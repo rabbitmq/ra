@@ -1,0 +1,101 @@
+-module(raga_test_log).
+-behaviour(raga_log).
+-export([init/1,
+         append/3,
+         take/3,
+         last/1,
+         fetch/2]).
+
+-include("raga.hrl").
+
+-type raga_test_log_state() ::
+    {raga_index(), #{raga_term() => {raga_index(), term()}}}.
+
+-spec init([term()]) -> raga_test_log_state().
+init(_Args) ->
+    % initialized with a deafault 0 index 0 term dummy value
+    {0, #{0 => {0, dummy}}}.
+
+-spec append(Entry::log_entry(), Overwrite::boolean(),
+                 State::raga_test_log_state()) ->
+    {ok, raga_test_log_state()} | {error, integrity_error}.
+append({Idx, Term, Data}, false, {LastIdx, Log})
+      when Idx == LastIdx+1 ->
+    {ok, {Idx, Log#{Idx => {Term, Data}}}};
+append(_Entry, false, _State) ->
+    {error, integrity_error};
+append({Idx, Term, Data}, true, {LastIdx, Log})  when LastIdx > Idx ->
+    Log1 = maps:without(lists:seq(Idx+1, LastIdx), Log),
+    {ok, {Idx, Log1#{Idx => {Term, Data}}}};
+append({Idx, Term, Data}, true, {_LastIdx, Log}) ->
+    {ok, {Idx, Log#{Idx => {Term, Data}}}}.
+
+
+-spec take(raga_index(), non_neg_integer(), raga_test_log_state()) ->
+    [log_entry()].
+take(Start, Num, {_, Log}) ->
+    [begin
+         #{I := {T, D}} = Log,
+         {I, T, D}
+     end || I <- lists:seq(Start, Start + Num - 1)].
+
+-spec last(raga_test_log_state()) ->
+    maybe(log_entry()).
+last({LastIdx, _Data} = Log) ->
+    fetch(LastIdx, Log).
+
+-spec fetch(raga_index(), raga_test_log_state()) ->
+    maybe(log_entry()).
+fetch(Idx, {_LastIdx, Log}) ->
+    case Log of
+        #{Idx := {T, D}} ->
+            {Idx, T, D};
+        _ -> undefined
+    end.
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+append_test() ->
+    {0, #{}} = S = init([]),
+    {ok, {1, #{1 := {1, <<"hi">>}}}} = append({1, 1, <<"hi">>}, false, S).
+
+append_gap_test() ->
+    {0, #{}} = S = init([]),
+    {error, integrity_error} = append({2, 1, <<"hi">>}, false, S).
+
+append_twice_test() ->
+    {0, #{}} = S = init([]),
+    Entry = {1, 1, <<"hi">>},
+    {ok, S2} = append(Entry, false, S),
+    {error, integrity_error} = append(Entry, false, S2).
+
+append_overwrite_test() ->
+    {0, #{}} = S = init([]),
+    Entry = {1, 1, <<"hi">>},
+    {ok, S2} = append(Entry, true, S),
+    % TODO: a proper implementation should validate the term isn't decremented
+    % also it should truncate any item newer than the last written index
+    {ok,  {1, #{1 := {1, <<"hi">>}}}} = append(Entry, true, S2).
+
+take_test() ->
+    Log = #{1 => {8, <<"one">>},
+            2 => {8, <<"two">>},
+            3 => {8, <<"three">>}},
+    [{1, 8, <<"one">>},
+     {2, 8, <<"two">>}] = take(1, 2, {3, Log}).
+
+last_test() ->
+    Log = #{1 => {8, <<"one">>},
+            2 => {8, <<"two">>},
+            3 => {8, <<"three">>}},
+    {3, 8, <<"three">>} = last({3, Log}).
+
+
+fetch_test() ->
+    Log = #{1 => {8, <<"one">>},
+            2 => {8, <<"two">>},
+            3 => {8, <<"three">>}},
+    {2, 8, <<"two">>} = fetch(2, {3, Log}).
+-endif.
