@@ -1,8 +1,8 @@
--module(raga_node_proc).
+-module(ra_node_proc).
 
 -behaviour(gen_statem).
 
--include("raga.hrl").
+-include("ra.hrl").
 
 %% API
 -export([start_link/1,
@@ -25,10 +25,10 @@
         ]).
 
 -define(SERVER, ?MODULE).
--define(TEST_LOG, raga_test_log).
+-define(TEST_LOG, ra_test_log).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
--record(state, {node_state :: raga_node:raga_node_state(_),
+-record(state, {node_state :: ra_node:ra_node_state(_),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid())}).
 
@@ -48,7 +48,7 @@ command(ServerRef, Data) ->
 %%%===================================================================
 
 init([Config]) ->
-    State = #state{node_state = raga_node:init(Config),
+    State = #state{node_state = ra_node:init(Config),
                    broadcast_time = ?DEFAULT_BROADCAST_TIME},
     ?DBG("init state ~p~n", [State]),
     {ok, follower, State, election_timeout_action(State)}.
@@ -88,7 +88,7 @@ leader(_EventType, {command, _Cmd}, State = #state{node_state = NodeState0}) ->
 leader(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p leader: ~p~n", [Id, Msg]),
     From = get_from(EventType),
-    case raga_node:handle_leader(Msg, NodeState0) of
+    case ra_node:handle_leader(Msg, NodeState0) of
         {leader, NodeState, Actions} ->
             interaction(Actions, From, State),
             {keep_state, State#state{node_state = NodeState}};
@@ -102,7 +102,7 @@ leader(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
 candidate(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p candidate: ~p~n", [Id, Msg]),
     From = get_from(EventType),
-    case raga_node:handle_candidate(Msg, NodeState0) of
+    case ra_node:handle_candidate(Msg, NodeState0) of
         {candidate, NodeState, Actions} ->
             interaction(Actions, From, State),
             {keep_state, State#state{node_state = NodeState},
@@ -120,7 +120,7 @@ candidate(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}})
 follower(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p follower: ~p~n", [Id, Msg]),
     From = get_from(EventType),
-    case raga_node:handle_follower(Msg, NodeState0) of
+    case ra_node:handle_follower(Msg, NodeState0) of
         {follower, NodeState, Actions} ->
             interaction(Actions, From, State),
             ?DBG("~p next follower: ~p~n", [Id, Actions]),
@@ -221,11 +221,11 @@ interaction({vote, Actions}, _From, _State) ->
 interaction({append, Actions}, _From, #state{proxy = undefined,
                                              broadcast_time = Interval}) ->
     ?DBG("Appends~p ~n", [Actions]),
-    {ok, Proxy} = raga_proxy:start_link(self(), Interval),
+    {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ?DBG("Proxy~p ~n", [Proxy]),
-    ok = raga_proxy:proxy(Proxy, Actions);
+    ok = ra_proxy:proxy(Proxy, Actions);
 interaction({append, Actions}, _From, #state{proxy = Proxy}) ->
-    ok = raga_proxy:proxy(Proxy, Actions).
+    ok = ra_proxy:proxy(Proxy, Actions).
 
 
 get_from({call, From}) -> From;

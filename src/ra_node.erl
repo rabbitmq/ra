@@ -1,6 +1,6 @@
--module(raga_node).
+-module(ra_node).
 
--include("raga.hrl").
+-include("ra.hrl").
 
 -export([
          name/2,
@@ -12,37 +12,37 @@
 
 % TODO should this really be a shared record?
 % Perhaps as it may be persisted to the log
--type raga_peer_state() :: #{next_index => non_neg_integer(),
+-type ra_peer_state() :: #{next_index => non_neg_integer(),
                              match_index => non_neg_integer()}.
 
--type raga_cluster() :: #{raga_node_id() => raga_peer_state()}.
+-type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
 % TODO: some of this state needs to be persisted
--type raga_node_state(MacState) ::
-    #{id => raga_node_id(),
+-type ra_node_state(MacState) ::
+    #{id => ra_node_id(),
       cluster_id => binary(),
-      cluster => {normal, raga_cluster()} |
-                 {joint, raga_cluster(), raga_cluster()},
-      current_term => raga_term(),
+      cluster => {normal, ra_cluster()} |
+                 {joint, ra_cluster(), ra_cluster()},
+      current_term => ra_term(),
       log => term(),
       log_mod => atom(), % if only this could be narrowed down to a behavour - sigh
-      voted_for => maybe(raga_node_id()),
+      voted_for => maybe(ra_node_id()),
       votes => non_neg_integer(),
-      commit_index => raga_index(),
-      last_applied => raga_index(),
-      machine_apply_fun => fun((term(), MacState) -> MacState), % Module implementing raga machine
+      commit_index => ra_index(),
+      last_applied => ra_index(),
+      machine_apply_fun => fun((term(), MacState) -> MacState), % Module implementing ra machine
       machine_state => MacState}.
 
--type raga_state() :: leader | follower | candidate.
+-type ra_state() :: leader | follower | candidate.
 
--export_type([raga_node_state/1]).
+-export_type([ra_node_state/1]).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
-    list_to_atom("raga_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
+    list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
 
--spec init(map()) -> raga_node_state(_).
+-spec init(map()) -> ra_node_state(_).
 init(#{id := Id,
        initial_nodes := InitialNodes,
        cluster_id := ClusterId,
@@ -61,8 +61,8 @@ init(#{id := Id,
       machine_apply_fun => MachineApplyFun,
       machine_state => InitialMachineState}.
 
--spec handle_leader(raga_msg(), raga_node_state(M)) ->
-    {raga_state(), raga_node_state(M), raga_action()}.
+-spec handle_leader(ra_msg(), ra_node_state(M)) ->
+    {ra_state(), ra_node_state(M), ra_action()}.
 handle_leader({_Peer, #append_entries_reply{term = Term}},
                        State = #{current_term := Term}) ->
     % Reply = #append_entries_reply{term = Term, success = true},
@@ -70,11 +70,12 @@ handle_leader({_Peer, #append_entries_reply{term = Term}},
 handle_leader(_Msg, State) ->
     {leader, State, none}.
 
--spec handle_follower(raga_msg(), raga_node_state(M)) ->
-    {raga_state(), raga_node_state(M), raga_action()}.
+-spec handle_follower(ra_msg(), ra_node_state(M)) ->
+    {ra_state(), ra_node_state(M), ra_action()}.
 handle_follower(election_timeout, State) ->
     handle_election_timeout(State);
 handle_follower(#append_entries_rpc{term = Term,
+                                    leader_commit = LeaderCommit,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries},
@@ -89,8 +90,10 @@ handle_follower(#append_entries_rpc{term = Term,
                                       {ok, L} = LogMod:append(E, true, Acc),
                                       L
                               end, Log0, Entries),
-            {follower, State#{current_term => Term,
-                              log => Log}, {reply, Reply}};
+            State1 = apply_to(LeaderCommit,
+                              State#{current_term => Term,
+                                     log => Log}),
+            {follower, State1, {reply, Reply}};
         false ->
             Reply = #append_entries_reply{term = Term, success = false},
             {follower, State#{current_term => Term}, {reply, Reply}}
@@ -130,8 +133,8 @@ handle_follower(#request_vote_rpc{term = Term},
 handle_follower(_Msg, State) ->
     {follower, State, none}.
 
--spec handle_candidate(raga_msg() | election_timeout, raga_node_state(M)) ->
-    {raga_state(), raga_node_state(M), raga_action()}.
+-spec handle_candidate(ra_msg() | election_timeout, ra_node_state(M)) ->
+    {ra_state(), ra_node_state(M), ra_action()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State = #{current_term := Term, votes := Votes,
                            cluster := {normal, Nodes}}) ->
@@ -182,6 +185,9 @@ has_log_entry(Idx, Term, #{log := Log, log_mod := Mod}) ->
         _ -> false
     end.
 
+fetch_entries(From, To, #{log := Log, log_mod := Mod}) ->
+    Mod:take(From, To - From, Log).
+
 make_cluster(Nodes) ->
     lists:foldl(fun(N, Acc) ->
                         Acc#{N => #{match_index => 0}}
@@ -204,4 +210,25 @@ make_empty_append_entries(State = #{id := Id, current_term := Term,
                                    prev_log_term = LastTerm,
                                    leader_commit = CommitIdx}}
       || PeerId <- peers(State)]}.
+
+apply_to(Commit, State = #{last_applied := LastApplied,
+                           machine_state := MacState0,
+                           machine_apply_fun := ApplyFun})
+  when Commit > LastApplied ->
+    case fetch_entries(LastApplied, Commit, State) of
+        [] -> State;
+        Entries ->
+            MacState = lists:foldl(ApplyFun, MacState0,
+                                   [E || {_I, _T, E} <- Entries]),
+
+            {LastEntryIdx, _, _} = lists:last(Entries),
+            NewCommit = min(Commit, LastEntryIdx),
+            State#{last_applied => NewCommit,
+                   commit_index => NewCommit,
+                   machine_state => MacState}
+    end;
+apply_to(_Commit, State) -> State.
+
+
+
 

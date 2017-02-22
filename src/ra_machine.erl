@@ -1,4 +1,4 @@
--module(raga_machine).
+-module(ra_machine).
 
 
 -callback apply(Command::term(), State::term()) ->

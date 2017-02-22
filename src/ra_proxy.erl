@@ -1,8 +1,8 @@
--module(raga_proxy).
+-module(ra_proxy).
 
 -behaviour(gen_server).
 
--include("raga.hrl").
+-include("ra.hrl").
 
 %% API functions
 -export([start_link/2,
@@ -91,6 +91,7 @@ handle_call(_Request, _From, State) ->
 handle_cast({appends, Appends}, State0) ->
     ?DBG("proxy: handle cast appends ~p~n", [State0]),
     AppendsMap = maps:from_list(Appends),
+    % TODO reset timer?
     State = State0#state{appends = AppendsMap},
     ok = broadcast(State),
     {noreply, State}.

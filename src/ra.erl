@@ -1,4 +1,4 @@
--module(raga).
+-module(ra).
 
 
 -export([
@@ -15,15 +15,15 @@
 %              ]).
 
 start_cluster(Num, Name, ApplyFun, InitialState) ->
-    Nodes = [raga_node:name(Name, integer_to_list(N))
+    Nodes = [ra_node:name(Name, integer_to_list(N))
              || N <- lists:seq(1, Num)],
-    Conf0 = #{log_module => raga_test_log,
+    Conf0 = #{log_module => ra_test_log,
               log_init_args => [],
               initial_nodes => Nodes,
               apply_fun => ApplyFun,
               initial_state => InitialState,
               cluster_id => Name},
     [begin
-         {ok, Pid} = raga_node_proc:start_link(Conf0#{id => Id}),
+         {ok, Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
          {Pid, Id}
      end || Id <- Nodes].

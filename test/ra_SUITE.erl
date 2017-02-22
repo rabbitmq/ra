@@ -1,4 +1,4 @@
--module(raga_SUITE).
+-module(ra_SUITE).
 
 -compile(export_all).
 
@@ -10,7 +10,7 @@ all() ->
     ].
 
 start_cluster(_Config) ->
-    [{APid, _A}, {BPid, _B}, _C] = raga:start_cluster(
+    [{APid, _A}, {BPid, _B}, _C] = ra:start_cluster(
                              3, "test", fun(Cmd, State) -> State + Cmd end, 0),
 
     true = (undefined /= is_process_alive(APid)),
