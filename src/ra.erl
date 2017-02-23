@@ -2,7 +2,8 @@
 
 
 -export([
-         start_cluster/4
+         start_cluster/4,
+         command/2
         ]).
 
 % -type node_id() :: reference().
@@ -27,3 +28,6 @@ start_cluster(Num, Name, ApplyFun, InitialState) ->
          {ok, Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
          {Pid, Id}
      end || Id <- Nodes].
+
+command(Ref, Data) ->
+    ra_node_proc:command(Ref, Data).

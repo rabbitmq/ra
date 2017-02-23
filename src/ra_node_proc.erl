@@ -28,9 +28,12 @@
 -define(TEST_LOG, ra_test_log).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
+-type server_ref() :: pid() | atom() | {node() | atom()}.
+
 -record(state, {node_state :: ra_node:ra_node_state(_),
                 broadcast_time :: non_neg_integer(),
-                proxy :: maybe(pid())}).
+                proxy :: maybe(pid()),
+                pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
 %%%===================================================================
 %%% API
@@ -39,9 +42,13 @@
 start_link(Config = #{id := Id}) ->
     gen_statem:start_link({local, Id}, ?MODULE, [Config], []).
 
--spec command(gen_statem:server_ref(), term()) -> ok.
+-spec command(server_ref(), term()) -> ok.
 command(ServerRef, Data) ->
-    gen_statem:cast(ServerRef, {command, Data}).
+    case gen_statem:call(ServerRef, {command, Data}) of
+        {redirect, Leader} ->
+            command(Leader, Data);
+        Reply -> Reply
+    end.
 
 %%%===================================================================
 %%% gen_statem callbacks
@@ -79,55 +86,74 @@ callback_mode() -> state_functions.
 %%                   {keep_state_and_data, Actions}
 %% @end
 %%--------------------------------------------------------------------
-leader(_EventType, {command, _Cmd}, State = #state{node_state = NodeState0}) ->
+leader({call, From}, {command, _Data} = Cmd,
+       State = #state{node_state = NodeState0}) ->
     % Persist command into log
     % Return raft index + term to caller so they can wait for apply notifications
     % Send msg to peer proxy with updated state data (so they can replicate)
-    NodeState = NodeState0,
+    {leader, NodeState, Actions} = ra_node:handle_leader(Cmd, NodeState0),
+    interact(Actions, From, State),
     {keep_state, State#state{node_state = NodeState}};
 leader(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p leader: ~p~n", [Id, Msg]),
     From = get_from(EventType),
     case ra_node:handle_leader(Msg, NodeState0) of
         {leader, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             {keep_state, State#state{node_state = NodeState}};
         {follower, NodeState, Actions} ->
+            ?DBG("~p leader abdicates!~n", [Id]),
             % TODO kill proxy process
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             {next_state, follower, State#state{node_state = NodeState},
              [election_timeout_action(State)]}
     end.
 
-candidate(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
+candidate({call, From}, {command, _Data},
+          State = #state{node_state = #{leader_id := LeaderId}}) ->
+    {keep_state, State, {reply, From, {redirect, LeaderId}}};
+candidate({call, From}, {command, _Data} = Cmd,
+          State = #state{pending_commands = Pending}) ->
+    {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
+candidate(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id},
+                                         pending_commands = Pending}) ->
     ?DBG("~p candidate: ~p~n", [Id, Msg]),
     From = get_from(EventType),
     case ra_node:handle_candidate(Msg, NodeState0) of
         {candidate, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             {keep_state, State#state{node_state = NodeState},
              election_timeout_action(State)};
         {follower, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             {next_state, follower, State#state{node_state = NodeState},
              election_timeout_action(State)};
         {leader, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             ?DBG("~p next leader~n", [Id]),
-            {next_state, leader, State#state{node_state = NodeState}}
+            NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
+            {next_state, leader, State#state{node_state = NodeState}, NextEvents}
     end.
 
+follower({call, From}, {command, _Data},
+         State = #state{node_state = #{leader_id := LeaderId}}) ->
+    {keep_state, State, {reply, From, {redirect, LeaderId}}};
+follower({call, From}, {command, _Data} = Cmd,
+         State = #state{pending_commands = Pending}) ->
+    {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
 follower(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p follower: ~p~n", [Id, Msg]),
     From = get_from(EventType),
     case ra_node:handle_follower(Msg, NodeState0) of
         {follower, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             ?DBG("~p next follower: ~p~n", [Id, Actions]),
-            {keep_state, State#state{node_state = NodeState},
+            NewState = follower_leader_change(State,
+                                              State#state{node_state = NodeState}),
+            {keep_state, NewState,
              election_timeout_action(State)};
         {candidate, NodeState, Actions} ->
-            interaction(Actions, From, State),
+            interact(Actions, From, State),
             ?DBG("~p next candidate: ~p ~p~n", [Id, Actions, NodeState]),
             {next_state, candidate, State#state{node_state = NodeState},
              election_timeout_action(State)}
@@ -202,13 +228,13 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%% Internal functions
 %%%===================================================================
 
-interaction(none, _From, _State) ->
+interact(none, _From, _State) ->
     ok;
-interaction({reply, _Reply}, undefined, _State) ->
+interact({reply, _Reply}, undefined, _State) ->
     exit(undefined_reply);
-interaction({reply, Reply}, From, _State) ->
+interact({reply, Reply}, From, _State) ->
     ok = gen_statem:reply(From, Reply);
-interaction({vote, Actions}, _From, _State) ->
+interact({vote, Actions}, _From, _State) ->
     % transient election processes
     T = 500,
     Me = self(),
@@ -218,14 +244,18 @@ interaction({vote, Actions}, _From, _State) ->
                    end)
      end || {N, M} <- Actions],
     ok;
-interaction({append, Actions}, _From, #state{proxy = undefined,
+interact({append, Actions}, _From, #state{proxy = undefined,
                                              broadcast_time = Interval}) ->
     ?DBG("Appends~p ~n", [Actions]),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ?DBG("Proxy~p ~n", [Proxy]),
     ok = ra_proxy:proxy(Proxy, Actions);
-interaction({append, Actions}, _From, #state{proxy = Proxy}) ->
-    ok = ra_proxy:proxy(Proxy, Actions).
+interact({append, Actions}, _From, #state{proxy = Proxy}) ->
+    ok = ra_proxy:proxy(Proxy, Actions);
+interact([Action | Actions], From, State) ->
+    interact(Action, From, State),
+    interact(Actions, From, State);
+interact([], _From, _State) -> ok.
 
 
 get_from({call, From}) -> From;
@@ -235,3 +265,18 @@ election_timeout_action(#state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 3) + (Timeout * 2),
     ?DBG("T: ~p~n", [T]),
     {timeout, T, election_timeout}.
+
+follower_leader_change(#state{node_state = #{leader_id := L}},
+                     #state{node_state = #{leader_id := L}} = New) ->
+    % no change
+    New;
+follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L},
+                                    pending_commands = Pending} = New)
+  when L /= undefined ->
+    % leader has either changed or just been set
+    ?DBG("~p A new leader has been detected: ~p~n", [Id, L]),
+    [ok = gen_statem:reply(From, {redirect, L})
+     || {From, _Data} <- Pending],
+    New#state{pending_commands = []};
+follower_leader_change(_Old, New) -> New.
+

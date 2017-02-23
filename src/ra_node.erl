@@ -13,13 +13,14 @@
 % TODO should this really be a shared record?
 % Perhaps as it may be persisted to the log
 -type ra_peer_state() :: #{next_index => non_neg_integer(),
-                             match_index => non_neg_integer()}.
+                           match_index => non_neg_integer()}.
 
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
 % TODO: some of this state needs to be persisted
 -type ra_node_state(MacState) ::
     #{id => ra_node_id(),
+      leader_id => maybe(ra_node_id()),
       cluster_id => binary(),
       cluster => {normal, ra_cluster()} |
                  {joint, ra_cluster(), ra_cluster()},
@@ -63,10 +64,24 @@ init(#{id := Id,
 
 -spec handle_leader(ra_msg(), ra_node_state(M)) ->
     {ra_state(), ra_node_state(M), ra_action()}.
-handle_leader({_Peer, #append_entries_reply{term = Term}},
-                       State = #{current_term := Term}) ->
-    % Reply = #append_entries_reply{term = Term, success = true},
+handle_leader({PeerId, #append_entries_reply{term = Term,
+                                             success = true,
+                                             last_index = LastIdx}},
+                       State0 = #{current_term := Term,
+                                  cluster := {normal, Nodes}}) ->
+    #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
+    Peer = Peer0#{match_index => max(MI, LastIdx),
+                 next_index => max(NI, LastIdx+1)},
+
+    State1 = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
+    {State, _Actions} = evaluate_quorum(State1),
+
     {leader, State, none};
+handle_leader({command, Data}, State0) ->
+    {IdxTerm, State} = append_log(Data, State0),
+    AEs = append_entries(State),
+    {leader, State, [{reply, IdxTerm}, {append, AEs}]};
+
 handle_leader(_Msg, State) ->
     {leader, State, none}.
 
@@ -75,6 +90,7 @@ handle_leader(_Msg, State) ->
 handle_follower(election_timeout, State) ->
     handle_election_timeout(State);
 handle_follower(#append_entries_rpc{term = Term,
+                                    leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
@@ -85,30 +101,31 @@ handle_follower(#append_entries_rpc{term = Term,
   when Term >= CurTerm ->
     case has_log_entry(PLIdx, PLTerm, State) of
         true ->
-            Reply = #append_entries_reply{term = Term, success = true},
             Log = lists:foldl(fun(E, Acc) ->
                                       {ok, L} = LogMod:append(E, true, Acc),
                                       L
                               end, Log0, Entries),
-            State1 = apply_to(LeaderCommit,
-                              State#{current_term => Term,
-                                     log => Log}),
+
+            State1 = apply_to(LeaderCommit, State#{current_term => Term,
+                                                   leader_id => LeaderId,
+                                                   log => Log}),
+            Reply = append_entries_reply(CurTerm, true, State1),
             {follower, State1, {reply, Reply}};
         false ->
-            Reply = #append_entries_reply{term = Term, success = false},
-            {follower, State#{current_term => Term}, {reply, Reply}}
+            Reply = append_entries_reply(CurTerm, false, State),
+            {follower, State#{current_term => Term,
+                              leader_id => LeaderId}, {reply, Reply}}
     end;
-handle_follower(#append_entries_rpc{},
-                       State = #{current_term := CurTerm}) ->
-    Reply = #append_entries_reply{term = CurTerm, success = false},
-    {follower, State, {reply, Reply}};
+handle_follower(#append_entries_rpc{}, State = #{current_term := CurTerm}) ->
+    Reply = append_entries_reply(CurTerm, false, State),
+    {follower, maps:without([leader_id], State), {reply, Reply}};
 handle_follower(#request_vote_rpc{candidate_id = Cand,
                                   term = Term},
                 State = #{current_term := Term, voted_for := VotedFor})
   when VotedFor /= Cand ->
-    % already voted in this term
+    % already voted for another in this term
     Reply = #request_vote_result{term = Term, vote_granted = false},
-    {follower, State, {reply, Reply}};
+    {follower, maps:without([leader_id], State), {reply, Reply}};
 handle_follower(#request_vote_rpc{candidate_id = Cand,
                                   term = Term,
                                   last_log_index = LLIdx,
@@ -142,7 +159,8 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {Cluster, Actions} = make_empty_append_entries(State),
-            {leader, maps:remove(votes, State#{cluster => Cluster}),
+            {leader, maps:without([votes, leader_id],
+                                  State#{cluster => Cluster}),
              {append, Actions}};
         _ ->
             {candidate, State#{votes => NewVotes}, none}
@@ -186,7 +204,7 @@ has_log_entry(Idx, Term, #{log := Log, log_mod := Mod}) ->
     end.
 
 fetch_entries(From, To, #{log := Log, log_mod := Mod}) ->
-    Mod:take(From, To - From, Log).
+    Mod:take(From, To - From + 1, Log).
 
 make_cluster(Nodes) ->
     lists:foldl(fun(N, Acc) ->
@@ -230,5 +248,49 @@ apply_to(Commit, State = #{last_applied := LastApplied,
 apply_to(_Commit, State) -> State.
 
 
+append_log(Cmd, State = #{log := Log0, log_mod := Mod, current_term := Term}) ->
+    {LastIdx, _, _} = Mod:last(Log0),
+    {ok, Log} = Mod:append({LastIdx+1, Term, Cmd}, false, Log0),
+    {{LastIdx+1, Term}, State#{log => Log}}.
 
 
+append_entries(#{id := Id, cluster := {normal, Nodes},
+                 log := Log, log_mod := Mod,
+                 current_term := Term, commit_index := CommitIndex}) ->
+    Peers = maps:remove(Id, Nodes),
+    [begin
+         {PrevIdx, PrevTerm, _} = Mod:fetch(Next-1, Log),
+         {PeerId, #append_entries_rpc{entries = Mod:take(Next, 5, Log),
+                                      term = Term,
+                                      leader_id = Id,
+                                      prev_log_index = PrevIdx,
+                                      prev_log_term = PrevTerm,
+                                      leader_commit = CommitIndex }}
+     end
+     || {PeerId, #{next_index := Next}} <- maps:to_list(Peers)].
+
+append_entries_reply(Term, Success, State) ->
+    {LastIdx, LastTerm, _} = last_entry(State),
+    #append_entries_reply{term = Term, success = Success,
+                          last_index = LastIdx,
+                          last_term = LastTerm}.
+
+evaluate_quorum(State = #{cluster := {normal, Nodes},
+                          id := Id,
+                          commit_index := CommitIndex,
+                          machine_apply_fun := ApplyFun,
+                          machine_state := MacState }) ->
+    {LeaderIdx, _, _} = last_entry(State),
+    Idxs = lists:sort(
+             [LeaderIdx |
+              [Idx || {_, #{match_index := Idx}} <- maps:to_list(maps:remove(Id, Nodes))]]),
+    Nth = trunc(length(Idxs) / 2) + 1,
+    NewCommitIndex = lists:nth(Nth, Idxs),
+    Entries = fetch_entries(CommitIndex+1, NewCommitIndex, State),
+    NewMacState = lists:foldl(fun({_Idx, _Trm, Entry}, Acc) ->
+                                      ApplyFun(Entry, Acc)
+                              end, MacState, Entries),
+
+    {State#{commit_index => NewCommitIndex,
+            last_applied => NewCommitIndex,
+            machine_state => NewMacState}, []}.

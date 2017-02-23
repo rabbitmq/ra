@@ -10,8 +10,45 @@ all() ->
      election_timeout,
      quorum,
      follower_vote,
-     follower_append_entries
+     follower_append_entries,
+     command,
+     append_entries_reply
     ].
+
+
+append_entries_reply(_Config) ->
+    Cluster = #{n1 => #{},
+                n2 => #{next_index => 1,
+                        match_index => 0},
+                n3 => #{next_index => 2,
+                        match_index => 1}},
+    State = (base_state(3))#{commit_index => 1,
+                             last_applied => 1,
+                             cluster => {normal, Cluster},
+                             machine_state => <<"hi1">>},
+    Msg = {n2, #append_entries_reply{term = 5, success = true,
+                                     last_index = 3, last_term = 5}},
+    % update match index
+    {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
+                                             match_index := 3}}},
+               commit_index := 3,
+               last_applied := 3,
+               machine_state := <<"hi3">>}, none} =
+        ra_node:handle_leader(Msg, State).
+
+command(_Config) ->
+    State = base_state(3),
+    Msg = {command, <<"hi4">>},
+    AE = #append_entries_rpc{entries = [{4, 5, <<"hi4">>}],
+                             leader_id = n1,
+                             term = 5,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3
+                            },
+    {leader, _, [{reply, {4, 5}}, {append, [{n2, AE}, {n3, AE}]}]} =
+        ra_node:handle_leader(Msg, State),
+    ok.
 
 follower_append_entries(_Config) ->
     State = (base_state(3))#{commit_index => 1},
@@ -20,8 +57,10 @@ follower_append_entries(_Config) ->
                                   prev_log_index = 3,
                                   prev_log_term = 5,
                                   leader_commit = 3},
-    % success case - everything is up to date
-    {follower, _, {reply, #append_entries_reply{term = 5, success = true}}} =
+    % success case - everything is up to date leader id got updated
+    {follower, #{leader_id := n1},
+     {reply, #append_entries_reply{term = 5, success = true,
+                                   last_index = 3, last_term = 5}}} =
         ra_node:handle_follower(EmptyAE, State),
 
     % reply false if term < current_term (5.1)
@@ -44,7 +83,8 @@ follower_append_entries(_Config) ->
 
     ExpectedLog = {2, #{1 => {1, <<"hi1">>}, 2 => {4, <<"hi">>}}},
     {follower,  #{log := ExpectedLog},
-     {reply, #append_entries_reply{term = 5, success = true}}} =
+     {reply, #append_entries_reply{term = 5, success = true,
+                                   last_index = 2, last_term = 4}}} =
         ra_node:handle_follower(AE, State#{last_applied => 1}),
 
     % append new entries not in the log
@@ -52,7 +92,8 @@ follower_append_entries(_Config) ->
     {follower, #{log := {4, #{4 := {5, <<"hi4">>}}},
                  commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
-     {reply, #append_entries_reply{term = 5, success = true}}} =
+     {reply, #append_entries_reply{term = 5, success = true,
+                                   last_index = 4, last_term = 5}}} =
         ra_node:handle_follower(
           EmptyAE#append_entries_rpc{entries = [{4, 5, <<"hi4">>}],
                                      leader_commit = 5},
@@ -119,7 +160,7 @@ quorum(_Config) ->
     PeerState = #{next_index => 3+1, % leaders last log index + 1
                   match_index => 0}, % initd to 0
 
-    Cluster = {normal, #{n1 => #{},
+    Cluster = {normal, #{n1 => #{next_index => 4},
                          n2 => PeerState,
                          n3 => PeerState,
                          n4 => PeerState,
@@ -145,7 +186,7 @@ base_state(NumNodes) ->
                 3 => {5, <<"hi3">>}}},
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
-                                Acc#{Name => #{}}
+                                Acc#{Name => #{next_index => 4}}
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
       cluster => {normal, Nodes},

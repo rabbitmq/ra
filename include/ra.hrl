@@ -23,7 +23,12 @@
 % rather than incrementally send append_entries_rpcs
 -record(append_entries_reply,
         {term :: ra_term(),
-         success :: boolean()}).
+         success :: boolean(),
+         % because we aren't doing true rpc we may have multiple append
+         % entries in flight we need to communicate what we are replying
+         % to
+         last_index :: ra_index(),
+         last_term :: ra_term()}).
 
 -record(request_vote_rpc,
         {term :: ra_term(),
@@ -39,7 +44,8 @@
 
 -type ra_action() :: {reply, ra_msg()} |
                         {vote | append,
-                         [{ra_node_id(), ra_msg()}]} | none.
+                         [{ra_node_id(), ra_msg()}]} |
+                       [ra_action()] | none.
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 

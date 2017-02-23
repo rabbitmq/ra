@@ -34,10 +34,12 @@ append({Idx, Term, Data}, true, {_LastIdx, Log}) ->
 -spec take(ra_index(), non_neg_integer(), ra_test_log_state()) ->
     [log_entry()].
 take(Start, Num, {_, Log}) ->
-    [begin
-         #{I := {T, D}} = Log,
-         {I, T, D}
-     end || I <- lists:seq(Start, Start + Num - 1)].
+    lists:filtermap(fun(I) -> case Log of
+                                  #{I := {T, D}} ->
+                                      {true, {I, T, D}};
+                                  _ -> false
+                              end
+                    end, lists:seq(Start, Start + Num - 1)).
 
 -spec last(ra_test_log_state()) ->
     maybe(log_entry()).
@@ -84,7 +86,8 @@ take_test() ->
             2 => {8, <<"two">>},
             3 => {8, <<"three">>}},
     [{1, 8, <<"one">>},
-     {2, 8, <<"two">>}] = take(1, 2, {3, Log}).
+     {2, 8, <<"two">>}] = take(1, 2, {3, Log}),
+    [{3, 8, <<"three">>}] = take(3, 2, {3, Log}).
 
 last_test() ->
     Log = #{1 => {8, <<"one">>},
