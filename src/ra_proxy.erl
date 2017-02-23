@@ -74,6 +74,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
+    ?DBG("broadcast ~p~n", [Appends]),
     [begin
          % use the peer ref as the unique rpc reply reference
          % fake gen_call - reply goes to parent process

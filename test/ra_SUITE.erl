@@ -21,18 +21,18 @@ basic(_Config) ->
 
     {1, 1} = ra:command(APid, 5),
     receive
-        applied -> ok
+        applied ->
+            receive
+                applied ->
+                    receive
+                        applied -> ok
+                    after 3000 ->
+                              exit(apply_timeout3)
+                    end
+            after 3000 ->
+                      exit(apply_timeout2)
+            end
     after 3000 ->
               exit(apply_timeout)
-    end,
-    receive
-        applied -> ok
-    after 3000 ->
-              exit(apply_timeout2)
-    end,
-    receive
-        applied -> ok
-    after 3000 ->
-              exit(apply_timeout3)
     end,
     ok.
