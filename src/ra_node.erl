@@ -10,7 +10,6 @@
          handle_candidate/2
         ]).
 
-% TODO should this really be a shared record?
 % Perhaps as it may be persisted to the log
 -type ra_peer_state() :: #{next_index => non_neg_integer(),
                            match_index => non_neg_integer()}.
@@ -31,7 +30,8 @@
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
-      machine_apply_fun => fun((term(), MacState) -> MacState), % Module implementing ra machine
+      % Module implementing ra machine
+      machine_apply_fun => fun((term(), MacState) -> MacState),
       machine_state => MacState}.
 
 -type ra_state() :: leader | follower | candidate.
@@ -75,8 +75,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term,
 
     State1 = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
     {State, _Actions} = evaluate_quorum(State1),
-
-    {leader, State, none};
+    AEs = append_entries(State),
+    {leader, State, {append, AEs}};
 handle_leader({command, Data}, State0) ->
     {IdxTerm, State} = append_log(Data, State0),
     AEs = append_entries(State),
@@ -233,7 +233,7 @@ apply_to(Commit, State = #{last_applied := LastApplied,
                            machine_state := MacState0,
                            machine_apply_fun := ApplyFun})
   when Commit > LastApplied ->
-    case fetch_entries(LastApplied, Commit, State) of
+    case fetch_entries(LastApplied+1, Commit, State) of
         [] -> State;
         Entries ->
             MacState = lists:foldl(ApplyFun, MacState0,
@@ -276,21 +276,11 @@ append_entries_reply(Term, Success, State) ->
                           last_term = LastTerm}.
 
 evaluate_quorum(State = #{cluster := {normal, Nodes},
-                          id := Id,
-                          commit_index := CommitIndex,
-                          machine_apply_fun := ApplyFun,
-                          machine_state := MacState }) ->
+                          id := Id}) ->
     {LeaderIdx, _, _} = last_entry(State),
     Idxs = lists:sort(
              [LeaderIdx |
               [Idx || {_, #{match_index := Idx}} <- maps:to_list(maps:remove(Id, Nodes))]]),
     Nth = trunc(length(Idxs) / 2) + 1,
     NewCommitIndex = lists:nth(Nth, Idxs),
-    Entries = fetch_entries(CommitIndex+1, NewCommitIndex, State),
-    NewMacState = lists:foldl(fun({_Idx, _Trm, Entry}, Acc) ->
-                                      ApplyFun(Entry, Acc)
-                              end, MacState, Entries),
-
-    {State#{commit_index => NewCommitIndex,
-            last_applied => NewCommitIndex,
-            machine_state => NewMacState}, []}.
+    {apply_to(NewCommitIndex, State), []}.

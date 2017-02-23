@@ -63,29 +63,7 @@ init([Config]) ->
 %% callback mode
 callback_mode() -> state_functions.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% There should be one instance of this function for each possible
-%% state name.  If callback_mode is statefunctions, one of these
-%% functions is called when gen_statem receives and event from
-%% call/2, cast/2, or as a normal process message.
-%%
-%% @spec state_name(Event, From, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Actions} |
-%%                   {stop, Reason, NewState} |
-%%    				 stop |
-%%                   {stop, Reason :: term()} |
-%%                   {stop, Reason :: term(), NewData :: data()} |
-%%                   {stop_and_reply, Reason, Replies} |
-%%                   {stop_and_reply, Reason, Replies, NewState} |
-%%                   {keep_state, NewData :: data()} |
-%%                   {keep_state, NewState, Actions} |
-%%                   keep_state_and_data |
-%%                   {keep_state_and_data, Actions}
-%% @end
-%%--------------------------------------------------------------------
+%% state functions
 leader({call, From}, {command, _Data} = Cmd,
        State = #state{node_state = NodeState0}) ->
     % Persist command into log
@@ -159,67 +137,18 @@ follower(EventType, Msg, State = #state{node_state = NodeState0 = #{id := Id}}) 
              election_timeout_action(State)}
     end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%%
-%% If callback_mode is handle_event_function, then whenever a
-%% gen_statem receives an event from call/2, cast/2, or as a normal
-%% process message, this function is called.
-%% @end
-% -spec handle_event(event_type(), any(), term(), state()) ->
-%                    {next_state, NextStateName, NextState} |
-%                    {next_state, NextStateName, NextState, Actions} |
-%                    {stop, Reason, NewState} |
-%     				 stop |
-%                    {stop, Reason :: term()} |
-%                    {stop, Reason :: term(), NewData :: data()} |
-%                    {stop_and_reply, Reason, Replies} |
-%                    {stop_and_reply, Reason, Replies, NewState} |
-%                    {keep_state, NewData :: data()} |
-%                    {keep_state, NewState, Actions} |
-%                    keep_state_and_data |
-%                    {keep_state_and_data, Actions}.
+
 handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknownn ~p~n", [EventContent]),
     {next_state, StateName, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_statem when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_statem terminates with
-%% Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, StateName, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
+terminate(Reason, _StateName, _State) ->
+    ?DBG("ra terminating with ~p~n", [Reason]),
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, StateName, State, Extra) ->
-%%                   {ok, StateName, NewState}
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Called (1) whenever sys:get_status/1,2 is called by gen_statem or
-%% (2) when gen_statem terminates abnormally.
-%% This callback is optional.
-%%
-%% @spec format_status(Opt, [PDict, StateName, State]) -> term()
-%% @end
-%%--------------------------------------------------------------------
 format_status(_Opt, [_PDict, _StateName, _State]) ->
     Status = some_term,
     Status.

@@ -28,12 +28,23 @@ append_entries_reply(_Config) ->
                              machine_state => <<"hi1">>},
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      last_index = 3, last_term = 5}},
+    ExpectedActions =
+    {append, [{n2, #append_entries_rpc{term = 5, leader_id = n1,
+                                       prev_log_index = 3,
+                                       prev_log_term = 5,
+                                       leader_commit = 3}},
+              {n3, #append_entries_rpc{term = 5, leader_id = n1,
+                                       prev_log_index = 1,
+                                       prev_log_term = 1,
+                                       leader_commit = 3,
+                                       entries = [{2, 3, <<"hi2">>},
+                                                  {3, 5, <<"hi3">>}]}}]},
     % update match index
     {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
                                              match_index := 3}}},
                commit_index := 3,
                last_applied := 3,
-               machine_state := <<"hi3">>}, none} =
+               machine_state := <<"hi3">>}, ExpectedActions} =
         ra_node:handle_leader(Msg, State).
 
 command(_Config) ->

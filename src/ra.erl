@@ -6,15 +6,6 @@
          command/2
         ]).
 
-% -type node_id() :: reference().
-% -opaque cluster_ref() :: {pid(), node_id()}.
-
-
-% -export_type([
-%               cluster_ref/0,
-%               node_id/0
-%              ]).
-
 start_cluster(Num, Name, ApplyFun, InitialState) ->
     Nodes = [ra_node:name(Name, integer_to_list(N))
              || N <- lists:seq(1, Num)],
