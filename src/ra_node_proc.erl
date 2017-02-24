@@ -166,6 +166,9 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 
 interact(none, _From, State) ->
     State;
+interact({send_msg, To, Msg}, _From, State) ->
+    To ! Msg,
+    State;
 interact({reply, _Reply}, undefined, _State) ->
     exit(undefined_reply);
 interact({reply, Reply}, From, State) ->

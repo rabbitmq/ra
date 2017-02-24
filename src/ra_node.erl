@@ -31,7 +31,8 @@
       commit_index => ra_index(),
       last_applied => ra_index(),
       % Module implementing ra machine
-      machine_apply_fun => fun((term(), term()) -> term()),
+      machine_apply_fun => fun((term(), term()) -> term() |
+                                                   {term(), [{send_msg, term(), term()}]}),
       machine_state => term()}.
 
 -type ra_state() :: leader | follower | candidate.
@@ -44,6 +45,7 @@
                      {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
                      {next_event, ra_msg()} |
                      [ra_action()] |
+                     {send_msg, pid(), term()} |
                      none.
 
 -export_type([ra_node_state/0,
@@ -85,9 +87,13 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                   next_index => max(NI, LastIdx+1)},
     State1 = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
     NewCommitIndex = increment_commit_index(State1),
-    State = apply_to(NewCommitIndex, State1),
+    {State, Effects} = apply_to(NewCommitIndex, State1),
     AEs = append_entries(State),
-    {leader, State, {send_append_entries, AEs}};
+    Actions = case Effects  of
+                  [] -> {send_append_entries, AEs};
+                  E -> [{send_append_entries, AEs} | E]
+              end,
+    {leader, State, Actions};
 handle_leader({_PeerId, #append_entries_reply{term = Term}},
               #{current_term := CurTerm} = State) when Term > CurTerm ->
     {follower, State#{current_term => Term}, none};
@@ -146,11 +152,15 @@ handle_follower(#append_entries_rpc{term = Term,
                                       L
                               end, Log0, Entries),
 
-            State1 = apply_to(LeaderCommit, State#{current_term => Term,
+            {State1, Effects} = apply_to(LeaderCommit, State#{current_term => Term,
                                                    leader_id => LeaderId,
                                                    log => Log}),
             Reply = append_entries_reply(CurTerm, true, State1),
-            {follower, State1, {reply, Reply}};
+            Actions = case Effects  of
+                          [] -> {reply, Reply};
+                          E -> [{reply, Reply} | E]
+                      end,
+            {follower, State1, Actions};
         false ->
             Reply = append_entries_reply(CurTerm, false, State),
             {follower, State#{current_term => Term,
@@ -290,21 +300,28 @@ make_empty_append_entries(State = #{id := Id, current_term := Term,
 
 apply_to(Commit, State = #{last_applied := LastApplied,
                            machine_state := MacState0,
-                           machine_apply_fun := ApplyFun})
+                           machine_apply_fun := ApplyFun0})
   when Commit > LastApplied ->
     case fetch_entries(LastApplied+1, Commit, State) of
-        [] -> State;
+        [] -> {State, []};
         Entries ->
-            MacState = lists:foldl(ApplyFun, MacState0,
-                                   [E || {_I, _T, E} <- Entries]),
+            ApplyFun = fun(Cmd, {MacSt, Effects}) ->
+                               case ApplyFun0(Cmd, MacSt) of
+                                   {NextSt, Efx} ->
+                                       {NextSt, Effects ++ Efx};
+                                   NextSt -> {NextSt, Effects}
+                               end
+                       end,
+            {MacState, NewEffects} = lists:foldl(ApplyFun, {MacState0, []},
+                                                 [E || {_I, _T, E} <- Entries]),
 
             {LastEntryIdx, _, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
-            State#{last_applied => NewCommit,
+            {State#{last_applied => NewCommit,
                    commit_index => NewCommit,
-                   machine_state => MacState}
+                   machine_state => MacState}, NewEffects}
     end;
-apply_to(_Commit, State) -> State.
+apply_to(_Commit, State) -> {State, []}.
 
 
 append_log(Cmd, State = #{log := Log0, log_mod := Mod, current_term := Term}) ->
