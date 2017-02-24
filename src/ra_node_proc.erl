@@ -30,6 +30,8 @@
 
 -type server_ref() :: pid() | atom() | {node() | atom()}.
 
+-export_type([server_ref/0]).
+
 -record(state, {node_state :: ra_node:ra_node_state(_),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
@@ -42,13 +44,14 @@
 start_link(Config = #{id := Id}) ->
     gen_statem:start_link({local, Id}, ?MODULE, [Config], []).
 
--spec command(server_ref(), term()) -> ok.
+-spec command(ra_node_proc:server_ref(), term()) ->
+    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
 command(ServerRef, Data) ->
     % TODO: use dirty timeouts
     case gen_statem:call(ServerRef, {command, Data}) of
         {redirect, Leader} ->
             command(Leader, Data);
-        Reply -> Reply
+        Reply -> {Reply, ServerRef}
     end.
 
 %%%===================================================================
@@ -170,7 +173,7 @@ interact({reply, Reply}, From, State) ->
     State;
 interact({send_vote_requests, VoteRequests}, _From, State) ->
     % transient election processes
-    T = 500,
+    T = {dirty_timeout, 500},
     Me = self(),
     [begin
          _ = spawn(fun () -> Reply = gen_statem:call(N, M, T),

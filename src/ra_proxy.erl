@@ -51,6 +51,7 @@ handle_cast({appends, Appends}, State0) ->
     case State0 of
         #state{appends = AppendsMap} ->
             % no change - do nothing
+            % TODO check each entry rather than the whole
             {noreply, State0};
         _ ->
             State = State0#state{appends = AppendsMap},
@@ -81,7 +82,7 @@ broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
     ?DBG("broadcast ~p~n", [Appends]),
     [begin
          % use the peer ref as the unique rpc reply reference
-         % fake gen_call - reply goes to parent process
+         % fake gen_call - reply goes to ra_node process
          try Peer ! {'$gen_call', {Parent, Peer}, AE} of
              _ -> ok
          catch

@@ -1,5 +1,6 @@
 -module(ra).
 
+-include("ra.hrl").
 
 -export([
          start_cluster/4,
@@ -20,5 +21,7 @@ start_cluster(Num, Name, ApplyFun, InitialState) ->
          {Pid, Id}
      end || Id <- Nodes].
 
+-spec command(ra_node_proc:server_ref(), term()) ->
+    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
 command(Ref, Data) ->
     ra_node_proc:command(Ref, Data).

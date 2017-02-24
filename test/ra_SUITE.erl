@@ -19,22 +19,17 @@ basic(_Config) ->
                              State + Cmd
                      end, 0),
 
-    {1, 1} = ra:command(APid, 5),
-    receive
-        applied ->
-            ok
-    after 3000 ->
-              exit(apply_timeout)
-    end,
-    receive
-        applied -> ok
-    after 3000 ->
-              exit(apply_timeout2)
-    end,
-    receive
-        applied -> ok
-    after 3000 ->
-              exit(apply_timeout3)
-    end,
-    timer:sleep(2000),
+    {{1, 1}, Leader} = ra:command(APid, 5),
+    ct:pal("basic test leader ~p~n", [Leader]),
+    waitfor(applied, apply_timeout),
+    waitfor(applied, apply_timeout2),
+    waitfor(applied, apply_timeout3),
     ok.
+
+
+waitfor(Msg, ExitWith) ->
+    receive
+        Msg -> ok
+    after 3000 ->
+              exit(ExitWith)
+    end.
