@@ -14,28 +14,35 @@ all() ->
      command,
      append_entries_reply_success,
      append_entries_reply_no_success,
-     leader_abdicates
+     node_steps_down
     ].
 
-leader_abdicates(_Config) ->
+
+node_steps_down(_Config) ->
     State = base_state(3),
-    % leader abdicates when term is higher
+    % Any message received with a higher term should result in the
+    % node reverting to follower state
     IncomingTerm = 6,
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
                                          last_index = 3, last_term = 5}},
-    {follower, #{current_term := IncomingTerm}, none} =
-        ra_node:handle_leader(AEReply, State),
+    AEReplyExpect = {follower, State#{current_term := IncomingTerm}, none},
+    AEReplyExpect = ra_node:handle_leader(AEReply, State),
+    AEReplyExpect = ra_node:handle_candidate(AEReply, State),
+    AEReplyExpect = ra_node:handle_follower(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
                                 prev_log_index = 3, prev_log_term = 5,
                                 leader_commit = 3},
-    {follower, #{current_term := IncomingTerm}, {next_event, AERpc}} =
-        ra_node:handle_leader(AERpc, State),
+    AERpcExpect = {follower, State#{current_term := IncomingTerm}, {next_event, AERpc}},
+    AERpcExpect = ra_node:handle_leader(AERpc, State),
+    AERpcExpect = ra_node:handle_candidate(AERpc, State),
+    % follower will handle this properly and is tested elsewhere
 
     Vote = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                              last_log_term = 5},
-    {follower, #{current_term := IncomingTerm}, {next_event, Vote}} =
-        ra_node:handle_leader(Vote, State).
+    VoteExpect = {follower, State#{current_term := IncomingTerm}, {next_event, Vote}},
+    VoteExpect = ra_node:handle_leader(Vote, State),
+    VoteExpect = ra_node:handle_candidate(Vote, State).
 
 
 

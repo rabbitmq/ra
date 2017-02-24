@@ -17,7 +17,7 @@
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
 % TODO: some of this state needs to be persisted
--type ra_node_state(MacState) ::
+-type ra_node_state() ::
     #{id => ra_node_id(),
       leader_id => maybe(ra_node_id()),
       cluster_id => binary(),
@@ -31,8 +31,8 @@
       commit_index => ra_index(),
       last_applied => ra_index(),
       % Module implementing ra machine
-      machine_apply_fun => fun((term(), MacState) -> MacState),
-      machine_state => MacState}.
+      machine_apply_fun => fun((term(), term()) -> term()),
+      machine_state => term()}.
 
 -type ra_state() :: leader | follower | candidate.
 
@@ -46,7 +46,7 @@
                      [ra_action()] |
                      none.
 
--export_type([ra_node_state/1,
+-export_type([ra_node_state/0,
               ra_msg/0,
               ra_action/0]).
 
@@ -55,7 +55,7 @@ name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
 
--spec init(map()) -> ra_node_state(_).
+-spec init(map()) -> ra_node_state().
 init(#{id := Id,
        initial_nodes := InitialNodes,
        cluster_id := ClusterId,
@@ -74,12 +74,12 @@ init(#{id := Id,
       machine_apply_fun => MachineApplyFun,
       machine_state => InitialMachineState}.
 
--spec handle_leader(ra_msg(), ra_node_state(M)) ->
-    {ra_state(), ra_node_state(M), ra_action()}.
+-spec handle_leader(ra_msg(), ra_node_state()) ->
+    {ra_state(), ra_node_state(), ra_action()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              last_index = LastIdx}},
-                       State0 = #{current_term := Term,
-                                  cluster := {normal, Nodes}}) ->
+              State0 = #{current_term := Term,
+                         cluster := {normal, Nodes}}) ->
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
     Peer = Peer0#{match_index => max(MI, LastIdx),
                   next_index => max(NI, LastIdx+1)},
@@ -92,8 +92,8 @@ handle_leader({_PeerId, #append_entries_reply{term = Term}},
               #{current_term := CurTerm} = State) when Term > CurTerm ->
     {follower, State#{current_term => Term}, none};
 handle_leader({PeerId, #append_entries_reply{success = false,
-                                              last_index = LastIdx,
-                                              last_term = LastTerm}},
+                                             last_index = LastIdx,
+                                             last_term = LastTerm}},
               State0 = #{cluster := {normal, Nodes},
                          log := Log, log_mod := LogMod}) ->
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
@@ -123,22 +123,21 @@ handle_leader({command, Data}, State0) ->
     AEs = append_entries(State),
     {leader, State, [{reply, IdxTerm}, {send_append_entries, AEs}]};
 
-handle_leader(_Msg, State) ->
+handle_leader(Msg, State) ->
+    log_unhandled_msg(leader, Msg, State),
     {leader, State, none}.
 
--spec handle_follower(ra_msg(), ra_node_state(M)) ->
-    {ra_state(), ra_node_state(M), ra_action()}.
-handle_follower(election_timeout, State) ->
-    handle_election_timeout(State);
+-spec handle_follower(ra_msg(), ra_node_state()) ->
+    {ra_state(), ra_node_state(), ra_action()}.
 handle_follower(#append_entries_rpc{term = Term,
                                     leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries},
-                       State = #{current_term := CurTerm,
-                                 log_mod := LogMod,
-                                 log := Log0})
+                State = #{current_term := CurTerm,
+                          log_mod := LogMod,
+                          log := Log0})
   when Term >= CurTerm ->
     case has_log_entry(PLIdx, PLTerm, State) of
         true ->
@@ -160,15 +159,13 @@ handle_follower(#append_entries_rpc{term = Term,
 handle_follower(#append_entries_rpc{}, State = #{current_term := CurTerm}) ->
     Reply = append_entries_reply(CurTerm, false, State),
     {follower, maps:without([leader_id], State), {reply, Reply}};
-handle_follower(#request_vote_rpc{candidate_id = Cand,
-                                  term = Term},
+handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{current_term := Term, voted_for := VotedFor})
   when VotedFor /= Cand ->
     % already voted for another in this term
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {follower, maps:without([leader_id], State), {reply, Reply}};
-handle_follower(#request_vote_rpc{candidate_id = Cand,
-                                  term = Term,
+handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
                 State = #{current_term := CurTerm})
@@ -187,12 +184,17 @@ handle_follower(#request_vote_rpc{term = Term},
   when Term < CurTerm ->
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, {reply, Reply}};
-
-handle_follower(_Msg, State) ->
+handle_follower({_PeerId, #append_entries_reply{term = Term}},
+                State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, none};
+handle_follower(election_timeout, State) ->
+    handle_election_timeout(State);
+handle_follower(Msg, State) ->
+    log_unhandled_msg(follower, Msg, State),
     {follower, State, none}.
 
--spec handle_candidate(ra_msg() | election_timeout, ra_node_state(M)) ->
-    {ra_state(), ra_node_state(M), ra_action()}.
+-spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
+    {ra_state(), ra_node_state(), ra_action()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State = #{current_term := Term, votes := Votes,
                            cluster := {normal, Nodes}}) ->
@@ -211,8 +213,21 @@ handle_candidate(#request_vote_result{term = Term},
     {follower, State#{current_term => Term}, none};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, none};
+handle_candidate(#append_entries_rpc{term = Term} = Msg,
+                 State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_candidate({_PeerId, #append_entries_reply{term = Term}},
+                 State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, none};
+handle_candidate(#request_vote_rpc{term = Term} = Msg,
+                 State = #{current_term := CurTerm})
+  when Term > CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
 handle_candidate(election_timeout, State) ->
-    handle_election_timeout(State).
+    handle_election_timeout(State);
+handle_candidate(Msg, State) ->
+    log_unhandled_msg(candidate, Msg, State),
+    {candidate, State, none}.
 
 
 %%%===================================================================
@@ -336,3 +351,5 @@ increment_commit_index(State = #{cluster := {normal, Nodes}, id := Id,
         _ -> CommitIndex
     end.
 
+log_unhandled_msg(RaState, Msg, State) ->
+    ?DBG("~p received unhandled msg: ~p~nState was~p~n", [RaState, Msg, State]).

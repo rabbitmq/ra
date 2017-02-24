@@ -32,7 +32,7 @@
 
 -export_type([server_ref/0]).
 
--record(state, {node_state :: ra_node:ra_node_state(_),
+-record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
