@@ -40,12 +40,6 @@
         {term :: ra_term(),
          vote_granted :: boolean()}).
 
--type ra_msg() :: #append_entries_rpc{} | #append_entries_reply{}.
-
--type ra_action() :: {reply, ra_msg()} |
-                        {vote | append,
-                         [{ra_node_id(), ra_msg()}]} |
-                       [ra_action()] | none.
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 

@@ -36,7 +36,19 @@
 
 -type ra_state() :: leader | follower | candidate.
 
--export_type([ra_node_state/1]).
+-type ra_msg() :: #append_entries_rpc{} | #append_entries_reply{} |
+                  #request_vote_rpc{} | #request_vote_result{}.
+
+-type ra_action() :: {reply, ra_msg()} |
+                     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
+                     {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
+                     {next_event, ra_msg()} |
+                     [ra_action()] |
+                     none.
+
+-export_type([ra_node_state/1,
+              ra_msg/0,
+              ra_action/0]).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
@@ -64,23 +76,52 @@ init(#{id := Id,
 
 -spec handle_leader(ra_msg(), ra_node_state(M)) ->
     {ra_state(), ra_node_state(M), ra_action()}.
-handle_leader({PeerId, #append_entries_reply{term = Term,
-                                             success = true,
+handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              last_index = LastIdx}},
                        State0 = #{current_term := Term,
                                   cluster := {normal, Nodes}}) ->
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
     Peer = Peer0#{match_index => max(MI, LastIdx),
-                 next_index => max(NI, LastIdx+1)},
-
+                  next_index => max(NI, LastIdx+1)},
     State1 = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
-    {State, _Actions} = evaluate_quorum(State1),
+    NewCommitIndex = increment_commit_index(State1),
+    State = apply_to(NewCommitIndex, State1),
     AEs = append_entries(State),
-    {leader, State, {append, AEs}};
+    {leader, State, {send_append_entries, AEs}};
+handle_leader({_PeerId, #append_entries_reply{term = Term}},
+              #{current_term := CurTerm} = State) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, none};
+handle_leader({PeerId, #append_entries_reply{success = false,
+                                              last_index = LastIdx,
+                                              last_term = LastTerm}},
+              State0 = #{cluster := {normal, Nodes},
+                         log := Log, log_mod := LogMod}) ->
+    #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
+    % if the last_index exists and has a matching term we can forward match_index
+    % and update next_index directly
+    Peer = case LogMod:fetch(LastIdx, Log) of
+               {_, LastTerm, _} -> % entry exists forward all things
+                   Peer0#{match_index => LastIdx,
+                          next_index => LastIdx+1};
+               _ ->
+                   % take the smallest next_index as long as it is
+                   % not smaller than the last known match index
+                   Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
+           end,
+
+    State = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
+    AEs = append_entries(State),
+    {leader, State, {send_append_entries, AEs}};
+handle_leader(#append_entries_rpc{term = Term} = Msg,
+              #{current_term := CurTerm} = State) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_leader(#request_vote_rpc{term = Term} = Msg,
+              #{current_term := CurTerm} = State) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
 handle_leader({command, Data}, State0) ->
     {IdxTerm, State} = append_log(Data, State0),
     AEs = append_entries(State),
-    {leader, State, [{reply, IdxTerm}, {append, AEs}]};
+    {leader, State, [{reply, IdxTerm}, {send_append_entries, AEs}]};
 
 handle_leader(_Msg, State) ->
     {leader, State, none}.
@@ -161,7 +202,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {Cluster, Actions} = make_empty_append_entries(State),
             {leader, maps:without([votes, leader_id],
                                   State#{cluster => Cluster}),
-             {append, Actions}};
+             {send_append_entries, Actions}};
         _ ->
             {candidate, State#{votes => NewVotes}, none}
     end;
@@ -174,9 +215,9 @@ handle_candidate(election_timeout, State) ->
     handle_election_timeout(State).
 
 
-%% util
-%%
-
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
     PeerIds = peers(State),
@@ -189,7 +230,7 @@ handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
                || PeerId <- PeerIds],
     % vote for self
     {candidate, State#{current_term => NewTerm,
-                       votes => 1}, {vote, Actions}}.
+                       votes => 1}, {send_vote_requests, Actions}}.
 
 peers(#{id := Id, cluster := {normal, Nodes}}) ->
     maps:keys(maps:remove(Id, Nodes)).
@@ -275,12 +316,10 @@ append_entries_reply(Term, Success, State) ->
                           last_index = LastIdx,
                           last_term = LastTerm}.
 
-evaluate_quorum(State = #{cluster := {normal, Nodes},
-                          id := Id}) ->
+increment_commit_index(State = #{cluster := {normal, Nodes}, id := Id}) ->
     {LeaderIdx, _, _} = last_entry(State),
     Idxs = lists:sort(
              [LeaderIdx |
               [Idx || {_, #{match_index := Idx}} <- maps:to_list(maps:remove(Id, Nodes))]]),
     Nth = trunc(length(Idxs) / 2) + 1,
-    NewCommitIndex = lists:nth(Nth, Idxs),
-    {apply_to(NewCommitIndex, State), []}.
+    lists:nth(Nth, Idxs).

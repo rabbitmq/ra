@@ -37,10 +37,8 @@ proxy(Pid, Appends) ->
 
 init([Parent, Interval]) ->
     {ok, TRef} = timer:send_after(Interval, broadcast),
-    {ok, #state{appends = #{},
-                parent = Parent,
-                interval = Interval,
-                timer_ref = TRef}}.
+    {ok, #state{appends = #{}, parent = Parent,
+                interval = Interval, timer_ref = TRef}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -50,9 +48,15 @@ handle_cast({appends, Appends}, State0) ->
     ?DBG("proxy: handle cast appends ~p~n", [State0]),
     AppendsMap = maps:from_list(Appends),
     % TODO reset timer?
-    State = State0#state{appends = AppendsMap},
-    ok = broadcast(State),
-    {noreply, State}.
+    case State0 of
+        #state{appends = AppendsMap} ->
+            % no change - do nothing
+            {noreply, State0};
+        _ ->
+            State = State0#state{appends = AppendsMap},
+            ok = broadcast(State),
+            {noreply, State}
+    end.
 
 handle_info(broadcast, State = #state{interval = Interval}) ->
     ?DBG("proxy: handle info broadcast ~p~n", [State]),
@@ -78,7 +82,12 @@ broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
     [begin
          % use the peer ref as the unique rpc reply reference
          % fake gen_call - reply goes to parent process
-         Peer ! {'$gen_call', {Parent, Peer}, AE},
-         ok
+         try Peer ! {'$gen_call', {Parent, Peer}, AE} of
+             _ -> ok
+         catch
+             _:_ ->
+                 ?DBG("Peer broadcast error ~p~n", [Peer]),
+                 ok
+         end
      end || {Peer, AE} <- maps:to_list(Appends)],
     ok.
