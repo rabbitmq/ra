@@ -244,6 +244,9 @@ has_log_entry(Idx, Term, #{log := Log, log_mod := Mod}) ->
         _ -> false
     end.
 
+fetch_entry(Idx, #{log := Log, log_mod := Mod}) ->
+    Mod:fetch(Idx, Log).
+
 fetch_entries(From, To, #{log := Log, log_mod := Mod}) ->
     Mod:take(From, To - From + 1, Log).
 
@@ -316,10 +319,20 @@ append_entries_reply(Term, Success, State) ->
                           last_index = LastIdx,
                           last_term = LastTerm}.
 
-increment_commit_index(State = #{cluster := {normal, Nodes}, id := Id}) ->
+increment_commit_index(State = #{cluster := {normal, Nodes}, id := Id,
+                                 current_term := CurrentTerm,
+                                 commit_index := CommitIndex}) ->
     {LeaderIdx, _, _} = last_entry(State),
     Idxs = lists:sort(
              [LeaderIdx |
               [Idx || {_, #{match_index := Idx}} <- maps:to_list(maps:remove(Id, Nodes))]]),
     Nth = trunc(length(Idxs) / 2) + 1,
-    lists:nth(Nth, Idxs).
+    PotentialNewCommitIndex = lists:nth(Nth, Idxs),
+    % leaders can only increment their commit index if the corresponding
+    % log entry term matches the current term
+    case fetch_entry(PotentialNewCommitIndex, State) of
+        {_, CurrentTerm, _} ->
+             PotentialNewCommitIndex;
+        _ -> CommitIndex
+    end.
+

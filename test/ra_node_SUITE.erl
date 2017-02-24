@@ -68,8 +68,18 @@ append_entries_reply_success(_Config) ->
                last_applied := 3,
                machine_state := <<"hi3">>}, ExpectedActions} =
         ra_node:handle_leader(Msg, State),
+
     % TODO: do not increment commit index when
     % the term of the log entry /= current_term (§5.3, §5.4)
+    Msg1 = {n2, #append_entries_reply{term = 7, success = true,
+                                      last_index = 3, last_term = 5}},
+    {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
+                                             match_index := 3}}},
+               commit_index := 1,
+               last_applied := 1,
+               current_term := 7,
+               machine_state := <<"hi1">>}, _} =
+        ra_node:handle_leader(Msg1, State#{current_term := 7}),
     ok.
 
 append_entries_reply_no_success(_Config) ->
