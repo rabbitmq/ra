@@ -6,7 +6,7 @@
 
 %% API
 -export([start_link/1,
-         command/2
+         command/3
         ]).
 
 %% State functions
@@ -35,6 +35,7 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
+                pending_replies = [] :: [{{ra_index(), ra_term()}, term()}],
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
 %%%===================================================================
@@ -44,14 +45,16 @@
 start_link(Config = #{id := Id}) ->
     gen_statem:start_link({local, Id}, ?MODULE, [Config], []).
 
--spec command(ra_node_proc:server_ref(), term()) ->
-    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
-command(ServerRef, Data) ->
+-spec command(ra_node_proc:server_ref(), term(), no_wait | await_consensus) ->
+    {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
+    | {error, term()}.
+command(ServerRef, Data, Flag) ->
     % TODO: use dirty timeouts
-    case gen_statem:call(ServerRef, {command, Data}) of
+    case gen_statem:call(ServerRef, {command, Data, Flag}) of
         {redirect, Leader} ->
-            command(Leader, Data);
-        Reply -> {Reply, ServerRef}
+            command(Leader, Data, Flag);
+        {error, _} = E -> E;
+        Reply -> {ok, Reply, ServerRef}
     end.
 
 %%%===================================================================
@@ -68,22 +71,33 @@ init([Config]) ->
 callback_mode() -> state_functions.
 
 %% state functions
-leader({call, From}, {command, _Data} = Cmd,
+leader({call, From}, {command, Data, no_wait},
        State0 = #state{node_state = NodeState0}) ->
     % Persist command into log
     % Return raft index + term to caller so they can wait for apply notifications
     % Send msg to peer proxy with updated state data (so they can replicate)
-    {leader, NodeState, Actions} = ra_node:handle_leader(Cmd, NodeState0),
+    {leader, NodeState, Actions} = ra_node:handle_leader({command, Data},
+                                                         NodeState0),
     State = interact(Actions, From, State0),
     {keep_state, State#state{node_state = NodeState}};
+leader({call, From}, {command, Data, await_consensus},
+       State0 = #state{node_state = NodeState0,
+                       pending_replies = PendingReplies0}) ->
+    {leader, NodeState, [{reply, IdxTerm} | Actions]} =
+     ra_node:handle_leader({command, Data}, NodeState0),
+    State = interact(Actions, From, State0),
+    PendingReplies = [{IdxTerm, From} | PendingReplies0],
+    {keep_state, State#state{node_state = NodeState,
+                             pending_replies = PendingReplies}};
 leader(EventType, Msg,
        State0 = #state{node_state = NodeState0 = #{id := Id}}) ->
-    ?DBG("~p leader: ~p~n", [Id, Msg]),
     From = get_from(EventType),
     case ra_node:handle_leader(Msg, NodeState0) of
         {leader, NodeState, Actions} ->
             State = interact(Actions, From, State0),
-            {keep_state, State#state{node_state = NodeState}};
+            State1 = State#state{node_state = NodeState},
+            {State2, ReplyActions} = make_caller_reply_actions(State1),
+            {keep_state, State2, ReplyActions};
         {follower, NodeState, Actions} ->
             ?DBG("~p leader abdicates!~n", [Id]),
             % TODO kill proxy process
@@ -92,10 +106,10 @@ leader(EventType, Msg,
              [election_timeout_action(State)]}
     end.
 
-candidate({call, From}, {command, _Data},
+candidate({call, From}, {command, _Data, _Flag},
           State = #state{node_state = #{leader_id := LeaderId}}) ->
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
-candidate({call, From}, {command, _Data} = Cmd,
+candidate({call, From}, {command, _Data, _Flag} = Cmd,
           State = #state{pending_commands = Pending}) ->
     % stash commands until a leader is known
     {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
@@ -121,10 +135,10 @@ candidate(EventType, Msg, State0 = #state{node_state = NodeState0 = #{id := Id},
             {next_state, leader, State#state{node_state = NodeState}, NextEvents}
     end.
 
-follower({call, From}, {command, _Data},
+follower({call, From}, {command, _Data, _Flag},
          State = #state{node_state = #{leader_id := LeaderId}}) ->
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
-follower({call, From}, {command, _Data} = Cmd,
+follower({call, From}, {command, _Data, _Flag} = Cmd,
          State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
 follower(EventType, Msg,
@@ -149,8 +163,12 @@ handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknownn ~p~n", [EventContent]),
     {next_state, StateName, State}.
 
-terminate(Reason, _StateName, _State) ->
+terminate(Reason, _StateName, #state{proxy = undefined}) ->
     ?DBG("ra terminating with ~p~n", [Reason]),
+    ok;
+terminate(Reason, _StateName, #state{proxy = Proxy}) ->
+    ?DBG("ra terminating with ~p~n", [Reason]),
+    _ = gen_server:stop(Proxy, Reason, 100),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -163,6 +181,35 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+make_caller_reply_actions(State = #state{pending_replies = []}) ->
+    {State, []};
+make_caller_reply_actions(State = #state{pending_replies = Pending,
+                                node_state = #{commit_index := CommitIndex,
+                                               log := Log, log_mod := Mod}}) ->
+    % There are code paths here that are difficult to test externally
+    % TODO: add internal unit tests
+    {Replies, Pending1} =
+    lists:foldl(fun({{Idx, Term} = IdxTerm, From}, {Act, Rem})
+                      when Idx =< CommitIndex ->
+                        Reply = case Mod:fetch(Idx, Log) of
+                                    undefined ->
+                                        % should never happen so exit
+                                        exit(corrupted_log);
+                                    {Idx, Term, _} ->
+                                        % the term of the index is correct
+                                        IdxTerm;
+                                    {Idx, OthTerm, _} ->
+                                        % can this happen given the pending
+                                        % callers are only stored for the leader
+                                        {error, {entry_term_mismatch, Term,
+                                                 OthTerm}}
+                                end,
+                        {[{reply, From, Reply} | Act], Rem};
+                   (_, {Act, Rem}) ->
+                        {Act, Rem}
+                end, {[], []}, Pending),
+    {State#state{pending_replies = Pending1}, Replies}.
 
 interact(none, _From, State) ->
     State;

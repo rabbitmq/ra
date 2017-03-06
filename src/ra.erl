@@ -4,7 +4,8 @@
 
 -export([
          start_cluster/4,
-         command/2
+         cast_command/2,
+         call_command/2
         ]).
 
 start_cluster(Num, Name, ApplyFun, InitialState) ->
@@ -21,7 +22,12 @@ start_cluster(Num, Name, ApplyFun, InitialState) ->
          {Pid, Id}
      end || Id <- Nodes].
 
--spec command(ra_node_proc:server_ref(), term()) ->
+-spec cast_command(ra_node_proc:server_ref(), term()) ->
     {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
-command(Ref, Data) ->
-    ra_node_proc:command(Ref, Data).
+cast_command(Ref, Data) ->
+    ra_node_proc:command(Ref, Data, no_wait).
+
+-spec call_command(ra_node_proc:server_ref(), term()) ->
+    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
+call_command(Ref, Data) ->
+    ra_node_proc:command(Ref, Data, await_consensus).

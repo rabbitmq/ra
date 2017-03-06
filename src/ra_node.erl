@@ -16,6 +16,9 @@
 
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
+-type ra_machine_effect() :: {send_msg,
+                              pid() | atom() | {atom(), atom()}, term()}.
+
 % TODO: some of this state needs to be persisted
 -type ra_node_state() ::
     #{id => ra_node_id(),
@@ -32,7 +35,7 @@
       last_applied => ra_index(),
       % Module implementing ra machine
       machine_apply_fun => fun((term(), term()) -> term() |
-                                                   {term(), [{send_msg, term(), term()}]}),
+                                                   {term(), [ra_machine_effect()]}),
       machine_state => term()}.
 
 -type ra_state() :: leader | follower | candidate.
@@ -152,9 +155,10 @@ handle_follower(#append_entries_rpc{term = Term,
                                       L
                               end, Log0, Entries),
 
-            {State1, _Effects} = apply_to(LeaderCommit, State#{current_term => Term,
-                                                   leader_id => LeaderId,
-                                                   log => Log}),
+            {State1, _Effects} = apply_to(LeaderCommit,
+                                          State#{current_term => Term,
+                                                 leader_id => LeaderId,
+                                                 log => Log}),
             % do not apply Effects from the machine on a non leader
             Reply = append_entries_reply(CurTerm, true, State1),
             {follower, State1, {reply, Reply}};
@@ -299,7 +303,7 @@ apply_to(Commit, State = #{last_applied := LastApplied,
                            machine_state := MacState0,
                            machine_apply_fun := ApplyFun0})
   when Commit > LastApplied ->
-    case fetch_entries(LastApplied+1, Commit, State) of
+    case fetch_entries(LastApplied + 1, Commit, State) of
         [] -> {State, []};
         Entries ->
             ApplyFun = fun(Cmd, {MacSt, Effects}) ->
@@ -315,8 +319,8 @@ apply_to(Commit, State = #{last_applied := LastApplied,
             {LastEntryIdx, _, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
             {State#{last_applied => NewCommit,
-                   commit_index => NewCommit,
-                   machine_state => MacState}, NewEffects}
+                    commit_index => NewCommit,
+                    machine_state => MacState}, NewEffects}
     end;
 apply_to(_Commit, State) -> {State, []}.
 
