@@ -23,11 +23,11 @@ start_cluster(Num, Name, ApplyFun, InitialState) ->
      end || Id <- Nodes].
 
 -spec cast_command(ra_node_proc:server_ref(), term()) ->
-    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
+    {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
 cast_command(Ref, Data) ->
-    ra_node_proc:command(Ref, Data, no_wait).
+    ra_node_proc:command(Ref, Data, after_log_append).
 
 -spec call_command(ra_node_proc:server_ref(), term()) ->
-    {IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
+    {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
 call_command(Ref, Data) ->
     ra_node_proc:command(Ref, Data, await_consensus).

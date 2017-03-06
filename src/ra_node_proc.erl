@@ -30,6 +30,8 @@
 
 -type server_ref() :: pid() | atom() | {node() | atom()}.
 
+-type command_reply_mode() :: after_log_append | await_consensus.
+
 -export_type([server_ref/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
@@ -45,14 +47,14 @@
 start_link(Config = #{id := Id}) ->
     gen_statem:start_link({local, Id}, ?MODULE, [Config], []).
 
--spec command(ra_node_proc:server_ref(), term(), no_wait | await_consensus) ->
+-spec command(ra_node_proc:server_ref(), term(), command_reply_mode()) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
     | {error, term()}.
-command(ServerRef, Data, Flag) ->
+command(ServerRef, Data, ReplyMode) ->
     % TODO: use dirty timeouts
-    case gen_statem:call(ServerRef, {command, Data, Flag}) of
+    case gen_statem:call(ServerRef, {command, Data, ReplyMode}) of
         {redirect, Leader} ->
-            command(Leader, Data, Flag);
+            command(Leader, Data, ReplyMode);
         {error, _} = E -> E;
         Reply -> {ok, Reply, ServerRef}
     end.
@@ -71,7 +73,7 @@ init([Config]) ->
 callback_mode() -> state_functions.
 
 %% state functions
-leader({call, From}, {command, Data, no_wait},
+leader({call, From}, {command, Data, after_log_append},
        State0 = #state{node_state = NodeState0}) ->
     % Persist command into log
     % Return raft index + term to caller so they can wait for apply notifications
