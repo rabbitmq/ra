@@ -7,7 +7,7 @@
 all() ->
     [
      basic,
-     call_command
+     send_and_await_consensus
     ].
 
 groups() ->
@@ -20,8 +20,8 @@ basic(_Config) ->
                      #{queue => queue:new(),
                        pending_dequeues => []}),
 
-    {ok, {1, 1}, Leader} = ra:cast_command(APid, {dequeue, Self}),
-    {ok, {2, 1}, _} = ra:cast_command(Leader, {enqueue, test_msg}),
+    {ok, {1, 1}, Leader} = ra:send(APid, {dequeue, Self}),
+    {ok, {2, 1}, _} = ra:send(Leader, {enqueue, test_msg}),
     waitfor(test_msg, apply_timeout),
     % check that the message isn't delivered multiple times
     receive
@@ -30,11 +30,11 @@ basic(_Config) ->
     end,
     terminate_cluster(Cluster).
 
-call_command(_Config) ->
+send_and_await_consensus(_Config) ->
     [{APid, _A}, _B, _C]  = Cluster =
     ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
 
-    {ok, {1, 1}, _Leader} = ra:call_command(APid, 5),
+    {ok, {1, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
 
     % {{1, 1}, 14} = ra:query(APid, fun(S) -> S end, dirty),
     terminate_cluster(Cluster).
