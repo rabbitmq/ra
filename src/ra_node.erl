@@ -152,15 +152,12 @@ handle_follower(#append_entries_rpc{term = Term,
                                       L
                               end, Log0, Entries),
 
-            {State1, Effects} = apply_to(LeaderCommit, State#{current_term => Term,
+            {State1, _Effects} = apply_to(LeaderCommit, State#{current_term => Term,
                                                    leader_id => LeaderId,
                                                    log => Log}),
+            % do not apply Effects from the machine on a non leader
             Reply = append_entries_reply(CurTerm, true, State1),
-            Actions = case Effects  of
-                          [] -> {reply, Reply};
-                          E -> [{reply, Reply} | E]
-                      end,
-            {follower, State1, Actions};
+            {follower, State1, {reply, Reply}};
         false ->
             Reply = append_entries_reply(CurTerm, false, State),
             {follower, State#{current_term => Term,

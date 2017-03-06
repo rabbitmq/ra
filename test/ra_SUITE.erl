@@ -18,7 +18,11 @@ basic(_Config) ->
     {{1, 1}, Leader} = ra:command(APid, {dequeue, Self}),
     {{2, 1}, _} = ra:command(Leader, {enqueue, test_msg}),
     waitfor(test_msg, apply_timeout),
-    ok.
+    % check that the message isn't delivered multiple times
+    receive
+        test_msg -> exit(double_delivery)
+    after 500 -> ok
+    end.
 
 apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
     Q = queue:in(Msg, Q0),
