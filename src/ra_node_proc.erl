@@ -26,6 +26,7 @@
 
 -define(SERVER, ?MODULE).
 -define(TEST_LOG, ra_test_log).
+-define(DEFAULT_TIMEOUT, 5000).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
 -type server_ref() :: pid() | atom() | {node() | atom()}.
@@ -51,8 +52,8 @@ start_link(Config = #{id := Id}) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
     | {error, term()}.
 command(ServerRef, Data, ReplyMode) ->
-    % TODO: use dirty timeouts
-    case gen_statem:call(ServerRef, {command, Data, ReplyMode}) of
+    case gen_statem:call(ServerRef, {command, Data, ReplyMode},
+                         {dirty_timeout, ?DEFAULT_TIMEOUT}) of
         {redirect, Leader} ->
             command(Leader, Data, ReplyMode);
         {error, _} = E -> E;
