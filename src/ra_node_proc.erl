@@ -30,7 +30,7 @@
 -define(DEFAULT_TIMEOUT, 5000).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
--type server_ref() :: pid() | atom() | {node() | atom()}.
+-type server_ref() :: pid() | atom() | {Name::atom(), node()}.
 
 -type command_reply_mode() :: after_log_append | await_consensus
                               | notify_on_consensus.
@@ -53,24 +53,36 @@
 %%%===================================================================
 
 start_link(Config = #{id := Id}) ->
-    gen_statem:start_link({local, Id}, ?MODULE, [Config], []).
+    Name = server_ref_to_local_name(Id),
+    gen_statem:start_link({local, Name}, ?MODULE, [Config], []).
 
 -spec command(ra_node_proc:server_ref(), term(), command_reply_mode()) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
     | {error, term()}.
 command(ServerRef, Data, ReplyMode) ->
-    case gen_statem:call(ServerRef, {command, Data, ReplyMode},
-                         {dirty_timeout, ?DEFAULT_TIMEOUT}) of
+    case gen_statem_safe_call(ServerRef, {command, Data, ReplyMode},
+                              {dirty_timeout, ?DEFAULT_TIMEOUT}) of
         {redirect, Leader} ->
             command(Leader, Data, ReplyMode);
         {error, _} = E -> E;
+        timeout ->
+            % TODO: formatted error message
+            {timeout, ServerRef};
         Reply -> {ok, Reply, ServerRef}
     end.
 
--spec query(ra_node_proc:server_ref(), query_fun(), dirty | consensus) ->
+gen_statem_safe_call(ServerRef, Msg, Timeout) ->
+    try
+        gen_statem:call(ServerRef, Msg, Timeout)
+    catch
+         exit:{timeout, _} ->
+            timeout
+    end.
+
+-spec query(ra_node_proc:server_ref(), query_fun(), dirty | consistent) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
-query(ServerRef, QueryFun, dirty) ->
-    gen_statem:call(ServerRef, {query, QueryFun, dirty}).
+query(ServerRef, QueryFun, QueryMode) ->
+    gen_statem:call(ServerRef, {query, QueryFun, QueryMode}).
 
 
 %%%===================================================================
@@ -313,4 +325,7 @@ follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L},
      || {From, _Data} <- Pending],
     New#state{pending_commands = []};
 follower_leader_change(_Old, New) -> New.
+
+server_ref_to_local_name({Name, _}) -> Name;
+server_ref_to_local_name(Name) when is_atom(Name) -> Name.
 
