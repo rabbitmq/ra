@@ -6,7 +6,8 @@
 
 %% API
 -export([start_link/1,
-         command/3
+         command/3,
+         query/3
         ]).
 
 %% State functions
@@ -37,6 +38,8 @@
 -type pending_reply() :: {reply | notify, {ra_index(), ra_term()},
                           From::term()}.
 
+-type query_fun() :: fun((term()) -> term()).
+
 -export_type([server_ref/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
@@ -63,6 +66,12 @@ command(ServerRef, Data, ReplyMode) ->
         {error, _} = E -> E;
         Reply -> {ok, Reply, ServerRef}
     end.
+
+-spec query(ra_node_proc:server_ref(), query_fun(), dirty | consensus) ->
+    {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
+query(ServerRef, QueryFun, dirty) ->
+    gen_statem:call(ServerRef, {query, QueryFun, dirty}).
+
 
 %%%===================================================================
 %%% gen_statem callbacks
@@ -162,6 +171,9 @@ follower({call, From}, {command, _Data, _Flag},
 follower({call, From}, {command, _Data, _Flag} = Cmd,
          State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
+follower({call, From}, {query, QueryFun, dirty}, State = #state{node_state = NodeState}) ->
+    Reply = perform_query(QueryFun, dirty, NodeState),
+    {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, Msg,
          State0 = #state{node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p follower: ~p~n", [Id, Msg]),
@@ -178,7 +190,6 @@ follower(EventType, Msg,
             {next_state, candidate, State#state{node_state = NodeState},
              election_timeout_action(State)}
     end.
-
 
 handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknownn ~p~n", [EventContent]),
@@ -202,6 +213,11 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+perform_query(QueryFun, dirty, #{machine_state := MacState,
+                                 last_applied := Last,
+                                 current_term := Term}) ->
+     {ok, {Last, Term}, QueryFun(MacState)}.
 
 make_caller_reply_actions(State = #state{pending_replies = []}) ->
     {State, [], []};

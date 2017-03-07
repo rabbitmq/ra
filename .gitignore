@@ -10,6 +10,7 @@ erl_crash.dump
 /logs/
 /plugins/
 /xrefr
+elvis
 
 rabbitmq_rtopic_exchange.d
 *.plt

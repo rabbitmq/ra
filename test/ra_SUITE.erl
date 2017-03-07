@@ -8,7 +8,8 @@ all() ->
     [
      queue,
      send_and_await_consensus,
-     send_and_notify
+     send_and_notify,
+     dirty_query
     ].
 
 groups() ->
@@ -34,10 +35,7 @@ queue(_Config) ->
 send_and_await_consensus(_Config) ->
     [{APid, _A}, _B, _C]  = Cluster =
     ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
-
     {ok, {1, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
-
-    % {{1, 1}, 14} = ra:query(APid, fun(S) -> S end, dirty),
     terminate_cluster(Cluster).
 
 send_and_notify(_Config) ->
@@ -49,6 +47,13 @@ send_and_notify(_Config) ->
     after 2000 ->
               exit(consensus_timeout)
     end,
+    terminate_cluster(Cluster).
+
+dirty_query(_Config) ->
+    [{APid, _A}, _B, _C]  = Cluster =
+    ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
+    {ok, {1, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
+    {ok, {1, 1}, 14} = ra:dirty_query(APid, fun(S) -> S end),
     terminate_cluster(Cluster).
 
 % implements a simple queue machine

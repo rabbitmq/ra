@@ -17,6 +17,9 @@ all() ->
      node_steps_down
     ].
 
+groups() ->
+    [ {tests, [], all()} ].
+
 
 node_steps_down(_Config) ->
     State = base_state(3),
