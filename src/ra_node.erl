@@ -28,14 +28,13 @@
                  {joint, ra_cluster(), ra_cluster()},
       current_term => ra_term(),
       log => term(),
-      log_mod => atom(), % if only this could be narrowed down to a behavour - sigh
       voted_for => maybe(ra_node_id()),
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
       % Module implementing ra machine
-      machine_apply_fun => fun((term(), term()) -> term() |
-                                                   {term(), [ra_machine_effect()]}),
+      machine_apply_fun => fun((term(), term()) ->
+                              term() | {term(), [ra_machine_effect()]}),
       machine_state => term()}.
 
 -type ra_state() :: leader | follower | candidate.
@@ -43,13 +42,14 @@
 -type ra_msg() :: #append_entries_rpc{} | #append_entries_reply{} |
                   #request_vote_rpc{} | #request_vote_result{}.
 
--type ra_action() :: {reply, ra_msg()} |
-                     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
-                     {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
-                     {next_event, ra_msg()} |
-                     [ra_action()] |
-                     {send_msg, pid(), term()} |
-                     none.
+-type ra_action() ::
+    {reply, ra_msg()} |
+    {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
+    {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
+    {next_event, ra_msg()} |
+    [ra_action()] |
+    {send_msg, pid(), term()} |
+    none.
 
 -export_type([ra_node_state/0,
               ra_msg/0,
@@ -74,8 +74,7 @@ init(#{id := Id,
       current_term => 0,
       commit_index => 0,
       last_applied => 0,
-      log => LogMod:init(LogInitArgs),
-      log_mod => LogMod,
+      log => ra_log:init(LogMod, LogInitArgs),
       machine_apply_fun => MachineApplyFun,
       machine_state => InitialMachineState}.
 
@@ -104,11 +103,11 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
               State0 = #{cluster := {normal, Nodes},
-                         log := Log, log_mod := LogMod}) ->
+                         log := Log}) ->
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
-    % if the last_index exists and has a matching term we can forward match_index
-    % and update next_index directly
-    Peer = case LogMod:fetch(LastIdx, Log) of
+    % if the last_index exists and has a matching term we can forward
+    % match_index and update next_index directly
+    Peer = case ra_log:fetch(LastIdx, Log) of
                {_, LastTerm, _} -> % entry exists forward all things
                    Peer0#{match_index => LastIdx,
                           next_index => LastIdx+1};
@@ -145,13 +144,12 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_term = PLTerm,
                                     entries = Entries},
                 State = #{current_term := CurTerm,
-                          log_mod := LogMod,
                           log := Log0})
   when Term >= CurTerm ->
     case has_log_entry(PLIdx, PLTerm, State) of
         true ->
             Log = lists:foldl(fun(E, Acc) ->
-                                      {ok, L} = LogMod:append(E, true, Acc),
+                                      {ok, L} = ra_log:append(E, true, Acc),
                                       L
                               end, Log0, Entries),
 
@@ -261,20 +259,20 @@ handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
 peers(#{id := Id, cluster := {normal, Nodes}}) ->
     maps:keys(maps:remove(Id, Nodes)).
 
-last_entry(#{log := Log, log_mod := Mod}) ->
-    Mod:last(Log).
+last_entry(#{log := Log}) ->
+    ra_log:last(Log).
 
-has_log_entry(Idx, Term, #{log := Log, log_mod := Mod}) ->
-    case Mod:fetch(Idx, Log) of
+has_log_entry(Idx, Term, #{log := Log}) ->
+    case ra_log:fetch(Idx, Log) of
         {Idx, Term, _} -> true;
         _ -> false
     end.
 
-fetch_entry(Idx, #{log := Log, log_mod := Mod}) ->
-    Mod:fetch(Idx, Log).
+fetch_entry(Idx, #{log := Log}) ->
+    ra_log:fetch(Idx, Log).
 
-fetch_entries(From, To, #{log := Log, log_mod := Mod}) ->
-    Mod:take(From, To - From + 1, Log).
+fetch_entries(From, To, #{log := Log}) ->
+    ra_log:take(From, To - From + 1, Log).
 
 make_cluster(Nodes) ->
     lists:foldl(fun(N, Acc) ->
@@ -306,13 +304,7 @@ apply_to(Commit, State = #{last_applied := LastApplied,
     case fetch_entries(LastApplied + 1, Commit, State) of
         [] -> {State, []};
         Entries ->
-            ApplyFun = fun(Cmd, {MacSt, Effects}) ->
-                               case ApplyFun0(Cmd, MacSt) of
-                                   {NextSt, Efx} ->
-                                       {NextSt, Effects ++ Efx};
-                                   NextSt -> {NextSt, Effects}
-                               end
-                       end,
+            ApplyFun = wrap_apply_fun(ApplyFun0),
             {MacState, NewEffects} = lists:foldl(ApplyFun, {MacState0, []},
                                                  [E || {_I, _T, E} <- Entries]),
 
@@ -324,20 +316,28 @@ apply_to(Commit, State = #{last_applied := LastApplied,
     end;
 apply_to(_Commit, State) -> {State, []}.
 
+wrap_apply_fun(ApplyFun) ->
+    fun(Cmd, {MacSt, Effects}) ->
+            case ApplyFun(Cmd, MacSt) of
+                {NextSt, Efx} ->
+                    {NextSt, Effects ++ Efx};
+                NextSt -> {NextSt, Effects}
+            end
+    end.
 
-append_log(Cmd, State = #{log := Log0, log_mod := Mod, current_term := Term}) ->
-    {LastIdx, _, _} = Mod:last(Log0),
-    {ok, Log} = Mod:append({LastIdx+1, Term, Cmd}, false, Log0),
+append_log(Cmd, State = #{log := Log0, current_term := Term}) ->
+    {LastIdx, _, _} = ra_log:last(Log0),
+    {ok, Log} = ra_log:append({LastIdx+1, Term, Cmd}, false, Log0),
     {{LastIdx+1, Term}, State#{log => Log}}.
 
 
 append_entries(#{id := Id, cluster := {normal, Nodes},
-                 log := Log, log_mod := Mod,
-                 current_term := Term, commit_index := CommitIndex}) ->
+                 log := Log, current_term := Term,
+                 commit_index := CommitIndex}) ->
     Peers = maps:remove(Id, Nodes),
     [begin
-         {PrevIdx, PrevTerm, _} = Mod:fetch(Next-1, Log),
-         {PeerId, #append_entries_rpc{entries = Mod:take(Next, 5, Log),
+         {PrevIdx, PrevTerm, _} = ra_log:fetch(Next-1, Log),
+         {PeerId, #append_entries_rpc{entries = ra_log:take(Next, 5, Log),
                                       term = Term,
                                       leader_id = Id,
                                       prev_log_index = PrevIdx,
@@ -358,7 +358,8 @@ increment_commit_index(State = #{cluster := {normal, Nodes}, id := Id,
     {LeaderIdx, _, _} = last_entry(State),
     Idxs = lists:sort(
              [LeaderIdx |
-              [Idx || {_, #{match_index := Idx}} <- maps:to_list(maps:remove(Id, Nodes))]]),
+              [Idx || {_, #{match_index := Idx}} <-
+                      maps:to_list(maps:remove(Id, Nodes))]]),
     Nth = trunc(length(Idxs) / 2) + 1,
     PotentialNewCommitIndex = lists:nth(Nth, Idxs),
     % leaders can only increment their commit index if the corresponding

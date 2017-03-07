@@ -34,7 +34,8 @@
 -type command_reply_mode() :: after_log_append | await_consensus
                               | notify_on_consensus.
 
--type pending_reply() :: {reply | notify, {ra_index(), ra_term()}, From::term()}.
+-type pending_reply() :: {reply | notify, {ra_index(), ra_term()},
+                          From::term()}.
 
 -export_type([server_ref/0]).
 
@@ -90,10 +91,9 @@ leader({call, From}, {command, Data, ReplyMode},
        State0 = #state{node_state = NodeState0,
                        pending_replies = PendingReplies0}) ->
     % Persist command into log
-    % Return raft index + term to caller so they can wait for apply notifications
-    % Send msg to peer proxy with updated state data (so they can replicate)
-    % {leader, NodeState, Actions} = ra_node:handle_leader({command, Data},
-    %                                                      NodeState0),
+    % Return raft index + term to caller so they can wait for apply
+    % notifications Send msg to peer proxy with updated state data
+    % (so they can replicate)
     {leader, NodeState, [{reply, IdxTerm} | _] = Actions} =
     ra_node:handle_leader({command, Data}, NodeState0),
     PendingReplies = case ReplyMode of
@@ -115,7 +115,8 @@ leader(EventType, Msg,
             State1 = State#state{node_state = NodeState},
             {State2, ReplyActions, Notifications} =
             make_caller_reply_actions(State1),
-            _ = [FromPid ! {consensus, Reply} || {FromPid, Reply} <- Notifications],
+            _ = [FromPid ! {consensus, Reply}
+                 || {FromPid, Reply} <- Notifications],
             {keep_state, State2, ReplyActions};
         {follower, NodeState, Actions} ->
             ?DBG("~p leader abdicates!~n", [Id]),
@@ -151,7 +152,8 @@ candidate(EventType, Msg, State0 = #state{node_state = NodeState0 = #{id := Id},
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            {next_state, leader, State#state{node_state = NodeState}, NextEvents}
+            {next_state, leader,
+             State#state{node_state = NodeState}, NextEvents}
     end.
 
 follower({call, From}, {command, _Data, _Flag},
@@ -167,8 +169,8 @@ follower(EventType, Msg,
     case ra_node:handle_follower(Msg, NodeState0) of
         {follower, NodeState, Actions} ->
             State = interact(Actions, From, State0),
-            NewState = follower_leader_change(State,
-                                              State#state{node_state = NodeState}),
+            NewState =
+            follower_leader_change(State, State#state{node_state = NodeState}),
             {keep_state, NewState, election_timeout_action(State)};
         {candidate, NodeState, Actions} ->
             State = interact(Actions, From, State0),
@@ -222,8 +224,8 @@ make_caller_reply_actions(State = #state{pending_replies = Pending,
                 end, {[], [], []}, Pending),
     {State#state{pending_replies = Pending1}, Replies, Notifications}.
 
-check_idx_term(Idx, Term, #{log := Log, log_mod := Mod}) ->
-    case Mod:fetch(Idx, Log) of
+check_idx_term(Idx, Term, #{log := Log}) ->
+    case ra_log:fetch(Idx, Log) of
         undefined ->
             % should never happen so exit
             exit(corrupted_log);

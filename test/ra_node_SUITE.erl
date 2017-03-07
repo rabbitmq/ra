@@ -161,14 +161,14 @@ follower_append_entries(_Config) ->
                              entries = [{2, 4, <<"hi">>}]},
 
     ExpectedLog = {2, #{1 => {1, <<"hi1">>}, 2 => {4, <<"hi">>}}},
-    {follower,  #{log := ExpectedLog},
+    {follower,  #{log := {ra_test_log, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 2, last_term = 4}}}
         = ra_node:handle_follower(AE, State#{last_applied => 1}),
 
     % append new entries not in the log
     % if leader_commit > commit_index set commit_index = min(leader_commit, index of last new entry)
-    {follower, #{log := {4, #{4 := {5, <<"hi4">>}}},
+    {follower, #{log := {ra_test_log, {4, #{4 := {5, <<"hi4">>}}}},
                  commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
      {reply, #append_entries_reply{term = 5, success = true,
@@ -209,7 +209,7 @@ follower_vote(_Config) ->
    % fail due to stale log but still update term if higher
     {follower, #{current_term := 6},
      {reply, #request_vote_result{term = 6, vote_granted = false}}} =
-     ra_node:handle_follower(Msg, State#{log => {3, #{}}}),
+     ra_node:handle_follower(Msg, State#{log => {ra_test_log, {3, #{}}}}),
      ok.
 
 
@@ -273,5 +273,4 @@ base_state(NumNodes) ->
       last_applied => 3,
       machine_apply_fun => fun (E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
-      log_mod => ra_test_log,
-      log => Log}.
+      log => {ra_test_log, Log}}.
