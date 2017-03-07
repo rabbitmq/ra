@@ -213,7 +213,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {Cluster, Actions} = make_empty_append_entries(State),
             {leader, maps:without([votes, leader_id],
                                   State#{cluster => Cluster}),
-             {send_append_entries, Actions}};
+            {send_append_entries, Actions}};
         _ ->
             {candidate, State#{votes => NewVotes}, none}
     end;

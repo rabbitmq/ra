@@ -6,7 +6,7 @@
 
 all() ->
     [
-     basic,
+     queue,
      send_and_await_consensus,
      send_and_notify
     ].
@@ -14,10 +14,10 @@ all() ->
 groups() ->
     [ {tests, [], all()} ].
 
-basic(_Config) ->
+queue(_Config) ->
     Self = self(),
     [{APid, _A}, _B, _C] = Cluster =
-    ra:start_cluster(3, "test", fun basic_apply/2,
+    ra:start_cluster(3, "test", fun queue_apply/2,
                      #{queue => queue:new(),
                        pending_dequeues => []}),
 
@@ -52,22 +52,22 @@ send_and_notify(_Config) ->
     terminate_cluster(Cluster).
 
 % implements a simple queue machine
-basic_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
+queue_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
     Q = queue:in(Msg, Q0),
     State#{queue => Q};
-basic_apply({enqueue, Msg}, State = #{queue := Q0,
+queue_apply({enqueue, Msg}, State = #{queue := Q0,
                                       pending_dequeues := [Next | Rest]}) ->
     Q1 = queue:in(Msg, Q0),
     {{value, Item}, Q} = queue:out(Q1),
     {State#{queue => Q, pending_dequeues => Rest}, [{send_msg, Next, Item}]};
-basic_apply({dequeue, For}, State = #{queue := Q0, pending_dequeues := []}) ->
+queue_apply({dequeue, For}, State = #{queue := Q0, pending_dequeues := []}) ->
     case queue:out(Q0) of
         {empty, Q} ->
             State#{queue => Q, pending_dequeues => [For]};
         {{value, Item}, Q} ->
             {State#{queue => Q}, [{send_msg, For, Item}]}
     end;
-basic_apply({dequeue, For},
+queue_apply({dequeue, For},
             State = #{queue := Q0,
                       pending_dequeues := [Next | Rest] = Pending}) ->
     case queue:out(Q0) of

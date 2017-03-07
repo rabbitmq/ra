@@ -6,7 +6,7 @@
 % NB: ra nodes need to be registered as need to be reachable under the old
 % name after restarts. Pids won't do.
 -type ra_node_id() :: Name::atom() | {Name::atom(), Node::atom()} |
-                        {global, Name::atom()}.
+                      {global, Name::atom()}.
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
 
