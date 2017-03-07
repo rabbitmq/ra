@@ -5,7 +5,8 @@
 -export([
          start_cluster/4,
          send/2,
-         send_and_await_consensus/2
+         send_and_await_consensus/2,
+         send_and_notify/2
         ]).
 
 start_cluster(Num, Name, ApplyFun, InitialState) ->
@@ -31,3 +32,8 @@ send(Ref, Data) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
 send_and_await_consensus(Ref, Data) ->
     ra_node_proc:command(Ref, Data, await_consensus).
+
+-spec send_and_notify(ra_node_proc:server_ref(), term()) ->
+    {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}.
+send_and_notify(Ref, Data) ->
+    ra_node_proc:command(Ref, Data, notify_on_consensus).

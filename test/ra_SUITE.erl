@@ -7,7 +7,8 @@
 all() ->
     [
      basic,
-     send_and_await_consensus
+     send_and_await_consensus,
+     send_and_notify
     ].
 
 groups() ->
@@ -39,6 +40,16 @@ send_and_await_consensus(_Config) ->
     % {{1, 1}, 14} = ra:query(APid, fun(S) -> S end, dirty),
     terminate_cluster(Cluster).
 
+send_and_notify(_Config) ->
+    [{APid, _A}, _B, _C]  = Cluster =
+    ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
+    {ok, {1, 1}, _Leader} = ra:send_and_notify(APid, 5),
+    receive
+        {consensus, {1, 1}} -> ok
+    after 2000 ->
+              exit(consensus_timeout)
+    end,
+    terminate_cluster(Cluster).
 
 % implements a simple queue machine
 basic_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->

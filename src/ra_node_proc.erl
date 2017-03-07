@@ -31,14 +31,17 @@
 
 -type server_ref() :: pid() | atom() | {node() | atom()}.
 
--type command_reply_mode() :: after_log_append | await_consensus.
+-type command_reply_mode() :: after_log_append | await_consensus
+                              | notify_on_consensus.
+
+-type pending_reply() :: {reply | notify, {ra_index(), ra_term()}, From::term()}.
 
 -export_type([server_ref/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
-                pending_replies = [] :: [{{ra_index(), ra_term()}, term()}],
+                pending_replies = [] :: [pending_reply()],
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
 %%%===================================================================
@@ -74,22 +77,33 @@ init([Config]) ->
 callback_mode() -> state_functions.
 
 %% state functions
-leader({call, From}, {command, Data, after_log_append},
-       State0 = #state{node_state = NodeState0}) ->
-    % Persist command into log
-    % Return raft index + term to caller so they can wait for apply notifications
-    % Send msg to peer proxy with updated state data (so they can replicate)
-    {leader, NodeState, Actions} = ra_node:handle_leader({command, Data},
-                                                         NodeState0),
-    State = interact(Actions, From, State0),
-    {keep_state, State#state{node_state = NodeState}};
 leader({call, From}, {command, Data, await_consensus},
        State0 = #state{node_state = NodeState0,
                        pending_replies = PendingReplies0}) ->
     {leader, NodeState, [{reply, IdxTerm} | Actions]} =
      ra_node:handle_leader({command, Data}, NodeState0),
     State = interact(Actions, From, State0),
-    PendingReplies = [{IdxTerm, From} | PendingReplies0],
+    PendingReplies = [{reply, IdxTerm, From} | PendingReplies0],
+    {keep_state, State#state{node_state = NodeState,
+                             pending_replies = PendingReplies}};
+leader({call, From}, {command, Data, ReplyMode},
+       State0 = #state{node_state = NodeState0,
+                       pending_replies = PendingReplies0}) ->
+    % Persist command into log
+    % Return raft index + term to caller so they can wait for apply notifications
+    % Send msg to peer proxy with updated state data (so they can replicate)
+    % {leader, NodeState, Actions} = ra_node:handle_leader({command, Data},
+    %                                                      NodeState0),
+    {leader, NodeState, [{reply, IdxTerm} | _] = Actions} =
+    ra_node:handle_leader({command, Data}, NodeState0),
+    PendingReplies = case ReplyMode of
+                         notify_on_consensus ->
+                             [{notify, IdxTerm, From} | PendingReplies0];
+                         after_log_append ->
+                             PendingReplies0
+                     end,
+
+    State = interact(Actions, From, State0),
     {keep_state, State#state{node_state = NodeState,
                              pending_replies = PendingReplies}};
 leader(EventType, Msg,
@@ -99,7 +113,9 @@ leader(EventType, Msg,
         {leader, NodeState, Actions} ->
             State = interact(Actions, From, State0),
             State1 = State#state{node_state = NodeState},
-            {State2, ReplyActions} = make_caller_reply_actions(State1),
+            {State2, ReplyActions, Notifications} =
+            make_caller_reply_actions(State1),
+            _ = [FromPid ! {consensus, Reply} || {FromPid, Reply} <- Notifications],
             {keep_state, State2, ReplyActions};
         {follower, NodeState, Actions} ->
             ?DBG("~p leader abdicates!~n", [Id]),
@@ -186,33 +202,41 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%%===================================================================
 
 make_caller_reply_actions(State = #state{pending_replies = []}) ->
-    {State, []};
+    {State, [], []};
 make_caller_reply_actions(State = #state{pending_replies = Pending,
-                                node_state = #{commit_index := CommitIndex,
-                                               log := Log, log_mod := Mod}}) ->
+                                         node_state = NodeState
+                                         = #{commit_index := CommitIndex}}) ->
     % There are code paths here that are difficult to test externally
     % TODO: add internal unit tests
-    {Replies, Pending1} =
-    lists:foldl(fun({{Idx, Term} = IdxTerm, From}, {Act, Rem})
+    {Replies, Pending1, Notifications} =
+    lists:foldl(fun({Mode, {Idx, Term}, {FromPid, _} = From}, {Act, Rem, Not})
                       when Idx =< CommitIndex ->
-                        Reply = case Mod:fetch(Idx, Log) of
-                                    undefined ->
-                                        % should never happen so exit
-                                        exit(corrupted_log);
-                                    {Idx, Term, _} ->
-                                        % the term of the index is correct
-                                        IdxTerm;
-                                    {Idx, OthTerm, _} ->
-                                        % can this happen given the pending
-                                        % callers are only stored for the leader
-                                        {error, {entry_term_mismatch, Term,
-                                                 OthTerm}}
-                                end,
-                        {[{reply, From, Reply} | Act], Rem};
-                   (_, {Act, Rem}) ->
-                        {Act, Rem}
-                end, {[], []}, Pending),
-    {State#state{pending_replies = Pending1}, Replies}.
+                        Reply = check_idx_term(Idx, Term, NodeState),
+                        case Mode of
+                            reply ->
+                                {[{reply, From, Reply} | Act], Rem, Not};
+                            notify ->
+                                {Act, Rem, [{FromPid, Reply} | Act]}
+                        end;
+                   (_, Acc) -> Acc
+                end, {[], [], []}, Pending),
+    {State#state{pending_replies = Pending1}, Replies, Notifications}.
+
+check_idx_term(Idx, Term, #{log := Log, log_mod := Mod}) ->
+    case Mod:fetch(Idx, Log) of
+        undefined ->
+            % should never happen so exit
+            exit(corrupted_log);
+        {Idx, Term, _} ->
+            % the term of the index is correct
+            {Idx, Term};
+        {Idx, OthTerm, _} ->
+            % can this happen given the pending
+            % callers are only stored for the leader
+            {error, {entry_term_mismatch, Term,
+                     OthTerm}}
+    end.
+
 
 interact(none, _From, State) ->
     State;
