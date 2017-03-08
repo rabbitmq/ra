@@ -147,6 +147,13 @@ follower_append_entries(_Config) ->
                                    last_index = 3, last_term = 5}}}
         = ra_node:handle_follower(EmptyAE, State),
 
+    % success case when leader term is higher
+    % reply term should be updated
+    {follower, #{leader_id := n1},
+     {reply, #append_entries_reply{term = 6, success = true,
+                                   last_index = 3, last_term = 5}}}
+        = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
+
     % reply false if term < current_term (5.1)
     {follower, _, {reply, #append_entries_reply{term = 5, success = false}}}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 4}, State),
@@ -209,10 +216,24 @@ follower_vote(_Config) ->
      {reply, #request_vote_result{term = 5, vote_granted = false}}} =
      ra_node:handle_follower(Msg#request_vote_rpc{term = 4}, State),
 
-   % fail due to stale log but still update term if higher
+     % Raft determines which of two logs is more up-to-date by comparing the
+     % index and term of the last entries in the logs. If the logs have last
+     % entries with different terms, then the log with the later term is more
+     % up-to-date. If the logs end with the same term, then whichever log is
+     % longer is more up-to-date. (§5.4.1)
+
+     % reject when candidate last log entry has a lower term
+     % still update current term if incoming is higher
     {follower, #{current_term := 6},
      {reply, #request_vote_result{term = 6, vote_granted = false}}} =
-     ra_node:handle_follower(Msg, State#{log => {ra_test_log, {3, #{}}}}),
+         ra_node:handle_follower(Msg#request_vote_rpc{last_log_term = 4},
+                                 State),
+
+    % grant vote when candidate last log entry has same term but is longer
+    {follower, #{current_term := 6},
+     {reply, #request_vote_result{term = 6, vote_granted = true}}} =
+         ra_node:handle_follower(Msg#request_vote_rpc{last_log_index = 4},
+                                 State),
      ok.
 
 

@@ -42,18 +42,18 @@
 -type ra_msg() :: #append_entries_rpc{} | #append_entries_reply{} |
                   #request_vote_rpc{} | #request_vote_result{}.
 
--type ra_action() ::
+-type ra_effect() ::
     {reply, ra_msg()} |
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
-    [ra_action()] |
+    [ra_effect()] |
     {send_msg, pid(), term()} |
     none.
 
 -export_type([ra_node_state/0,
               ra_msg/0,
-              ra_action/0]).
+              ra_effect/0]).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
@@ -79,16 +79,19 @@ init(#{id := Id,
       machine_state => InitialMachineState}.
 
 -spec handle_leader(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_action()}.
+    {ra_state(), ra_node_state(), ra_effect()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
-                                             last_index = LastIdx}},
+                                             last_index = LastIdx} = AER},
               State0 = #{current_term := Term,
-                         cluster := {normal, Nodes}}) ->
+                         cluster := {normal, Nodes},
+                         id := Id}) ->
+    ?DBG("~p leader ae reply from ~p ~p~n", [Id, PeerId, AER]),
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
     Peer = Peer0#{match_index => max(MI, LastIdx),
                   next_index => max(NI, LastIdx+1)},
     State1 = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
     NewCommitIndex = increment_commit_index(State1),
+    ?DBG("~p leader commit index ~p~n", [Id, NewCommitIndex]),
     {State, Effects} = apply_to(NewCommitIndex, State1),
     AEs = append_entries(State),
     Actions = case Effects  of
@@ -101,9 +104,11 @@ handle_leader({_PeerId, #append_entries_reply{term = Term}},
     {follower, State#{current_term => Term}, none};
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = LastIdx,
-                                             last_term = LastTerm}},
+                                             last_term = LastTerm} = AER},
               State0 = #{cluster := {normal, Nodes},
-                         log := Log}) ->
+                         log := Log,
+                         id := Id}) ->
+    ?DBG("~p leader ae reply ~p~n", [Id, AER]),
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
     % match_index and update next_index directly
@@ -126,8 +131,10 @@ handle_leader(#append_entries_rpc{term = Term} = Msg,
 handle_leader(#request_vote_rpc{term = Term} = Msg,
               #{current_term := CurTerm} = State) when Term > CurTerm ->
     {follower, State#{current_term => Term}, {next_event, Msg}};
-handle_leader({command, Data}, State0) ->
+handle_leader({command, Data}, State0 = #{id := Id}) ->
+    ?DBG("~p leader command ~p~n", [Id, Data]),
     {IdxTerm, State} = append_log(Data, State0),
+    ?DBG("~p leader post append_log ~p~n", [Id, State]),
     AEs = append_entries(State),
     {leader, State, [{reply, IdxTerm}, {send_append_entries, AEs}]};
 
@@ -136,16 +143,18 @@ handle_leader(Msg, State) ->
     {leader, State, none}.
 
 -spec handle_follower(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_action()}.
+    {ra_state(), ra_node_state(), ra_effect()}.
 handle_follower(#append_entries_rpc{term = Term,
                                     leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
-                                    entries = Entries},
+                                    entries = Entries} = AER,
                 State = #{current_term := CurTerm,
-                          log := Log0})
+                          log := Log0,
+                          id := Id})
   when Term >= CurTerm ->
+    ?DBG("~p follower aer ~p", [Id, AER]),
     case has_log_entry(PLIdx, PLTerm, State) of
         true ->
             Log = lists:foldl(fun(E, Acc) ->
@@ -158,10 +167,11 @@ handle_follower(#append_entries_rpc{term = Term,
                                                  leader_id => LeaderId,
                                                  log => Log}),
             % do not apply Effects from the machine on a non leader
-            Reply = append_entries_reply(CurTerm, true, State1),
+            Reply = append_entries_reply(Term, true, State1),
+            ?DBG("~p follower reply ~p", [Id, Reply]),
             {follower, State1, {reply, Reply}};
         false ->
-            Reply = append_entries_reply(CurTerm, false, State),
+            Reply = append_entries_reply(Term, false, State),
             {follower, State#{current_term => Term,
                               leader_id => LeaderId}, {reply, Reply}}
     end;
@@ -177,14 +187,19 @@ handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
-                State = #{current_term := CurTerm})
+                State = #{current_term := CurTerm, id := Id,
+                          log := Log})
   when Term >= CurTerm ->
-    case has_log_entry(LLIdx, LLTerm, State) of
+    LastEntry = ra_log:last(Log),
+    case is_candidate_log_up_to_date(LLIdx, LLTerm, LastEntry) of
         true ->
+            ?DBG("~p granting vote to ~p for term ~p previous term was ~p",
+                 [Id, Cand, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
             {follower, State#{voted_for => Cand, current_term => Term},
              {reply, Reply}};
         false ->
+            ?DBG("~p declining vote to ~p for term ~p", [Id, Cand, Term]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State#{current_term => Term}, {reply, Reply}}
     end;
@@ -203,7 +218,7 @@ handle_follower(Msg, State) ->
     {follower, State, none}.
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_action()}.
+    {ra_state(), ra_node_state(), ra_effect()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State = #{current_term := Term, votes := Votes,
                            cluster := {normal, Nodes}}) ->
@@ -244,6 +259,7 @@ handle_candidate(Msg, State) ->
 %%%===================================================================
 
 handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
+    ?DBG("~p election timeout in term ~p~n", [Id, CurrentTerm]),
     PeerIds = peers(State),
     % increment current term
     NewTerm = CurrentTerm + 1,
@@ -261,6 +277,15 @@ peers(#{id := Id, cluster := {normal, Nodes}}) ->
 
 last_entry(#{log := Log}) ->
     ra_log:last(Log).
+
+is_candidate_log_up_to_date(_Idx, Term, {_LastIdx, LastTerm, _})
+  when Term > LastTerm ->
+    true;
+is_candidate_log_up_to_date(Idx, Term, {LastIdx, Term, _})
+  when Idx >= LastIdx ->
+    true;
+is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm, _}) ->
+    false.
 
 has_log_entry(Idx, Term, #{log := Log}) ->
     case ra_log:fetch(Idx, Log) of
@@ -337,6 +362,8 @@ append_entries(#{id := Id, cluster := {normal, Nodes},
     Peers = maps:remove(Id, Nodes),
     [begin
          {PrevIdx, PrevTerm, _} = ra_log:fetch(Next-1, Log),
+         Entries = ra_log:take(Next, 5, Log),
+         ?DBG("ra_log:take ~p ~p", [Next, Entries]),
          {PeerId, #append_entries_rpc{entries = ra_log:take(Next, 5, Log),
                                       term = Term,
                                       leader_id = Id,

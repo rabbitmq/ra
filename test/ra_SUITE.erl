@@ -11,25 +11,27 @@ all() ->
      queue,
      send_and_await_consensus,
      send_and_notify,
-     dirty_query,
-     consistent_query
+     node_recovery,
+     dirty_query
     ].
 
 groups() ->
     [{tests, [], all()}].
 
+suite() -> [ {timetrap,{seconds,30}} ].
+
 single_node(_Config) ->
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
-    {timeout, _} = ra:send_and_await_consensus({n1, node()}, 5).
+    {timeout, _} = ra:send_and_await_consensus({n1, node()}, 5, 500).
 
 start_node(_Config) ->
     % start the first node and wait a bit
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
-    timer:sleep(5000),
+    timer:sleep(1000),
     % start second node
     ok = ra:start_node(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0),
     % a consensus command tells us there is a functioning cluster
-    {ok, {1, Term}, _Leader} = ra:send_and_await_consensus({n2, node()}, 5),
+    {ok, {1, Term}, _Leader} = ra:send_and_await_consensus({n1, node()}, 5),
     ct:pal("Term ~p~n", [Term]),
     % start the 3rd node and issue another command
     ok = ra:start_node(n3, [{n1, node()}, {n2, node()}], fun erlang:'+'/2, 0),
@@ -42,10 +44,33 @@ start_node(_Config) ->
     {ok, {3, Term}, _Leader} = ra:send_and_await_consensus({n3, node()}, 5),
     terminate_cluster([n1, n2]).
 
+node_recovery(_Config) ->
+    % start the first node and wait a bit
+    ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    % start second node
+    ok = ra:start_node(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    % a consensus command tells us there is a functioning 2 node cluster
+    {ok, {1, _}, Leader} = ra:send_and_await_consensus({n2, node()}, 5),
+    % restart Leader
+    gen_statem:stop(Leader, normal, 2000),
+    timer:sleep(1000),
+    N = node(),
+    case Leader of
+        {n1, N} ->
+            ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0);
+        {n2, N} ->
+            ok = ra:start_node(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0)
+    end,
+    timer:sleep(1000),
+    % issue command
+    {ok, {2, _}, _Leader} = ra:send_and_await_consensus({n2, node()}, 5),
+    terminate_cluster([n1, n2]).
+
+
 queue(_Config) ->
     Self = self(),
     [{APid, _A}, _B, _C] = Cluster =
-    ra:start_cluster(3, "test", fun queue_apply/2,
+    ra:start_local_cluster(3, "test", fun queue_apply/2,
                      #{queue => queue:new(),
                        pending_dequeues => []}),
 
@@ -61,13 +86,13 @@ queue(_Config) ->
 
 send_and_await_consensus(_Config) ->
     [{APid, _A}, _B, _C] = Cluster =
-    ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
+    ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
     {ok, {1, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
     terminate_cluster(Cluster).
 
 send_and_notify(_Config) ->
     [{APid, _A}, _B, _C] = Cluster =
-    ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
+    ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
     {ok, {1, 1}, _Leader} = ra:send_and_notify(APid, 5),
     receive
         {consensus, {1, 1}} -> ok
@@ -77,15 +102,16 @@ send_and_notify(_Config) ->
     terminate_cluster(Cluster).
 
 dirty_query(_Config) ->
-    [{APid, _A}, _B, _C]  = Cluster =
-    ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
-    {ok, {1, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
-    {ok, {1, 1}, 14} = ra:dirty_query(APid, fun(S) -> S end),
+    [{AName, _A}, B, _C]  = Cluster =
+    ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
+    {ok, {_, _}, 9} = ra:dirty_query(B, fun(S) -> S end),
+    {ok, {1, 1}, Leader} = ra:send_and_await_consensus(AName, 5, 1000),
+    {ok, {1, 1}, 14} = ra:dirty_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
 % consistent_query(_Config) ->
 %     [{APid, _A}, _B, _C]  = Cluster =
-%     ra:start_cluster(3, "test", fun erlang:'+'/2, 9),
+%     ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
 %     {ok, {1, 1}, _Leader} = ra:send(APid, 5),
 %     {ok, {1, 1}, 14} = ra:consistent_query(APid, fun(S) -> S end),
 %     terminate_cluster(Cluster).

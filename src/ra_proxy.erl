@@ -45,7 +45,7 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({appends, Appends}, State0) ->
-    ?DBG("proxy: handle cast appends ~p~n", [State0]),
+    % ?DBG("proxy: handle cast appends ~p~n", [State0]),
     AppendsMap = maps:from_list(Appends),
     % TODO reset timer?
     case State0 of
@@ -60,7 +60,7 @@ handle_cast({appends, Appends}, State0) ->
     end.
 
 handle_info(broadcast, State = #state{interval = Interval}) ->
-    ?DBG("proxy: handle info broadcast ~p~n", [State]),
+    % ?DBG("proxy: handle info broadcast ~p~n", [State]),
     ok = broadcast(State),
     {ok, TRef} = timer:send_after(Interval, broadcast),
     {noreply, State#state{timer_ref = TRef}};
@@ -79,7 +79,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
-    ?DBG("broadcast ~p~n", [Appends]),
+    % ?DBG("broadcast ~p~n", [Appends]),
     [begin
          % use the peer ref as the unique rpc reply reference
          % fake gen_call - reply goes to ra_node process
