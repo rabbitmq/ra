@@ -7,7 +7,8 @@
          init/1,
          handle_leader/2,
          handle_follower/2,
-         handle_candidate/2
+         handle_candidate/2,
+         append_entries/1
         ]).
 
 % Perhaps as it may be persisted to the log
@@ -131,7 +132,6 @@ handle_leader({command, Data}, State0 = #{id := Id}) ->
     ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
     AEs = append_entries(State),
     {leader, State, [{reply, IdxTerm}, {send_append_entries, AEs}]};
-
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, none}.
