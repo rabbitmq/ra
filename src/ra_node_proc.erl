@@ -117,10 +117,11 @@ leader({call, From} = EventType, {command, Data, await_consensus},
 leader({call, From} = EventType, {command, Data, ReplyMode},
        State0 = #state{node_state = NodeState0,
                        pending_replies = PendingReplies0}) ->
-    % Persist command into log
-    % Return raft index + term to caller so they can wait for apply
-    % notifications Send msg to peer proxy with updated state data
-    % (so they can replicate)
+    %% Persist command into log
+    %% Return raft index + term to caller so they can wait for apply
+    %% notifications
+    %% Send msg to peer proxy with updated state data
+    %% (so they can replicate)
     {leader, NodeState, [{reply, IdxTerm} | _] = Effects} =
         ra_node:handle_leader({command, Data}, NodeState0),
     PendingReplies = case ReplyMode of
