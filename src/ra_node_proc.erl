@@ -138,11 +138,12 @@ leader({call, From}, {query, QueryFun, dirty},
          State = #state{node_state = NodeState}) ->
     Reply = perform_query(QueryFun, dirty, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
-leader(_EventType, {'EXIT', Proxy, Reason},
-       State0 = #state{proxy = Proxy,
+leader(_EventType, {'EXIT', Proxy0, Reason},
+       State0 = #state{proxy = Proxy0,
                        broadcast_time = Interval,
-                       node_state = NodeState}) ->
-    ?DBG("~p leader proxy exited with ~p~nRestarting..~n", [Reason]),
+                       node_state = NodeState = #{id := Id}}) ->
+    ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
+    % TODO: this is a bit hacky - refactor
     AppendEntries = ra_node:append_entries(NodeState),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, AppendEntries),

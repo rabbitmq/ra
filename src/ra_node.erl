@@ -154,11 +154,11 @@ handle_follower(#append_entries_rpc{term = Term,
                                       L
                               end, Log0, Entries),
 
+            % do not apply Effects from the machine on a non leader
             {State1, _Effects} = apply_to(LeaderCommit,
                                           State#{current_term => Term,
                                                  leader_id => LeaderId,
                                                  log => Log}),
-            % do not apply Effects from the machine on a non leader
             Reply = append_entries_reply(Term, true, State1),
             {follower, State1, {reply, Reply}};
         false ->
@@ -207,6 +207,7 @@ handle_follower(election_timeout, State) ->
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, none}.
+
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
