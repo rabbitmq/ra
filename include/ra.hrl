@@ -18,7 +18,7 @@
          entries = [] :: [log_entry()],
          leader_commit :: ra_index()}).
 
-% TODO: optimisation - follower could send last committ indx when
+% TODO: optimisation - follower could send last commit index when
 % success is false to allow leader to skip to that index
 % rather than incrementally send append_entries_rpcs
 -record(append_entries_reply,
