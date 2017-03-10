@@ -4,6 +4,7 @@
 
 -include("ra.hrl").
 -include_lib("common_test/include/ct.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 all() ->
     [
@@ -14,11 +15,32 @@ all() ->
      command,
      append_entries_reply_success,
      append_entries_reply_no_success,
-     node_steps_down
+     node_steps_down,
+     consistent_query
     ].
 
 groups() ->
     [ {tests, [], all()} ].
+
+id(X) -> X.
+
+consistent_query(_Config) ->
+    Cluster = {normal, #{n1 => #{},
+                         n2 => #{next_index => 4, match_index => 3},
+                         n3 => #{next_index => 4, match_index => 3}}},
+    State = (base_state(3))#{cluster => Cluster},
+    {leader, State1, _} =
+    ra_node:handle_leader({command, {'$ra_query', self(), fun id/1, await_consensus}}, State),
+    AEReply = {n2, #append_entries_reply{term = 5, success = true,
+                                         last_index = 4, last_term = 5}},
+    {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
+    ct:pal("Effects ~p~n", [Effects]),
+    ?assert(lists:any(fun({reply, _, {{4, 5}, <<"hi3">>}}) -> true;
+                         (_) -> false
+                      end, Effects)),
+    ok.
+
+    % ct:pal("~p ~p~n", [State2, MacState]).
 
 
 node_steps_down(_Config) ->
@@ -69,8 +91,8 @@ append_entries_reply_success(_Config) ->
                                prev_log_index = 1,
                                prev_log_term = 1,
                                leader_commit = 3,
-                               entries = [{2, 3, <<"hi2">>},
-                                          {3, 5, <<"hi3">>}]}}]},
+                               entries = [{2, 3, usr(<<"hi2">>)},
+                                          {3, 5, usr(<<"hi3">>)}]}}]},
     % update match index
     {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
                                              match_index := 3}}},
@@ -108,8 +130,8 @@ append_entries_reply_no_success(_Config) ->
                              prev_log_index = 1,
                              prev_log_term = 1,
                              leader_commit = 1,
-                             entries = [{2, 3, <<"hi2">>},
-                                        {3, 5, <<"hi3">>}]},
+                             entries = [{2, 3, usr(<<"hi2">>)},
+                                        {3, 5, usr(<<"hi3">>)}]},
     ExpectedActions = {send_append_entries, [{n2, AE}, {n3, AE}]},
     % new peers state is updated
     {leader, #{cluster := {normal, #{n2 := #{next_index := 2,
@@ -122,19 +144,21 @@ append_entries_reply_no_success(_Config) ->
 
 command(_Config) ->
     State = base_state(3),
-    Msg = {command, <<"hi4">>},
-    AE = #append_entries_rpc{entries = [{4, 5, <<"hi4">>}],
+    Self = self(),
+    Cmd = {'$usr', Self, <<"hi4">>, after_log_append},
+    AE = #append_entries_rpc{entries = [{4, 5, Cmd}],
                              leader_id = n1,
                              term = 5,
                              prev_log_index = 3,
                              prev_log_term = 5,
                              leader_commit = 3
                             },
-    {leader, _, [{reply, {4, 5}}, {send_append_entries, [{n2, AE}, {n3, AE}]}]} =
-        ra_node:handle_leader(Msg, State),
+    {leader, _, [{reply, Self, {4, 5}}, {send_append_entries, [{n2, AE}, {n3, AE}]}]} =
+        ra_node:handle_leader({command, Cmd}, State),
     ok.
 
 follower_append_entries(_Config) ->
+    Self = self(),
     State = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = n1,
@@ -168,9 +192,9 @@ follower_append_entries(_Config) ->
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 1, prev_log_term = 1,
                              leader_commit = 2,
-                             entries = [{2, 4, <<"hi">>}]},
+                             entries = [{2, 4, {'$usr', Self, <<"hi">>, after_log_append}}]},
 
-    ExpectedLog = {2, #{1 => {1, <<"hi1">>}, 2 => {4, <<"hi">>}}},
+    ExpectedLog = {2, #{1 => {1, usr(<<"hi1">>)}, 2 => {4, usr(<<"hi">>)}}},
     {follower,  #{log := {ra_test_log, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 2, last_term = 4}}}
@@ -178,16 +202,17 @@ follower_append_entries(_Config) ->
 
     % append new entries not in the log
     % if leader_commit > commit_index set commit_index = min(leader_commit, index of last new entry)
-    {follower, #{log := {ra_test_log, {4, #{4 := {5, <<"hi4">>}}}},
+    ExpectedLogEntry = usr(<<"hi4">>),
+    {follower, #{log := {ra_test_log, {4, #{4 := {5, ExpectedLogEntry}}}},
                  commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 4, last_term = 5}}}
         = ra_node:handle_follower(
-            EmptyAE#append_entries_rpc{entries = [{4, 5, <<"hi4">>}],
+            EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
-                   machine_state => <<"hi1">>}),
+                   machine_state => usr(<<"hi1">>)}),
     ok.
 
 
@@ -283,9 +308,9 @@ election_timeout(_Config) ->
     ok.
 
 base_state(NumNodes) ->
-    Log = {3, #{1 => {1, <<"hi1">>},
-                2 => {3, <<"hi2">>},
-                3 => {5, <<"hi3">>}}},
+    Log = {3, #{1 => {1, usr(<<"hi1">>)},
+                2 => {3, usr(<<"hi2">>)},
+                3 => {5, usr(<<"hi3">>)}}},
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
                                 Acc#{Name => #{next_index => 4}}
@@ -298,3 +323,6 @@ base_state(NumNodes) ->
       machine_apply_fun => fun (E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
       log => {ra_test_log, Log}}.
+
+usr(Data) ->
+    {'$usr', self(), Data, after_log_append}.

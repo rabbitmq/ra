@@ -98,7 +98,10 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
               end,
     {leader, State, Actions};
 handle_leader({_PeerId, #append_entries_reply{term = Term}},
-              #{current_term := CurTerm} = State) when Term > CurTerm ->
+              #{current_term := CurTerm,
+                id := Id} = State) when Term > CurTerm ->
+    ?DBG("~p leader saw append_entries_reply for term ~p abdicates term: ~p!~n",
+         [Id, Term, CurTerm]),
     {follower, State#{current_term => Term}, none};
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = LastIdx,
@@ -122,16 +125,38 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     AEs = append_entries(State),
     {leader, State, {send_append_entries, AEs}};
 handle_leader(#append_entries_rpc{term = Term} = Msg,
-              #{current_term := CurTerm} = State) when Term > CurTerm ->
+              #{current_term := CurTerm,
+                id := Id} = State) when Term > CurTerm ->
+    ?DBG("~p leader saw append_entries_rpc for term ~p abdicates term: ~p!~n",
+         [Id, Term, CurTerm]),
     {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
+                                                  id := Id}) ->
+    ?DBG("~p leader saw append_entries_rpc for same term ~p this should not happen: ~p!~n",
+         [Id, Term]),
+         exit(leader_saw_append_entries_rpc_in_same_term);
+% TODO: reply to append_entries_rpcs that have lower term?
 handle_leader(#request_vote_rpc{term = Term} = Msg,
-              #{current_term := CurTerm} = State) when Term > CurTerm ->
+              #{current_term := CurTerm,
+                id := Id} = State) when Term > CurTerm ->
+    ?DBG("~p leader saw request_vote_rpc for term ~p abdicates term: ~p!~n",
+         [Id, Term, CurTerm]),
     {follower, State#{current_term => Term}, {next_event, Msg}};
-handle_leader({command, Data}, State0 = #{id := Id}) ->
-    {IdxTerm, State} = append_log(Data, State0),
+handle_leader({command, Cmd}, State0 = #{id := Id}) ->
+    {IdxTerm, State} = append_log(Cmd, State0),
     ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
     AEs = append_entries(State),
-    {leader, State, [{reply, IdxTerm}, {send_append_entries, AEs}]};
+    Actions = case Cmd of
+                  {'$usr', From, _Data, ReplyMode} when
+                       ReplyMode =:= after_log_append orelse
+                       ReplyMode =:= notify_on_consensus ->
+                      [{reply, From, IdxTerm},
+                       {send_append_entries, AEs}];
+                  _ ->
+                      [{send_append_entries, AEs}]
+              end,
+
+    {leader, State, Actions};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, none}.
@@ -220,7 +245,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {Cluster, Actions} = make_empty_append_entries(State),
             {leader, maps:without([votes, leader_id],
                                   State#{cluster => Cluster}),
-            {send_append_entries, Actions}};
+             {send_append_entries, Actions}};
         _ ->
             {candidate, State#{votes => NewVotes}, none}
     end;
@@ -322,7 +347,7 @@ apply_to(Commit, State = #{last_applied := LastApplied,
         Entries ->
             ApplyFun = wrap_apply_fun(ApplyFun0),
             {MacState, NewEffects} = lists:foldl(ApplyFun, {MacState0, []},
-                                                 [E || {_I, _T, E} <- Entries]),
+                                                 Entries),
 
             {LastEntryIdx, _, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
@@ -333,13 +358,29 @@ apply_to(Commit, State = #{last_applied := LastApplied,
 apply_to(_Commit, State) -> {State, []}.
 
 wrap_apply_fun(ApplyFun) ->
-    fun(Cmd, {MacSt, Effects}) ->
+    fun({Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
+        {MacSt, Effects0}) ->
+            Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
+                                ReplyType, Effects0),
+            {MacSt, Effects};
+       ({Idx, Term, {'$usr', From, Cmd, ReplyType}}, {MacSt, Effects0}) ->
             case ApplyFun(Cmd, MacSt) of
                 {NextSt, Efx} ->
+                    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
                     {NextSt, Effects ++ Efx};
-                NextSt -> {NextSt, Effects}
+                NextSt ->
+                    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+                    {NextSt, Effects}
             end
     end.
+
+add_reply(From, Reply,  await_consensus, Effects) ->
+    [{reply, From, Reply} | Effects];
+add_reply({FromPid, _}, Reply, notify_on_consensus, Effects) ->
+    [{notify, FromPid, Reply} | Effects];
+add_reply(_From, _Reply, _Mode, Effects) ->
+    Effects.
+
 
 append_log(Cmd, State = #{log := Log0, current_term := Term}) ->
     {LastIdx, _, _} = ra_log:last(Log0),

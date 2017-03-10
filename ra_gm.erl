@@ -48,5 +48,5 @@ start_queues() ->
     [{shell, N} ! {qp, [Q]} || N <-
                                [ra1@snowman,
                                 ra2@snowman,
-                                ra3@snoman]].
+                                ra3@snowman]].
 

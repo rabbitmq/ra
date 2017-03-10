@@ -6,6 +6,10 @@
 %% https://raft.github.io/raft.pdf.
 %%
 
+%% from gen_statem
+-type from() ::
+	{To :: pid(), Tag :: term()}.
+
 %% Sections 5.1 in the paper.
 -type ra_index() :: non_neg_integer().
 %% Section 5.3.

@@ -55,7 +55,7 @@ send(Ref, Data) ->
 
 -spec send(ra_node_proc:server_ref(), term(), timeout()) -> ra_sendret().
 send(Ref, Data, Timeout) ->
-    ra_node_proc:command(Ref, Data, after_log_append, Timeout).
+    ra_node_proc:command(Ref, usr(Data, after_log_append), Timeout).
 
 -spec send_and_await_consensus(ra_node_proc:server_ref(), term()) ->
     ra_sendret().
@@ -65,7 +65,7 @@ send_and_await_consensus(Ref, Data) ->
 -spec send_and_await_consensus(ra_node_proc:server_ref(), term(), timeout()) ->
     ra_sendret().
 send_and_await_consensus(Ref, Data, Timeout) ->
-    ra_node_proc:command(Ref, Data, await_consensus, Timeout).
+    ra_node_proc:command(Ref, usr(Data, await_consensus), Timeout).
 
 -spec send_and_notify(ra_node_proc:server_ref(), term()) -> ra_sendret().
 send_and_notify(Ref, Data) ->
@@ -74,7 +74,7 @@ send_and_notify(Ref, Data) ->
 -spec send_and_notify(ra_node_proc:server_ref(), term(), timeout()) ->
     ra_sendret().
 send_and_notify(Ref, Data, Timeout) ->
-    ra_node_proc:command(Ref, Data, notify_on_consensus, Timeout).
+    ra_node_proc:command(Ref, usr(Data, notify_on_consensus), Timeout).
 
 -spec dirty_query(Node::ra_node_proc:server_ref(),
                   QueryFun::fun((term()) -> term())) ->
@@ -87,3 +87,6 @@ dirty_query(ServerRef, QueryFun) ->
     {ok, ra_idxterm(), term()}.
 consistent_query(Node, QueryFun) ->
     ra_node_proc:query(Node, QueryFun, consistent).
+
+usr(Data, Mode) ->
+    {'$usr', Data, Mode}.
