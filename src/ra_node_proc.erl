@@ -125,7 +125,7 @@ leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}} = C,
     {keep_state, State#state{node_state = NodeState}, Actions};
 leader({call, From}, {query, QueryFun, dirty},
          State = #state{node_state = NodeState}) ->
-    Reply = perform_dirty_query(QueryFun, NodeState),
+    Reply = perform_dirty_query(QueryFun, leader, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
@@ -161,7 +161,7 @@ candidate({call, From}, {command, _Cmd} = Cmd,
     {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
 candidate({call, From}, {query, QueryFun, dirty},
          State = #state{node_state = NodeState}) ->
-    Reply = perform_dirty_query(QueryFun, NodeState),
+    Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate(EventType, Msg, State0 = #state{node_state = NodeState0
                                           = #{id := Id,
@@ -195,7 +195,7 @@ follower({call, From}, {command, _Cmd} = Msg,
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 follower({call, From}, {query, QueryFun, dirty},
          State = #state{node_state = NodeState}) ->
-    Reply = perform_dirty_query(QueryFun, NodeState),
+    Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, Msg,
          State0 = #state{node_state = NodeState0 = #{id := Id}}) ->
@@ -237,9 +237,14 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%% Internal functions
 %%%===================================================================
 
-perform_dirty_query(QueryFun, #{machine_state := MacState,
-                                last_applied := Last,
-                                current_term := Term} = NodeState) ->
+perform_dirty_query(QueryFun, leader, #{machine_state := MacState,
+                                        last_applied := Last,
+                                        id := Leader,
+                                        current_term := Term}) ->
+    {ok, {{Last, Term}, QueryFun(MacState)}, Leader};
+perform_dirty_query(QueryFun, _StateName, #{machine_state := MacState,
+                                            last_applied := Last,
+                                            current_term := Term} = NodeState) ->
     Leader = maps:get(leader_id, NodeState, not_known),
     {ok, {{Last, Term}, QueryFun(MacState)}, Leader}.
 

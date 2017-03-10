@@ -142,6 +142,9 @@ handle_leader(#request_vote_rpc{term = Term} = Msg,
     ?DBG("~p leader saw request_vote_rpc for term ~p abdicates term: ~p!~n",
          [Id, Term, CurTerm]),
     {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
+    Reply = #request_vote_result{term = Term, vote_granted = false},
+    {leader, State, {reply, Reply}};
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
     {IdxTerm, State} = append_log(Cmd, State0),
     ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
@@ -264,6 +267,9 @@ handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  State = #{current_term := CurTerm})
   when Term > CurTerm ->
     {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
+    Reply = #request_vote_result{term = Term, vote_granted = false},
+    {candidate, State, {reply, Reply}};
 handle_candidate(election_timeout, State) ->
     handle_election_timeout(State);
 handle_candidate(Msg, State) ->

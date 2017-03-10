@@ -35,9 +35,9 @@ non_assoc_prop({Ops, Initial}) ->
     % TODO: replace with consistent query when ready
     {ok, _, Leader} = ra:send_and_await_consensus(A, {add, 0}),
     timer:sleep(100),
-    {ok, _, ARes} = ra:dirty_query(A, fun id/1),
-    {ok, _, BRes} = ra:dirty_query(B, fun id/1),
-    {ok, _, CRes} = ra:dirty_query(C, fun id/1),
+    {ok, {_, ARes}, _} = ra:dirty_query(A, fun id/1),
+    {ok, {_, BRes}, _} = ra:dirty_query(B, fun id/1),
+    {ok, {_, CRes}, _} = ra:dirty_query(C, fun id/1),
     terminate_cluster(Cluster),
     % assert all nodes have the same final state
     Expected == ARes andalso Expected == BRes andalso Expected == CRes.

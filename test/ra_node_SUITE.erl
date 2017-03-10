@@ -10,6 +10,7 @@ all() ->
     [
      election_timeout,
      quorum,
+     request_vote_rpc_with_lower_term,
      follower_vote,
      follower_append_entries,
      command,
@@ -215,6 +216,19 @@ follower_append_entries(_Config) ->
                    machine_state => usr(<<"hi1">>)}),
     ok.
 
+request_vote_rpc_with_lower_term(_Config) ->
+    State = (base_state(3))#{current_term => 6,
+                             voted_for => n1},
+    Msg = #request_vote_rpc{candidate_id = n2, term = 5, last_log_index = 3,
+                            last_log_term = 5},
+    % term is lower than candidate term
+    {candidate, #{voted_for := n1, current_term := 6},
+     {reply, #request_vote_result{term = 6, vote_granted = false}}} =
+     ra_node:handle_candidate(Msg, State),
+    % term is lower than candidate term
+    {leader, #{current_term := 6},
+     {reply, #request_vote_result{term = 6, vote_granted = false}}} =
+     ra_node:handle_leader(Msg, State).
 
 
 follower_vote(_Config) ->
