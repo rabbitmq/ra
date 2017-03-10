@@ -79,7 +79,7 @@ gen_statem_safe_call(ServerRef, Msg, Timeout) ->
     catch
          exit:{timeout, _} ->
             timeout;
-         exit:{no_proc, _} ->
+         exit:{noproc, _} ->
             {error, no_proc}
     end.
 

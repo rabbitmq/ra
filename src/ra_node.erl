@@ -258,14 +258,14 @@ handle_candidate(#request_vote_result{term = Term},
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, none};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
-                 State = #{current_term := CurTerm}) when Term > CurTerm ->
+                 State = #{current_term := CurTerm}) when Term >= CurTerm ->
     {follower, State#{current_term => Term}, {next_event, Msg}};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, State#{current_term => Term}, none};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  State = #{current_term := CurTerm})
-  when Term > CurTerm ->
+  when Term >= CurTerm ->
     {follower, State#{current_term => Term}, {next_event, Msg}};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},

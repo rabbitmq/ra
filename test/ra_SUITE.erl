@@ -6,14 +6,14 @@
 
 all() ->
     [
-     single_node,
-     start_node,
-     queue,
+     minority,
+     start_nodes,
+     node_recovery,
      send_and_await_consensus,
      send_and_notify,
-     node_recovery,
      dirty_query,
-     consistent_query
+     consistent_query,
+     queue_example
     ].
 
 groups() ->
@@ -21,11 +21,11 @@ groups() ->
 
 suite() -> [ {timetrap,{seconds,30}} ].
 
-single_node(_Config) ->
+minority(_Config) ->
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
     {timeout, _} = ra:send_and_await_consensus({n1, node()}, 5, 500).
 
-start_node(_Config) ->
+start_nodes(_Config) ->
     % start the first node and wait a bit
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
     timer:sleep(1000),
@@ -37,11 +37,15 @@ start_node(_Config) ->
     ok = ra:start_node(n3, [{n1, node()}, {n2, node()}], fun erlang:'+'/2, 0),
     timer:sleep(1000),
     % issue command
-    {ok, {2, Term}, _Leader} = ra:send_and_await_consensus({n3, node()}, 5),
-    % shut down n2
-    gen_statem:stop(n2, normal, 2000),
+    {ok, {2, Term}, Leader} = ra:send_and_await_consensus({n3, node()}, 5),
+    % shut down non leader
+    Target = case Leader of
+                 {n1, _} -> {n2, node()};
+                 _ -> {n1, node()}
+             end,
+    gen_statem:stop(Target, normal, 2000),
     % issue command to confirm n3 joined the cluster successfully
-    {ok, {3, Term}, _Leader} = ra:send_and_await_consensus({n3, node()}, 5),
+    {ok, {3, Term}, _} = ra:send_and_await_consensus({n3, node()}, 5),
     terminate_cluster([n1, n3]).
 
 node_recovery(_Config) ->
@@ -66,23 +70,6 @@ node_recovery(_Config) ->
     {ok, {2, _}, _Leader} = ra:send_and_await_consensus({n2, node()}, 5),
     terminate_cluster([n1, n2]).
 
-
-queue(_Config) ->
-    Self = self(),
-    [A, _B, _C] = Cluster =
-    ra:start_local_cluster(3, "test", fun queue_apply/2,
-                     #{queue => queue:new(),
-                       pending_dequeues => []}),
-
-    {ok, {1, 1}, Leader} = ra:send(A, {dequeue, Self}),
-    {ok, {2, 1}, _} = ra:send(Leader, {enqueue, test_msg}),
-    waitfor(test_msg, apply_timeout),
-    % check that the message isn't delivered multiple times
-    receive
-        test_msg -> exit(double_delivery)
-    after 500 -> ok
-    end,
-    terminate_cluster(Cluster).
 
 send_and_await_consensus(_Config) ->
     [{APid, _A}, _B, _C] = Cluster =
@@ -117,6 +104,23 @@ consistent_query(_Config) ->
     {ok, {{3, 1}, 14}, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
 
+
+queue_example(_Config) ->
+    Self = self(),
+    [A, _B, _C] = Cluster =
+    ra:start_local_cluster(3, "test", fun queue_apply/2,
+                     #{queue => queue:new(),
+                       pending_dequeues => []}),
+
+    {ok, {1, 1}, Leader} = ra:send(A, {dequeue, Self}),
+    {ok, {2, 1}, _} = ra:send(Leader, {enqueue, test_msg}),
+    waitfor(test_msg, apply_timeout),
+    % check that the message isn't delivered multiple times
+    receive
+        test_msg -> exit(double_delivery)
+    after 500 -> ok
+    end,
+    terminate_cluster(Cluster).
 % implements a simple queue machine
 queue_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
     Q = queue:in(Msg, Q0),
