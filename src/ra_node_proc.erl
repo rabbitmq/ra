@@ -77,7 +77,7 @@ command(ServerRef, Cmd, Timeout) ->
 -spec query(ra_node_proc:server_ref(), query_fun(), dirty | consistent) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
 query(ServerRef, QueryFun, dirty) ->
-    gen_statem:call(ServerRef, {query, QueryFun, dirty});
+    gen_statem:call(ServerRef, {dirty_query, QueryFun});
 query(ServerRef, QueryFun, consistent) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 1000).
@@ -116,7 +116,7 @@ leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}} = C,
                               NodeState0),
     {State, Actions} = interact(Effects, EventType, State0),
     {keep_state, State#state{node_state = NodeState}, Actions};
-leader({call, From}, {query, QueryFun, dirty},
+leader({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, leader, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
@@ -126,7 +126,7 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
                        node_state = NodeState = #{id := Id}}) ->
     ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
-    AppendEntries = ra_node:append_entries(NodeState),
+    AppendEntries = ra_node:make_append_entries(NodeState),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, AppendEntries),
     {keep_state, State0#state{proxy = Proxy}};
@@ -152,7 +152,7 @@ candidate({call, From}, {command, _Cmd} = Cmd,
           State = #state{pending_commands = Pending}) ->
     % stash commands until a leader is known
     {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
-candidate({call, From}, {query, QueryFun, dirty},
+candidate({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
@@ -186,7 +186,7 @@ follower({call, From}, {command, _Cmd},
 follower({call, From}, {command, _Cmd} = Msg,
          State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
-follower({call, From}, {query, QueryFun, dirty},
+follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};

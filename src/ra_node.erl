@@ -6,9 +6,9 @@
          name/2,
          init/1,
          handle_leader/2,
-         handle_follower/2,
          handle_candidate/2,
-         append_entries/1
+         handle_follower/2,
+         make_append_entries/1
         ]).
 
 % Perhaps as it may be persisted to the log
@@ -92,7 +92,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
     State1 = update_peer(PeerId, Peer, State0),
     NewCommitIndex = increment_commit_index(State1),
     {State, Effects} = apply_to(NewCommitIndex, State1),
-    AEs = append_entries(State),
+    AEs = make_append_entries(State),
     Actions = case Effects  of
                   [] -> {send_append_entries, AEs};
                   E -> [{send_append_entries, AEs} | E]
@@ -122,22 +122,20 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                    Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
            end,
     State = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
-    AEs = append_entries(State),
+    AEs = make_append_entries(State),
     {leader, State, {send_append_entries, AEs}};
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
     {IdxTerm, State} = append_log_leader(Cmd, State0),
     ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
-    AEs = append_entries(State),
+    AEs = make_append_entries(State),
     Actions = case Cmd of
-                  {'$usr', From, _Data, ReplyMode} when
-                       ReplyMode =:= after_log_append orelse
-                       ReplyMode =:= notify_on_consensus ->
-                      [{reply, From, IdxTerm},
-                       {send_append_entries, AEs}];
-                  _ ->
-                      [{send_append_entries, AEs}]
+                  {_, _, _, await_consensus} ->
+                      [{send_append_entries, AEs}];
+                  {_, undefined, _, _} ->
+                      [{send_append_entries, AEs}];
+                  {_, From, _, _} ->
+                      [{reply, From, IdxTerm}, {send_append_entries, AEs}]
               end,
-
     {leader, State, Actions};
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
@@ -164,6 +162,45 @@ handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, none}.
 
+
+-spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
+    {ra_state(), ra_node_state(), ra_effect()}.
+handle_candidate(#request_vote_result{term = Term, vote_granted = true},
+                 State = #{current_term := Term, votes := Votes,
+                           cluster := {normal, Nodes}}) ->
+    NewVotes = Votes+1,
+    case trunc(maps:size(Nodes) / 2) + 1 of
+        NewVotes ->
+            {Cluster, Actions} = make_empty_append_entries(State),
+            {leader, maps:without([votes, leader_id],
+                                  State#{cluster => Cluster}),
+             {send_append_entries, Actions}};
+        _ ->
+            {candidate, State#{votes => NewVotes}, none}
+    end;
+handle_candidate(#request_vote_result{term = Term},
+                 State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, none};
+handle_candidate(#request_vote_result{vote_granted = false}, State) ->
+    {candidate, State, none};
+handle_candidate(#append_entries_rpc{term = Term} = Msg,
+                 State = #{current_term := CurTerm}) when Term >= CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_candidate({_PeerId, #append_entries_reply{term = Term}},
+                 State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, State#{current_term => Term}, none};
+handle_candidate(#request_vote_rpc{term = Term} = Msg,
+                 State = #{current_term := CurTerm})
+  when Term >= CurTerm ->
+    {follower, State#{current_term => Term}, {next_event, Msg}};
+handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
+    Reply = #request_vote_result{term = Term, vote_granted = false},
+    {candidate, State, {reply, Reply}};
+handle_candidate(election_timeout, State) ->
+    handle_election_timeout(State);
+handle_candidate(Msg, State) ->
+    log_unhandled_msg(candidate, Msg, State),
+    {candidate, State, none}.
 
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
@@ -234,45 +271,6 @@ handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, none}.
 
-
--spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effect()}.
-handle_candidate(#request_vote_result{term = Term, vote_granted = true},
-                 State = #{current_term := Term, votes := Votes,
-                           cluster := {normal, Nodes}}) ->
-    NewVotes = Votes+1,
-    case trunc(maps:size(Nodes) / 2) + 1 of
-        NewVotes ->
-            {Cluster, Actions} = make_empty_append_entries(State),
-            {leader, maps:without([votes, leader_id],
-                                  State#{cluster => Cluster}),
-             {send_append_entries, Actions}};
-        _ ->
-            {candidate, State#{votes => NewVotes}, none}
-    end;
-handle_candidate(#request_vote_result{term = Term},
-                 State = #{current_term := CurTerm}) when Term > CurTerm ->
-    {follower, State#{current_term => Term}, none};
-handle_candidate(#request_vote_result{vote_granted = false}, State) ->
-    {candidate, State, none};
-handle_candidate(#append_entries_rpc{term = Term} = Msg,
-                 State = #{current_term := CurTerm}) when Term >= CurTerm ->
-    {follower, State#{current_term => Term}, {next_event, Msg}};
-handle_candidate({_PeerId, #append_entries_reply{term = Term}},
-                 State = #{current_term := CurTerm}) when Term > CurTerm ->
-    {follower, State#{current_term => Term}, none};
-handle_candidate(#request_vote_rpc{term = Term} = Msg,
-                 State = #{current_term := CurTerm})
-  when Term >= CurTerm ->
-    {follower, State#{current_term => Term}, {next_event, Msg}};
-handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
-    Reply = #request_vote_result{term = Term, vote_granted = false},
-    {candidate, State, {reply, Reply}};
-handle_candidate(election_timeout, State) ->
-    handle_election_timeout(State);
-handle_candidate(Msg, State) ->
-    log_unhandled_msg(candidate, Msg, State),
-    {candidate, State, none}.
 
 
 %%%===================================================================
@@ -368,13 +366,12 @@ make_empty_append_entries(State = #{id := Id, current_term := Term,
 
 apply_to(Commit, State0 = #{last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
-                            machine_state := MacState0,
-                            cluster := Cluster})
+                            machine_state := MacState0})
   when Commit > LastApplied ->
     case fetch_entries(LastApplied + 1, Commit, State0) of
         [] -> {State0, []};
         Entries ->
-            ApplyFun = wrap_apply_fun(ApplyFun0, Cluster),
+            ApplyFun = wrap_apply_fun(ApplyFun0),
             {MacState, NewEffects} = lists:foldl(ApplyFun, {MacState0, []},
                                                  Entries),
             {LastEntryIdx, _, _} = lists:last(Entries),
@@ -385,7 +382,7 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
     end;
 apply_to(_Commit, State) -> {State, []}.
 
-wrap_apply_fun(ApplyFun, _Cluster) ->
+wrap_apply_fun(ApplyFun) ->
     fun({Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
         {MacSt, Effects0}) ->
             Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
@@ -440,30 +437,27 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     {ok, Log} = ra_log:append({LastIdx+1, Term, Cmd}, false, Log0),
     {{LastIdx+1, Term}, State#{log => Log}}.
 
-append_log_follower({_Idx, _Term, Cmd} = Entry, State = #{log := Log0,
-                                                cluster := Cluster}) ->
-    NextCluster = case Cmd of
-                      {'$ra_cluster_change', _, New, _} ->
-                         New;
-                     _ -> Cluster
-                  end,
+append_log_follower({_Idx, _Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
+                    State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, true, Log0),
-    State#{log => Log, cluster => NextCluster}.
+    State#{log => Log, cluster => Cluster};
+append_log_follower(Entry, State = #{log := Log0}) ->
+    {ok, Log} = ra_log:append(Entry, true, Log0),
+    State#{log => Log}.
 
-append_entries(#{id := Id, log := Log, current_term := Term,
+make_append_entries(#{id := Id, log := Log, current_term := Term,
                  commit_index := CommitIndex} = State) ->
-    Peers = maps:to_list(peers(State)),
-    [begin
-         {PrevIdx, PrevTerm, _} = ra_log:fetch(Next-1, Log),
-         Entries = ra_log:take(Next, 5, Log),
-         {PeerId, #append_entries_rpc{entries = Entries,
-                                      term = Term,
-                                      leader_id = Id,
-                                      prev_log_index = PrevIdx,
-                                      prev_log_term = PrevTerm,
-                                      leader_commit = CommitIndex }}
-     end
-     || {PeerId, #{next_index := Next}} <- Peers].
+    maps:fold(
+      fun(PeerId, #{next_index := Next}, Acc) ->
+              {PrevIdx, PrevTerm, _} = ra_log:fetch(Next-1, Log),
+              Entries = ra_log:take(Next, 5, Log),
+              [{PeerId, #append_entries_rpc{entries = Entries,
+                                            term = Term,
+                                            leader_id = Id,
+                                            prev_log_index = PrevIdx,
+                                            prev_log_term = PrevTerm,
+                                            leader_commit = CommitIndex}} | Acc]
+      end, [], peers(State)).
 
 append_entries_reply(Term, Success, State) ->
     {LastIdx, LastTerm, _} = last_entry(State),

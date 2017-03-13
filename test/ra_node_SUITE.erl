@@ -115,17 +115,17 @@ append_entries_reply_success(_Config) ->
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      last_index = 3, last_term = 5}},
     ExpectedActions =
-    {send_append_entries,
-     [{n2, #append_entries_rpc{term = 5, leader_id = n1,
-                               prev_log_index = 3,
-                               prev_log_term = 5,
-                               leader_commit = 3}},
-      {n3, #append_entries_rpc{term = 5, leader_id = n1,
-                               prev_log_index = 1,
-                               prev_log_term = 1,
-                               leader_commit = 3,
-                               entries = [{2, 3, usr(<<"hi2">>)},
-                                          {3, 5, usr(<<"hi3">>)}]}}]},
+        {send_append_entries,
+         [ {n3, #append_entries_rpc{term = 5, leader_id = n1,
+                                    prev_log_index = 1,
+                                    prev_log_term = 1,
+                                    leader_commit = 3,
+                                    entries = [{2, 3, usr(<<"hi2">>)},
+                                               {3, 5, usr(<<"hi3">>)}]}},
+           {n2, #append_entries_rpc{term = 5, leader_id = n1,
+                                    prev_log_index = 3,
+                                    prev_log_term = 5,
+                                    leader_commit = 3}}]},
     % update match index
     {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
                                              match_index := 3}}},
@@ -163,7 +163,7 @@ append_entries_reply_no_success(_Config) ->
                              leader_commit = 1,
                              entries = [{2, 3, usr(<<"hi2">>)},
                                         {3, 5, usr(<<"hi3">>)}]},
-    ExpectedActions = {send_append_entries, [{n2, AE}, {n3, AE}]},
+    ExpectedActions = {send_append_entries, [{n3, AE}, {n2, AE}]},
     % new peers state is updated
     {leader, #{cluster := {normal, #{n2 := #{next_index := 2,
                                              match_index := 1}}},
@@ -295,9 +295,9 @@ leader_join_node(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3,
                              entries = [JoinEntry]},
-    [{send_append_entries, [{n2, AE}, {n3, AE},
-                            {n4, #append_entries_rpc{entries =
-                                                    [_, _, _, JoinEntry]}}]}] = Effects,
+    [{send_append_entries, [{n4, #append_entries_rpc{entries =
+                                                     [_, _, _, JoinEntry]}},
+                            {n3, AE}, {n2, AE}]}] = Effects,
     ok.
 
 follower_cluster_change(_Config) ->
@@ -341,7 +341,6 @@ joint_cluster_append_entries_reply(_Config) ->
     {leader, #{cluster := {joint, OldCluster, #{n2 := #{next_index := 5,
                                                         match_index := 4}}}},
      Effects} = ra_node:handle_leader(AEReply, State1),
-    ct:pal("Effects ~p~n", [Effects]),
     ?assert(lists:any(fun({next_event, cast, {command,
                                               {'$ra_cluster_change', undefined,
                                                {normal,
@@ -367,7 +366,7 @@ command(_Config) ->
                              leader_commit = 3
                             },
     {leader, _, [{reply, Self, {4, 5}}, {send_append_entries,
-                                         [{n2, AE}, {n3, AE}]}]} =
+                                         [{n3, AE}, {n2, AE}]}]} =
         ra_node:handle_leader({command, Cmd}, State),
     ok.
 
