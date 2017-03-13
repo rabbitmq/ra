@@ -18,7 +18,9 @@ all() ->
      quorum,
      command,
      consistent_query,
-     leader_join_node
+     leader_join_node,
+     follower_cluster_change,
+     joint_cluster_append_entries_reply
     ].
 
 groups() ->
@@ -80,7 +82,8 @@ follower_handleds_append_entries_rpc(_Config) ->
                              entries = [{2, 4, {'$usr', Self, <<"hi">>,
                                                 after_log_append}}]},
 
-    ExpectedLog = {2, #{1 => {1, usr(<<"hi1">>)}, 2 => {4, usr(<<"hi">>)}}},
+    ExpectedLog = {2, #{0 => {0, dummy}, 1 => {1, usr(<<"hi1">>)},
+                        2 => {4, usr(<<"hi">>)}}},
     {follower,  #{log := {ra_test_log, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 2, last_term = 4}}}
@@ -273,26 +276,83 @@ consistent_query(_Config) ->
     ok.
 
 leader_join_node(_Config) ->
-    OldCluster = {normal, #{n1 => #{},
-                            n2 => #{next_index => 4, match_index => 3},
-                            n3 => #{next_index => 4, match_index => 3}}},
-    State = (base_state(3))#{cluster => OldCluster},
-    NewCluster = {normal, #{n1 => #{},
-                            n2 => #{next_index => 4, match_index => 3},
-                            n3 => #{next_index => 4, match_index => 3},
-                            n4 => #{next_index => 1}}},
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3}},
+    State = (base_state(3))#{cluster => {normal, OldCluster}},
+    NewCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
     JointCluster = {joint, OldCluster, NewCluster},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
         ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
                               State),
-    JoinEntry = {4, 5, {'$ra_join', self(), JointCluster, await_consensus}},
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
-                             prev_log_index = 1,
-                             prev_log_term = 1,
-                             leader_commit = 1,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3,
                              entries = [JoinEntry]},
-    {send_append_entries, [{n2, AE}, {n3, AE}, {n4, _Todo}]} = Effects,
+    [{send_append_entries, [{n2, AE}, {n3, AE},
+                            {n4, #append_entries_rpc{entries =
+                                                    [_, _, _, JoinEntry]}}]}] = Effects,
+    ok.
+
+follower_cluster_change(_Config) ->
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3}},
+    State = (base_state(3))#{id => n2,
+                             cluster => {normal, OldCluster}},
+    NewCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1}},
+    JointCluster = {joint, OldCluster, NewCluster},
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
+    AE = #append_entries_rpc{term = 5, leader_id = n1,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3,
+                             entries = [JoinEntry]},
+    {follower, #{cluster := JointCluster}, {reply, #append_entries_reply{}}} =
+        ra_node:handle_follower(AE, State),
+    ok.
+
+joint_cluster_append_entries_reply(_Config) ->
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3}},
+    NewCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
+    % JointCluster = {joint, OldCluster, NewCluster},
+    State = (base_state(3))#{id => n1, cluster => {normal, OldCluster}},
+    {leader, #{cluster := {joint, OldCluster, NewCluster}} = State1, _} =
+        ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
+                              State),
+    AEReply = {n2, #append_entries_reply{term = 5, success = true,
+                                         last_index = 4, last_term = 5}},
+    % leader has consensus - generate next_event to commit new cluster:
+    % to log
+    {leader, #{cluster := {joint, OldCluster, #{n2 := #{next_index := 5,
+                                                        match_index := 4}}}},
+     Effects} = ra_node:handle_leader(AEReply, State1),
+    ct:pal("Effects ~p~n", [Effects]),
+    ?assert(lists:any(fun({next_event, cast, {command,
+                                              {'$ra_cluster_change', undefined,
+                                               {normal,
+                                                #{n2 := #{match_index := 3,
+                                                          next_index := 4},
+                                                  n3 := #{match_index := 3,
+                                                          next_index := 4},
+                                                  n4 := #{next_index := 1}}},
+                                               none}}}) -> true;
+                         (_) -> false
+                      end, Effects)),
     ok.
 
 command(_Config) ->
@@ -348,7 +408,8 @@ quorum(_Config) ->
 %%% helpers
 
 base_state(NumNodes) ->
-    Log = {3, #{1 => {1, usr(<<"hi1">>)},
+    Log = {3, #{0 => {0, dummy},
+                1 => {1, usr(<<"hi1">>)},
                 2 => {3, usr(<<"hi2">>)},
                 3 => {5, usr(<<"hi3">>)}}},
     Nodes = lists:foldl(fun(N, Acc) ->

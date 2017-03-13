@@ -13,6 +13,7 @@ all() ->
      send_and_notify,
      dirty_query,
      consistent_query,
+     add_node,
      queue_example
     ].
 
@@ -104,6 +105,16 @@ consistent_query(_Config) ->
     {ok, {{3, 1}, 14}, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
 
+add_node(_Config) ->
+    [A, _B]  = Cluster =
+    ra:start_local_cluster(2, "test", fun erlang:'+'/2, 0),
+    {ok, {1, 1}, Leader} = ra:send_and_await_consensus(A, 9, 1000),
+    C = ra_node:name("test", "3"),
+    {ok, {2, 1}, _Leader} = ra:add_node(Leader, C),
+    ok = ra:start_node(C, Cluster, fun erlang:'+'/2, 0),
+    timer:sleep(2000),
+    {ok, {{4, 1}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
+    terminate_cluster([C | Cluster]).
 
 queue_example(_Config) ->
     Self = self(),

@@ -12,7 +12,8 @@
          send_and_notify/3,
          dirty_query/2,
          consistent_query/2,
-         start_node/4
+         start_node/4,
+         add_node/2
         ]).
 
 -type ra_idxterm() :: {ra_index(), ra_term()}.
@@ -48,6 +49,9 @@ start_node(Name, Peers, ApplyFun, InitialState) ->
               cluster_id => Name},
     {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => {Name, node()}}),
     ok.
+
+add_node(ServerRef, NodeId) ->
+    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus}, 1000).
 
 -spec send(ra_node_proc:server_ref(), term()) -> ra_sendret().
 send(Ref, Data) ->

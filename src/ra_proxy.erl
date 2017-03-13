@@ -19,7 +19,7 @@
 -record(state, {appends :: map(),
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
-                timer_ref :: timer:tref()}).
+                timer_ref :: reference()}).
 
 %%%===================================================================
 %%% API functions

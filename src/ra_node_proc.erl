@@ -22,7 +22,8 @@
 %% API
 -export([start_link/1,
          command/3,
-         query/3
+         query/3,
+         change/2
         ]).
 
 -define(SERVER, ?MODULE).
@@ -36,7 +37,8 @@
 
 -type query_fun() :: fun((term()) -> term()).
 
--type ra_command_type() :: '$usr' | '$ra_query'.
+-type ra_command_type() :: '$usr' | '$ra_query' | '$ra_join'
+                           | '$ra_cluster_change'.
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
 
@@ -80,6 +82,8 @@ query(ServerRef, QueryFun, consistent) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 1000).
 
+change(ServerRef, {add_node, NodeId}) ->
+    command(ServerRef, {'$ra_join', NodeId, await_consensus}, 1000).
 
 %%%===================================================================
 %%% gen_statem callbacks
@@ -244,6 +248,8 @@ interact(none, _EvtType, State, Actions) ->
     {State, Actions};
 interact({next_event, Evt}, EvtType, State, Actions) ->
     {State, [ {next_event, EvtType, Evt} |  Actions]};
+interact({next_event, cast, Evt}, _EvtType, State, Actions) ->
+    {State, [ {next_event, cast, Evt} |  Actions]};
 interact({send_msg, To, Msg}, _EvtType, State, Actions) ->
     To ! Msg,
     {State, Actions};
