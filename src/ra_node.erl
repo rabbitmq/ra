@@ -79,6 +79,7 @@ init(#{id := Id,
       machine_apply_fun => MachineApplyFun,
       machine_state => InitialMachineState}.
 
+
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
@@ -120,10 +121,24 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                    % not smaller than the last known match index
                    Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
            end,
-
     State = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
     AEs = append_entries(State),
     {leader, State, {send_append_entries, AEs}};
+handle_leader({command, Cmd}, State0 = #{id := Id}) ->
+    {IdxTerm, State} = append_log(Cmd, State0),
+    ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
+    AEs = append_entries(State),
+    Actions = case Cmd of
+                  {'$usr', From, _Data, ReplyMode} when
+                       ReplyMode =:= after_log_append orelse
+                       ReplyMode =:= notify_on_consensus ->
+                      [{reply, From, IdxTerm},
+                       {send_append_entries, AEs}];
+                  _ ->
+                      [{send_append_entries, AEs}]
+              end,
+
+    {leader, State, Actions};
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
                 id := Id} = State) when Term > CurTerm ->
@@ -145,24 +160,10 @@ handle_leader(#request_vote_rpc{term = Term} = Msg,
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {leader, State, {reply, Reply}};
-handle_leader({command, Cmd}, State0 = #{id := Id}) ->
-    {IdxTerm, State} = append_log(Cmd, State0),
-    ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
-    AEs = append_entries(State),
-    Actions = case Cmd of
-                  {'$usr', From, _Data, ReplyMode} when
-                       ReplyMode =:= after_log_append orelse
-                       ReplyMode =:= notify_on_consensus ->
-                      [{reply, From, IdxTerm},
-                       {send_append_entries, AEs}];
-                  _ ->
-                      [{send_append_entries, AEs}]
-              end,
-
-    {leader, State, Actions};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, none}.
+
 
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.

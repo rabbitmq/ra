@@ -36,7 +36,7 @@ proxy(Pid, Appends) ->
 %%%===================================================================
 
 init([Parent, Interval]) ->
-    {ok, TRef} = timer:send_after(Interval, broadcast),
+    TRef = erlang:send_after(Interval, self(), broadcast),
     {ok, #state{appends = #{}, parent = Parent,
                 interval = Interval, timer_ref = TRef}}.
 
@@ -60,7 +60,7 @@ handle_cast({appends, Appends}, State0) ->
 
 handle_info(broadcast, State = #state{interval = Interval}) ->
     ok = broadcast(State),
-    {ok, TRef} = timer:send_after(Interval, broadcast),
+    TRef = erlang:send_after(Interval, self(), broadcast),
     {noreply, State#state{timer_ref = TRef}};
 handle_info(Msg, State) ->
     ?DBG("proxy: handle info unknown ~p~n", [Msg]),

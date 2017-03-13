@@ -17,7 +17,8 @@ all() ->
      higher_term_detected,
      quorum,
      command,
-     consistent_query
+     consistent_query,
+     leader_join_node
     ].
 
 groups() ->
@@ -266,10 +267,32 @@ consistent_query(_Config) ->
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
-    ct:pal("Effects ~p~n", [Effects]),
     ?assert(lists:any(fun({reply, _, {{4, 5}, <<"hi3">>}}) -> true;
                          (_) -> false
                       end, Effects)),
+    ok.
+
+leader_join_node(_Config) ->
+    OldCluster = {normal, #{n1 => #{},
+                            n2 => #{next_index => 4, match_index => 3},
+                            n3 => #{next_index => 4, match_index => 3}}},
+    State = (base_state(3))#{cluster => OldCluster},
+    NewCluster = {normal, #{n1 => #{},
+                            n2 => #{next_index => 4, match_index => 3},
+                            n3 => #{next_index => 4, match_index => 3},
+                            n4 => #{next_index => 1}}},
+    JointCluster = {joint, OldCluster, NewCluster},
+    % raft nodes should switch to the new configuration after log append
+    {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
+        ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
+                              State),
+    JoinEntry = {4, 5, {'$ra_join', self(), JointCluster, await_consensus}},
+    AE = #append_entries_rpc{term = 5, leader_id = n1,
+                             prev_log_index = 1,
+                             prev_log_term = 1,
+                             leader_commit = 1,
+                             entries = [JoinEntry]},
+    {send_append_entries, [{n2, AE}, {n3, AE}, {n4, _Todo}]} = Effects,
     ok.
 
 command(_Config) ->

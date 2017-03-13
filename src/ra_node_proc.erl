@@ -55,7 +55,6 @@ start_link(Config = #{id := Id}) ->
     Name = server_ref_to_local_name(Id),
     gen_statem:start_link({local, Name}, ?MODULE, [Config], []).
 
-
 -spec command(ra_node_proc:server_ref(), ra_command(), timeout()) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
     | {error, term()}.
@@ -71,16 +70,6 @@ command(ServerRef, Cmd, Timeout) ->
             {timeout, ServerRef};
         Reply ->
             {ok, Reply, ServerRef}
-    end.
-
-gen_statem_safe_call(ServerRef, Msg, Timeout) ->
-    try
-        gen_statem:call(ServerRef, Msg, Timeout)
-    catch
-         exit:{timeout, _} ->
-            timeout;
-         exit:{noproc, _} ->
-            {error, no_proc}
     end.
 
 -spec query(ra_node_proc:server_ref(), query_fun(), dirty | consistent) ->
@@ -319,4 +308,14 @@ follower_leader_change(_Old, New) -> New.
 
 server_ref_to_local_name({Name, _}) -> Name;
 server_ref_to_local_name(Name) when is_atom(Name) -> Name.
+
+gen_statem_safe_call(ServerRef, Msg, Timeout) ->
+    try
+        gen_statem:call(ServerRef, Msg, Timeout)
+    catch
+         exit:{timeout, _} ->
+            timeout;
+         exit:{noproc, _} ->
+            {error, no_proc}
+    end.
 
