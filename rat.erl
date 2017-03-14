@@ -18,3 +18,18 @@ command(Node, C) ->
 
 query(Node) ->
     ra:dirty_query(Node, fun (S) -> S end).
+
+looking_glass() ->
+    [A, _B, _C]  =
+        ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
+        lg:trace({callback, rat, patterns}, lg_file_tracer, "traces.gz", #{running => true,
+                                                                           mode => profile}),
+    {ok, {1,1}, _Leader} = ra:send_and_await_consensus(A, 5),
+    % lg_callgrind:profile_many("traces.gz.*", "callgrind.out", #{running => true}).
+    lg:stop().
+
+patterns() ->
+    [rat, {scope, [self()]}].
+
+    % [ {ok, _, _Leader} = ra:send_and_await_consensus(APid, 5),
+

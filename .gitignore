@@ -11,6 +11,7 @@ erl_crash.dump
 /plugins/
 /xrefr
 elvis
+callgrind*
 
 rabbitmq_rtopic_exchange.d
 *.plt
