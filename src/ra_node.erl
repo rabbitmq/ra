@@ -86,7 +86,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
     case peer(PeerId, State0) of
         undefined ->
             ?DBG("~p saw command from unknown peer ~p~n", [Id, PeerId]),
-            {leader, State0, []};
+            {leader, State0, none};
         Peer0 = #{match_index := MI, next_index := NI} ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, LastIdx+1)},
@@ -99,12 +99,18 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                       end,
             {leader, State, Actions}
     end;
-handle_leader({_PeerId, #append_entries_reply{term = Term}},
+handle_leader({PeerId, #append_entries_reply{term = Term}},
               #{current_term := CurTerm,
                 id := Id} = State) when Term > CurTerm ->
-    ?DBG("~p leader saw append_entries_reply for term ~p abdicates term: ~p!~n",
-         [Id, Term, CurTerm]),
-    {follower, State#{current_term => Term}, none};
+    case peer(PeerId, State) of
+        undefined ->
+            ?DBG("~p saw command from unknown peer ~p~n", [Id, PeerId]),
+            {leader, State, none};
+        _ ->
+            ?DBG("~p leader saw append_entries_reply for term ~p abdicates term: ~p!~n",
+                 [Id, Term, CurTerm]),
+            {follower, State#{current_term => Term}, none}
+    end;
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
@@ -152,12 +158,19 @@ handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
          [Id, Term]),
          exit(leader_saw_append_entries_rpc_in_same_term);
 % TODO: reply to append_entries_rpcs that have lower term?
-handle_leader(#request_vote_rpc{term = Term} = Msg,
+handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
                 id := Id} = State) when Term > CurTerm ->
-    ?DBG("~p leader saw request_vote_rpc for term ~p abdicates term: ~p!~n",
-         [Id, Term, CurTerm]),
-    {follower, State#{current_term => Term}, {next_event, Msg}};
+    case peer(Cand, State) of
+        undefined ->
+            ?DBG("~p leader saw request_vote_rpc for unknown peer ~p~n",
+                 [Id, Cand]),
+            {leader, State, none};
+        _ ->
+            ?DBG("~p leader saw request_vote_rpc for term ~p abdicates term: ~p!~n",
+                 [Id, Term, CurTerm]),
+            {follower, State#{current_term => Term}, {next_event, Msg}}
+    end;
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {leader, State, {reply, Reply}};

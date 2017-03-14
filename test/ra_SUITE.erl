@@ -16,7 +16,8 @@ all() ->
      consistent_query,
      add_node,
      queue_example,
-     ramp_up_and_ramp_down
+     ramp_up_and_ramp_down,
+     leave_and_terminate
     ].
 
 groups() ->
@@ -29,6 +30,22 @@ single_node(_Config) ->
     timer:sleep(1000),
     {ok, {1,1}, _} = ra:send_and_await_consensus({n1, node()}, 5, 2000),
     terminate_cluster([n1]).
+
+leave_and_terminate(_Config) ->
+    % safe node removal
+    ok = new_node(n1),
+    timer:sleep(1000),
+    _ = issue_op(n1, 5),
+    validate(n1, 5),
+    ok = add_node(n1, n2),
+    ok = new_node(n2),
+    _ = issue_op(n2, 5),
+    validate(n2, 10),
+    ok = ra:leave_and_terminate({n2, node()}),
+    validate(n1, 10),
+    terminate_cluster([n1]),
+    ok.
+
 
 ramp_up_and_ramp_down(_Config) ->
     ok = new_node(n1),
@@ -55,7 +72,10 @@ ramp_up_and_ramp_down(_Config) ->
     % we need a quorum from the node that is to be removed for the cluster
     % change. if we stop the node before removing it from the cluster
     % configuration the cluster becomes non-functional
-    ok = remove_node(n1),
+    ok = remove_node(n2),
+    % a longish sleep here simulates a node that has been removed but not
+    % shut down and thus may start issuing request_vote_rpcs
+    timer:sleep(1000),
     ok = stop_node(n2),
     _ = issue_op(n1, 5),
     validate(n1, 25),

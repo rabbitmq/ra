@@ -14,6 +14,7 @@ all() ->
      append_entries_reply_no_success,
      follower_vote,
      request_vote_rpc_with_lower_term,
+     leader_does_not_abdicate_to_unknown_peer,
      higher_term_detected,
      quorum,
      command,
@@ -234,6 +235,19 @@ request_vote_rpc_with_lower_term(_Config) ->
     {leader, #{current_term := 6},
      {reply, #request_vote_result{term = 6, vote_granted = false}}} =
      ra_node:handle_leader(Msg, State).
+
+leader_does_not_abdicate_to_unknown_peer(_Config) ->
+    State = base_state(3),
+    Vote = #request_vote_rpc{candidate_id = uknown_peer, term = 6,
+                             last_log_index = 3,
+                             last_log_term = 5},
+    {leader, State, none} = ra_node:handle_leader(Vote, State),
+
+    AEReply = {unknown_peer, #append_entries_reply{term = 6, success = false,
+                                                   last_index = 3,
+                                                   last_term = 5}},
+    {leader, State, none} = ra_node:handle_leader(AEReply , State),
+    ok.
 
 higher_term_detected(_Config) ->
     % Any message received with a higher term should result in the
