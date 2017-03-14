@@ -376,11 +376,11 @@ joint_cluster_append_entries_reply(_Config) ->
 
     % leader has consensus - generate next_event to commit new cluster:
     % to log
-    {leader, #{commit_index := 4,
-               cluster := {joint, _, #{n3 := #{next_index := 5,
-                                               match_index := 4}}}},
+    {leader, State3 = #{commit_index := 4,
+                        cluster := {joint, _, #{n3 := #{next_index := 5,
+                                                        match_index := 4}}}},
      Effects} = ra_node:handle_leader({n3, AEReply}, State2),
-    ?assert(lists:any(fun({next_event, cast, {command,
+    NextEventPred = fun({next_event, cast, {command,
                                               {'$ra_cluster_change', undefined,
                                                {normal,
                                                 #{n2 := #{match_index := 3,
@@ -390,7 +390,16 @@ joint_cluster_append_entries_reply(_Config) ->
                                                   n4 := #{next_index := 1}}},
                                                none}}}) -> true;
                          (_) -> false
-                      end, Effects)),
+                      end,
+    ?assert(lists:any(NextEventPred, Effects)),
+    % appending the next cluster change should switch cluster config
+    % to the new config
+    [{next_event, cast, NextCmd}] = lists:filter(NextEventPred, Effects),
+    {leader, #{commit_index := 4,
+               cluster := {normal, #{n3 := #{next_index := 5,
+                                             match_index := 4}}}},
+     _} = ra_node:handle_leader(NextCmd, State3),
+
     ok.
 
 command(_Config) ->

@@ -14,7 +14,8 @@
          consistent_query/2,
          start_node/4,
          stop_node/1,
-         add_node/2
+         add_node/2,
+         remove_node/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -55,6 +56,11 @@ stop_node(ServerRef) ->
     ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append}, 2000).
+
+-spec remove_node(ra_node_id(), ra_node_id()) ->
+    ra_cmd_ret().
+remove_node(ServerRef, NodeId) ->
+    ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).
 
 -spec send(ra_node_id(), term()) ->
     ra_cmd_ret().

@@ -35,7 +35,7 @@
 
 -type query_fun() :: fun((term()) -> term()).
 
--type ra_command_type() :: '$usr' | '$ra_query' | '$ra_join'
+-type ra_command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave'
                            | '$ra_cluster_change'.
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
@@ -209,11 +209,13 @@ handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknown ~p~n", [EventContent]),
     {next_state, StateName, State}.
 
-terminate(Reason, _StateName, #state{proxy = undefined}) ->
-    ?DBG("ra terminating with ~p~n", [Reason]),
+terminate(Reason, _StateName, #state{proxy = undefined,
+                                     node_state = #{id := Id}}) ->
+    ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
     ok;
-terminate(Reason, _StateName, #state{proxy = Proxy}) ->
-    ?DBG("ra terminating with ~p~n", [Reason]),
+terminate(Reason, _StateName, #state{proxy = Proxy,
+                                     node_state = #{id := Id}}) ->
+    ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
     _ = gen_server:stop(Proxy, Reason, 100),
     ok.
 

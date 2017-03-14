@@ -4,7 +4,8 @@
          append/3,
          take/3,
          last/1,
-         fetch/2]).
+         fetch/2,
+         next_index/1]).
 
 -include("ra.hrl").
 
@@ -45,6 +46,10 @@ take(Start, Num, {_, Log}) ->
     maybe(log_entry()).
 last({LastIdx, _Data} = Log) ->
     fetch(LastIdx, Log).
+
+-spec next_index({ra_index(), ra_test_log_state()}) -> any().
+next_index({LastIdx, _Data}) ->
+    LastIdx + 1.
 
 -spec fetch(ra_index(), ra_test_log_state()) ->
     maybe(log_entry()).
@@ -95,6 +100,11 @@ last_test() ->
             3 => {8, <<"three">>}},
     {3, 8, <<"three">>} = last({3, Log}).
 
+next_index_test() ->
+    Log = #{1 => {8, <<"one">>},
+            2 => {8, <<"two">>},
+            3 => {8, <<"three">>}},
+    4 = next_index({3, Log}).
 
 fetch_test() ->
     Log = #{1 => {8, <<"one">>},

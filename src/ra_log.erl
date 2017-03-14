@@ -6,7 +6,8 @@
          append/3,
          fetch/2,
          take/3,
-         last/1
+         last/1,
+         next_index/1
         ]).
 
 -type ra_log_init_args() :: [term()].
@@ -60,3 +61,7 @@ take(Start, Num, {Mod, Log}) ->
     maybe(log_entry()).
 last({Mod, Log}) ->
     Mod:last(Log).
+
+-spec next_index(State::ra_log()) -> ra_index().
+ next_index({Mod, Log}) ->
+    Mod:next_index(Log).
