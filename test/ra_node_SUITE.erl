@@ -32,14 +32,17 @@ id(X) -> X.
 election_timeout(_Config) ->
     State = base_state(3),
     Msg = election_timeout,
-    VoteRpc = #request_vote_rpc{term = 6, candidate_id = n1, last_log_index = 3,
+    Term = 6,
+    VoteRpc = #request_vote_rpc{term = Term, candidate_id = n1, last_log_index = 3,
                                 last_log_term = 5},
-    {candidate, #{current_term := 6, votes := 1},
-     {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}} =
+    VoteForSelfEvent = {next_event, cast,
+                        #request_vote_result{term = Term, vote_granted = true}},
+    {candidate, #{current_term := Term, votes := 0},
+     [VoteForSelfEvent, {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}]} =
         ra_node:handle_follower(Msg, State),
-    {candidate, #{current_term := 6, votes := 1},
-     {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}} =
-    ra_node:handle_candidate(Msg, State),
+    {candidate, #{current_term := Term, votes := 0},
+     [VoteForSelfEvent, {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}]} =
+        ra_node:handle_candidate(Msg, State),
     ok.
 
 follower_handleds_append_entries_rpc(_Config) ->
@@ -288,9 +291,10 @@ leader_node_join(_Config) ->
     JointCluster = {joint, OldCluster, NewCluster},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
-        ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
-                              State),
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
+        ra_node:handle_leader({command, {'$ra_join', self(),
+                                         n4, await_consensus}}, State),
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(),
+                        JointCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
@@ -355,18 +359,27 @@ joint_cluster_append_entries_reply(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
-    % JointCluster = {joint, OldCluster, NewCluster},
+
     State = (base_state(3))#{id => n1, cluster => {normal, OldCluster}},
     {leader, #{cluster := {joint, OldCluster, NewCluster}} = State1, _} =
         ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
                               State),
-    AEReply = {n2, #append_entries_reply{term = 5, success = true,
-                                         last_index = 4, last_term = 5}},
+
+    % replies coming in
+    AEReply = #append_entries_reply{term = 5, success = true,
+                                    last_index = 4, last_term = 5},
+    % leader does not yet have consensus as will need at least 3 votes
+    {leader, State2 = #{commit_index := 3,
+                        cluster := {joint, _, #{n2 := #{next_index := 5,
+                                                        match_index := 4}}}},
+     _} = ra_node:handle_leader({n2, AEReply}, State1),
+
     % leader has consensus - generate next_event to commit new cluster:
     % to log
-    {leader, #{cluster := {joint, OldCluster, #{n2 := #{next_index := 5,
-                                                        match_index := 4}}}},
-     Effects} = ra_node:handle_leader(AEReply, State1),
+    {leader, #{commit_index := 4,
+               cluster := {joint, _, #{n3 := #{next_index := 5,
+                                               match_index := 4}}}},
+     Effects} = ra_node:handle_leader({n3, AEReply}, State2),
     ?assert(lists:any(fun({next_event, cast, {command,
                                               {'$ra_cluster_change', undefined,
                                                {normal,
@@ -421,14 +434,13 @@ quorum(_Config) ->
     PeerState = #{next_index => 3+1, % leaders last log index + 1
                   match_index => 0}, % initd to 0
 
-    Cluster = {normal, #{n1 => #{next_index => 4},
-                         n2 => PeerState,
-                         n3 => PeerState,
-                         n4 => PeerState,
-                         n5 => PeerState}},
-    {leader, #{cluster := Cluster},
+    {leader, #{cluster := {normal, #{n1 := #{next_index := 4},
+                                     n2 := PeerState,
+                                     n3 := PeerState,
+                                     n4 := PeerState,
+                                     n5 := PeerState}}},
      {send_append_entries, [{n2, AE} | _ ]}}
-               = ra_node:handle_candidate(Reply, State1).
+        = ra_node:handle_candidate(Reply, State1).
 
 %%% helpers
 
@@ -439,7 +451,8 @@ base_state(NumNodes) ->
                 3 => {5, usr(<<"hi3">>)}}},
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
-                                Acc#{Name => #{next_index => 4}}
+                                Acc#{Name => #{next_index => 4,
+                                               match_index => 3}}
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
       cluster => {normal, Nodes},

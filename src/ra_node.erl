@@ -48,8 +48,8 @@
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_append_entries, [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
-    [ra_effect()] |
     {send_msg, pid(), term()} |
+    [ra_effect()] |
     none.
 
 -export_type([ra_node_state/0,
@@ -79,7 +79,6 @@ init(#{id := Id,
       machine_apply_fun => MachineApplyFun,
       machine_state => InitialMachineState}.
 
-
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
@@ -90,8 +89,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
     Peer = Peer0#{match_index => max(MI, LastIdx),
                   next_index => max(NI, LastIdx+1)},
     State1 = update_peer(PeerId, Peer, State0),
-    NewCommitIndex = increment_commit_index(State1),
-    {State, Effects} = apply_to(NewCommitIndex, State1),
+    {State, Effects} = evaluate_quorum(State1),
     AEs = make_append_entries(State),
     Actions = case Effects  of
                   [] -> {send_append_entries, AEs};
@@ -127,16 +125,18 @@ handle_leader({PeerId, #append_entries_reply{success = false,
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
     {IdxTerm, State} = append_log_leader(Cmd, State0),
     ?DBG("~p command appended to log at ~p~n", [Id, IdxTerm]),
-    AEs = make_append_entries(State),
+    {State1, Effects} = evaluate_quorum(State),
+    AEs = make_append_entries(State1),
     Actions = case Cmd of
                   {_, _, _, await_consensus} ->
-                      [{send_append_entries, AEs}];
+                      [{send_append_entries, AEs} | Effects];
                   {_, undefined, _, _} ->
-                      [{send_append_entries, AEs}];
+                      [{send_append_entries, AEs} | Effects];
                   {_, From, _, _} ->
-                      [{reply, From, IdxTerm}, {send_append_entries, AEs}]
+                      [{reply, From, IdxTerm}, {send_append_entries, AEs}
+                       | Effects]
               end,
-    {leader, State, Actions};
+    {leader, State1, Actions};
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
                 id := Id} = State) when Term > CurTerm ->
@@ -278,6 +278,7 @@ handle_follower(Msg, State) ->
 %%%===================================================================
 
 handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
+    ?DBG("~p election timeout in term ~p~n", [Id, CurrentTerm]),
     PeerIds = peer_ids(State),
     % increment current term
     NewTerm = CurrentTerm + 1,
@@ -287,8 +288,10 @@ handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
                                           last_log_term = LastTerm}}
                || PeerId <- PeerIds],
     % vote for self
+    VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     {candidate, State#{current_term => NewTerm,
-                       votes => 1}, {send_vote_requests, Actions}}.
+                       votes => 0}, [{next_event, cast, VoteForSelf},
+                                     {send_vote_requests, Actions}]}.
 
 peers(#{id := Id, cluster := {normal, Nodes}}) ->
     maps:remove(Id, Nodes);
@@ -446,10 +449,10 @@ append_log_follower(Entry, State = #{log := Log0}) ->
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
                                 current_term := Term}) ->
-    {LastIdx, _, _} = ra_log:last(Log0),
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
+    {LastIdx, _, _} = ra_log:last(Log0),
     {ok, Log} = ra_log:append({LastIdx+1, Term, Command}, false, Log0),
     {{LastIdx+1, Term}, State#{log => Log, cluster => Cluster}}.
 
@@ -473,21 +476,53 @@ append_entries_reply(Term, Success, State) ->
                           last_index = LastIdx,
                           last_term = LastTerm}.
 
+evaluate_quorum(State) ->
+    NewCommitIndex = increment_commit_index(State),
+    apply_to(NewCommitIndex, State).
+
 increment_commit_index(State = #{current_term := CurrentTerm,
                                  commit_index := CommitIndex}) ->
     {LeaderIdx, _, _} = last_entry(State),
-    Idxs = lists:sort(
-             [LeaderIdx | [Idx || {_, #{match_index := Idx}} <-
-                                  maps:to_list(peers(State))]]),
-    Nth = trunc(length(Idxs) / 2) + 1,
-    PotentialNewCommitIndex = lists:nth(Nth, Idxs),
+    PotentialNewCommitIndex = agreed_commit(LeaderIdx, peers(State)),
     % leaders can only increment their commit index if the corresponding
-    % log entry term matches the current term
+    % log entry term matches the current term. See (§5.4.2)
     case fetch_entry(PotentialNewCommitIndex, State) of
         {_, CurrentTerm, _} ->
              PotentialNewCommitIndex;
         _ -> CommitIndex
     end.
 
+agreed_commit(LeaderIdx, Peers) ->
+    Idxs = maps:fold(fun(_K, #{match_index := Idx}, Acc) ->
+                             [Idx | Acc]
+                     end, [LeaderIdx], Peers),
+    SortedIdxs = lists:sort(fun erlang:'>'/2, Idxs),
+    Nth = trunc(length(Idxs) / 2) + 1,
+    lists:nth(Nth, SortedIdxs).
+
 log_unhandled_msg(RaState, Msg, State) ->
     ?DBG("~p received unhandled msg: ~p~nState was~p~n", [RaState, Msg, State]).
+
+%%% ===================
+%%% Internal unit tests
+%%% ===================
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+agreed_commit_test() ->
+    Peers = #{n2 => #{match_index => 3},
+              n3 => #{match_index => 3}},
+    % one node
+    4 = agreed_commit(4, #{}),
+    % 2 nodes - only leader has seen new commit
+    3 = agreed_commit(4, #{n2 => #{match_index => 3}}),
+    % 2 nodes - all nodes have seen new commit
+    4 = agreed_commit(4, Peers#{n2 => #{match_index => 4}}),
+    % 3 nodes - leader + 1 node has seen new commit
+    4 = agreed_commit(4, #{n2 => #{match_index => 4}}),
+    % 3 nodes - only leader has seen new commit
+    3 = agreed_commit(4, Peers),
+    ok.
+
+-endif.

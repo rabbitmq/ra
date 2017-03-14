@@ -33,10 +33,10 @@
 -record(append_entries_rpc,
         {term :: ra_term(),
          leader_id :: ra_node_id(),
+         leader_commit :: ra_index(),
          prev_log_index :: non_neg_integer(),
          prev_log_term :: ra_term(),
-         entries = [] :: [log_entry()],
-         leader_commit :: ra_index()}).
+         entries = [] :: [log_entry()]}).
 
 %% TODO: optimisation - follower could send last commit index when
 %% success is false to allow leader to skip to that index

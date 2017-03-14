@@ -6,6 +6,7 @@
 
 all() ->
     [
+     single_node,
      minority,
      start_nodes,
      node_recovery,
@@ -21,6 +22,13 @@ groups() ->
     [{tests, [], all()}].
 
 suite() -> [ {timetrap,{seconds,30}} ].
+
+single_node(_Config) ->
+    ok = ra:start_node(n1, [], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    {ok, {1,1}, _} = ra:send_and_await_consensus({n1, node()}, 5, 2000),
+    terminate_cluster([n1]).
+
 
 minority(_Config) ->
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
@@ -106,8 +114,7 @@ consistent_query(_Config) ->
     terminate_cluster(Cluster).
 
 add_node(_Config) ->
-    [A, _B]  = Cluster =
-    ra:start_local_cluster(2, "test", fun erlang:'+'/2, 0),
+    [A, _B] = Cluster = ra:start_local_cluster(2, "test", fun erlang:'+'/2, 0),
     {ok, {1, 1}, Leader} = ra:send_and_await_consensus(A, 9, 1000),
     C = ra_node:name("test", "3"),
     {ok, {2, 1}, _Leader} = ra:add_node(Leader, C),

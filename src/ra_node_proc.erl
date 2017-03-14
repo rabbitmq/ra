@@ -295,7 +295,7 @@ election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 3) + (Timeout * 2),
     {timeout, T, election_timeout};
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * 3) + (Timeout * 2),
+    T = rand:uniform(Timeout * 5) + (Timeout * 2),
     % candidate should use a state timeout instead of event
     {state_timeout, T, election_timeout}.
 
