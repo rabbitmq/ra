@@ -15,7 +15,8 @@ all() ->
      dirty_query,
      consistent_query,
      add_node,
-     queue_example
+     queue_example,
+     ramp_up_and_ramp_down
     ].
 
 groups() ->
@@ -29,6 +30,38 @@ single_node(_Config) ->
     {ok, {1,1}, _} = ra:send_and_await_consensus({n1, node()}, 5, 2000),
     terminate_cluster([n1]).
 
+new_node(Name) ->
+    ok = ra:start_node(Name, [], fun erlang:'+'/2, 0),
+    ok.
+
+add_node(Ref, New) ->
+    {ok, _IdxTerm, _Leader} = ra:add_node({Ref, node()}, {New, node()}),
+    ok.
+
+issue_op(Name, Op) ->
+    {ok, IdxTrm, Res} = ra:send_and_await_consensus(Name, Op, 2000),
+    {IdxTrm, Res}.
+
+validate(Name, Expected) ->
+    {ok, {_, Expected}, _} = ra:consistent_query({Name, node()},
+                                                 fun(X) -> X end).
+
+ramp_up_and_ramp_down(_Config) ->
+    ok = new_node(n1),
+    timer:sleep(1000),
+    _ = issue_op(n1, 5),
+    validate(n1, 5),
+
+    ok = add_node(n1, n2),
+    ok = new_node(n2),
+    _ = issue_op(n1, 5),
+    validate(n2, 10),
+
+    ok = add_node(n1, n3),
+    ok = new_node(n3),
+    _ = issue_op(n3, 5),
+    validate(n3, 15),
+    terminate_cluster([n1, n2, n3]).
 
 minority(_Config) ->
     ok = ra:start_node(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),

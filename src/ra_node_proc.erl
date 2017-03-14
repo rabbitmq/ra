@@ -22,8 +22,7 @@
 %% API
 -export([start_link/1,
          command/3,
-         query/3,
-         change/2
+         query/3
         ]).
 
 -define(SERVER, ?MODULE).
@@ -83,9 +82,6 @@ query(ServerRef, QueryFun, dirty) ->
 query(ServerRef, QueryFun, consistent) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 1000).
-
-change(ServerRef, {add_node, NodeId}) ->
-    command(ServerRef, {'$ra_join', NodeId, await_consensus}, 1000).
 
 %%%===================================================================
 %%% gen_statem callbacks

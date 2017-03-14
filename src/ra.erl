@@ -54,7 +54,7 @@ stop_node(ServerRef) ->
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
-    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus}, 1000).
+    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append}, 2000).
 
 -spec send(ra_node_id(), term()) ->
     ra_cmd_ret().

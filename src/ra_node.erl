@@ -11,7 +11,6 @@
          make_append_entries/1
         ]).
 
-% Perhaps as it may be persisted to the log
 -type ra_peer_state() :: #{next_index => non_neg_integer(),
                            match_index => non_neg_integer()}.
 
