@@ -419,17 +419,15 @@ add_reply(_From, _Reply, _Mode, Effects) ->
     Effects.
 
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-           State = #{cluster := {normal, OldCluster},
-                     log := Log0, current_term := Term}) ->
+           State = #{cluster := {normal, OldCluster}}) ->
     Cluster = {joint, OldCluster,
                OldCluster#{JoiningNode => #{next_index => 1,
                                             match_index => 0}}},
-    {LastIdx, _, _} = ra_log:last(Log0),
-    % turn join command into a generic cluster change command
-    % that include the new cluster configuration
-    Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
-    {ok, Log} = ra_log:append({LastIdx+1, Term, Command}, false, Log0),
-    {{LastIdx+1, Term}, State#{log => Log, cluster => Cluster}};
+    append_cluster_change(Cluster, From, ReplyMode, State);
+append_log_leader({'$ra_leave', From, JoiningNode, ReplyMode},
+           State = #{cluster := {normal, OldCluster}}) ->
+    Cluster = {joint, OldCluster, maps:remove(JoiningNode, OldCluster)},
+    append_cluster_change(Cluster, From, ReplyMode, State);
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     % TODO: optimise. ra_log:last returns the full entry which is not
     % needed here - add ra_log:lastidx.
@@ -444,6 +442,16 @@ append_log_follower({_Idx, _Term, {'$ra_cluster_change', _, Cluster, _}} = Entry
 append_log_follower(Entry, State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, true, Log0),
     State#{log => Log}.
+
+append_cluster_change(Cluster, From, ReplyMode,
+                      State = #{log := Log0,
+                                current_term := Term}) ->
+    {LastIdx, _, _} = ra_log:last(Log0),
+    % turn join command into a generic cluster change command
+    % that include the new cluster configuration
+    Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
+    {ok, Log} = ra_log:append({LastIdx+1, Term, Command}, false, Log0),
+    {{LastIdx+1, Term}, State#{log => Log, cluster => Cluster}}.
 
 make_append_entries(#{id := Id, log := Log, current_term := Term,
                  commit_index := CommitIndex} = State) ->

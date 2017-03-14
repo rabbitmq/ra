@@ -6,7 +6,7 @@
 %% https://raft.github.io/raft.pdf.
 %%
 
-%% from gen_statem
+%% taken from gen_statem as this type isn't exported for some reason.
 -type from() ::
 	{To :: pid(), Tag :: term()}.
 
@@ -15,12 +15,18 @@
 %% Section 5.3.
 -type ra_term() :: non_neg_integer().
 
+%% tuple form of index and term
+-type ra_idxterm() :: {ra_index(), ra_term()}.
+
 %% Sections 5.1-5.3.
 %%
+%% Uniquely identifies a ra node
 %% NB: ra nodes need to be registered as need to be reachable under the old
 %% name after restarts. Pids won't do.
 -type ra_node_id() :: Name::atom() | {Name::atom(), Node::atom()} |
                       {global, Name::atom()}.
+
+%% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
 %% Figure 2 in the paper

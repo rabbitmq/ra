@@ -18,7 +18,8 @@ all() ->
      quorum,
      command,
      consistent_query,
-     leader_join_node,
+     leader_node_join,
+     leader_node_leave,
      follower_cluster_change,
      joint_cluster_append_entries_reply
     ].
@@ -275,7 +276,7 @@ consistent_query(_Config) ->
                       end, Effects)),
     ok.
 
-leader_join_node(_Config) ->
+leader_node_join(_Config) ->
     OldCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
@@ -288,6 +289,31 @@ leader_join_node(_Config) ->
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
         ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
+                              State),
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
+    AE = #append_entries_rpc{term = 5, leader_id = n1,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3,
+                             entries = [JoinEntry]},
+    [{send_append_entries, [{n4, #append_entries_rpc{entries =
+                                                     [_, _, _, JoinEntry]}},
+                            {n3, AE}, {n2, AE}]}] = Effects,
+    ok.
+
+leader_node_leave(_Config) ->
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
+    State = (base_state(3))#{cluster => {normal, OldCluster}},
+    NewCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3}},
+    JointCluster = {joint, OldCluster, NewCluster},
+    % raft nodes should switch to the new configuration after log append
+    {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
+        ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
                               State),
     JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,

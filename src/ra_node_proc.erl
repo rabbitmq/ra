@@ -30,7 +30,6 @@
 -define(TEST_LOG, ra_test_log).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
--type server_ref() :: pid() | atom() | {Name::atom(), node()}.
 
 -type command_reply_mode() :: after_log_append | await_consensus
                                              | notify_on_consensus.
@@ -42,7 +41,11 @@
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
 
--export_type([server_ref/0]).
+-type ra_cmd_ret() :: {ok, IdxTerm::ra_idxterm(), Leader::ra_node_id()}
+                      | {error, term()}
+                      | {timeout, ra_node_id()}.
+
+-export_type([ra_cmd_ret/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
@@ -54,12 +57,11 @@
 %%%===================================================================
 
 start_link(Config = #{id := Id}) ->
-    Name = server_ref_to_local_name(Id),
+    Name = ra_node_id_to_local_name(Id),
     gen_statem:start_link({local, Name}, ?MODULE, [Config], []).
 
--spec command(ra_node_proc:server_ref(), ra_command(), timeout()) ->
-    {ok, IdxTerm::{ra_index(), ra_term()}, Leader::ra_node_proc:server_ref()}
-    | {error, term()}.
+-spec command(ra_node_id(), ra_command(), timeout()) ->
+    ra_cmd_ret().
 command(ServerRef, Cmd, Timeout) ->
     case gen_statem_safe_call(ServerRef, {command, Cmd},
                               {dirty_timeout, Timeout}) of
@@ -74,7 +76,7 @@ command(ServerRef, Cmd, Timeout) ->
             {ok, Reply, ServerRef}
     end.
 
--spec query(ra_node_proc:server_ref(), query_fun(), dirty | consistent) ->
+-spec query(ra_node_id(), query_fun(), dirty | consistent) ->
     {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
 query(ServerRef, QueryFun, dirty) ->
     gen_statem:call(ServerRef, {dirty_query, QueryFun});
@@ -312,8 +314,8 @@ follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L,
     New#state{pending_commands = []};
 follower_leader_change(_Old, New) -> New.
 
-server_ref_to_local_name({Name, _}) -> Name;
-server_ref_to_local_name(Name) when is_atom(Name) -> Name.
+ra_node_id_to_local_name({Name, _}) -> Name;
+ra_node_id_to_local_name(Name) when is_atom(Name) -> Name.
 
 gen_statem_safe_call(ServerRef, Msg, Timeout) ->
     try

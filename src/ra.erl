@@ -13,13 +13,11 @@
          dirty_query/2,
          consistent_query/2,
          start_node/4,
+         stop_node/1,
          add_node/2
         ]).
 
--type ra_idxterm() :: {ra_index(), ra_term()}.
-
--type ra_sendret() :: {ok, ra_idxterm(), Leader::ra_node_proc:server_ref()} |
-                      {timeout, ra_node_proc:server_ref()}.
+-type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
 
 -define(DEFAULT_TIMEOUT, 5000).
 
@@ -38,8 +36,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
      end || Id <- Nodes].
 
 
--spec start_node(atom(), [{atom(), node()}], fun(), term()) ->
-    ok.
+-spec start_node(atom(), [{atom(), node()}], fun(), term()) -> ok.
 start_node(Name, Peers, ApplyFun, InitialState) ->
     Conf0 = #{log_module => ra_test_log,
               log_init_args => [],
@@ -50,43 +47,52 @@ start_node(Name, Peers, ApplyFun, InitialState) ->
     {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => {Name, node()}}),
     ok.
 
+-spec stop_node(ra_node_id()) -> ok.
+stop_node(ServerRef) ->
+    gen_statem:stop(ServerRef, normal, ?DEFAULT_TIMEOUT).
+
+-spec add_node(ra_node_id(), ra_node_id()) ->
+    ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus}, 1000).
 
--spec send(ra_node_proc:server_ref(), term()) -> ra_sendret().
+-spec send(ra_node_id(), term()) ->
+    ra_cmd_ret().
 send(Ref, Data) ->
     send(Ref, Data, ?DEFAULT_TIMEOUT).
 
--spec send(ra_node_proc:server_ref(), term(), timeout()) -> ra_sendret().
+-spec send(ra_node_id(), term(), timeout()) ->
+    ra_cmd_ret().
 send(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, after_log_append), Timeout).
 
--spec send_and_await_consensus(ra_node_proc:server_ref(), term()) ->
-    ra_sendret().
+-spec send_and_await_consensus(ra_node_id(), term()) ->
+    ra_cmd_ret().
 send_and_await_consensus(Ref, Data) ->
     send_and_await_consensus(Ref, Data, ?DEFAULT_TIMEOUT).
 
--spec send_and_await_consensus(ra_node_proc:server_ref(), term(), timeout()) ->
-    ra_sendret().
+-spec send_and_await_consensus(ra_node_id(), term(), timeout()) ->
+    ra_cmd_ret().
 send_and_await_consensus(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, await_consensus), Timeout).
 
--spec send_and_notify(ra_node_proc:server_ref(), term()) -> ra_sendret().
+-spec send_and_notify(ra_node_id(), term()) ->
+    ra_cmd_ret().
 send_and_notify(Ref, Data) ->
     send_and_notify(Ref, Data, ?DEFAULT_TIMEOUT).
 
--spec send_and_notify(ra_node_proc:server_ref(), term(), timeout()) ->
-    ra_sendret().
+-spec send_and_notify(ra_node_id(), term(), timeout()) ->
+    ra_cmd_ret().
 send_and_notify(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, notify_on_consensus), Timeout).
 
--spec dirty_query(Node::ra_node_proc:server_ref(),
+-spec dirty_query(Node::ra_node_id(),
                   QueryFun::fun((term()) -> term())) ->
     {ok, ra_idxterm(), term()}.
 dirty_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
 
--spec consistent_query(Node::ra_node_proc:server_ref(),
+-spec consistent_query(Node::ra_node_id(),
                        QueryFun::fun((term()) -> term())) ->
     {ok, ra_idxterm(), term()}.
 consistent_query(Node, QueryFun) ->
