@@ -17,7 +17,8 @@ all() ->
      add_node,
      queue_example,
      ramp_up_and_ramp_down,
-     leave_and_terminate
+     leave_and_terminate,
+     leader_steps_down_after_replicating_new_cluster
     ].
 
 groups() ->
@@ -30,6 +31,30 @@ single_node(_Config) ->
     timer:sleep(1000),
     {ok, {1,1}, _} = ra:send_and_await_consensus({n1, node()}, 5, 2000),
     terminate_cluster([n1]).
+
+leader_steps_down_after_replicating_new_cluster(_Config) ->
+    ok = new_node(n1),
+    timer:sleep(1000),
+    _ = issue_op(n1, 5),
+    validate(n1, 5),
+    ok = new_node(n2),
+    ok = add_node(n1, n2),
+    _ = issue_op(n1, 5),
+    validate(n1, 10),
+    ok = new_node(n3),
+    ok = add_node(n1, n3),
+    _ = issue_op(n1, 5),
+    validate(n1, 15),
+    % remove leader node
+    % the leader should here replicate the new cluster config
+    % then step down + shut itself down
+    ok = remove_node(n1),
+    timer:sleep(1000),
+    {error, no_proc} = ra:send_and_await_consensus(n1, 5, 2000),
+    _ = issue_op(n2, 5),
+    validate(n2, 20),
+    terminate_cluster([n2, n3]).
+
 
 leave_and_terminate(_Config) ->
     % safe node removal

@@ -140,7 +140,9 @@ leader(EventType, Msg, State0 = #state{node_state = NodeState0,
             _ = gen_server:stop(Proxy, normal, 100),
             {State, Actions} = interact(Effects, EventType, State0),
             {next_state, follower, State#state{node_state = NodeState},
-             [election_timeout_action(follower, State) | Actions]}
+             [election_timeout_action(follower, State) | Actions]};
+        {stop, NodeState, _Effects} ->
+            {stop, normal, State0#state{node_state = NodeState}}
     end.
 
 candidate({call, From}, {command, _Cmd},

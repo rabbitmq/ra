@@ -21,6 +21,7 @@ all() ->
      consistent_query,
      leader_node_join,
      leader_node_leave,
+     leader_is_removed,
      follower_cluster_change,
      joint_cluster_append_entries_reply
     ].
@@ -343,6 +344,39 @@ leader_node_leave(_Config) ->
                                                      [_, _, _, JoinEntry]}},
                             {n3, AE}, {n2, AE}]}] = Effects,
     ok.
+
+leader_is_removed(_Config) ->
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
+    State = (base_state(3))#{cluster => {normal, OldCluster}},
+    NewCluster = #{n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
+    % raft nodes should switch to the new configuration after log append
+    {leader, State1, _} =
+        ra_node:handle_leader({command, {'$ra_leave', self(), n1, await_consensus}},
+                              State),
+
+    % replies coming in
+    AEReply = #append_entries_reply{term = 5, success = true,
+                                    last_index = 4, last_term = 5},
+    {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1),
+    {leader, State3, _} = ra_node:handle_leader({n3, AEReply}, State2),
+
+    {leader, State4 = #{step_down_after := 5}, _} =
+        ra_node:handle_leader({command, {'$ra_cluster_change', self(),
+                                         {normal, NewCluster},
+                                         after_log_append}}, State3),
+    % new config is replicated
+    AEReply2 = #append_entries_reply{term = 5, success = true,
+                                     last_index = 5, last_term = 5},
+    {leader, State5, _} = ra_node:handle_leader({n2, AEReply2}, State4),
+    % the new cluster configuration has consensus - time to go
+    {stop, _, _} = ra_node:handle_leader({n3, AEReply2}, State5),
+    ok.
+
 
 follower_cluster_change(_Config) ->
     OldCluster = #{n1 => #{},

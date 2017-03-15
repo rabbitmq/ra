@@ -32,6 +32,7 @@
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
+      step_down_after => ra_index(),
       % Module implementing ra machine
       machine_apply_fun => fun((term(), term()) ->
                               term() | {term(), [ra_machine_effect()]}),
@@ -97,7 +98,15 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           [] -> {send_append_entries, AEs};
                           E -> [{send_append_entries, AEs} | E]
                       end,
-            {leader, State, Actions}
+            case State of
+                #{step_down_after := End,
+                  commit_index := Commit} when End =< Commit ->
+                    % it is time to say goodbye
+                    ?DBG("~p leader stopping - goodbye", [Id]),
+                    {stop, State, Actions};
+                _ ->
+                    {leader, State, Actions}
+            end
     end;
 handle_leader({PeerId, #append_entries_reply{term = Term}},
               #{current_term := CurTerm,
@@ -451,11 +460,23 @@ append_log_leader({CmdTag, _, _, _}, _State)
       exit(invalid_cluster_state_for_join);
 append_log_leader({'$ra_cluster_change', _, {normal, _}, _} = Cmd,
                   State = #{log := Log0, current_term := Term,
-                            cluster := {joint, _Old, New}}) ->
-    % switch to new cluster configuration but use
+                            cluster := {joint, _Old, New},
+                            id := Id}) ->
+    % switch to the new cluster
     NextIdx = ra_log:next_index(Log0),
     {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),
-    {{NextIdx, Term}, State#{log => Log, cluster => {normal, New}}};
+    case New of
+        #{Id := _} ->
+            % leader is in the new cluster
+            {{NextIdx, Term}, State#{log => Log, cluster => {normal, New}}};
+        _ ->
+            % leader is not in the new cluster
+            % set a marker to step down after this entry has been replicated
+            {{NextIdx, Term}, State#{log => Log,
+                                     cluster => {normal, New},
+                                     step_down_after => NextIdx}}
+    end;
+
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
     {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),

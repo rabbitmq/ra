@@ -12,6 +12,7 @@ erl_crash.dump
 /xrefr
 elvis
 callgrind*
+ct.coverdata
 
 rabbitmq_rtopic_exchange.d
 *.plt
