@@ -365,7 +365,7 @@ leader_is_removed(_Config) ->
     {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1),
     {leader, State3, _} = ra_node:handle_leader({n3, AEReply}, State2),
 
-    {leader, State4 = #{step_down_after := 5}, _} =
+    {leader, State4 = #{stop_after := 5}, _} =
         ra_node:handle_leader({command, {'$ra_cluster_change', self(),
                                          {normal, NewCluster},
                                          after_log_append}}, State3),

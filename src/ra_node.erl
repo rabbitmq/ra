@@ -32,7 +32,7 @@
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
-      step_down_after => ra_index(),
+      stop_after => ra_index(),
       % Module implementing ra machine
       machine_apply_fun => fun((term(), term()) ->
                               term() | {term(), [ra_machine_effect()]}),
@@ -99,7 +99,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           E -> [{send_append_entries, AEs} | E]
                       end,
             case State of
-                #{step_down_after := End,
+                #{stop_after := End,
                   commit_index := Commit} when End =< Commit ->
                     % it is time to say goodbye
                     ?DBG("~p leader stopping - goodbye", [Id]),
@@ -239,14 +239,13 @@ handle_follower(#append_entries_rpc{term = Term,
   when Term >= CurTerm ->
     case has_log_entry(PLIdx, PLTerm, State0) of
         true ->
-            #{log := Log} = State = lists:foldl(fun append_log_follower/2,
+            State = lists:foldl(fun append_log_follower/2,
                                                 State0, Entries),
 
             % do not apply Effects from the machine on a non leader
             {State1, _Effects} = apply_to(LeaderCommit,
                                           State#{current_term => Term,
-                                                 leader_id => LeaderId,
-                                                 log => Log}),
+                                                 leader_id => LeaderId}),
             Reply = append_entries_reply(Term, true, State1),
             {follower, State1, {reply, Reply}};
         false ->
@@ -474,9 +473,8 @@ append_log_leader({'$ra_cluster_change', _, {normal, _}, _} = Cmd,
             % set a marker to step down after this entry has been replicated
             {{NextIdx, Term}, State#{log => Log,
                                      cluster => {normal, New},
-                                     step_down_after => NextIdx}}
+                                     stop_after => NextIdx}}
     end;
-
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
     {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),

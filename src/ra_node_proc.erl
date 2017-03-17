@@ -141,8 +141,11 @@ leader(EventType, Msg, State0 = #state{node_state = NodeState0,
             {State, Actions} = interact(Effects, EventType, State0),
             {next_state, follower, State#state{node_state = NodeState},
              [election_timeout_action(follower, State) | Actions]};
-        {stop, NodeState, _Effects} ->
-            {stop, normal, State0#state{node_state = NodeState}}
+        {stop, NodeState, Effects} ->
+            % interact before shutting downin case followers need
+            % to know about the new commit index
+            {State, _Actions} = interact(Effects, EventType, State0),
+            {stop, normal, State#state{node_state = NodeState}}
     end.
 
 candidate({call, From}, {command, _Cmd},
