@@ -166,8 +166,7 @@ candidate(EventType, Msg, State0 = #state{node_state = NodeState0
     case ra_node:handle_candidate(Msg, NodeState0) of
         {candidate, NodeState, Effects} ->
             {State, Actions} = interact(Effects, EventType, State0),
-            {keep_state, State#state{node_state = NodeState},
-             [election_timeout_action(candidate, State) | Actions]};
+            {keep_state, State#state{node_state = NodeState}, Actions};
         {follower, NodeState, Effects} ->
             ?DBG("~p candidate -> follower term: ~p~n", [Id, Term]),
             {State, Actions} = interact(Effects, EventType, State0),
@@ -296,7 +295,7 @@ interact([], _EvtType, State, Actions) -> {State, Actions}.
 
 election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 3) + (Timeout * 2),
-    {timeout, T, election_timeout};
+    {state_timeout, T, election_timeout};
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 5) + (Timeout * 2),
     % candidate should use a state timeout instead of event

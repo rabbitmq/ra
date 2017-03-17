@@ -24,8 +24,11 @@
     #{id => ra_node_id(),
       leader_id => maybe(ra_node_id()),
       cluster_id => binary(),
-      cluster => {normal, ra_cluster()} |
-                 {joint, ra_cluster(), ra_cluster()},
+      cluster => ra_cluster(),
+      cluster_change_permitted => boolean(),
+      cluster_index_term => ra_idxterm(),
+      pending_cluster_changes => [term()],
+      previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term => ra_term(),
       log => term(),
       voted_for => maybe(ra_node_id()),
@@ -71,7 +74,10 @@ init(#{id := Id,
        initial_state := InitialMachineState}) ->
     #{id => Id,
       cluster_id => ClusterId,
-      cluster => {normal, make_cluster(InitialNodes)},
+      cluster => make_cluster(InitialNodes),
+      cluster_change_permitted => false,
+      cluster_index_term => {0, 0},
+      pending_cluster_changes => [],
       current_term => 0,
       commit_index => 0,
       last_applied => 0,
@@ -99,9 +105,14 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           E -> [{send_append_entries, AEs} | E]
                       end,
             case State of
-                #{stop_after := End,
-                  commit_index := Commit} when End =< Commit ->
-                    % it is time to say goodbye
+                #{id := Id, cluster := #{Id := _}} ->
+                    % leader is in the cluster
+                    {leader, State, Actions};
+                #{commit_index := CI, cluster_index_term := {CITIndex, _}}
+                  when CI >= CITIndex ->
+                    % leader is not in the cluster and the new cluster
+                    % config has been committed
+                    % time to say goodbye
                     ?DBG("~p leader stopping - goodbye", [Id]),
                     {stop, State, Actions};
                 _ ->
@@ -123,7 +134,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
-              State0 = #{cluster := {normal, Nodes},
+              State0 = #{cluster := Nodes,
                          log := Log}) ->
     #{PeerId := Peer0 = #{match_index := MI, next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
@@ -137,24 +148,30 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                    % not smaller than the last known match index
                    Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
            end,
-    State = State0#{cluster => {normal, Nodes#{PeerId => Peer}}},
+    State = State0#{cluster => Nodes#{PeerId => Peer}},
     AEs = make_append_entries(State),
     {leader, State, {send_append_entries, AEs}};
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
-    {IdxTerm, State} = append_log_leader(Cmd, State0),
-    ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
-    {State1, Effects} = evaluate_quorum(State),
-    AEs = make_append_entries(State1),
-    Actions = case Cmd of
-                  {_, _, _, await_consensus} ->
-                      [{send_append_entries, AEs} | Effects];
-                  {_, undefined, _, _} ->
-                      [{send_append_entries, AEs} | Effects];
-                  {_, From, _, _} ->
-                      [{reply, From, IdxTerm}, {send_append_entries, AEs}
-                       | Effects]
-              end,
-    {leader, State1, Actions};
+    case append_log_leader(Cmd, State0) of
+        {not_appended, State} ->
+            {leader, State, []};
+        {IdxTerm, State}  ->
+            ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
+            {State1, Effects} = evaluate_quorum(State),
+            AEs = make_append_entries(State1),
+            Actions = case Cmd of
+                          {_, _, _, await_consensus} ->
+                              [{send_append_entries, AEs} | Effects];
+                          {_, undefined, _, _} ->
+                              [{send_append_entries, AEs} | Effects];
+                          {_, From, _, _} ->
+                              [{reply, From, IdxTerm}, {send_append_entries, AEs}
+                               | Effects];
+                          _ ->
+                              [{send_append_entries, AEs} | Effects]
+                      end,
+            {leader, State1, Actions}
+    end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
                 id := Id} = State) when Term > CurTerm ->
@@ -191,17 +208,16 @@ handle_leader(Msg, State) ->
 -spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
-                 State = #{current_term := Term, votes := Votes,
-                           cluster := {normal, Nodes}}) ->
+                 State0 = #{current_term := Term, votes := Votes,
+                           cluster := Nodes}) ->
     NewVotes = Votes+1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            {Cluster, Actions} = make_empty_append_entries(State),
-            {leader, maps:without([votes, leader_id],
-                                  State#{cluster => Cluster}),
-             {send_append_entries, Actions}};
+            State = initialise_peers(State0),
+            {leader, maps:without([votes, leader_id], State),
+             [{next_event, cast, {command, noop}}]};
         _ ->
-            {candidate, State#{votes => NewVotes}, none}
+            {candidate, State0#{votes => NewVotes}, none}
     end;
 handle_candidate(#request_vote_result{term = Term},
                  State = #{current_term := CurTerm}) when Term > CurTerm ->
@@ -316,32 +332,17 @@ handle_election_timeout(State = #{id := Id, current_term := CurrentTerm}) ->
                        votes => 0}, [{next_event, cast, VoteForSelf},
                                      {send_vote_requests, Actions}]}.
 
-peers(#{id := Id, cluster := {normal, Nodes}}) ->
-    maps:remove(Id, Nodes);
-peers(#{id := Id, cluster := {joint, Old, New}}) ->
-    Nodes = maps:merge(Old, New),
+peers(#{id := Id, cluster := Nodes}) ->
     maps:remove(Id, Nodes).
 
 peer_ids(State) ->
     maps:keys(peers(State)).
 
-peer(PeerId, #{cluster := {normal, Nodes}}) ->
-    maps:get(PeerId, Nodes, undefined);
-peer(PeerId, #{cluster := {joint, Old, New}}) ->
-    case New of
-        #{PeerId := Peer} -> Peer;
-        _ -> maps:get(PeerId, Old, undefined)
-    end.
+peer(PeerId, #{cluster := Nodes}) ->
+    maps:get(PeerId, Nodes, undefined).
 
-update_peer(PeerId, Peer, #{cluster := {normal, Nodes}} = State) ->
-    State#{cluster => {normal, Nodes#{PeerId => Peer}}};
-update_peer(PeerId, Peer, #{cluster := {joint, Old, New}} = State) ->
-    case New of
-        #{PeerId := _} ->
-            State#{cluster => {joint, Old, New#{PeerId => Peer}}};
-        _ ->
-            State#{cluster => {joint, Old#{PeerId := Peer}, New}}
-    end.
+update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
+    State#{cluster => Nodes#{PeerId => Peer}}.
 
 last_entry(#{log := Log}) ->
     ra_log:last(Log).
@@ -372,23 +373,15 @@ make_cluster(Nodes) ->
                         Acc#{N => #{match_index => 0}}
                 end, #{}, Nodes).
 
-make_empty_append_entries(State = #{id := Id, current_term := Term,
-                                    commit_index := CommitIdx,
-                                    cluster := {normal, Cluster0}}) ->
+initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     PeerIds = peer_ids(State),
-    {LastIdx, LastTerm, _} = last_entry(State),
+    NextIdx = ra_log:next_index(Log),
     Cluster = lists:foldl(fun(PeerId, Acc) ->
                                   Acc#{PeerId => #{match_index => 0,
-                                                   next_index => LastIdx+1}}
+                                                   next_index => NextIdx}}
                           end, Cluster0, PeerIds),
+    State#{cluster => Cluster}.
 
-    {{normal, Cluster},
-     [{PeerId, #append_entries_rpc{term = Term,
-                                   leader_id = Id,
-                                   prev_log_index = LastIdx,
-                                   prev_log_term = LastTerm,
-                                   leader_commit = CommitIdx}}
-      || PeerId <- peer_ids(State)]}.
 
 apply_to(Commit, State0 = #{last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
@@ -398,41 +391,42 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
         [] -> {State0, []};
         Entries ->
             ApplyFun = wrap_apply_fun(ApplyFun0),
-            {MacState, NewEffects} = lists:foldl(ApplyFun, {MacState0, []},
-                                                 Entries),
+            {State, MacState, NewEffects} = lists:foldl(ApplyFun,
+                                                        {State0, MacState0, []},
+                                                        Entries),
             {LastEntryIdx, _, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
-            {State0#{last_applied => NewCommit,
-                     commit_index => NewCommit,
-                     machine_state => MacState}, NewEffects}
+            {State#{last_applied => NewCommit,
+                    commit_index => NewCommit,
+                    machine_state => MacState}, NewEffects}
     end;
 apply_to(_Commit, State) -> {State, []}.
 
 wrap_apply_fun(ApplyFun) ->
     fun({Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
-        {MacSt, Effects0}) ->
+        {State, MacSt, Effects0}) ->
             Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
                                 ReplyType, Effects0),
-            {MacSt, Effects};
+            {State, MacSt, Effects};
        ({Idx, Term, {'$usr', From, Cmd, ReplyType}},
-        {MacSt, Effects0}) ->
+        {State, MacSt, Effects0}) ->
             case ApplyFun(Cmd, MacSt) of
-                {NextSt, Efx} ->
+                {NextMacSt, Efx} ->
                     Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-                    {NextSt, Effects ++ Efx};
-                NextSt ->
+                    {State, NextMacSt, Effects ++ Efx};
+                NextMacSt ->
                     Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-                    {NextSt, Effects}
+                    {State, NextMacSt, Effects}
             end;
-       ({Idx, Term, {'$ra_cluster_change', From, {joint, _, New}, ReplyType}},
-         {MacSt, Effects0}) ->
+       ({Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
+         {State0, MacSt, Effects0}) ->
             ?DBG("ra cluster change to ~p~n", [New]),
-            % create effect to append new cluster to log
-            Effects = [{next_event, cast,
-                        {command, {'$ra_cluster_change', undefined, {normal, New},
-                                   none}}} | Effects0],
-            Effects1 = add_reply(From, {Idx, Term}, ReplyType, Effects),
-            {MacSt, Effects1};
+            Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+            State = State0#{cluster_change_permitted => true},
+            {State, MacSt, Effects};
+       ({_Idx, Term, noop}, {State0 = #{current_term := Term}, MacSt, Effects}) ->
+            State = State0#{cluster_change_permitted => true},
+            {State, MacSt, Effects};
        (_, Acc) ->
             Acc
     end.
@@ -444,62 +438,74 @@ add_reply({FromPid, _}, Reply, notify_on_consensus, Effects) ->
 add_reply(_From, _Reply, _Mode, Effects) ->
     Effects.
 
+append_log_leader({CmdTag, _, _, _} = Cmd,
+                  State = #{cluster_change_permitted := false,
+                            pending_cluster_changes := Pending})
+  when CmdTag == '$ra_join' orelse
+       CmdTag == '$ra_leave' ->
+    % cluster change is in progress or leader has not yet committed anything
+    % in this term - stash the request
+    {not_appended, State#{pending_cluster_changes => Pending ++ [Cmd]}};
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-           State = #{cluster := {normal, OldCluster}}) ->
-    Cluster = {joint, OldCluster,
-               OldCluster#{JoiningNode => #{next_index => 1,
-                                            match_index => 0}}},
+           State = #{cluster := OldCluster}) ->
+    Cluster = OldCluster#{JoiningNode => #{next_index => 1,
+                                           match_index => 0}},
     append_cluster_change(Cluster, From, ReplyMode, State);
-append_log_leader({'$ra_leave', From, JoiningNode, ReplyMode},
-           State = #{cluster := {normal, OldCluster}}) ->
-    Cluster = {joint, OldCluster, maps:remove(JoiningNode, OldCluster)},
+append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
+                  State = #{cluster := OldCluster}) ->
+    Cluster = maps:remove(LeavingNode, OldCluster),
     append_cluster_change(Cluster, From, ReplyMode, State);
-append_log_leader({CmdTag, _, _, _}, _State)
- when CmdTag =:= '$ra_join' ->
-      exit(invalid_cluster_state_for_join);
-append_log_leader({'$ra_cluster_change', _, {normal, _}, _} = Cmd,
-                  State = #{log := Log0, current_term := Term,
-                            cluster := {joint, _Old, New},
-                            id := Id}) ->
-    % switch to the new cluster
-    NextIdx = ra_log:next_index(Log0),
-    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),
-    case New of
-        #{Id := _} ->
-            % leader is in the new cluster
-            {{NextIdx, Term}, State#{log => Log, cluster => {normal, New}}};
-        _ ->
-            % leader is not in the new cluster
-            % set a marker to step down after this entry has been replicated
-            {{NextIdx, Term}, State#{log => Log,
-                                     cluster => {normal, New},
-                                     stop_after => NextIdx}}
-    end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
     {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),
     {{NextIdx, Term}, State#{log => Log}}.
 
-append_log_follower({_Idx, _Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
+append_log_follower({Idx, Term, Cmd} = Entry,
+                    State = #{log := Log0,
+                              cluster_index_term := {Idx, CITTerm}})
+  when Term /= CITTerm ->
+    % the index for the cluster config entry has a different term, i.e.
+    % it has been overwritten by a new leader. Unless it is another cluster
+    % change (can this even happen?) we should revert back to the last known
+    % cluster
+    case Cmd of
+        {'$ra_cluster_change', _, Cluster, _} ->
+            {ok, Log} = ra_log:append(Entry, true, Log0),
+            State#{log => Log, cluster => Cluster,
+                   cluster_index_term => {Idx, Term}};
+        _ ->
+            % revert back to previous cluster
+            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
+            State1 = State#{cluster => PrevCluster,
+                            cluster_index_term => {PrevIdx, PrevTerm}},
+            append_log_follower(Entry, State1)
+    end;
+append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
                     State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, true, Log0),
-    State#{log => Log, cluster => Cluster};
+    State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}};
 append_log_follower(Entry, State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, true, Log0),
     State#{log => Log}.
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
+                                cluster := PrevCluster,
+                                cluster_index_term := {PrevCITIdx, PrevCITTerm},
                                 current_term := Term}) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
     NextIdx = ra_log:next_index(Log0),
+    IdxTerm = {NextIdx, Term},
     {ok, Log} = ra_log:append({NextIdx, Term, Command}, false, Log0),
-    {{NextIdx, Term}, State#{log => Log, cluster => Cluster}}.
+    {IdxTerm, State#{log => Log, cluster => Cluster,
+                     cluster_change_permitted => false,
+                     cluster_index_term => IdxTerm,
+                     previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
 
 make_append_entries(#{id := Id, log := Log, current_term := Term,
-                 commit_index := CommitIndex} = State) ->
+                      commit_index := CommitIndex} = State) ->
     maps:fold(
       fun(PeerId, #{next_index := Next}, Acc) ->
               {PrevIdx, PrevTerm, _} = ra_log:fetch(Next-1, Log),

@@ -19,11 +19,13 @@ all() ->
      quorum,
      command,
      consistent_query,
+     leader_noop_operation_enables_cluster_change,
      leader_node_join,
      leader_node_leave,
      leader_is_removed,
      follower_cluster_change,
-     joint_cluster_append_entries_reply
+     leader_applies_new_cluster,
+     leader_appends_cluster_change_then_steps_before_applying_it
     ].
 
 groups() ->
@@ -116,7 +118,7 @@ append_entries_reply_success(_Config) ->
                 n3 => #{next_index => 2, match_index => 1}},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
-                             cluster => {normal, Cluster},
+                             cluster => Cluster,
                              machine_state => <<"hi1">>},
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      last_index = 3, last_term = 5}},
@@ -133,8 +135,7 @@ append_entries_reply_success(_Config) ->
                                     prev_log_term = 5,
                                     leader_commit = 3}}]},
     % update match index
-    {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
-                                             match_index := 3}}},
+    {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 3}},
                commit_index := 3,
                last_applied := 3,
                machine_state := <<"hi3">>}, ExpectedActions} =
@@ -142,8 +143,8 @@ append_entries_reply_success(_Config) ->
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
                                       last_index = 3, last_term = 5}},
-    {leader, #{cluster := {normal, #{n2 := #{next_index := 4,
-                                             match_index := 3}}},
+    {leader, #{cluster := #{n2 := #{next_index := 4,
+                                             match_index := 3}},
                commit_index := 1,
                last_applied := 1,
                current_term := 7,
@@ -158,7 +159,7 @@ append_entries_reply_no_success(_Config) ->
                 n3 => #{next_index => 2, match_index => 1}},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
-                             cluster => {normal, Cluster},
+                             cluster => Cluster,
                              machine_state => <<"hi1">>},
     % n2 has only seen index 1
     Msg = {n2, #append_entries_reply{term = 5, success = false,
@@ -171,8 +172,7 @@ append_entries_reply_no_success(_Config) ->
                                         {3, 5, usr(<<"hi3">>)}]},
     ExpectedActions = {send_append_entries, [{n3, AE}, {n2, AE}]},
     % new peers state is updated
-    {leader, #{cluster := {normal, #{n2 := #{next_index := 2,
-                                             match_index := 1}}},
+    {leader, #{cluster := #{n2 := #{next_index := 2, match_index := 1}},
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>}, ExpectedActions} =
@@ -279,9 +279,9 @@ higher_term_detected(_Config) ->
     VoteExpect = ra_node:handle_candidate(Vote, State).
 
 consistent_query(_Config) ->
-    Cluster = {normal, #{n1 => #{},
+    Cluster = #{n1 => #{},
                          n2 => #{next_index => 4, match_index => 3},
-                         n3 => #{next_index => 4, match_index => 3}}},
+                         n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => Cluster},
     {leader, State1, _} =
     ra_node:handle_leader({command, {'$ra_query', self(),
@@ -294,22 +294,36 @@ consistent_query(_Config) ->
                       end, Effects)),
     ok.
 
+leader_noop_operation_enables_cluster_change(_Config) ->
+    State = (base_state(3))#{cluster_change_permitted => false},
+    {leader, #{cluster_change_permitted := false} = State1, _} =
+        ra_node:handle_leader({command, noop}, State),
+    AEReply = {n2, #append_entries_reply{term = 5, success = true,
+                                         last_index = 4, last_term = 5}},
+    % noop consensus
+    {leader, #{cluster_change_permitted := true}, _} =
+        ra_node:handle_leader(AEReply, State1),
+    ok.
+
+
+
 leader_node_join(_Config) ->
     OldCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
-    State = (base_state(3))#{cluster => {normal, OldCluster}},
+    State = (base_state(3))#{cluster => OldCluster},
     NewCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
-    JointCluster = {joint, OldCluster, NewCluster},
     % raft nodes should switch to the new configuration after log append
-    {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
+    % and further cluster changes should be disallowed
+    {leader, #{cluster := NewCluster,
+               cluster_change_permitted := false}, Effects} =
         ra_node:handle_leader({command, {'$ra_join', self(),
                                          n4, await_consensus}}, State),
     JoinEntry = {4, 5, {'$ra_cluster_change', self(),
-                        JointCluster, await_consensus}},
+                        NewCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
@@ -325,24 +339,22 @@ leader_node_leave(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
-    State = (base_state(3))#{cluster => {normal, OldCluster}},
+    State = (base_state(3))#{cluster => OldCluster},
     NewCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
-    JointCluster = {joint, OldCluster, NewCluster},
     % raft nodes should switch to the new configuration after log append
-    {leader, #{cluster := {joint, OldCluster, NewCluster}}, Effects} =
+    {leader, #{cluster := NewCluster}, Effects} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
                               State),
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(), NewCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
                              leader_commit = 3,
                              entries = [JoinEntry]},
-    [{send_append_entries, [{n4, #append_entries_rpc{entries =
-                                                     [_, _, _, JoinEntry]}},
-                            {n3, AE}, {n2, AE}]}] = Effects,
+    % the leaving node is no longer included
+    [{send_append_entries, [{n3, AE}, {n2, AE}]}] = Effects,
     ok.
 
 leader_is_removed(_Config) ->
@@ -350,11 +362,8 @@ leader_is_removed(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
-    State = (base_state(3))#{cluster => {normal, OldCluster}},
-    NewCluster = #{n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3},
-                   n4 => #{next_index => 1, match_index => 0}},
-    % raft nodes should switch to the new configuration after log append
+    State = (base_state(3))#{cluster => OldCluster},
+
     {leader, State1, _} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n1, await_consensus}},
                               State),
@@ -363,43 +372,32 @@ leader_is_removed(_Config) ->
     AEReply = #append_entries_reply{term = 5, success = true,
                                     last_index = 4, last_term = 5},
     {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1),
-    {leader, State3, _} = ra_node:handle_leader({n3, AEReply}, State2),
-
-    {leader, State4 = #{stop_after := 5}, _} =
-        ra_node:handle_leader({command, {'$ra_cluster_change', self(),
-                                         {normal, NewCluster},
-                                         after_log_append}}, State3),
-    % new config is replicated
-    AEReply2 = #append_entries_reply{term = 5, success = true,
-                                     last_index = 5, last_term = 5},
-    {leader, State5, _} = ra_node:handle_leader({n2, AEReply2}, State4),
-    % the new cluster configuration has consensus - time to go
-    {stop, _, _} = ra_node:handle_leader({n3, AEReply2}, State5),
+    % after committing the new entry the leader steps down
+    {stop, #{commit_index := 4}, _} = ra_node:handle_leader({n3, AEReply}, State2),
     ok.
-
 
 follower_cluster_change(_Config) ->
     OldCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{id => n2,
-                             cluster => {normal, OldCluster}},
+                             cluster => OldCluster},
     NewCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1}},
-    JointCluster = {joint, OldCluster, NewCluster},
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(), JointCluster, await_consensus}},
+    JoinEntry = {4, 5, {'$ra_cluster_change', self(), NewCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
                              leader_commit = 3,
                              entries = [JoinEntry]},
-    {follower, #{cluster := JointCluster}, {reply, #append_entries_reply{}}} =
-        ra_node:handle_follower(AE, State),
+    {follower, #{cluster := NewCluster,
+                 cluster_index_term := {4, 5}},
+     {reply, #append_entries_reply{}}} = ra_node:handle_follower(AE, State),
     ok.
 
-joint_cluster_append_entries_reply(_Config) ->
+leader_applies_new_cluster(_Config) ->
     OldCluster = #{n1 => #{},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
@@ -408,47 +406,73 @@ joint_cluster_append_entries_reply(_Config) ->
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
 
-    State = (base_state(3))#{id => n1, cluster => {normal, OldCluster}},
-    {leader, #{cluster := {joint, OldCluster, NewCluster}} = State1, _} =
-        ra_node:handle_leader({command, {'$ra_join', self(), n4, await_consensus}},
-                              State),
+    State = (base_state(3))#{id => n1, cluster => OldCluster},
+    Command = {command, {'$ra_join', self(), n4, await_consensus}},
+    % cluster records index and term it was applied to determine whether it has
+    % been applied
+    {leader, #{cluster_index_term := {4, 5},
+               cluster := NewCluster} = State1, _} =
+        ra_node:handle_leader(Command, State),
+
+    Command2 = {command, {'$ra_join', self(), n5, await_consensus}},
+    % additional cluster change commands are not applied whilst
+    % cluster change is being committed
+    {leader, #{cluster_index_term := {4, 5},
+               cluster := NewCluster,
+               pending_cluster_changes := [_]} = State2, _} =
+        ra_node:handle_leader(Command2, State1),
+
 
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true,
                                     last_index = 4, last_term = 5},
     % leader does not yet have consensus as will need at least 3 votes
-    {leader, State2 = #{commit_index := 3,
-                        cluster := {joint, _, #{n2 := #{next_index := 5,
-                                                        match_index := 4}}}},
-     _} = ra_node:handle_leader({n2, AEReply}, State1),
+    {leader, State3 = #{commit_index := 3,
+                        cluster_index_term := {4, 5},
+                        cluster := #{n2 := #{next_index := 5,
+                                             match_index := 4}}},
+     _} = ra_node:handle_leader({n2, AEReply}, State2#{votes => 1}),
 
-    % leader has consensus - generate next_event to commit new cluster:
-    % to log
-    {leader, State3 = #{commit_index := 4,
-                        cluster := {joint, _, #{n3 := #{next_index := 5,
-                                                        match_index := 4}}}},
-     Effects} = ra_node:handle_leader({n3, AEReply}, State2),
-    NextEventPred = fun({next_event, cast, {command,
-                                              {'$ra_cluster_change', undefined,
-                                               {normal,
-                                                #{n2 := #{match_index := 3,
-                                                          next_index := 4},
-                                                  n3 := #{match_index := 3,
-                                                          next_index := 4},
-                                                  n4 := #{next_index := 1}}},
-                                               none}}}) -> true;
-                         (_) -> false
-                      end,
-    ?assert(lists:any(NextEventPred, Effects)),
-    % appending the next cluster change should switch cluster config
-    % to the new config
-    [{next_event, cast, NextCmd}] = lists:filter(NextEventPred, Effects),
-    {leader, #{commit_index := 4,
-               cluster := {normal, #{n3 := #{next_index := 5,
-                                             match_index := 4}}}},
-     _} = ra_node:handle_leader(NextCmd, State3),
+    % leader has consensus
+    {leader, _State4 = #{commit_index := 4,
+                         cluster := #{n3 := #{next_index := 5,
+                                              match_index := 4}}},
+     _Effects} = ra_node:handle_leader({n3, AEReply}, State3),
 
     ok.
+
+leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
+    OldCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3}},
+    NewCluster = #{n1 => #{},
+                   n2 => #{next_index => 4, match_index => 3},
+                   n3 => #{next_index => 4, match_index => 3},
+                   n4 => #{next_index => 1, match_index => 0}},
+
+    State = (base_state(3))#{id => n1, cluster => OldCluster},
+    Command = {command, {'$ra_join', self(), n4, await_consensus}},
+    % cluster records index and term it was applied to determine whether it has
+    % been applied
+    {leader, #{cluster_index_term := {4, 5},
+               cluster := NewCluster} = State1, _} = ra_node:handle_leader(
+                                                       Command, State),
+
+    % leader has committed the entry but n2 and n3 have not yet seen it and
+    % n2 has been elected leader and is replicating a different entry for
+    % index 4 with a higher term
+    AE = #append_entries_rpc{entries = [{4, 6, noop}],
+                             leader_id = n2,
+                             term = 6,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3},
+    {follower, #{cluster := Cluster}, _} = ra_node:handle_follower(AE, State1),
+    % assert n1 has switched back to the old cluster config
+    #{n1 := _, n2 := _, n3 := _} = Cluster,
+    3 = maps:size(Cluster),
+    ok.
+
 
 command(_Config) ->
     State = base_state(3),
@@ -481,22 +505,16 @@ quorum(_Config) ->
         = ra_node:handle_candidate(HighTermResult, State1),
 
     % quorum has been achieved - candidate becomes leader
-    AE = #append_entries_rpc{term = 6,
-                             leader_id = n1,
-                             prev_log_index = 3,
-                             prev_log_term = 5,
-                             entries = [],
-                             leader_commit = 3
-                             },
     PeerState = #{next_index => 3+1, % leaders last log index + 1
                   match_index => 0}, % initd to 0
 
-    {leader, #{cluster := {normal, #{n1 := #{next_index := 4},
-                                     n2 := PeerState,
-                                     n3 := PeerState,
-                                     n4 := PeerState,
-                                     n5 := PeerState}}},
-     {send_append_entries, [{n2, AE} | _ ]}}
+    % when candidate becomes leader the next operation should be a noop
+    {leader, #{cluster := #{n1 := #{next_index := 4},
+                            n2 := PeerState,
+                            n3 := PeerState,
+                            n4 := PeerState,
+                            n5 := PeerState}},
+     [{next_event, cast, {command, noop}}]}
         = ra_node:handle_candidate(Reply, State1).
 
 %%% helpers
@@ -512,7 +530,10 @@ base_state(NumNodes) ->
                                                match_index => 3}}
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
-      cluster => {normal, Nodes},
+      cluster => Nodes,
+      cluster_index_term => {0, 0},
+      cluster_change_permitted => true,
+      pending_cluster_changes => [],
       current_term => 5,
       commit_index => 3,
       last_applied => 3,
