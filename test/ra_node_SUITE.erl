@@ -537,7 +537,7 @@ base_state(NumNodes) ->
       current_term => 5,
       commit_index => 3,
       last_applied => 3,
-      machine_apply_fun => fun (E, _) -> E end, % just keep last applied value
+      machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
       log => {ra_test_log, Log}}.
 

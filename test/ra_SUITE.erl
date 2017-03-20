@@ -76,14 +76,10 @@ ramp_up_and_ramp_down(_Config) ->
     _ = issue_op(n1, 5),
     validate(n1, 5),
 
-    % ok = add_node(n1, n2),
-    % ok = new_node(n2),
     ok = start_and_join(n1, n2),
     _ = issue_op(n2, 5),
     validate(n2, 10),
 
-    % ok = add_node(n1, n3),
-    % ok = new_node(n3),
     ok = start_and_join(n1, n3),
     _ = issue_op(n3, 5),
     validate(n3, 15),

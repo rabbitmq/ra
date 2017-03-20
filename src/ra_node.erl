@@ -37,7 +37,7 @@
       last_applied => ra_index(),
       stop_after => ra_index(),
       % Module implementing ra machine
-      machine_apply_fun => fun((term(), term()) ->
+      machine_apply_fun => fun((ra_index(), term(), term()) ->
                               term() | {term(), [ra_machine_effect()]}),
       machine_state => term()}.
 
@@ -82,8 +82,17 @@ init(#{id := Id,
       commit_index => 0,
       last_applied => 0,
       log => ra_log:init(LogMod, LogInitArgs),
-      machine_apply_fun => MachineApplyFun,
+      machine_apply_fun => wrap_machine(MachineApplyFun),
       machine_state => InitialMachineState}.
+
+wrap_machine(Fun) ->
+    case erlang:fun_info(Fun, arity) of
+        {arity, 2} ->
+            % user is not insterested in the index
+            % of the entry
+            fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
+        _ -> Fun
+    end.
 
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effect()}.
@@ -410,7 +419,7 @@ wrap_apply_fun(ApplyFun) ->
             {State, MacSt, Effects};
        ({Idx, Term, {'$usr', From, Cmd, ReplyType}},
         {State, MacSt, Effects0}) ->
-            case ApplyFun(Cmd, MacSt) of
+            case ApplyFun(Idx, Cmd, MacSt) of
                 {NextMacSt, Efx} ->
                     Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
                     {State, NextMacSt, Effects ++ Efx};
