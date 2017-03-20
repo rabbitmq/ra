@@ -31,7 +31,7 @@
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term => ra_term(),
       log => term(),
-      voted_for => maybe(ra_node_id()),
+      voted_for => maybe(ra_node_id()), % persistent
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
@@ -157,18 +157,17 @@ handle_leader({command, Cmd}, State0 = #{id := Id}) ->
             {leader, State, []};
         {IdxTerm, State}  ->
             ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
-            {State1, Effects} = evaluate_quorum(State),
-            AEs = make_append_entries(State1),
+            {State1, Effects0} = evaluate_quorum(State),
+            Effects = [{send_append_entries, make_append_entries(State1)} | Effects0],
             Actions = case Cmd of
                           {_, _, _, await_consensus} ->
-                              [{send_append_entries, AEs} | Effects];
+                              Effects;
                           {_, undefined, _, _} ->
-                              [{send_append_entries, AEs} | Effects];
+                              Effects;
                           {_, From, _, _} ->
-                              [{reply, From, IdxTerm}, {send_append_entries, AEs}
-                               | Effects];
+                              [{reply, From, IdxTerm} | Effects];
                           _ ->
-                              [{send_append_entries, AEs} | Effects]
+                              Effects
                       end,
             {leader, State1, Actions}
     end;
@@ -390,6 +389,7 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
     case fetch_entries(LastApplied + 1, Commit, State0) of
         [] -> {State0, []};
         Entries ->
+            ?DBG("applying entrries: ~p", [Entries]),
             ApplyFun = wrap_apply_fun(ApplyFun0),
             {State, MacState, NewEffects} = lists:foldl(ApplyFun,
                                                         {State0, MacState0, []},

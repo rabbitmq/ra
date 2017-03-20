@@ -17,7 +17,7 @@ all() ->
      add_node,
      queue_example,
      ramp_up_and_ramp_down,
-     leave_and_terminate,
+     start_and_join_then_leave_and_terminate,
      leader_steps_down_after_replicating_new_cluster
     ].
 
@@ -38,12 +38,10 @@ leader_steps_down_after_replicating_new_cluster(_Config) ->
     timer:sleep(1000),
     _ = issue_op(n1, 5),
     validate(n1, 5),
-    ok = new_node(n2),
-    ok = add_node(n1, n2),
+    ok = start_and_join(n1, n2),
     _ = issue_op(n1, 5),
     validate(n1, 10),
-    ok = new_node(n3),
-    ok = add_node(n1, n3),
+    ok = start_and_join(n1, n3),
     _ = issue_op(n1, 5),
     validate(n1, 15),
     % remove leader node
@@ -57,14 +55,13 @@ leader_steps_down_after_replicating_new_cluster(_Config) ->
     terminate_cluster([n2, n3]).
 
 
-leave_and_terminate(_Config) ->
+start_and_join_then_leave_and_terminate(_Config) ->
     % safe node removal
     ok = new_node(n1),
     timer:sleep(1000),
     _ = issue_op(n1, 5),
     validate(n1, 5),
-    ok = add_node(n1, n2),
-    ok = new_node(n2),
+    ok = start_and_join(n1, n2),
     _ = issue_op(n2, 5),
     validate(n2, 10),
     ok = ra:leave_and_terminate({n2, node()}),
@@ -79,18 +76,19 @@ ramp_up_and_ramp_down(_Config) ->
     _ = issue_op(n1, 5),
     validate(n1, 5),
 
-    ok = add_node(n1, n2),
-    ok = new_node(n2),
+    % ok = add_node(n1, n2),
+    % ok = new_node(n2),
+    ok = start_and_join(n1, n2),
     _ = issue_op(n2, 5),
     validate(n2, 10),
 
-    ok = add_node(n1, n3),
-    ok = new_node(n3),
+    % ok = add_node(n1, n3),
+    % ok = new_node(n3),
+    ok = start_and_join(n1, n3),
     _ = issue_op(n3, 5),
     validate(n3, 15),
 
-    ok = remove_node(n3),
-    ok = stop_node(n3),
+    ok = ra:leave_and_terminate({n3, node()}),
     _ = issue_op(n2, 5),
     validate(n2, 20),
 
@@ -175,16 +173,16 @@ send_and_notify(_Config) ->
     terminate_cluster(Cluster).
 
 dirty_query(_Config) ->
-    [A, B, _C]  = Cluster =
-    ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
+    [A, B, _C] = Cluster = ra:start_local_cluster(3, "test",
+                                                  fun erlang:'+'/2, 9),
     {ok, {{_, _}, 9}, _} = ra:dirty_query(B, fun(S) -> S end),
     {ok, {_, 1}, Leader} = ra:send_and_await_consensus(A, 5, 1000),
     {ok, {{_, 1}, 14}, _} = ra:dirty_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
 consistent_query(_Config) ->
-    [A, _B, _C]  = Cluster =
-    ra:start_local_cluster(3, "test", fun erlang:'+'/2, 0),
+    [A, _B, _C]  = Cluster = ra:start_local_cluster(3, "test",
+                                                    fun erlang:'+'/2, 0),
     {ok, {_, 1}, Leader} = ra:send_and_await_consensus(A, 9, 1000),
     {ok, {_, 1}, _Leader} = ra:send(Leader, 5),
     {ok, {{_, 1}, 14}, Leader} = ra:consistent_query(A, fun(S) -> S end),
@@ -266,6 +264,11 @@ stop_node(Name) ->
 
 add_node(Ref, New) ->
     {ok, _IdxTerm, _Leader} = ra:add_node({Ref, node()}, {New, node()}),
+    ok.
+
+start_and_join(Ref, New) ->
+    {ok, _IdxTerm, _Leader} = ra:start_and_join({Ref, node()}, New, [],
+                                                fun erlang:'+'/2, 0),
     ok.
 
 remove_node(Name) ->

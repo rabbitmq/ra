@@ -16,6 +16,7 @@
          stop_node/1,
          add_node/2,
          remove_node/2,
+         start_and_join/5,
          leave_and_terminate/1
         ]).
 
@@ -56,12 +57,20 @@ stop_node(ServerRef) ->
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
-    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append}, 2000).
+    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
+                         ?DEFAULT_TIMEOUT).
 
 -spec remove_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).
+
+start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
+    ok = start_node(Name, Peers, ApplyFun, InitialState),
+    NodeId = {Name, node()},
+    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus},
+                         ?DEFAULT_TIMEOUT).
+
 
 % safe way to remove an active node from a cluster
 -spec leave_and_terminate(ra_node_id()) -> ok | timeout.
