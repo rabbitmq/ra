@@ -38,7 +38,7 @@
       stop_after => ra_index(),
       % Module implementing ra machine
       machine_apply_fun => fun((ra_index(), term(), term()) ->
-                              term() | {term(), [ra_machine_effect()]}),
+                              term() | {effects, term(), [ra_machine_effect()]}),
       machine_state => term()}.
 
 -type ra_state() :: leader | follower | candidate.
@@ -91,7 +91,7 @@ wrap_machine(Fun) ->
             % user is not insterested in the index
             % of the entry
             fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
-        _ -> Fun
+        {arity, 3} -> Fun
     end.
 
 -spec handle_leader(ra_msg(), ra_node_state()) ->
@@ -420,7 +420,7 @@ wrap_apply_fun(ApplyFun) ->
        ({Idx, Term, {'$usr', From, Cmd, ReplyType}},
         {State, MacSt, Effects0}) ->
             case ApplyFun(Idx, Cmd, MacSt) of
-                {NextMacSt, Efx} ->
+                {effects, NextMacSt, Efx} ->
                     Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
                     {State, NextMacSt, Effects ++ Efx};
                 NextMacSt ->
