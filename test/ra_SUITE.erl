@@ -219,13 +219,13 @@ queue_apply({enqueue, Msg}, State = #{queue := Q0,
                                       pending_dequeues := [Next | Rest]}) ->
     Q1 = queue:in(Msg, Q0),
     {{value, Item}, Q} = queue:out(Q1),
-    {State#{queue => Q, pending_dequeues => Rest}, [{send_msg, Next, Item}]};
+    {effects, State#{queue => Q, pending_dequeues => Rest}, [{send_msg, Next, Item}]};
 queue_apply({dequeue, For}, State = #{queue := Q0, pending_dequeues := []}) ->
     case queue:out(Q0) of
         {empty, Q} ->
             State#{queue => Q, pending_dequeues => [For]};
         {{value, Item}, Q} ->
-            {State#{queue => Q}, [{send_msg, For, Item}]}
+            {effects, State#{queue => Q}, [{send_msg, For, Item}]}
     end;
 queue_apply({dequeue, For},
             State = #{queue := Q0,
@@ -234,7 +234,7 @@ queue_apply({dequeue, For},
         {empty, Q} ->
             State#{queue => Q, pending_dequeues => Pending ++ [For]};
         {{value, Item}, Q} ->
-            {State#{queue => Q,
+            {effects, State#{queue => Q,
                     pending_dequeues => Rest ++ [For]},
              [{send_msg, Next, Item}]}
     end.

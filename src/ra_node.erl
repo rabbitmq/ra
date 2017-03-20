@@ -457,13 +457,25 @@ append_log_leader({CmdTag, _, _, _} = Cmd,
     {not_appended, State#{pending_cluster_changes => Pending ++ [Cmd]}};
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
            State = #{cluster := OldCluster}) ->
-    Cluster = OldCluster#{JoiningNode => #{next_index => 1,
-                                           match_index => 0}},
-    append_cluster_change(Cluster, From, ReplyMode, State);
+    case OldCluster of
+        #{JoiningNode := _} ->
+            % already a member do nothing
+            {not_appended, State};
+        _ ->
+            Cluster = OldCluster#{JoiningNode => #{next_index => 1,
+                                                   match_index => 0}},
+            append_cluster_change(Cluster, From, ReplyMode, State)
+    end;
 append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
                   State = #{cluster := OldCluster}) ->
-    Cluster = maps:remove(LeavingNode, OldCluster),
-    append_cluster_change(Cluster, From, ReplyMode, State);
+    case OldCluster of
+        #{LeavingNode := _} ->
+            Cluster = maps:remove(LeavingNode, OldCluster),
+            append_cluster_change(Cluster, From, ReplyMode, State);
+        _ ->
+            % not a member - do nothing
+            {not_appended, State}
+    end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
     {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),
