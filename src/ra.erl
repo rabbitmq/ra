@@ -24,7 +24,7 @@
 -define(DEFAULT_TIMEOUT, 5000).
 
 start_local_cluster(Num, Name, ApplyFun, InitialState) ->
-    Nodes = [ra_node:name(Name, integer_to_list(N))
+    Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
     Conf0 = #{log_module => ra_test_log,
               log_init_args => [],
@@ -34,7 +34,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
               cluster_id => Name},
     [begin
          {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
-         {Id, node()}
+         Id
      end || Id <- Nodes].
 
 

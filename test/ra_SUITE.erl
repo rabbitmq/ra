@@ -132,7 +132,7 @@ start_nodes(_Config) ->
     gen_statem:stop(Target, normal, 2000),
     % issue command to confirm n3 joined the cluster successfully
     {ok, {4, Term}, _} = ra:send_and_await_consensus({n3, node()}, 5),
-    terminate_cluster([n1, n2, n3] -- [Target]).
+    terminate_cluster([n1, n2, n3] -- [element(1, Target)]).
 
 node_recovery(_Config) ->
     % start the first node and wait a bit
@@ -158,15 +158,15 @@ node_recovery(_Config) ->
 
 
 send_and_await_consensus(_Config) ->
-    [{APid, _A}, _B, _C] = Cluster =
+    [A, _B, _C] = Cluster =
     ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
-    {ok, {2, 1}, _Leader} = ra:send_and_await_consensus(APid, 5),
+    {ok, {2, 1}, _Leader} = ra:send_and_await_consensus(A, 5),
     terminate_cluster(Cluster).
 
 send_and_notify(_Config) ->
-    [{APid, _A}, _B, _C] = Cluster =
+    [A, _B, _C] = Cluster =
     ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
-    {ok, {_, 1}, _Leader} = ra:send_and_notify(APid, 5),
+    {ok, {_, 1}, _Leader} = ra:send_and_notify(A, 5),
     receive
         {consensus, {_, 1}} -> ok
     after 2000 ->
