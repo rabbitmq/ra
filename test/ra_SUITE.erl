@@ -34,6 +34,7 @@ stop_node_idemp(_Config) ->
     ok = ra:stop_node({n1, node()}),
     % should not raise exception
     ok = ra:stop_node({n1, node()}),
+    ok = ra:stop_node({n1, randomnode@bananas}),
     ok.
 
 
@@ -60,7 +61,7 @@ leader_steps_down_after_replicating_new_cluster(_Config) ->
     % then step down + shut itself down
     ok = remove_node(n1),
     timer:sleep(1000),
-    {error, no_proc} = ra:send_and_await_consensus(n1, 5, 2000),
+    {error, noproc} = ra:send_and_await_consensus(n1, 5, 2000),
     _ = issue_op(n2, 5),
     validate(n2, 20),
     terminate_cluster([n2, n3]).

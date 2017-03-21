@@ -342,7 +342,9 @@ gen_statem_safe_call(ServerRef, Msg, Timeout) ->
          exit:{timeout, _} ->
             timeout;
          exit:{noproc, _} ->
-            {error, no_proc}
+            {error, noproc};
+         exit:{{nodedown, _}, _} ->
+            {error, nodedown}
     end.
 
 do_state_query(all, State) -> State;

@@ -52,10 +52,12 @@ start_node(Name, Peers, ApplyFun, InitialState) ->
 
 -spec stop_node(ra_node_id()) -> ok.
 stop_node(ServerRef) ->
+
     try gen_statem:stop(ServerRef, normal, ?DEFAULT_TIMEOUT) of
         ok -> ok
     catch
-        exit:noproc -> ok
+        exit:noproc -> ok;
+        exit:{{nodedown, _}, _}  -> ok
     end.
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
@@ -106,18 +108,15 @@ leave_and_terminate(ServerRef, NodeId) ->
             stop_node(NodeId)
     end.
 
--spec send(ra_node_id(), term()) ->
-    ra_cmd_ret().
+-spec send(ra_node_id(), term()) -> ra_cmd_ret().
 send(Ref, Data) ->
     send(Ref, Data, ?DEFAULT_TIMEOUT).
 
--spec send(ra_node_id(), term(), timeout()) ->
-    ra_cmd_ret().
+-spec send(ra_node_id(), term(), timeout()) -> ra_cmd_ret().
 send(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, after_log_append), Timeout).
 
--spec send_and_await_consensus(ra_node_id(), term()) ->
-    ra_cmd_ret().
+-spec send_and_await_consensus(ra_node_id(), term()) -> ra_cmd_ret().
 send_and_await_consensus(Ref, Data) ->
     send_and_await_consensus(Ref, Data, ?DEFAULT_TIMEOUT).
 
@@ -126,18 +125,15 @@ send_and_await_consensus(Ref, Data) ->
 send_and_await_consensus(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, await_consensus), Timeout).
 
--spec send_and_notify(ra_node_id(), term()) ->
-    ra_cmd_ret().
+-spec send_and_notify(ra_node_id(), term()) -> ra_cmd_ret().
 send_and_notify(Ref, Data) ->
     send_and_notify(Ref, Data, ?DEFAULT_TIMEOUT).
 
--spec send_and_notify(ra_node_id(), term(), timeout()) ->
-    ra_cmd_ret().
+-spec send_and_notify(ra_node_id(), term(), timeout()) -> ra_cmd_ret().
 send_and_notify(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, notify_on_consensus), Timeout).
 
--spec dirty_query(Node::ra_node_id(),
-                  QueryFun::fun((term()) -> term())) ->
+-spec dirty_query(Node::ra_node_id(), QueryFun::fun((term()) -> term())) ->
     {ok, ra_idxterm(), term()}.
 dirty_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
