@@ -6,6 +6,7 @@
 
 all() ->
     [
+     stop_node_idemp,
      single_node,
      minority,
      start_nodes,
@@ -26,6 +27,15 @@ groups() ->
     [{tests, [], all()}].
 
 suite() -> [ {timetrap,{seconds,30}} ].
+
+stop_node_idemp(_Config) ->
+    ok = ra:start_node(n1, [], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    ok = ra:stop_node({n1, node()}),
+    % should not raise exception
+    ok = ra:stop_node({n1, node()}),
+    ok.
+
 
 single_node(_Config) ->
     ok = ra:start_node(n1, [], fun erlang:'+'/2, 0),
@@ -65,7 +75,7 @@ start_and_join_then_leave_and_terminate(_Config) ->
     ok = start_and_join(n1, n2),
     _ = issue_op(n2, 5),
     validate(n2, 10),
-    ok = ra:leave_and_terminate({n2, node()}),
+    ok = ra:leave_and_terminate({n1, node()}, {n2, node()}),
     validate(n1, 10),
     terminate_cluster([n1]),
     ok.

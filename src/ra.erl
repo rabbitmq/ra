@@ -18,7 +18,8 @@
          add_node/2,
          remove_node/2,
          start_and_join/5,
-         leave_and_terminate/1
+         leave_and_terminate/1,
+         leave_and_terminate/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -51,7 +52,11 @@ start_node(Name, Peers, ApplyFun, InitialState) ->
 
 -spec stop_node(ra_node_id()) -> ok.
 stop_node(ServerRef) ->
-    gen_statem:stop(ServerRef, normal, ?DEFAULT_TIMEOUT).
+    try gen_statem:stop(ServerRef, normal, ?DEFAULT_TIMEOUT) of
+        ok -> ok
+    catch
+        exit:noproc -> ok
+    end.
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
@@ -59,8 +64,7 @@ add_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
                          ?DEFAULT_TIMEOUT).
 
--spec remove_node(ra_node_id(), ra_node_id()) ->
-    ra_cmd_ret().
+-spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).
 
@@ -84,13 +88,19 @@ start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
     end.
 
 % safe way to remove an active node from a cluster
--spec leave_and_terminate(ra_node_id()) -> ok | timeout.
 leave_and_terminate(NodeId) ->
+    leave_and_terminate(NodeId, NodeId).
+
+-spec leave_and_terminate(ra_node_id(), ra_node_id()) ->
+    ok | timeout | {error, no_proc}.
+leave_and_terminate(ServerRef, NodeId) ->
     LeaveCmd = {'$ra_leave', NodeId, await_consensus},
-    case ra_node_proc:command(NodeId, LeaveCmd, ?DEFAULT_TIMEOUT) of
+    case ra_node_proc:command(ServerRef, LeaveCmd, ?DEFAULT_TIMEOUT) of
         {timeout, Who} ->
             ?DBG("request to ~p timed out trying to leave the cluster", [Who]),
             timeout;
+        {error, no_proc} = Err ->
+            Err;
         {ok, _, _} ->
             ?DBG("~p has left the building. terminating", [NodeId]),
             stop_node(NodeId)
