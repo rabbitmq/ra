@@ -398,7 +398,7 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
     case fetch_entries(LastApplied + 1, Commit, State0) of
         [] -> {State0, []};
         Entries ->
-            ?DBG("applying entrries: ~p", [Entries]),
+            ?DBG("applying {Index, Term}: ~p", [{I,T} || {I, T, _} <- Entries]),
             ApplyFun = wrap_apply_fun(ApplyFun0),
             {State, MacState, NewEffects} = lists:foldl(ApplyFun,
                                                         {State0, MacState0, []},
@@ -432,13 +432,24 @@ wrap_apply_fun(ApplyFun) ->
             ?DBG("ra cluster change to ~p~n", [New]),
             Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
             State = State0#{cluster_change_permitted => true},
-            {State, MacSt, Effects};
+            % add pending cluster change as next event
+            {Effects1, State1} = add_next_cluster_change(Effects, State),
+            {State1, MacSt, Effects1};
        ({_Idx, Term, noop}, {State0 = #{current_term := Term}, MacSt, Effects}) ->
             State = State0#{cluster_change_permitted => true},
             {State, MacSt, Effects};
        (_, Acc) ->
             Acc
     end.
+
+add_next_cluster_change(Effects,
+                        State = #{pending_cluster_changes := [C | Rest]}) ->
+    {_, From , _, _} = C,
+    {[{next_event, {call, From}, {command, C}} | Effects],
+     State#{pending_cluster_changes => Rest}};
+add_next_cluster_change(Effects, State) ->
+    {Effects, State}.
+
 
 add_reply(From, Reply,  await_consensus, Effects) ->
     [{reply, From, Reply} | Effects];

@@ -65,3 +65,6 @@
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 
+-define(DEFAULT_TIMEOUT, 5000).
+
+

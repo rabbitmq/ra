@@ -13,6 +13,7 @@ all() ->
      send_and_await_consensus,
      send_and_notify,
      dirty_query,
+     members,
      consistent_query,
      add_node,
      queue_example,
@@ -176,6 +177,12 @@ dirty_query(_Config) ->
     {ok, {{_, 1}, 14}, _} = ra:dirty_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
+members(_Config) ->
+    Cluster = ra:start_local_cluster(3, "test", fun erlang:'+'/2, 9),
+    {ok, _, Leader} = ra:send_and_await_consensus(hd(Cluster), 5, 1000),
+    {ok, Cluster, Leader} = ra:members(Leader),
+    terminate_cluster(Cluster).
+
 consistent_query(_Config) ->
     [A, _B, _C]  = Cluster = ra:start_local_cluster(3, "test",
                                                     fun erlang:'+'/2, 0),
@@ -263,8 +270,7 @@ add_node(Ref, New) ->
     ok.
 
 start_and_join(Ref, New) ->
-    {ok, _IdxTerm, _Leader} = ra:start_and_join({Ref, node()}, New, [],
-                                                fun erlang:'+'/2, 0),
+    ok = ra:start_and_join({Ref, node()}, New, [], fun erlang:'+'/2, 0),
     ok.
 
 remove_node(Name) ->

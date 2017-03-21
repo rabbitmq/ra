@@ -11,6 +11,7 @@
          send_and_notify/2,
          send_and_notify/3,
          dirty_query/2,
+         members/1,
          consistent_query/2,
          start_node/4,
          stop_node/1,
@@ -21,8 +22,6 @@
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
-
--define(DEFAULT_TIMEOUT, 5000).
 
 start_local_cluster(Num, Name, ApplyFun, InitialState) ->
     Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
@@ -68,9 +67,21 @@ remove_node(ServerRef, NodeId) ->
 start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
     ok = start_node(Name, Peers, ApplyFun, InitialState),
     NodeId = {Name, node()},
-    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus},
-                         ?DEFAULT_TIMEOUT).
-
+    JoinCmd = {'$ra_join', NodeId, await_consensus},
+    case ra_node_proc:command(ServerRef, JoinCmd, ?DEFAULT_TIMEOUT) of
+        {ok, _, _} -> ok;
+        {timeout, Who} ->
+            ?DBG("request to ~p timed out trying to join the cluster", [Who]),
+            % this is awkward - we don't know if the request was received or not
+            % it may still get processed so we have to leave the server up
+            timeout;
+        {error, _} = Err ->
+            ?DBG("request errored whilst ~p tried to join the cluster~p~n",
+                 [NodeId, Err]),
+            % shut down server
+            stop_node(NodeId),
+            Err
+    end.
 
 % safe way to remove an active node from a cluster
 -spec leave_and_terminate(ra_node_id()) -> ok | timeout.
@@ -126,6 +137,11 @@ dirty_query(ServerRef, QueryFun) ->
     {ok, ra_idxterm(), term()}.
 consistent_query(Node, QueryFun) ->
     ra_node_proc:query(Node, QueryFun, consistent).
+
+-spec members(ra_node_id()) -> ra_node_proc:ra_leader_call_ret([ra_node_id()]).
+members(ServerRef) ->
+    ra_node_proc:state_query(ServerRef, members).
+
 
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.

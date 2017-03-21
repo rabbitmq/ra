@@ -437,7 +437,14 @@ leader_applies_new_cluster(_Config) ->
     {leader, _State4 = #{commit_index := 4,
                          cluster := #{n3 := #{next_index := 5,
                                               match_index := 4}}},
-     _Effects} = ra_node:handle_leader({n3, AEReply}, State3),
+     Effects} = ra_node:handle_leader({n3, AEReply}, State3),
+
+    % the pending cluster change can now be processed as the
+    % next event
+    ?assert(lists:any(fun({next_event, {call, _}, {command, _} = C2}) ->
+                              C2 =:= Command2;
+                         (_) -> false
+                      end, Effects)),
 
     ok.
 

@@ -22,7 +22,8 @@
 %% API
 -export([start_link/1,
          command/3,
-         query/3
+         query/3,
+         state_query/2
         ]).
 
 -define(SERVER, ?MODULE).
@@ -40,11 +41,14 @@
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
 
--type ra_cmd_ret() :: {ok, IdxTerm::ra_idxterm(), Leader::ra_node_id()}
-                      | {error, term()}
-                      | {timeout, ra_node_id()}.
+-type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_node_id()}
+                                    | {error, term()}
+                                    | {timeout, ra_node_id()}.
 
--export_type([ra_cmd_ret/0]).
+-type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm()).
+
+-export_type([ra_leader_call_ret/1,
+              ra_cmd_ret/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
@@ -62,10 +66,27 @@ start_link(Config = #{id := Id}) ->
 -spec command(ra_node_id(), ra_command(), timeout()) ->
     ra_cmd_ret().
 command(ServerRef, Cmd, Timeout) ->
-    case gen_statem_safe_call(ServerRef, {command, Cmd},
+    leader_call(ServerRef, {command, Cmd}, Timeout).
+
+-spec query(ra_node_id(), query_fun(), dirty | consistent) ->
+    {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
+query(ServerRef, QueryFun, dirty) ->
+    gen_statem:call(ServerRef, {dirty_query, QueryFun});
+query(ServerRef, QueryFun, consistent) ->
+    % TODO: timeout
+    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 5000).
+
+
+%% used to query the raft state rather than the machine state
+-spec state_query(ra_node_id(), all | members) ->  ra_leader_call_ret(term()).
+state_query(ServerRef, Spec) ->
+    leader_call(ServerRef, {state_query, Spec}, ?DEFAULT_TIMEOUT).
+
+leader_call(ServerRef, Msg, Timeout) ->
+    case gen_statem_safe_call(ServerRef, {leader_call, Msg},
                               {dirty_timeout, Timeout}) of
         {redirect, Leader} ->
-            command(Leader, Cmd, Timeout);
+            leader_call(Leader, Msg, Timeout);
         {error, _} = E ->
             E;
         timeout ->
@@ -74,14 +95,6 @@ command(ServerRef, Cmd, Timeout) ->
         Reply ->
             {ok, Reply, ServerRef}
     end.
-
--spec query(ra_node_id(), query_fun(), dirty | consistent) ->
-    {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
-query(ServerRef, QueryFun, dirty) ->
-    gen_statem:call(ServerRef, {dirty_query, QueryFun});
-query(ServerRef, QueryFun, consistent) ->
-    % TODO: timeout
-    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 1000).
 
 %%%===================================================================
 %%% gen_statem callbacks
@@ -101,6 +114,9 @@ callback_mode() -> state_functions.
 %%% State functions
 %%%===================================================================
 
+leader(EventType, {leader_call, Msg}, State) ->
+    %  no need to redirect
+    leader(EventType, Msg, State);
 leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}} = C,
        State0 = #state{node_state = NodeState0}) ->
     %% Persist command into log
@@ -117,6 +133,10 @@ leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}} = C,
 leader({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, leader, NodeState),
+    {keep_state, State, [{reply, From, Reply}]};
+leader({call, From}, {state_query, Spec},
+         State = #state{node_state = NodeState}) ->
+    Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
@@ -148,13 +168,9 @@ leader(EventType, Msg, State0 = #state{node_state = NodeState0,
             {stop, normal, State#state{node_state = NodeState}}
     end.
 
-candidate({call, From}, {command, _Cmd},
-          State = #state{node_state = #{leader_id := LeaderId}}) ->
-    {keep_state, State, {reply, From, {redirect, LeaderId}}};
-candidate({call, From}, {command, _Cmd} = Cmd,
+candidate({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
-    % stash commands until a leader is known
-    {keep_state, State#state{pending_commands = [{From, Cmd} | Pending]}};
+    {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 candidate({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
@@ -182,10 +198,10 @@ candidate(EventType, Msg, State0 = #state{node_state = NodeState0
              State#state{node_state = NodeState}, Actions ++ NextEvents}
     end.
 
-follower({call, From}, {command, _Cmd},
+follower({call, From}, {leader_call, _Cmd},
          State = #state{node_state = #{leader_id := LeaderId}}) ->
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
-follower({call, From}, {command, _Cmd} = Msg,
+follower({call, From}, {leader_call, Msg},
          State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 follower({call, From}, {dirty_query, QueryFun},
@@ -252,8 +268,8 @@ interact(none, _EvtType, State, Actions) ->
     {State, Actions};
 interact({next_event, Evt}, EvtType, State, Actions) ->
     {State, [ {next_event, EvtType, Evt} |  Actions]};
-interact({next_event, cast, Evt}, _EvtType, State, Actions) ->
-    {State, [ {next_event, cast, Evt} |  Actions]};
+interact({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
+    {State, [Next | Actions]};
 interact({send_msg, To, Msg}, _EvtType, State, Actions) ->
     To ! Msg,
     {State, Actions};
@@ -329,3 +345,6 @@ gen_statem_safe_call(ServerRef, Msg, Timeout) ->
             {error, no_proc}
     end.
 
+do_state_query(all, State) -> State;
+do_state_query(members, #{cluster := Cluster}) ->
+    maps:keys(Cluster).
