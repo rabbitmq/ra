@@ -259,8 +259,8 @@ higher_term_detected(_Config) ->
                                          last_index = 3, last_term = 5}},
     AEReplyExpect = {follower, State#{current_term := IncomingTerm}, none},
     AEReplyExpect = ra_node:handle_leader(AEReply, State),
-    AEReplyExpect = ra_node:handle_candidate(AEReply, State),
     AEReplyExpect = ra_node:handle_follower(AEReply, State),
+    AEReplyExpect = ra_node:handle_candidate(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
                                 prev_log_index = 3, prev_log_term = 5,

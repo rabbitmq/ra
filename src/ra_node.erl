@@ -217,7 +217,7 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_node_state(), ra_effect()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State0 = #{current_term := Term, votes := Votes,
-                           cluster := Nodes}) ->
+                            cluster := Nodes}) ->
     NewVotes = Votes+1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->

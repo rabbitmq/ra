@@ -10,4 +10,6 @@ dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
 
 DEP_PLUGINS = elvis_mk
 
+DIALYZER_OPTS += --src -r test
+
 include erlang.mk

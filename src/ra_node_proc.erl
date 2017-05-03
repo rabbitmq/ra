@@ -69,7 +69,7 @@ command(ServerRef, Cmd, Timeout) ->
     leader_call(ServerRef, {command, Cmd}, Timeout).
 
 -spec query(ra_node_id(), query_fun(), dirty | consistent) ->
-    {ok, IdxTerm::{ra_index(), ra_term()}, term()}.
+    {ok, {ra_idxterm(), term()}, ra_node_id()}.
 query(ServerRef, QueryFun, dirty) ->
     gen_statem:call(ServerRef, {dirty_query, QueryFun});
 query(ServerRef, QueryFun, consistent) ->

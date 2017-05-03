@@ -134,13 +134,13 @@ send_and_notify(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, notify_on_consensus), Timeout).
 
 -spec dirty_query(Node::ra_node_id(), QueryFun::fun((term()) -> term())) ->
-    {ok, ra_idxterm(), term()}.
+    {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 dirty_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
 
 -spec consistent_query(Node::ra_node_id(),
                        QueryFun::fun((term()) -> term())) ->
-    {ok, ra_idxterm(), term()}.
+    {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 consistent_query(Node, QueryFun) ->
     ra_node_proc:query(Node, QueryFun, consistent).
 
