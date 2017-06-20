@@ -43,8 +43,10 @@
 
 -type ra_state() :: leader | follower | candidate.
 
--type ra_msg() :: #append_entries_rpc{} | #append_entries_reply{} |
-                  #request_vote_rpc{} | #request_vote_result{}.
+-type ra_msg() :: #append_entries_rpc{} |
+                  {ra_node_id(), #append_entries_reply{}} |
+                  #request_vote_rpc{} | #request_vote_result{} |
+                  {command, term()}.
 
 -type ra_effect() ::
     {reply, ra_msg()} |
