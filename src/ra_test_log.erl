@@ -50,8 +50,8 @@ take(Start, Num, {_, Log, _Meta}) ->
 
 -spec last(ra_test_log_state()) ->
     maybe(log_entry()).
-last({LastIdx, _Data, _Meta} = Log) ->
-    fetch(LastIdx, Log).
+last({LastIdx, _Data, _Meta} = LogState) ->
+    fetch(LastIdx, LogState).
 
 -spec next_index(ra_test_log_state()) -> ra_index().
 next_index({LastIdx, _Data, _Meta}) ->

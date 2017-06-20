@@ -9,6 +9,7 @@
          last/1,
          next_index/1,
          read_meta/2,
+         read_meta/3,
          write_meta/3
         ]).
 
@@ -88,8 +89,19 @@ next_index({Mod, Log}) ->
 read_meta(Key, {Mod, Log}) ->
     Mod:read_meta(Key, Log).
 
+-spec read_meta(Key :: ra_meta_key(), State :: ra_log_state(),
+                Default :: term()) ->
+    term().
+read_meta(Key, {Mod, Log}, Default) ->
+    ra_util:default(Mod:read_meta(Key, Log), Default).
+
 -spec write_meta(Key :: ra_meta_key(), Value :: term(),
                      State :: ra_log_state()) ->
     {ok, ra_log_state()} | {error, term()}.
 write_meta(Key, Value, {Mod, Log}) ->
-    Mod:read_meta(Key, Value, Log).
+    case Mod:write_meta(Key, Value, Log) of
+        {ok, Inner} ->
+            {ok, {Mod, Inner}};
+        {error, _} = Err ->
+            Err
+    end.

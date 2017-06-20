@@ -253,30 +253,38 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
 higher_term_detected(_Config) ->
     % Any message received with a higher term should result in the
     % node reverting to follower state
-    State = base_state(3),
+    State = #{log := Log} = base_state(3),
     IncomingTerm = 6,
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
                                          last_index = 3, last_term = 5}},
-    AEReplyExpect = {follower, State#{current_term := IncomingTerm}, none},
-    AEReplyExpect = ra_node:handle_leader(AEReply, State),
-    AEReplyExpect = ra_node:handle_follower(AEReply, State),
-    AEReplyExpect = ra_node:handle_candidate(AEReply, State),
+    {ok, ExpectLog} = ra_log:write_meta(current_term, IncomingTerm, Log),
+    {ok, ExpectLogWithVotedFor} = ra_log:write_meta(voted_for, undefined,
+                                                    ExpectLog),
+    {follower, #{current_term := IncomingTerm,
+                 log := ExpectLog}, none} = ra_node:handle_leader(AEReply, State),
+    {follower, #{current_term := IncomingTerm,
+                 log := ExpectLog}, none} = ra_node:handle_follower(AEReply, State),
+    {follower, #{current_term := IncomingTerm,
+                 log := ExpectLogWithVotedFor}, none}
+    = ra_node:handle_candidate(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
                                 prev_log_index = 3, prev_log_term = 5,
                                 leader_commit = 3},
-    AERpcExpect = {follower, State#{current_term := IncomingTerm},
-                   {next_event, AERpc}},
-    AERpcExpect = ra_node:handle_leader(AERpc, State),
-    AERpcExpect = ra_node:handle_candidate(AERpc, State),
+    {follower, #{current_term := IncomingTerm},
+     {next_event, AERpc}} = ra_node:handle_leader(AERpc, State),
+    {follower, #{current_term := IncomingTerm},
+     {next_event, AERpc}} = ra_node:handle_candidate(AERpc, State),
     % follower will handle this properly and is tested elsewhere
 
     Vote = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                              last_log_term = 5},
-    VoteExpect = {follower, State#{current_term := IncomingTerm},
-                  {next_event, Vote}},
-    VoteExpect = ra_node:handle_leader(Vote, State),
-    VoteExpect = ra_node:handle_candidate(Vote, State).
+    {follower, #{current_term := IncomingTerm,
+                 log := ExpectLog},
+     {next_event, Vote}} = ra_node:handle_leader(Vote, State),
+    {follower, #{current_term := IncomingTerm,
+                 log := ExpectLogWithVotedFor},
+     {next_event, Vote}} = ra_node:handle_candidate(Vote, State).
 
 consistent_query(_Config) ->
     Cluster = #{n1 => #{},
