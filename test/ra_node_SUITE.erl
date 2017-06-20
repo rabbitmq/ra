@@ -90,7 +90,7 @@ follower_handleds_append_entries_rpc(_Config) ->
                              entries = [{2, 4, {'$usr', Self, <<"hi">>,
                                                 after_log_append}}]},
 
-    ExpectedLog = {2, #{0 => {0, dummy}, 1 => {1, usr(<<"hi1">>)},
+    ExpectedLog = {2, #{0 => {0, undefined}, 1 => {1, usr(<<"hi1">>)},
                         2 => {4, usr(<<"hi">>)}}, #{}},
     {follower,  #{log := {ra_test_log, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
@@ -535,7 +535,7 @@ quorum(_Config) ->
 %%% helpers
 
 base_state(NumNodes) ->
-    Log = {3, #{0 => {0, dummy},
+    Log = {3, #{0 => {0, undefined},
                 1 => {1, usr(<<"hi1">>)},
                 2 => {3, usr(<<"hi2">>)},
                 3 => {5, usr(<<"hi3">>)}},

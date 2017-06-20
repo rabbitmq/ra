@@ -21,7 +21,7 @@
 init(_Args) ->
     % initialized with a deafault 0 index 0 term dummy value
     % and an empty meta data map
-    {0, #{0 => {0, dummy}}, #{}}.
+    {0, #{0 => {0, undefined}}, #{}}.
 
 -spec append(Entry::log_entry(), Overwrite::boolean(),
                  State::ra_test_log_state()) ->

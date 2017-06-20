@@ -58,7 +58,7 @@ init(Mod, Args) ->
 fetch(Idx, {Mod, Log}) ->
     Mod:fetch(Idx, Log).
 
--spec append(Entry::log_entry(), Overwrite::boolean(),
+-spec append(Entry :: log_entry(), Overwrite::boolean(),
                  State::ra_log()) ->
     {ok, ra_log_state()} | {error, integrity_error}.
 append(Entry, Overwrite, {Mod, Log0}) ->
