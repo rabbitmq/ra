@@ -26,6 +26,11 @@
 -type ra_node_id() :: Name::atom() | {Name::atom(), Node::atom()} |
                       {global, Name::atom()}.
 
+-type ra_peer_state() :: #{next_index => non_neg_integer(),
+                           match_index => non_neg_integer()}.
+
+-type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
+
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
@@ -62,6 +67,17 @@
         {term :: ra_term(),
          vote_granted :: boolean()}).
 
+
+%% similar to install snapshot rpc but communicates a reset index
+%% at which point all preceeding entries adds upp to the initial machine
+%% state
+-record(reset_rpc,
+        {index :: ra_index(), % the index to reset log to
+         term :: ra_term(),
+         leader_id :: ra_node_id(),
+         % the cluster at the time of the reset index
+         current_cluster :: {ra_index(), ra_cluster()}
+        }).
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 

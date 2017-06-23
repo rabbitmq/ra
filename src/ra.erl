@@ -27,7 +27,7 @@
 start_local_cluster(Num, Name, ApplyFun, InitialState) ->
     Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
-    Conf0 = #{log_module => ra_test_log,
+    Conf0 = #{log_module => ra_log_memory,
               log_init_args => [],
               initial_nodes => Nodes,
               apply_fun => ApplyFun,
@@ -41,7 +41,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
 
 -spec start_node(atom(), [{atom(), node()}], fun(), term()) -> ok.
 start_node(Name, Peers, ApplyFun, InitialState) ->
-    Conf0 = #{log_module => ra_test_log,
+    Conf0 = #{log_module => ra_log_memory,
               log_init_args => [],
               initial_nodes => [{Name, node()} | Peers],
               apply_fun => ApplyFun,

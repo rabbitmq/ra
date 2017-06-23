@@ -27,7 +27,7 @@
         ]).
 
 -define(SERVER, ?MODULE).
--define(TEST_LOG, ra_test_log).
+-define(TEST_LOG, ra_log_memory).
 -define(DEFAULT_BROADCAST_TIME, 100).
 
 

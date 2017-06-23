@@ -11,11 +11,6 @@
          make_append_entries/1
         ]).
 
--type ra_peer_state() :: #{next_index => non_neg_integer(),
-                           match_index => non_neg_integer()}.
-
--type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
-
 -type ra_machine_effect() :: {send_msg,
                               pid() | atom() | {atom(), atom()}, term()}.
 
@@ -271,7 +266,6 @@ handle_follower(#append_entries_rpc{term = Term,
                 State00 = #{current_term := CurTerm})
   when Term >= CurTerm ->
     State0 = update_term(Term, State00),
-    ?DBG("State0 ~p~n", [State0]),
     case has_log_entry(PLIdx, PLTerm, State0) of
         true ->
             State1 = lists:foldl(fun append_log_follower/2,
@@ -422,7 +416,7 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
     case fetch_entries(LastApplied + 1, Commit, State0) of
         [] -> {State0, []};
         Entries ->
-            ?DBG("applying {Index, Term}: ~p", [{I,T} || {I, T, _} <- Entries]),
+            % ?DBG("applying {Index, Term}: ~p", [{I,T} || {I, T, _} <- Entries]),
             ApplyFun = wrap_apply_fun(ApplyFun0),
             {State, MacState, NewEffects} = lists:foldl(ApplyFun,
                                                         {State0, MacState0, []},

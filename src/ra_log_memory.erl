@@ -1,4 +1,4 @@
--module(ra_test_log).
+-module(ra_log_memory).
 -behaviour(ra_log).
 -export([init/1,
          append/3,
@@ -6,28 +6,29 @@
          last/1,
          fetch/2,
          next_index/1,
+         release/2,
          read_meta/2,
          write_meta/3
         ]).
 
 -include("ra.hrl").
 
--type ra_test_log_meta() :: #{atom() => term()}.
+-type ra_log_memory_meta() :: #{atom() => term()}.
 
--type ra_test_log_state() ::
-    {ra_index(), #{ra_term() => {ra_index(), term()}}, ra_test_log_meta()}.
+-type ra_log_memory_state() ::
+    {ra_index(), #{ra_term() => {ra_index(), term()}}, ra_log_memory_meta()}.
 
--spec init([term()]) -> ra_test_log_state().
+-spec init([term()]) -> ra_log_memory_state().
 init(_Args) ->
     % initialized with a deafault 0 index 0 term dummy value
     % and an empty meta data map
     {0, #{0 => {0, undefined}}, #{}}.
 
 -spec append(Entry::log_entry(), Overwrite::boolean(),
-                 State::ra_test_log_state()) ->
-    {ok, ra_test_log_state()} | {error, integrity_error}.
+                 State::ra_log_memory_state()) ->
+    {ok, ra_log_memory_state()} | {error, integrity_error}.
 append({Idx, Term, Data}, false, {LastIdx, Log, Meta})
-      when Idx == LastIdx+1 ->
+      when Idx > LastIdx ->
     {ok, {Idx, Log#{Idx => {Term, Data}}, Meta}};
 append(_Entry, false, _State) ->
     {error, integrity_error};
@@ -38,26 +39,35 @@ append({Idx, Term, Data}, true, {_LastIdx, Log, Meta}) ->
     {ok, {Idx, Log#{Idx => {Term, Data}}, Meta}}.
 
 
--spec take(ra_index(), non_neg_integer(), ra_test_log_state()) ->
+-spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->
     [log_entry()].
-take(Start, Num, {_, Log, _Meta}) ->
-    lists:filtermap(fun(I) -> case Log of
-                                  #{I := {T, D}} ->
-                                      {true, {I, T, D}};
-                                  _ -> false
-                              end
-                    end, lists:seq(Start, Start + Num - 1)).
+take(Start, Num, {LastIdx, Log, _Meta}) ->
+    sparse_take(Start, Log, Num, LastIdx, []).
 
--spec last(ra_test_log_state()) ->
+% this allows for missing entries in the log
+sparse_take(Idx, _Log, Num, Max, Res)
+    when length(Res) =:= Num orelse
+         Idx > Max ->
+    lists:reverse(Res);
+sparse_take(Idx, Log, Num, Max, Res) ->
+    case Log of
+        #{Idx := {T, D}} ->
+            sparse_take(Idx+1, Log, Num, Max, [{Idx, T, D} | Res]);
+        _ ->
+            sparse_take(Idx+1, Log, Num, Max, Res)
+    end.
+
+
+-spec last(ra_log_memory_state()) ->
     maybe(log_entry()).
 last({LastIdx, _Data, _Meta} = LogState) ->
     fetch(LastIdx, LogState).
 
--spec next_index(ra_test_log_state()) -> ra_index().
+-spec next_index(ra_log_memory_state()) -> ra_index().
 next_index({LastIdx, _Data, _Meta}) ->
     LastIdx + 1.
 
--spec fetch(ra_index(), ra_test_log_state()) ->
+-spec fetch(ra_index(), ra_log_memory_state()) ->
     maybe(log_entry()).
 fetch(Idx, {_LastIdx, Log, _Meta}) ->
     case Log of
@@ -66,14 +76,20 @@ fetch(Idx, {_LastIdx, Log, _Meta}) ->
         _ -> undefined
     end.
 
--spec read_meta(Key :: ra_log:ra_meta_key(), State ::  ra_test_log_state()) ->
+-spec release(Indices :: [ra_index()], State :: ra_log_memory_state()) ->
+    ra_log_memory_state().
+release(Indices, {Idx, Log0, Meta}) ->
+    Log = maps:without(Indices, Log0),
+    {Idx, Log, Meta}.
+
+-spec read_meta(Key :: ra_log:ra_meta_key(), State ::  ra_log_memory_state()) ->
     maybe(term()).
 read_meta(Key, {_LastIdx, _Log, Meta}) ->
     maps:get(Key, Meta, undefined).
 
 -spec write_meta(Key :: ra_log:ra_meta_key(), Value :: term(),
-                     State :: ra_test_log_state()) ->
-    {ok,  ra_test_log_state()} | {error, term()}.
+                     State :: ra_log_memory_state()) ->
+    {ok,  ra_log_memory_state()} | {error, term()}.
 write_meta(Key, Value, {_LastIdx, _Log, Meta} = State) ->
     {ok, erlang:setelement(3, State, Meta#{Key => Value})}.
 
@@ -83,10 +99,6 @@ write_meta(Key, Value, {_LastIdx, _Log, Meta} = State) ->
 append_test() ->
     {0, #{}, _} = S = init([]),
     {ok, {1, #{1 := {1, <<"hi">>}}, _}} = append({1, 1, <<"hi">>}, false, S).
-
-append_gap_test() ->
-    {0, #{}, _} = S = init([]),
-    {error, integrity_error} = append({2, 1, <<"hi">>}, false, S).
 
 append_twice_test() ->
     {0, #{}, _} = S = init([]),

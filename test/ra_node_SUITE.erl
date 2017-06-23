@@ -92,7 +92,7 @@ follower_handleds_append_entries_rpc(_Config) ->
 
     ExpectedLog = {2, #{0 => {0, undefined}, 1 => {1, usr(<<"hi1">>)},
                         2 => {4, usr(<<"hi">>)}}, #{}},
-    {follower,  #{log := {ra_test_log, ExpectedLog}},
+    {follower,  #{log := {ra_log_memory, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 2, last_term = 4}}}
         = ra_node:handle_follower(AE, State#{last_applied => 1}),
@@ -100,7 +100,7 @@ follower_handleds_append_entries_rpc(_Config) ->
     % append new entries not in the log
     % if leader_commit > commit_index set commit_index = min(leader_commit, index of last new entry)
     ExpectedLogEntry = usr(<<"hi4">>),
-    {follower, #{log := {ra_test_log, {4, #{4 := {5, ExpectedLogEntry}}, #{}}},
+    {follower, #{log := {ra_log_memory, {4, #{4 := {5, ExpectedLogEntry}}, #{}}},
                  commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
      {reply, #append_entries_reply{term = 5, success = true,
@@ -555,7 +555,7 @@ base_state(NumNodes) ->
       last_applied => 3,
       machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
-      log => {ra_test_log, Log}}.
+      log => {ra_log_memory, Log}}.
 
 usr(Data) ->
     {'$usr', self(), Data, after_log_append}.
