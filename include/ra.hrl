@@ -68,16 +68,19 @@
          vote_granted :: boolean()}).
 
 
-%% similar to install snapshot rpc but communicates a reset index
-%% at which point all preceeding entries adds upp to the initial machine
-%% state
--record(reset_rpc,
-        {index :: ra_index(), % the index to reset log to
-         term :: ra_term(),
+-record(install_snapshot_rpc,
+        {term :: ra_term(), % the leaders term
          leader_id :: ra_node_id(),
-         % the cluster at the time of the reset index
-         current_cluster :: {ra_index(), ra_cluster()}
+         last_index :: ra_index(), % the snapshot replaces all previous entries incl this
+         last_term :: ra_term(), % the term at the point of snapshot
+         last_config :: ra_cluster(),
+         % because we only snapshot when the state is effectively empty
+         % we should never need to create chunks
+         data :: term()
         }).
+
+-record(install_snapshot_result,
+        {term :: ra_term()}).
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 

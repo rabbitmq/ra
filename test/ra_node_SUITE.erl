@@ -91,7 +91,7 @@ follower_handleds_append_entries_rpc(_Config) ->
                                                 after_log_append}}]},
 
     ExpectedLog = {2, #{0 => {0, undefined}, 1 => {1, usr(<<"hi1">>)},
-                        2 => {4, usr(<<"hi">>)}}, #{}},
+                        2 => {4, usr(<<"hi">>)}}, #{}, undefined},
     {follower,  #{log := {ra_log_memory, ExpectedLog}},
      {reply, #append_entries_reply{term = 5, success = true,
                                    last_index = 2, last_term = 4}}}
@@ -100,7 +100,7 @@ follower_handleds_append_entries_rpc(_Config) ->
     % append new entries not in the log
     % if leader_commit > commit_index set commit_index = min(leader_commit, index of last new entry)
     ExpectedLogEntry = usr(<<"hi4">>),
-    {follower, #{log := {ra_log_memory, {4, #{4 := {5, ExpectedLogEntry}}, #{}}},
+    {follower, #{log := {ra_log_memory, {4, #{4 := {5, ExpectedLogEntry}}, #{}, undefined}},
                  commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
      {reply, #append_entries_reply{term = 5, success = true,
@@ -539,7 +539,7 @@ base_state(NumNodes) ->
                 1 => {1, usr(<<"hi1">>)},
                 2 => {3, usr(<<"hi2">>)},
                 3 => {5, usr(<<"hi3">>)}},
-           #{}},
+           #{}, undefined},
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
                                 Acc#{Name => #{next_index => 4,

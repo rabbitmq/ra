@@ -18,11 +18,14 @@
 -type ra_log_state() :: term().
 -type ra_log() :: {Module :: module(), ra_log_state()}.
 -type ra_meta_key() :: atom().
+-type ra_log_snapshot() :: maybe({ra_term(), ra_index(),
+                                  ra_cluster(), term()}).
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,
               ra_log/0,
-              ra_meta_key/0
+              ra_meta_key/0,
+              ra_log_snapshot/0
              ]).
 
 -callback init(Args::ra_log_init_args()) -> ra_log_state().
@@ -47,6 +50,13 @@
 % release log entries at specified indices
 -callback release(Indices :: [ra_index()], State :: ra_log_state()) ->
     ra_log_state().
+
+-callback write_snapshot(Snapshot :: ra_log_snapshot(),
+                         State :: ra_log_state()) ->
+    ra_log_state().
+
+-callback read_snapshot(State :: ra_log_state()) ->
+    ra_log_snapshot().
 
 -callback read_meta(Key :: ra_meta_key(), State :: ra_log_state()) ->
     maybe(term()).
