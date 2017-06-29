@@ -80,10 +80,14 @@
         }).
 
 -record(install_snapshot_result,
-        {term :: ra_term()}).
+        {term :: ra_term(),
+         % because we aren't doing true rpc we may have multiple append
+         % entries in flight we need to communicate what we are replying
+         % to
+         last_index :: ra_index(),
+         last_term :: ra_term()}).
 
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 
 -define(DEFAULT_TIMEOUT, 5000).
-
 

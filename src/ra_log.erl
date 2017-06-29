@@ -9,6 +9,8 @@
          last/1,
          next_index/1,
          release/2,
+         read_snapshot/1,
+         write_snapshot/2,
          read_meta/2,
          read_meta/3,
          write_meta/3
@@ -18,7 +20,7 @@
 -type ra_log_state() :: term().
 -type ra_log() :: {Module :: module(), ra_log_state()}.
 -type ra_meta_key() :: atom().
--type ra_log_snapshot() :: maybe({ra_term(), ra_index(),
+-type ra_log_snapshot() :: maybe({ra_index(), ra_term(),
                                   ra_cluster(), term()}).
 
 -export_type([ra_log_init_args/0,
@@ -101,6 +103,13 @@ last({Mod, Log}) ->
 next_index({Mod, Log}) ->
     Mod:next_index(Log).
 
+write_snapshot(Snapshot, {Mod, Log0}) ->
+    Log = Mod:write_snapshot(Snapshot, Log0),
+    {Mod, Log}.
+
+read_snapshot({Mod, Log0}) ->
+    Mod:read_snapshot(Log0).
+
 -spec release(Indices :: [ra_index()], State :: ra_log()) ->
     ra_log().
 release(Indices, {Mod, Log}) ->
@@ -115,7 +124,7 @@ read_meta(Key, {Mod, Log}) ->
                 Default :: term()) ->
     term().
 read_meta(Key, {Mod, Log}, Default) ->
-    ra_util:default(Mod:read_meta(Key, Log), Default).
+    ra_lib:default(Mod:read_meta(Key, Log), Default).
 
 -spec write_meta(Key :: ra_meta_key(), Value :: term(),
                      State :: ra_log()) ->

@@ -1,8 +1,9 @@
--module(ra_util).
+-module(ra_lib).
 
 -export([
          ceiling/1,
-         default/2
+         default/2,
+         dump/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -18,3 +19,7 @@ default(undefined, Def) ->
     Def;
 default(Value, _Def) ->
     Value.
+
+dump(Term) ->
+    io:format("Dump: ~p~n", [Term]),
+    Term.

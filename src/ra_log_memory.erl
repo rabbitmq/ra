@@ -91,9 +91,11 @@ release(Indices, {Idx, Log0, Meta, Snapshot}) ->
                      State :: ra_log_memory_state()) ->
     ra_log_memory_state().
 write_snapshot(Snapshot, State) ->
-    % TODO: discard log
-    setelement(4, State, Snapshot).
-
+    Log0 = element(2, State),
+    Index  = element(1, Snapshot),
+    % discard log
+    Log = maps:filter(fun (K, _) -> K > Index end, Log0),
+    setelement(2, setelement(4, State, Snapshot), Log).
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
     ra_log:ra_log_snapshot().

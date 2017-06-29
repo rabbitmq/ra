@@ -217,8 +217,8 @@ queue_example(_Config) ->
     Self = self(),
     [A, _B, _C] = Cluster =
     ra:start_local_cluster(3, "test", fun queue_apply/2,
-                     #{queue => queue:new(),
-                       pending_dequeues => []}),
+                           #{queue => queue:new(),
+                             pending_dequeues => []}),
 
     {ok, {_, 1}, Leader} = ra:send(A, {dequeue, Self}),
     {ok, {_, 1}, _} = ra:send(Leader, {enqueue, test_msg}),
@@ -253,7 +253,7 @@ queue_apply({dequeue, For},
             State#{queue => Q, pending_dequeues => Pending ++ [For]};
         {{value, Item}, Q} ->
             {effects, State#{queue => Q,
-                    pending_dequeues => Rest ++ [For]},
+                             pending_dequeues => Rest ++ [For]},
              [{send_msg, Next, Item}]}
     end.
 

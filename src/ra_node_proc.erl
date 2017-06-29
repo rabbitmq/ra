@@ -128,7 +128,7 @@ leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}} = C,
     {leader, NodeState, Effects} =
         ra_node:handle_leader({command, {CmdType, From, Data, ReplyMode}},
                               NodeState0),
-    {State, Actions} = interact(Effects, EventType, State0),
+    {State, Actions} = handle_effects(Effects, EventType, State0),
     {keep_state, State#state{node_state = NodeState}, Actions};
 leader({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
@@ -144,27 +144,28 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
                        node_state = NodeState = #{id := Id}}) ->
     ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
-    AppendEntries = ra_node:make_append_entries(NodeState),
+    AppendEntries = ra_node:make_rpcs(NodeState),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, AppendEntries),
     {keep_state, State0#state{proxy = Proxy}};
 leader(EventType, Msg, State0 = #state{node_state = NodeState0,
                                        proxy = Proxy}) ->
+    ?DBG("leader msg ~p~n", [Msg]),
     case ra_node:handle_leader(Msg, NodeState0) of
         {leader, NodeState, Effects} ->
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             State1 = State#state{node_state = NodeState},
             {keep_state, State1, Actions};
         {follower, NodeState, Effects} ->
             % stop proxy process
             _ = gen_server:stop(Proxy, normal, 100),
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             {next_state, follower, State#state{node_state = NodeState},
              [election_timeout_action(follower, State) | Actions]};
         {stop, NodeState, Effects} ->
-            % interact before shutting downin case followers need
+            % interact before shutting down in case followers need
             % to know about the new commit index
-            {State, _Actions} = interact(Effects, EventType, State0),
+            {State, _Actions} = handle_effects(Effects, EventType, State0),
             {stop, normal, State#state{node_state = NodeState}}
     end.
 
@@ -181,15 +182,15 @@ candidate(EventType, Msg, State0 = #state{node_state = NodeState0
                                           pending_commands = Pending}) ->
     case ra_node:handle_candidate(Msg, NodeState0) of
         {candidate, NodeState, Effects} ->
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             {keep_state, State#state{node_state = NodeState}, Actions};
         {follower, NodeState, Effects} ->
             ?DBG("~p candidate -> follower term: ~p~n", [Id, Term]),
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             {next_state, follower, State#state{node_state = NodeState},
              [election_timeout_action(follower, State) | Actions]};
         {leader, NodeState, Effects} ->
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             ?DBG("~p candidate -> leader term: ~p~n", [Id, Term]),
             % inject a bunch of command events to be processed when node
             % becomes leader
@@ -212,13 +213,14 @@ follower(EventType, Msg,
          State0 = #state{node_state = NodeState0 = #{id := Id}}) ->
     case ra_node:handle_follower(Msg, NodeState0) of
         {follower, NodeState, Effects} ->
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             NewState = follower_leader_change(State,
                                               State#state{node_state = NodeState}),
+            ?DBG("follower actions ~p~n", [Actions]),
             {keep_state, NewState,
              [election_timeout_action(follower, State) | Actions]};
         {candidate, NodeState = #{current_term := NewTerm}, Effects} ->
-            {State, Actions} = interact(Effects, EventType, State0),
+            {State, Actions} = handle_effects(Effects, EventType, State0),
             ?DBG("~p follower -> candidate term: ~p~n", [Id, NewTerm]),
             % TODO: the candidate timer should probably be a state_timeout()
             {next_state, candidate, State#state{node_state = NodeState},
@@ -242,6 +244,7 @@ terminate(Reason, _StateName, #state{proxy = Proxy,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
+%% TODO:
 format_status(_Opt, [_PDict, _StateName, _State]) ->
     Status = some_term,
     Status.
@@ -261,29 +264,32 @@ perform_dirty_query(QueryFun, _StateName, #{machine_state := MacState,
     Leader = maps:get(leader_id, NodeState, not_known),
     {ok, {{Last, Term}, QueryFun(MacState)}, Leader}.
 
-interact(Effect, EvtType, State) ->
-    interact(Effect, EvtType, State, []).
+% effect handler: either executes an effect or builds up a list of
+% gen_statem 'Actions' to be returned.
+handle_effects(Effects, EvtType, State0) ->
+    lists:foldl(fun(Effect, {State, Actions}) ->
+                        handle_effect(Effect, EvtType, State, Actions)
+                end, {State0, []}, Effects).
 
-interact(none, _EvtType, State, Actions) ->
-    {State, Actions};
-interact({next_event, Evt}, EvtType, State, Actions) ->
-    {State, [ {next_event, EvtType, Evt} |  Actions]};
-interact({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
+handle_effect({next_event, Evt}, EvtType, State, Actions) ->
+    {State, [{next_event, EvtType, Evt} |  Actions]};
+handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
     {State, [Next | Actions]};
-interact({send_msg, To, Msg}, _EvtType, State, Actions) ->
+handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
     To ! Msg,
     {State, Actions};
-interact({notify, Who, Reply}, _EvtType, State, Actions) ->
+handle_effect({notify, Who, Reply}, _EvtType, State, Actions) ->
     ?DBG("notify ~p ~p~n", [Who, Reply]),
     _ = Who ! {consensus, Reply},
     {State, Actions};
-interact({reply, _From, _Reply} = Action, _, State, Actions) ->
+handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
     {State, [Action | Actions]};
-interact({reply, Reply}, {call, From}, State, Actions) ->
+handle_effect({reply, Reply}, {call, From}, State, Actions) ->
+    ?DBG("handle_effect reply ~p ~p~n", [From, Reply]),
     {State, [{reply, From, Reply} | Actions]};
-interact({reply, _Reply}, _, _State, _Actions) ->
+handle_effect({reply, _Reply}, _, _State, _Actions) ->
     exit(undefined_reply);
-interact({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
+handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
     % transient election processes
     T = {dirty_timeout, 500},
     Me = self(),
@@ -293,20 +299,24 @@ interact({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
-interact({send_append_entries, AppendEntries}, _EvtType,
-         #state{proxy = undefined, broadcast_time = Interval} = State,
-         Actions) ->
+handle_effect({send_rpcs, AppendEntries}, _EvtType,
+               #state{proxy = undefined, broadcast_time = Interval} = State,
+               Actions) ->
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, AppendEntries),
     {State#state{proxy = Proxy}, Actions};
-interact({send_append_entries, AppendEntries}, _EvtType,
-         #state{proxy = Proxy} = State, Actions) ->
+handle_effect({send_rpcs, AppendEntries}, _EvtType,
+               #state{proxy = Proxy} = State, Actions) ->
     ok = ra_proxy:proxy(Proxy, AppendEntries),
     {State, Actions};
-interact([Effect | Effects], EvtType, State0, Actions0) ->
-    {State, Actions} = interact(Effect,  EvtType, State0, Actions0),
-    interact(Effects, EvtType, State, Actions);
-interact([], _EvtType, State, Actions) -> {State, Actions}.
+handle_effect({release_up_to, Index}, _EvtType,
+               #state{node_state = NodeState0} = State, Actions) ->
+    NodeState = ra_node:maybe_snapshot(Index, NodeState0),
+    {State#state{node_state = NodeState}, Actions};
+handle_effect({snapshot_point, Index}, _EvtType,
+               #state{node_state = NodeState0} = State, Actions) ->
+    NodeState = ra_node:record_snapshot_point(Index, NodeState0),
+    {State#state{node_state = NodeState}, Actions}.
 
 
 election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
