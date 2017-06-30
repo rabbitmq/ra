@@ -28,9 +28,11 @@ all() ->
      leader_appends_cluster_change_then_steps_before_applying_it,
      follower_installs_snapshot,
      snapshotted_follower_received_append_entries,
+     leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
      take_snapshot,
-     send_snapshot
+     send_snapshot,
+     past_leader_overwrites_entry
     ].
 
 groups() ->
@@ -590,6 +592,44 @@ snapshotted_follower_received_append_entries(_Config) ->
         = ra_node:handle_follower(AER, FState1),
     ok.
 
+leader_received_append_entries_reply_with_stale_last_index(_Config) ->
+    Term = 2,
+    N2NextIndex = 3,
+    Leader0 = #{cluster =>
+                #{n1 => #{match_index => 0}, % current leader in term 2
+                  n2 => #{match_index => 0,next_index => N2NextIndex }, % stale peer - previous leader
+                  n3 => #{match_index => 3,next_index => 4}}, % uptodate peer
+                cluster_change_permitted => true,
+                cluster_id => test_cluster,
+                cluster_index_term => {0,0},
+                commit_index => 4,
+                current_term => Term,
+                id => n1,
+                initial_machine_state => [],
+                last_applied => 4,
+                log => {ra_log_memory,
+                        {3,
+                         #{0 => {0,undefined},
+                           1 => {1,noop},
+                           2 => {2, {'$usr',pid, {enq,apple}, after_log_append}},
+                           3 => {2, {'$usr',pid, {enq,pear}, after_log_append}}},
+                         #{current_term => 2,voted_for => n2},
+                         undefined}},
+                machine_state => [{4,apple}],
+                pending_cluster_changes => [],
+                snapshot_index_term => {0,0},
+                snapshot_points => #{}},
+    AER = #append_entries_reply{success = false,
+                                term = Term,
+                                last_index = 2, % refer to stale entry
+                                last_term = 1}, % in previous term
+    % should decrement next_index for n2
+    ExpectedN2NextIndex = 2,
+    {leader, #{cluster := #{n2 := #{next_index := ExpectedN2NextIndex}}},
+     Effects} = ra_node:handle_leader({n2, AER}, Leader0),
+    dump(Effects),
+    ok.
+
 leader_receives_install_snapshot_result(_Config) ->
     % should update peer next_index
     Term = 1,
@@ -693,6 +733,44 @@ send_snapshot(_Config) ->
     assert_node_state(n3, Nodes, Assertion),
     ok.
 
+past_leader_overwrites_entry(_Config) ->
+    InitNodes = init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+    Nodes = lists:foldl(fun (F, S) -> F(S) end,
+                        InitNodes,
+                        [
+                         fun (S) -> run_election(n1, S) end,
+                         fun (S) -> run_effects_leader(n1, S) end,
+                         fun (S) -> interact(n1, {command, usr({enq, banana})}, S) end,
+                         % command appended to leader but not replicated
+                         % run a new election for a different peer with the
+                         % previous leader "partitioned"
+                         fun (S) -> run_election_without(n2, n1, S) end,
+                         % the noop command would have overwritten the original
+                         % {enq, banana} addint another one for good measure
+                         fun (S) ->
+                                 S1 = interact_without(n2, n1, {command, usr({enq, apple})}, S),
+                                 dump(strip_send_rpcs_for(n2, n1, S1))
+                         end,
+                         fun (S) -> run_effects_leader(n2, S) end,
+                         % replicate
+                         fun (S) -> run_effects_leader(n2, S) end,
+                         fun (S) -> run_effects_on_all(4, S) end
+                        ]),
+    Assertion = fun (#{log := Log}) ->
+                        % ensure no node still has a banana
+                        Entries = ra_log:take(0, 100, Log),
+                        not lists:any(fun({_, _, {'$usr',_, {enq, banana}, _}}) ->
+                                              true;
+                                         (_) -> false
+                                      end, Entries)
+                end,
+    assert_node_state(n1, Nodes, Assertion),
+    assert_node_state(n2, Nodes, Assertion),
+    assert_node_state(n3, Nodes, Assertion),
+    % dump(Nodes),
+    % assert banana is not in log of anyone as it was never committed
+    ok.
+
 % TODO
 % follower receives snapshot:
 % * current index is lower, throwaway state and reset to snapshot
@@ -715,7 +793,7 @@ assert_node_state(Id, Nodes, Assert) ->
 % append_entry_rpcs stuff
 run_effects_leader(Id, Nodes) ->
     % run a few effects then strip remaining append entries
-    strip_send_rpcs(n1, run_effects(5, Id, Nodes)).
+    strip_send_rpcs(Id, run_effects(5, Id, Nodes)).
 
 %%% helpers
 
@@ -730,6 +808,11 @@ init_nodes(NodeIds, ApplyFun, MacState) ->
                                  initial_state => MacState},
                         Acc#{NodeId => {follower, ra_node:init(Args), []}}
                 end, #{}, NodeIds).
+
+run_election_without(CandId, WithoutId, Nodes0) ->
+    Without = maps:get(WithoutId, Nodes0),
+    maps:put(WithoutId, Without,
+             run_election(CandId, maps:remove(WithoutId, Nodes0))).
 
 run_election(CandidateId, Nodes0) ->
     Nodes1 = interact(CandidateId, election_timeout, Nodes0),
@@ -799,16 +882,25 @@ next_effect(NodeId, Nodes) ->
     end.
 
 rpc_interact(Id, FromId, Interaction, Nodes0) ->
-    #{Id := {_, _, Effects0}} = Nodes1 = interact(Id, Interaction, Nodes0),
-    Effects = list(Effects0),
-    % there should only ever be one reply really?
-    [{reply, Reply}] = Replies = lists:filter(fun({reply, _}) -> true;
-                                                 (_) -> false
-                                              end, Effects),
-    % interact with caller
-    Nodes2 = interact(FromId, fixup_reply(Id, Reply), Nodes1),
-    % remove replies from remaining effects
-    maps:update_with(Id, fun (X) -> setelement(3, X, Effects -- Replies) end, Nodes2).
+    case interact(Id, Interaction, Nodes0) of
+        #{Id := {_, _, Effects0}} = Nodes1 ->
+            % interact(Id, Interaction, Nodes0),
+            Effects = list(Effects0),
+            % there should only ever be one reply really?
+            Replies = lists:filter(fun({reply, _}) -> true;
+                                      (_) -> false
+                                   end, Effects),
+            Nodes2 = case Replies of
+                         [{reply, Reply}] ->
+                             % interact with caller
+                             interact(FromId, fixup_reply(Id, Reply), Nodes1);
+                         _ -> Nodes1
+                     end,
+            % remove replies from remaining effects
+            maps:update_with(Id, fun (X) -> setelement(3, X, Effects -- Replies) end, Nodes2);
+        _ ->
+            Nodes0
+    end.
 
 % helper to remove append entry effects as they are always returned
 % in response to a result
@@ -852,9 +944,20 @@ drop_all_aers_but_last0([E | Tail], Result, _) ->
     drop_all_aers_but_last0(Tail, [E | Result], true).
 
 
+interact_without(Id, WithoutId, Interaction, Nodes0) ->
+    Without = maps:get(WithoutId, Nodes0),
+    maps:put(WithoutId, Without,
+             interact(Id, Interaction, maps:remove(WithoutId, Nodes0))).
+
 % dispatch a single command
 interact(Id, Interaction, Nodes) ->
-    interact(Id, maps:get(Id, Nodes), Interaction, Nodes).
+    case Nodes of
+        #{Id := Node} ->
+            interact(Id, Node, Interaction, Nodes);
+        _ ->
+            ct:pal("interact node ~p not found", [Id]),
+            Nodes
+    end.
 
 interact(Id, {follower, State, Effects}, Interaction, Nodes) ->
         {NewRaState, NewState, NewEffects} =

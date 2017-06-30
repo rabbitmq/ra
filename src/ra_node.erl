@@ -174,15 +174,22 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                    Peer0#{match_index => LastIdx,
                           next_index => LastIdx + 1};
                _  when LastIdx < MI ->
+                   % TODO: this can only really happen when peers are non-persistent.
+                   % should they turn-into non-voters when this sitution is detected
                    error_logger:warning_msg(
                      "~p leader: peer returned last_index [~p in ~p] lower than recorded "
                      "match index [~p]. Resetting peers state to last_index.~n",
                      [Id, LastIdx, LastTerm, MI]),
                    Peer0#{match_index => LastIdx,
                           next_index => LastIdx + 1};
-               _ ->
-                   % decrement next_index but don't go lower than
-                   % match index.
+               {_, EntryTerm, _} ->
+                   ?DBG("~p leader received last_index with different term ~p~n",
+                        [Id, EntryTerm]),
+                   % last_index has a different term
+                   % The peer must have received an entry from a previous leader
+                   % and the current leader wrote a different entry at the same
+                   % index in a different term.
+                   % decrement next_index but don't go lower than match index.
                    Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
            end,
     State = State0#{cluster => Nodes#{PeerId => Peer}},
@@ -271,10 +278,11 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State0 = #{current_term := Term, votes := Votes,
-                            cluster := Nodes}) ->
+                            cluster := Nodes, id := Id}) ->
     NewVotes = Votes+1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
+            ?DBG("~p candidate becoming leader of term ~p", [Id, Term]),
             State = initialise_peers(State0),
             {leader, maps:without([votes, leader_id], State),
              [{next_event, cast, {command, noop}}]};
@@ -327,7 +335,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                  State0, Entries),
 
             % ?DBG("~p: follower received ~p append_entries in ~p.",
-            %      [Id, length(Entries), Term]),
+            %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
             % only apply snapshot related effects on non-leader
             {State, Effects0} = apply_to(LeaderCommit,
                                          State1#{leader_id => LeaderId}),
