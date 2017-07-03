@@ -551,7 +551,7 @@ quorum(_Config) ->
 
 follower_installs_snapshot(_Config) ->
     #{n3 := {_, FState = #{cluster := Config}, _}}
-    = init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+    = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -571,7 +571,7 @@ follower_installs_snapshot(_Config) ->
 
 snapshotted_follower_received_append_entries(_Config) ->
     #{n3 := {_, FState0 = #{cluster := Config}, _}} =
-        init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+        init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -602,7 +602,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 cluster_change_permitted => true,
                 cluster_id => test_cluster,
                 cluster_index_term => {0,0},
-                commit_index => 4,
+                commit_index => 3,
                 current_term => Term,
                 id => n1,
                 initial_machine_state => [],
@@ -681,7 +681,7 @@ leader_receives_install_snapshot_result(_Config) ->
 %%%
 take_snapshot(_Config) ->
     % * takes snapshot in response to state machine release_up_to effect
-    InitNodes = init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -703,7 +703,7 @@ take_snapshot(_Config) ->
     ok.
 
 send_snapshot(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -734,7 +734,7 @@ send_snapshot(_Config) ->
     ok.
 
 past_leader_overwrites_entry(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], fun simple_fifo_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -775,15 +775,6 @@ past_leader_overwrites_entry(_Config) ->
 % follower receives snapshot:
 % * current index is lower, throwaway state and reset to snapshot
 % * current index is higher - ignore or reset?
-
-% implements a simple FIFO queue
-simple_fifo_apply(Idx, {enq, Msg}, State) ->
-    {effects, State ++ [{Idx, Msg}], [{snapshot_point, Idx}]};
-simple_fifo_apply(_Idx, deq, [{EncIdx, _Msg} | State]) ->
-    {effects, State, [{release_up_to, EncIdx}]};
-% due to compaction there may not be a dequeue op to do
-simple_fifo_apply(_Idx, deq, [] = State) ->
-    {effects, State, []}.
 
 assert_node_state(Id, Nodes, Assert) ->
     {_, S, _} = maps:get(Id, Nodes),

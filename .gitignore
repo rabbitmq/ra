@@ -13,7 +13,10 @@ erl_crash.dump
 elvis
 callgrind*
 ct.coverdata
+test/ct.cover.spec
 
 rabbitmq_rtopic_exchange.d
 *.plt
 *.d
+
+

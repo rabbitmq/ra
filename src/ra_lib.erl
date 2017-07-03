@@ -3,7 +3,8 @@
 -export([
          ceiling/1,
          default/2,
-         dump/1
+         dump/1,
+         id/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -23,3 +24,5 @@ default(Value, _Def) ->
 dump(Term) ->
     io:format("Dump: ~p~n", [Term]),
     Term.
+
+id(X) -> X.

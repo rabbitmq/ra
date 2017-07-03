@@ -16,6 +16,7 @@ all() ->
      dirty_query,
      members,
      consistent_query,
+     snapshot,
      add_node,
      queue_example,
      ramp_up_and_ramp_down,
@@ -213,6 +214,28 @@ add_node(_Config) ->
     {ok, {{_, 1}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
+snapshot(_Config) ->
+    InitialNodes = [{n1, node()}, {n2, node()}],
+    %%TODO look into cluster changes WITH INVALID NAMES!!!
+
+    % start two nodes
+    ok = ra:start_node(n1, InitialNodes, fun ra_queue:simple_apply/3, []),
+    ok = ra:start_node(n2, InitialNodes, fun ra_queue:simple_apply/3, []),
+    N1 = {n1, node()}, N2 = {n2, node()}, N3 = {n3, node()},
+    {ok, {_, 1}, Leader} = ra:send(n1, {enq, banana}),
+    {ok, {_, 1}, Leader} = ra:send(Leader, {deq, self()}),
+    {ok, {_, 1}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple}),
+    % waitfor(banana, apply_timeout),
+    ok = ra:start_node(n3, InitialNodes, fun ra_queue:simple_apply/3, []),
+    {ok, {_, 1}, _Leader} = ra:add_node(Leader, N3),
+    timer:sleep(1000),
+    % at this point snapshot should have been taken
+    {ok, {_, Res}, _} = ra:dirty_query(N1, fun ra_lib:id/1),
+    {ok, {_, Res}, _} = ra:dirty_query(N2, fun ra_lib:id/1),
+    {ok, {_, Res}, _} = ra:dirty_query(N3, fun ra_lib:id/1),
+    % check that the message isn't delivered multiple times
+    terminate_cluster([N3 | InitialNodes]).
+
 queue_example(_Config) ->
     Self = self(),
     [A, _B, _C] = Cluster =
@@ -229,6 +252,7 @@ queue_example(_Config) ->
     after 500 -> ok
     end,
     terminate_cluster(Cluster).
+
 % implements a simple queue machine
 queue_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
     Q = queue:in(Msg, Q0),
@@ -296,3 +320,6 @@ validate(Name, Expected) ->
     {ok, {_, Expected}, _} = ra:consistent_query({Name, node()},
                                                  fun(X) -> X end).
 
+dump(T) ->
+    ct:pal("DUMP: ~p~n", [T]),
+    T.

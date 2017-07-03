@@ -198,6 +198,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
     case append_log_leader(Cmd, State0) of
         {not_appended, State} ->
+            ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
         {IdxTerm, State}  ->
             ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
@@ -489,7 +490,7 @@ maybe_snapshot(Index, State = #{id := Id,
                                 initial_machine_state := MachineState}) ->
     case Points0 of
         #{Index := {Term, Cluster}} ->
-            % ?DBG("~p: writing snapshot at index ~p~n", [Id, Index]),
+            ?DBG("~p: writing snapshot at index ~p~n", [Id, Index]),
             Snapshot = {Index, Term, Cluster, MachineState},
             Log = ra_log:write_snapshot(Snapshot, Log0),
             % ?DBG("~p: post snapshot log ~p~n", [Id, Log]),
@@ -598,7 +599,8 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(Commit, State0 = #{last_applied := LastApplied,
+apply_to(Commit, State0 = #{id := Id,
+                            last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
                             machine_state := MacState0})
   when Commit > LastApplied ->
@@ -606,7 +608,7 @@ apply_to(Commit, State0 = #{last_applied := LastApplied,
         [] ->
             {State0, []};
         Entries ->
-            % ?DBG("applying {Index, Term}: ~p", [{I,T} || {I, T, _} <- Entries]),
+            ?DBG("~p: applying {Index, Term}: ~p", [Id, [{I,T} || {I, T, _} <- Entries]]),
             ApplyFun = wrap_apply_fun(ApplyFun0),
             {State, MacState, NewEffects} = lists:foldl(ApplyFun,
                                                         {State0, MacState0, []},
