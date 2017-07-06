@@ -6,7 +6,7 @@
 
 %% API functions
 -export([start_link/2,
-         proxy/2]).
+         proxy/3]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -29,8 +29,8 @@
 start_link(ParentPid, Interval) ->
     gen_server:start_link(?MODULE, [ParentPid, Interval], []).
 
-proxy(Pid, Appends) ->
-    gen_server:cast(Pid, {appends, Appends}).
+proxy(Pid, IsUrgent, Appends) ->
+    gen_server:cast(Pid, {appends, IsUrgent, Appends}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -52,19 +52,15 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({appends, Appends}, State0) ->
-    case State0 of
-        %% TODO: structural comparison can be very expensive. Instead perform
-        %% comparison based on last_index/term, commit_index and num entries
-        #state{appends = Appends} ->
-            % no change - do nothing - just wait for next interval
-            {noreply, State0};
-        _ ->
-            State = State0#state{appends = Appends},
-            ok = broadcast(State),
-            % as we have just broadcast we can reset the timer
-            {noreply, reset_timer(State)}
-    end.
+handle_cast({appends, false, Appends}, State0) ->
+    % not urgent just update appends and wait for next interval
+    {noreply, State0#state{appends = Appends}};
+handle_cast({appends, true, Appends}, State0) ->
+    % urgent send append entries now
+    State = State0#state{appends = Appends},
+    ok = broadcast(State),
+    % as we have just broadcast we can reset the timer
+    {noreply, reset_timer(State)}.
 
 handle_info(broadcast, State) ->
     ok = broadcast(State),
@@ -96,11 +92,10 @@ reset_timer(State = #state{timer_ref = Ref0, interval = Interval}) ->
     State#state{timer_ref = Ref}.
 
 broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
-    % ?DBG("broadcast ~p~n", [Appends]),
     [begin
          % use the peer ref as the unique rpc reply reference
          % fake gen_call - reply goes to ra_node process
-         try Peer ! {'$gen_call', {Parent, Peer}, AE} of
+         try send(Peer, {'$gen_call', {Parent, Peer}, AE}) of
              _ -> ok
          catch
              _:_ = Err ->
@@ -109,6 +104,11 @@ broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
          end
      end || {Peer, AE} <- Appends, is_connected(Peer, Nodes)],
     ok.
+
+send(Dest, Msg) ->
+    %% use nosuspend here as we don't want to delay the sending to other peers
+    %% due to single overflowed buffer.
+    erlang:send(Dest, Msg, [nosuspend]).
 
 is_connected({_Proc, Node}, Nodes) ->
     maps:is_key(Node, Nodes);

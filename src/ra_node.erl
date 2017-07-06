@@ -60,7 +60,7 @@
 -type ra_effect() ::
     {reply, ra_msg()} |
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
-    {send_rpcs, [{ra_node_id(), #append_entries_rpc{}}]} |
+    {send_rpcs, [{ra_node_id(), IsUrgent :: boolean(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
     {send_msg, pid(), term()}.
 
@@ -131,7 +131,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, LastIdx+1)},
             State1 = update_peer(PeerId, Peer, State0),
             {State, Effects0} = evaluate_quorum(State1),
-            Effects = [{send_rpcs, make_rpcs(State)} | Effects0],
+            Effects = [{send_rpcs, false, make_rpcs(State)} | Effects0],
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -194,7 +194,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
            end,
     State = State0#{cluster => Nodes#{PeerId => Peer}},
     AEs = make_rpcs(State),
-    {leader, State, [{send_rpcs, AEs}]};
+    {leader, State, [{send_rpcs, false, AEs}]};
 handle_leader({command, Cmd}, State0 = #{id := Id}) ->
     case append_log_leader(Cmd, State0) of
         {not_appended, State} ->
@@ -203,7 +203,7 @@ handle_leader({command, Cmd}, State0 = #{id := Id}) ->
         {IdxTerm, State}  ->
             ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
             {State1, Effects0} = evaluate_quorum(State),
-            Effects1 = [{send_rpcs, make_rpcs(State1)} | Effects0],
+            Effects1 = [{send_rpcs, true, make_rpcs(State1)} | Effects0],
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
                               Effects1;
@@ -239,7 +239,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                                                next_index => LastIndex + 1},
                                 State0),
 
-            Effects = [{send_rpcs, make_rpcs(State)}],
+            Effects = [{send_rpcs, false, make_rpcs(State)}],
             {leader, State, Effects}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
@@ -437,9 +437,14 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log,
                                            current_term := Term,
                                            commit_index := CommitIndex,
                                            snapshot_index_term := {SIdx, STerm}}) ->
-    Prev = Next-1,
+    Prev = Next - 1,
     case ra_log:fetch(Prev, Log) of
         {PrevIdx, PrevTerm, _} ->
+            % TODO: either we could keep some state of the last append entries
+            % generated to see if we really need to load a new set of entries
+            % or we could rely on the log implementation to keep an LRU like
+            % cache to avoid reloading receintly read entries from persistent
+            % storage.
             Entries = ra_log:take(Next, 5, Log),
             {PeerId, #append_entries_rpc{entries = Entries,
                                          term = Term,
@@ -599,7 +604,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(Commit, State0 = #{id := Id,
+apply_to(Commit, State0 = #{id := _Id,
                             last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
                             machine_state := MacState0})
@@ -608,11 +613,10 @@ apply_to(Commit, State0 = #{id := Id,
         [] ->
             {State0, []};
         Entries ->
-            ?DBG("~p: applying {Index, Term}: ~p", [Id, [{I,T} || {I, T, _} <- Entries]]),
-            ApplyFun = wrap_apply_fun(ApplyFun0),
-            {State, MacState, NewEffects} = lists:foldl(ApplyFun,
-                                                        {State0, MacState0, []},
-                                                        Entries),
+            % ?DBG("~p: applying {Index, Term}: ~p", [Id, [{I,T} || {I, T, _} <- Entries]]),
+            {State, MacState, NewEffects} =
+                lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
+                            {State0, MacState0, []}, Entries),
             {LastEntryIdx, _, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
             {State#{last_applied => NewCommit,
@@ -621,13 +625,7 @@ apply_to(Commit, State0 = #{id := Id,
     end;
 apply_to(_Commit, State) -> {State, []}.
 
-wrap_apply_fun(ApplyFun) ->
-    fun({Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
-        {State, MacSt, Effects0}) ->
-            Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
-                                ReplyType, Effects0),
-            {State, MacSt, Effects};
-       ({Idx, Term, {'$usr', From, Cmd, ReplyType}},
+apply_with(ApplyFun, {Idx, Term, {'$usr', From, Cmd, ReplyType}},
         {State, MacSt, Effects0}) ->
             case ApplyFun(Idx, Cmd, MacSt) of
                 {effects, NextMacSt, Efx} ->
@@ -637,7 +635,12 @@ wrap_apply_fun(ApplyFun) ->
                     Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
                     {State, NextMacSt, Effects}
             end;
-       ({Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
+apply_with(_ApplyFun, {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
+        {State, MacSt, Effects0}) ->
+            Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
+                                ReplyType, Effects0),
+            {State, MacSt, Effects};
+apply_with(_ApplyFun, {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
          {State0, MacSt, Effects0}) ->
             ?DBG("ra cluster change to ~p~n", [New]),
             Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
@@ -645,12 +648,11 @@ wrap_apply_fun(ApplyFun) ->
             % add pending cluster change as next event
             {Effects1, State1} = add_next_cluster_change(Effects, State),
             {State1, MacSt, Effects1};
-       ({_Idx, Term, noop}, {State0 = #{current_term := Term}, MacSt, Effects}) ->
+apply_with(_ApplyFun, {_Idx, Term, noop}, {State0 = #{current_term := Term}, MacSt, Effects}) ->
             State = State0#{cluster_change_permitted => true},
             {State, MacSt, Effects};
-       (_, Acc) ->
-            Acc
-    end.
+apply_with(_ApplyFun, _, Acc) ->
+            Acc.
 
 add_next_cluster_change(Effects,
                         State = #{pending_cluster_changes := [C | Rest]}) ->

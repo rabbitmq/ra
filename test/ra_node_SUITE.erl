@@ -130,7 +130,7 @@ append_entries_reply_success(_Config) ->
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      last_index = 3, last_term = 5}},
     ExpectedEffects =
-        {send_rpcs,
+        {send_rpcs, false,
          [ {n3, #append_entries_rpc{term = 5, leader_id = n1,
                                     prev_log_index = 1,
                                     prev_log_term = 1,
@@ -177,7 +177,7 @@ append_entries_reply_no_success(_Config) ->
                              leader_commit = 1,
                              entries = [{2, 3, usr(<<"hi2">>)},
                                         {3, 5, usr(<<"hi3">>)}]},
-    ExpectedEffects = [{send_rpcs, [{n3, AE}, {n2, AE}]}],
+    ExpectedEffects = [{send_rpcs, false, [{n3, AE}, {n2, AE}]}],
     % new peers state is updated
     {leader, #{cluster := #{n2 := #{next_index := 2, match_index := 1}},
                commit_index := 1,
@@ -353,9 +353,10 @@ leader_node_join(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3,
                              entries = [JoinEntry]},
-    [{send_rpcs, [{n4, #append_entries_rpc{entries =
-                                                     [_, _, _, JoinEntry]}},
-                            {n3, AE}, {n2, AE}]}] = Effects,
+    [{send_rpcs, true, [{n4,
+                          #append_entries_rpc{entries =
+                                              [_, _, _, JoinEntry]}},
+                         {n3, AE}, {n2, AE}]}] = Effects,
     ok.
 
 leader_node_leave(_Config) ->
@@ -378,7 +379,7 @@ leader_node_leave(_Config) ->
                              leader_commit = 3,
                              entries = [JoinEntry]},
     % the leaving node is no longer included
-    [{send_rpcs, [{n3, AE}, {n2, AE}]}] = Effects,
+    [{send_rpcs, true, [{n3, AE}, {n2, AE}]}] = Effects,
     ok.
 
 leader_is_removed(_Config) ->
@@ -516,7 +517,7 @@ command(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3
                             },
-    {leader, _, [{reply, Self, {4, 5}}, {send_rpcs,
+    {leader, _, [{reply, Self, {4, 5}}, {send_rpcs, true,
                                          [{n3, AE}, {n2, AE}]}]} =
         ra_node:handle_leader({command, Cmd}, State),
     ok.
@@ -670,7 +671,7 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
                                     next_index := 3}}},
-     [{send_rpcs, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
+     [{send_rpcs, false, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
     ?assert(lists:any(fun({n3, #append_entries_rpc{}}) -> true;
                          (_) -> false end, Rpcs)),
     ok.
@@ -844,7 +845,7 @@ run_effect(NodeId, Nodes0) ->
             lists:foldl(fun ({Id, VoteReq}, Acc) ->
                                 rpc_interact(Id, NodeId, VoteReq, Acc)
                         end, Nodes, Requests);
-        {{send_rpcs, Entries}, Nodes} ->
+        {{send_rpcs, _, Entries}, Nodes} ->
             lists:foldl(fun ({Id, AppendEntry}, Acc) ->
                                 rpc_interact(Id, NodeId, AppendEntry, Acc)
                         end, Nodes, Entries);
@@ -897,7 +898,7 @@ rpc_interact(Id, FromId, Interaction, Nodes0) ->
 % in response to a result
 strip_send_rpcs(Id, Nodes) ->
     {S, St, Effects} = maps:get(Id, Nodes),
-    Node = {S, St, lists:filter(fun ({send_rpcs, _}) -> false;
+    Node = {S, St, lists:filter(fun ({send_rpcs,_, _}) -> false;
                                     (_) -> true
                                 end, Effects)},
     Nodes#{Id => Node}.
@@ -905,7 +906,7 @@ strip_send_rpcs(Id, Nodes) ->
 strip_send_rpcs_for(Id, TargetId, Nodes) ->
     {S, St, Effects} = maps:get(Id, Nodes),
     Node = {S, St,
-            lists:map(fun ({send_rpcs, AEs}) ->
+            lists:map(fun ({send_rpcs,_, AEs}) ->
                               {send_rpcs,
                                lists:filter(fun({I, _}) when I =:= TargetId ->
                                                     false;

@@ -146,7 +146,7 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     % TODO: this is a bit hacky - refactor
     AppendEntries = ra_node:make_rpcs(NodeState),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
-    ok = ra_proxy:proxy(Proxy, AppendEntries),
+    ok = ra_proxy:proxy(Proxy, true, AppendEntries),
     {keep_state, State0#state{proxy = Proxy}};
 leader(EventType, Msg, State0 = #state{proxy = Proxy}) ->
     case handle_leader(Msg, State0) of
@@ -305,15 +305,15 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
-handle_effect({send_rpcs, AppendEntries}, _EvtType,
+handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = undefined, broadcast_time = Interval} = State,
                Actions) ->
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
-    ok = ra_proxy:proxy(Proxy, AppendEntries),
+    ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State#state{proxy = Proxy}, Actions};
-handle_effect({send_rpcs, AppendEntries}, _EvtType,
+handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = Proxy} = State, Actions) ->
-    ok = ra_proxy:proxy(Proxy, AppendEntries),
+    ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State, Actions};
 handle_effect({release_up_to, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
