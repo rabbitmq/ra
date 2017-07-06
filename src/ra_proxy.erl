@@ -16,7 +16,7 @@
          terminate/2,
          code_change/3]).
 
--record(state, {appends :: map(),
+-record(state, {appends :: list(),
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
                 timer_ref :: reference(),
@@ -42,7 +42,7 @@ init([Parent, Interval]) ->
     Nodes = lists:foldl(fun(N, Acc) ->
                                 maps:put(N, ok, Acc)
                         end, #{}, [node() | nodes()]),
-    {ok, #state{appends = #{},
+    {ok, #state{appends = [],
                 parent = Parent,
                 interval = Interval,
                 timer_ref = TRef,
@@ -53,15 +53,14 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({appends, Appends}, State0) ->
-    AppendsMap = maps:from_list(Appends),
-    % TODO reset timer?
     case State0 of
-        #state{appends = AppendsMap} ->
-            % no change - do nothing
-            % TODO check each entry rather than the whole
+        %% TODO: structural comparison can be very expensive. Instead perform
+        %% comparison based on last_index/term, commit_index and num entries
+        #state{appends = Appends} ->
+            % no change - do nothing - just wait for next interval
             {noreply, State0};
         _ ->
-            State = State0#state{appends = AppendsMap},
+            State = State0#state{appends = Appends},
             ok = broadcast(State),
             % as we have just broadcast we can reset the timer
             {noreply, reset_timer(State)}
@@ -90,8 +89,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-reset_timer(State = #state{timer_ref = undefined, interval = Interval}) ->
-    State#state{timer_ref = erlang:send_after(Interval, self(), broadcast)};
 reset_timer(State = #state{timer_ref = Ref0, interval = Interval}) ->
     % should we use the async flag here to ensure minimal blocking
     _ = erlang:cancel_timer(Ref0),
@@ -110,7 +107,7 @@ broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
                  ?DBG("Peer broadcast error ~p ~p~n", [Peer, Err]),
                  ok
          end
-     end || {Peer, AE} <- maps:to_list(Appends), is_connected(Peer, Nodes)],
+     end || {Peer, AE} <- Appends, is_connected(Peer, Nodes)],
     ok.
 
 is_connected({_Proc, Node}, Nodes) ->
