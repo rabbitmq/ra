@@ -287,6 +287,8 @@ handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
 handle_effect({notify, Who, Reply}, _EvtType, State, Actions) ->
     _ = Who ! {consensus, Reply},
     {State, Actions};
+% TODO: optimisation we could send the reply using gen_statem:reply to
+% avoid waiting for all effects to finishe processing
 handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
     {State, [Action | Actions]};
 handle_effect({reply, Reply}, {call, From}, State, Actions) ->

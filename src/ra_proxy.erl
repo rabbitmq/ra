@@ -19,7 +19,8 @@
 -record(state, {appends :: map(),
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
-                timer_ref :: reference()}).
+                timer_ref :: reference(),
+                nodes :: #{node() => ok}}).
 
 %%%===================================================================
 %%% API functions
@@ -37,8 +38,15 @@ proxy(Pid, Appends) ->
 
 init([Parent, Interval]) ->
     TRef = erlang:send_after(Interval, self(), broadcast),
-    {ok, #state{appends = #{}, parent = Parent,
-                interval = Interval, timer_ref = TRef}}.
+    ok = net_kernel:monitor_nodes(true),
+    Nodes = lists:foldl(fun(N, Acc) ->
+                                maps:put(N, ok, Acc)
+                        end, #{}, [node() | nodes()]),
+    {ok, #state{appends = #{},
+                parent = Parent,
+                interval = Interval,
+                timer_ref = TRef,
+                nodes = Nodes}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -55,18 +63,24 @@ handle_cast({appends, Appends}, State0) ->
         _ ->
             State = State0#state{appends = AppendsMap},
             ok = broadcast(State),
-            {noreply, State}
+            % as we have just broadcast we can reset the timer
+            {noreply, reset_timer(State)}
     end.
 
-handle_info(broadcast, State = #state{interval = Interval}) ->
+handle_info(broadcast, State) ->
     ok = broadcast(State),
-    TRef = erlang:send_after(Interval, self(), broadcast),
-    {noreply, State#state{timer_ref = TRef}};
+    {noreply, reset_timer(State)};
+handle_info({nodeup, Node}, State = #state{nodes = Nodes}) ->
+    ?DBG("proxy: nodeup recieved x ~p~n", [Node]),
+    {noreply, State#state{nodes = maps:put(Node, ok, Nodes)}};
+handle_info({nodedown, Node}, State = #state{nodes = Nodes}) ->
+    {noreply, State#state{nodes = maps:remove(Node, Nodes)}};
 handle_info(Msg, State) ->
     ?DBG("proxy: handle info unknown ~p~n", [Msg]),
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, State) ->
+    ?DBG("proxy: terminate ~p ~p~n", [Reason, State]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -76,7 +90,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
+reset_timer(State = #state{timer_ref = undefined, interval = Interval}) ->
+    State#state{timer_ref = erlang:send_after(Interval, self(), broadcast)};
+reset_timer(State = #state{timer_ref = Ref0, interval = Interval}) ->
+    % should we use the async flag here to ensure minimal blocking
+    _ = erlang:cancel_timer(Ref0),
+    Ref = erlang:send_after(Interval, self(), broadcast),
+    State#state{timer_ref = Ref}.
+
+broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
     % ?DBG("broadcast ~p~n", [Appends]),
     [begin
          % use the peer ref as the unique rpc reply reference
@@ -84,9 +106,14 @@ broadcast(#state{parent = Parent, appends = Appends, interval = _Interval}) ->
          try Peer ! {'$gen_call', {Parent, Peer}, AE} of
              _ -> ok
          catch
-             _:_ ->
-                 ?DBG("Peer broadcast error ~p~n", [Peer]),
+             _:_ = Err ->
+                 ?DBG("Peer broadcast error ~p ~p~n", [Peer, Err]),
                  ok
          end
-     end || {Peer, AE} <- maps:to_list(Appends)],
+     end || {Peer, AE} <- maps:to_list(Appends), is_connected(Peer, Nodes)],
     ok.
+
+is_connected({_Proc, Node}, Nodes) ->
+    maps:is_key(Node, Nodes);
+is_connected(_, _) ->
+    true. % default to true here to ensure we try to send
