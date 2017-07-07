@@ -201,7 +201,7 @@ handle_leader({command, Cmd}, State0 = #{id := Id}) ->
             ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
         {IdxTerm, State}  ->
-            ?DBG("~p command ~p appended to log at ~p~n", [Id, Cmd, IdxTerm]),
+            ?DBG("~p ~p command appended to log at ~p~n", [Id, first_or_atom(Cmd), IdxTerm]),
             {State1, Effects0} = evaluate_quorum(State),
             Effects1 = [{send_rpcs, true, make_rpcs(State1)} | Effects0],
             Effects = case Cmd of
@@ -291,7 +291,9 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {candidate, State0#{votes => NewVotes}, []}
     end;
 handle_candidate(#request_vote_result{term = Term},
-                 State0 = #{current_term := CurTerm}) when Term > CurTerm ->
+                 State0 = #{current_term := CurTerm, id := Id}) when Term > CurTerm ->
+    ?DBG("~p candidate request_vote_result with higher term recieved ~p -> ~p",
+         [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State#{current_term => Term}, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
@@ -300,13 +302,20 @@ handle_candidate(#append_entries_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm}) when Term >= CurTerm ->
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State#{current_term => Term}, [{next_event, Msg}]};
+handle_candidate(#append_entries_rpc{},
+                 State = #{current_term := CurTerm}) ->
+    % term must be older return success=false
+    Reply = append_entries_reply(CurTerm, false, State),
+    {candidate, State, [{reply, Reply}]};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  State0 = #{current_term := CurTerm}) when Term > CurTerm ->
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State#{current_term => Term}, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
-                 State0 = #{current_term := CurTerm})
+                 State0 = #{current_term := CurTerm, id := Id})
   when Term >= CurTerm ->
+    ?DBG("~p candidate request_vote_rpc with higher term recieved ~p -> ~p",
+         [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State#{current_term => Term}, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
@@ -361,7 +370,8 @@ handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
     % already voted for another in this term
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {follower, maps:without([leader_id], State), [{reply, Reply}]};
-handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term,
+handle_follower(#request_vote_rpc{term = Term,
+                                  candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
                 State0 = #{current_term := CurTerm, id := Id})
@@ -782,6 +792,13 @@ agreed_commit(LeaderIdx, Peers) ->
 
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?DBG("~p ~p received unhandled msg: ~p~n", [Id, RaState, Msg]).
+
+first_or_atom(T) when is_tuple(T) ->
+    element(1, T);
+first_or_atom(A) when is_atom(A) ->
+    A;
+first_or_atom(X) ->
+    X.
 
 %%% ===================
 %%% Internal unit tests

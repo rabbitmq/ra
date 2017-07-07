@@ -87,7 +87,7 @@
          last_index :: ra_index(),
          last_term :: ra_term()}).
 
--define(DBG(Fmt, Args), ct:pal(Fmt, Args)).
+-define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 
 -define(DEFAULT_TIMEOUT, 5000).
 

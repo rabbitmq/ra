@@ -148,15 +148,14 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, true, AppendEntries),
     {keep_state, State0#state{proxy = Proxy}};
-leader(EventType, Msg, State0 = #state{proxy = Proxy}) ->
+leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            % stop proxy process
-            _ = gen_server:stop(Proxy, normal, 100),
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            State2 = stop_proxy(State1),
+            {State, Actions} = handle_effects(Effects, EventType, State2),
             {next_state, follower, State,
              [election_timeout_action(follower, State) | Actions]};
         {stop, State1, Effects} ->
@@ -223,14 +222,9 @@ handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknown ~p~n", [EventContent]),
     {next_state, StateName, State}.
 
-terminate(Reason, _StateName, #state{proxy = undefined,
-                                     node_state = #{id := Id}}) ->
+terminate(Reason, _StateName, State = #state{node_state = #{id := Id}}) ->
     ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
-    ok;
-terminate(Reason, _StateName, #state{proxy = Proxy,
-                                     node_state = #{id := Id}}) ->
-    ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
-    _ = gen_server:stop(Proxy, Reason, 100),
+    stop_proxy(State),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -244,6 +238,12 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+stop_proxy(#state{proxy = undefined} = State) ->
+    State;
+stop_proxy(#state{proxy = Proxy} = State) ->
+    catch(gen_server:stop(Proxy, normal, 100)),
+    State#state{proxy = undefined}.
 
 handle_leader(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, NodeState, Effects} = ra_node:handle_leader(Msg, NodeState0),

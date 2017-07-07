@@ -9,7 +9,8 @@
 all() ->
     [
      election_timeout,
-     follower_handleds_append_entries_rpc,
+     follower_handles_append_entries_rpc,
+     candidate_handles_append_entries_rpc,
      append_entries_reply_success,
      append_entries_reply_no_success,
      follower_vote,
@@ -56,7 +57,7 @@ election_timeout(_Config) ->
         ra_node:handle_candidate(Msg, State),
     ok.
 
-follower_handleds_append_entries_rpc(_Config) ->
+follower_handles_append_entries_rpc(_Config) ->
     Self = self(),
     State = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
@@ -117,6 +118,20 @@ follower_handleds_append_entries_rpc(_Config) ->
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
                    machine_state => usr(<<"hi1">>)}),
+    ok.
+
+candidate_handles_append_entries_rpc(_Config) ->
+    State = (base_state(3))#{commit_index => 1},
+    EmptyAE = #append_entries_rpc{term = 4,
+                                  leader_id = n1,
+                                  prev_log_index = 3,
+                                  prev_log_term = 5,
+                                  leader_commit = 3},
+    % Lower term
+    {candidate, _,
+     [{reply, #append_entries_reply{term = 5, success = false,
+                                    last_index = 3, last_term = 5}}]}
+    = ra_node:handle_candidate(EmptyAE, State),
     ok.
 
 append_entries_reply_success(_Config) ->
