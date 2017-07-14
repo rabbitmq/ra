@@ -2,7 +2,7 @@ PROJECT = ra
 PROJECT_DESCRIPTION = Experimental raft library
 PROJECT_VERSION = 0.1.0
 
-TEST_DEPS = proper
+TEST_DEPS = proper meck
 
 BUILD_DEPS = elvis_mk looking_glass
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master

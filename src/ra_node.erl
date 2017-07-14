@@ -10,7 +10,8 @@
          handle_follower/2,
          make_rpcs/1,
          record_snapshot_point/2,
-         maybe_snapshot/2
+         maybe_snapshot/2,
+         terminate/1
         ]).
 
 -type ra_machine_effect() ::
@@ -22,6 +23,11 @@
     {release_up_to, ra_index()} |
     % instruct ra to record a snapshot point at the current index
     {snapshot_point, ra_index()}.
+
+-type ra_machine_apply_fun_return() :: term() | {effects, term(), [ra_machine_effect()]}.
+-type ra_machine_apply_fun() ::
+        fun((ra_index(), term(), term()) -> ra_machine_apply_fun_return()) |
+        fun((term(), term()) -> ra_machine_apply_fun_return()).
 
 % TODO: some of this state needs to be persisted
 -type ra_node_state() ::
@@ -41,8 +47,7 @@
       last_applied => ra_index(),
       stop_after => ra_index(),
       % fun implementing ra machine
-      machine_apply_fun => fun((ra_index(), term(), term()) ->
-                              term() | {effects, term(), [ra_machine_effect()]}),
+      machine_apply_fun => ra_machine_apply_fun(),
       machine_state => term(),
       initial_machine_state => term(),
       snapshot_index_term => ra_idxterm(),
@@ -66,7 +71,17 @@
 
 -type ra_effects() :: [ra_effect()].
 
+-type ra_node_config() :: #{id => ra_node_id(),
+                            log_module => ra_log_memory | ra_log_file,
+                            log_init_args => ra_log:ra_log_init_args(),
+                            initial_nodes => [ra_node_id()],
+                            apply_fun => ra_machine_apply_fun(),
+                            initial_state => term(),
+                            cluster_id => atom()}.
+
 -export_type([ra_node_state/0,
+              ra_node_config/0,
+              ra_machine_apply_fun/0,
               ra_msg/0,
               ra_effect/0]).
 
@@ -75,7 +90,7 @@ name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
 
--spec init(map()) -> ra_node_state().
+-spec init(ra_node_config()) -> ra_node_state().
 init(#{id := Id,
        initial_nodes := InitialNodes,
        cluster_id := ClusterId,
@@ -85,25 +100,35 @@ init(#{id := Id,
        initial_state := InitialMachineState}) ->
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
-    {ok, Log} = ra_log:write_meta(current_term, CurrentTerm , Log0),
+    VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
+    {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log0),
+    {CommitIndex, Cluster, MacState, SnapshotIndexTerm} =
+        case ra_log:read_snapshot(Log) of
+            undefined ->
+                {0, make_cluster(InitialNodes), InitialMachineState, {0, 0}};
+            {Idx, Term, Clu, MacSt} ->
+                {Idx, Clu, MacSt, {Idx, Term}}
+        end,
+
     #{id => Id,
       cluster_id => ClusterId,
-      cluster => make_cluster(InitialNodes),
+      cluster => Cluster,
       cluster_change_permitted => false,
-      cluster_index_term => {0, 0},
+      cluster_index_term => {0, 0}, %% TODO?
       pending_cluster_changes => [],
       current_term => CurrentTerm,
-      commit_index => 0,
-      last_applied => 0,
+      voted_for => VotedFor,
+      commit_index => CommitIndex,
+      last_applied => CommitIndex,
       log => Log,
-      machine_apply_fun => wrap_machine(MachineApplyFun),
-      machine_state => InitialMachineState,
+      machine_apply_fun => wrap_machine_fun(MachineApplyFun),
+      machine_state => MacState,
       % for snapshots
       initial_machine_state => InitialMachineState,
-      snapshot_index_term => {0, 0},
+      snapshot_index_term => SnapshotIndexTerm,
       snapshot_points => #{}}.
 
-wrap_machine(Fun) ->
+wrap_machine_fun(Fun) ->
     case erlang:fun_info(Fun, arity) of
         {arity, 2} ->
             % user is not insterested in the index
@@ -313,7 +338,7 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     {follower, State#{current_term => Term}, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm, id := Id})
-  when Term >= CurTerm ->
+  when Term > CurTerm ->
     ?DBG("~p candidate request_vote_rpc with higher term recieved ~p -> ~p",
          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
@@ -518,6 +543,11 @@ maybe_snapshot(Index, State = #{id := Id,
             ?DBG("~p: snapshot point not found at index ~p~n", [Id, Index]),
             State
     end.
+
+-spec terminate(ra_node_state()) -> ok.
+terminate(#{log := Log}) ->
+    catch ra_log:close(Log),
+    ok.
 
 %%%===================================================================
 %%% Internal functions

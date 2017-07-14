@@ -213,7 +213,6 @@ follower(EventType, Msg, State0 = #state{node_state = #{id := Id}}) ->
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
-            % TODO: the candidate timer should probably be a state_timeout()
             {next_state, candidate, State,
              [election_timeout_action(candidate, State) | Actions]}
     end.
@@ -222,9 +221,11 @@ handle_event(_EventType, EventContent, StateName, State) ->
     ?DBG("handle_event unknown ~p~n", [EventContent]),
     {next_state, StateName, State}.
 
-terminate(Reason, _StateName, State = #state{node_state = #{id := Id}}) ->
+terminate(Reason, _StateName,
+          State = #state{node_state = NodeState = #{id := Id}}) ->
     ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
-    stop_proxy(State),
+    _ = stop_proxy(State),
+    _ = ra_node:terminate(NodeState),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -330,7 +331,6 @@ election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
     {state_timeout, T, election_timeout};
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 5) + (Timeout * 2),
-    % candidate should use a state timeout instead of event
     {state_timeout, T, election_timeout}.
 
 follower_leader_change(#state{node_state = #{leader_id := L}},

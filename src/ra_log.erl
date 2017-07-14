@@ -3,12 +3,13 @@
 -include("ra.hrl").
 
 -export([init/2,
+         close/1,
          append/3,
          fetch/2,
          take/3,
          last/1,
          next_index/1,
-         release/2,
+         % release/2,
          read_snapshot/1,
          write_snapshot/2,
          read_meta/2,
@@ -16,12 +17,11 @@
          write_meta/3
         ]).
 
--type ra_log_init_args() :: [term()].
+-type ra_log_init_args() :: #{atom() => term()}.
 -type ra_log_state() :: term().
 -type ra_log() :: {Module :: module(), ra_log_state()}.
 -type ra_meta_key() :: atom().
--type ra_log_snapshot() :: maybe({ra_index(), ra_term(),
-                                  ra_cluster(), term()}).
+-type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,
@@ -30,7 +30,9 @@
               ra_log_snapshot/0
              ]).
 
--callback init(Args::ra_log_init_args()) -> ra_log_state().
+-callback init(Args:: ra_log_init_args()) -> ra_log_state().
+
+-callback close(State::  ra_log_state()) -> ok.
 
 -callback append(Entry::log_entry(), Overwrite::boolean(),
                  State::ra_log_state()) ->
@@ -49,16 +51,17 @@
 -callback last(State :: ra_log_state()) ->
     maybe(log_entry()).
 
-% release log entries at specified indices
--callback release(Indices :: [ra_index()], State :: ra_log_state()) ->
-    ra_log_state().
+% % release log entries at specified indices
+% -callback release(Indices :: [ra_index()], State :: ra_log_state()) ->
+%     ra_log_state().
 
+% writes snapshot to storage and discards any prior entries
 -callback write_snapshot(Snapshot :: ra_log_snapshot(),
                          State :: ra_log_state()) ->
     ra_log_state().
 
 -callback read_snapshot(State :: ra_log_state()) ->
-    ra_log_snapshot().
+    maybe(ra_log_snapshot()).
 
 -callback read_meta(Key :: ra_meta_key(), State :: ra_log_state()) ->
     maybe(term()).
@@ -71,9 +74,13 @@
 %% API
 %%
 
--spec init(Mod::atom(), Args::[term()]) -> ra_log().
+-spec init(Mod::atom(), Args :: ra_log_init_args()) -> ra_log().
 init(Mod, Args) ->
     {Mod, Mod:init(Args)}.
+
+-spec close(Log :: ra_log()) -> ok.
+close({Mod, Log}) ->
+    Mod:close(Log).
 
 -spec fetch(Idx::ra_index(), Log::ra_log()) -> maybe(log_entry()).
 fetch(Idx, {Mod, Log}) ->
@@ -103,17 +110,19 @@ last({Mod, Log}) ->
 next_index({Mod, Log}) ->
     Mod:next_index(Log).
 
+-spec write_snapshot(Snapshot :: ra_log_snapshot(), State::ra_log()) -> ra_log().
 write_snapshot(Snapshot, {Mod, Log0}) ->
     Log = Mod:write_snapshot(Snapshot, Log0),
     {Mod, Log}.
 
+-spec read_snapshot(State::ra_log()) -> maybe(ra_log_snapshot()).
 read_snapshot({Mod, Log0}) ->
     Mod:read_snapshot(Log0).
 
--spec release(Indices :: [ra_index()], State :: ra_log()) ->
-    ra_log().
-release(Indices, {Mod, Log}) ->
-    {Mod, Mod:release(Indices, Log)}.
+% -spec release(Indices :: [ra_index()], State :: ra_log()) ->
+%     ra_log().
+% release(Indices, {Mod, Log}) ->
+%     {Mod, Mod:release(Indices, Log)}.
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log()) ->
     maybe(term()).

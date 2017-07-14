@@ -13,6 +13,7 @@
          dirty_query/2,
          members/1,
          consistent_query/2,
+         start_node/2,
          start_node/4,
          stop_node/1,
          add_node/2,
@@ -28,7 +29,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
     Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
     Conf0 = #{log_module => ra_log_memory,
-              log_init_args => [],
+              log_init_args => #{},
               initial_nodes => Nodes,
               apply_fun => ApplyFun,
               initial_state => InitialState,
@@ -39,15 +40,26 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
      end || Id <- Nodes].
 
 
--spec start_node(atom(), [{atom(), node()}], fun(), term()) -> ok.
+-spec start_node(atom(), [ra_node_id()], ra_node:ra_machine_apply_fun(), term()) -> ok.
 start_node(Name, Peers, ApplyFun, InitialState) ->
-    Conf0 = #{log_module => ra_log_memory,
-              log_init_args => [],
-              initial_nodes => [{Name, node()} | Peers],
-              apply_fun => ApplyFun,
-              initial_state => InitialState,
-              cluster_id => Name},
-    {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => {Name, node()}}),
+    Conf = #{log_module => ra_log_memory,
+             log_init_args => #{},
+             apply_fun => ApplyFun,
+             initial_state => InitialState,
+             initial_nodes => Peers,
+             cluster_id => Name},
+    start_node(Name, Conf).
+
+%% Starts a ra node on the local erlang node using the provided config.
+-spec start_node(atom(), ra_node:ra_node_config()) -> ok.
+start_node(Name, Conf0) when is_atom(Name) ->
+    This = {Name, node()},
+    Conf = maps:update_with(initial_nodes,
+                            fun (Peers) ->
+                                    lists:usort([This | Peers])
+                            end,
+                            Conf0#{id => This}),
+    {ok, _Pid} = ra_node_proc:start_link(Conf),
     ok.
 
 -spec stop_node(ra_node_id()) -> ok.

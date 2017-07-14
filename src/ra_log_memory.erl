@@ -1,6 +1,7 @@
 -module(ra_log_memory).
 -behaviour(ra_log).
 -export([init/1,
+         close/1,
          append/3,
          take/3,
          last/1,
@@ -21,13 +22,18 @@
     {ra_index(),
      #{ra_term() => {ra_index(), term()}},
      ra_log_memory_meta(),
-     ra_log:ra_log_snapshot()}.
+     maybe(ra_log:ra_log_snapshot())}.
 
--spec init([term()]) -> ra_log_memory_state().
+-spec init(_) -> ra_log_memory_state().
 init(_Args) ->
     % initialized with a deafault 0 index 0 term dummy value
     % and an empty meta data map
     {0, #{0 => {0, undefined}}, #{}, undefined}.
+
+-spec close(ra_log_memory_state()) -> ok.
+close(_State) ->
+    % not much to do here
+    ok.
 
 -spec append(Entry::log_entry(), Overwrite::boolean(),
                  State::ra_log_memory_state()) ->

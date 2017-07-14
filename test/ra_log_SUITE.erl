@@ -10,7 +10,8 @@
 
 all() ->
     [
-     {group, ra_log_memory}
+     {group, ra_log_memory},
+     {group, ra_log_file}
     ].
 
 all_tests() ->
@@ -21,21 +22,38 @@ all_tests() ->
      append_then_overwrite,
      append_integrity_error,
      take,
-     sparse_take,
-     release,
+     % sparse_take,
+     % release,
      last,
-     meta
+     meta,
+     snapshot
     ].
 
 groups() ->
-    [{ra_log_memory, [], all_tests()}].
+    [
+     {ra_log_memory, [], all_tests()},
+     {ra_log_file, [], [ init_close_init | all_tests()]}
+    ].
 
 init_per_group(ra_log_memory, Config) ->
-    Log = ra_log:init(ra_log_memory, []),
-    [{ra_log, Log} | Config].
+    InitFun = fun (_) -> ra_log:init(ra_log_memory, #{}) end,
+    [{init_fun, InitFun} | Config];
+init_per_group(ra_log_file, Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    InitFun = fun (TestCase) ->
+                Dir = filename:join(PrivDir, TestCase),
+                ok = filelib:ensure_dir(Dir),
+                ra_log:init(ra_log_file, #{directory => Dir})
+              end,
+    [{init_fun, InitFun} | Config].
 
 end_per_group(_, Config) ->
     Config.
+
+init_per_testcase(TestCase, Config) ->
+    Fun = ?config(init_fun, Config),
+    Log = Fun(TestCase),
+    [{ra_log, Log} | Config].
 
 fetch_when_empty(Config) ->
     Log = ?config(ra_log, Config),
@@ -104,41 +122,41 @@ take(Config) ->
     ?assertEqual(10, length(Taken)),
     ok.
 
-sparse_take(Config) ->
-    % ensure we can take a windows even when entries may be missing
-    Log0 = ?config(ra_log, Config),
-    Term = 1,
-    Idx = ra_log:next_index(Log0),
-    % [1,4,7,10,13,16,19,22,25;28]
-    Log = lists:foldl(fun (I, L0) ->
-                        Entry = {I, Term, "entry" ++ integer_to_list(I)},
-                        {ok, L} = ra_log:append(Entry, false, L0),
-                        L
-                      end, Log0, lists:seq(Idx, Idx + 27, 3)),
-    [?IDX(1)] = ra_log:take(1, 1, Log),
-    [?IDX(1), ?IDX(4)] = ra_log:take(1, 2, Log),
-    [?IDX(10), ?IDX(13), ?IDX(16)] = ra_log:take(9, 3, Log),
-    % completely out of range
-    [?IDX(25), ?IDX(28)] = ra_log:take(24, 3, Log),
-    % take all
-    Taken = ra_log:take(1, 9, Log),
-    ?assertEqual(9, length(Taken)),
-    ok.
+% sparse_take(Config) ->
+%     % ensure we can take a windows even when entries may be missing
+%     Log0 = ?config(ra_log, Config),
+%     Term = 1,
+%     Idx = ra_log:next_index(Log0),
+%     % [1,4,7,10,13,16,19,22,25;28]
+%     Log = lists:foldl(fun (I, L0) ->
+%                         Entry = {I, Term, "entry" ++ integer_to_list(I)},
+%                         {ok, L} = ra_log:append(Entry, false, L0),
+%                         L
+%                       end, Log0, lists:seq(Idx, Idx + 27, 3)),
+%     [?IDX(1)] = ra_log:take(1, 1, Log),
+%     [?IDX(1), ?IDX(4)] = ra_log:take(1, 2, Log),
+%     [?IDX(10), ?IDX(13), ?IDX(16)] = ra_log:take(9, 3, Log),
+%     % completely out of range
+%     [?IDX(25), ?IDX(28)] = ra_log:take(24, 3, Log),
+%     % take all
+%     Taken = ra_log:take(1, 9, Log),
+%     ?assertEqual(9, length(Taken)),
+%     ok.
 
-release(Config) ->
-    Log0 = ?config(ra_log, Config),
-    Term = 1,
-    Idx = ra_log:next_index(Log0),
-    Log1 = lists:foldl(fun (I, L0) ->
-                        Entry = {I, Term, "entry" ++ integer_to_list(I)},
-                        {ok, L} = ra_log:append(Entry, false, L0),
-                        L
-                      end, Log0, lists:seq(Idx, Idx + 9)),
-    Log = ra_log:release([1,2,3,4,5], Log1),
-    [?IDX(6), ?IDX(7),
-     ?IDX(8), ?IDX(9),
-     ?IDX(10)] = ra_log:take(1, 9, Log),
-    ok.
+% release(Config) ->
+%     Log0 = ?config(ra_log, Config),
+%     Term = 1,
+%     Idx = ra_log:next_index(Log0),
+%     Log1 = lists:foldl(fun (I, L0) ->
+%                         Entry = {I, Term, "entry" ++ integer_to_list(I)},
+%                         {ok, L} = ra_log:append(Entry, false, L0),
+%                         L
+%                       end, Log0, lists:seq(Idx, Idx + 9)),
+%     Log = ra_log:release([1,2,3,4,5], Log1),
+%     [?IDX(6), ?IDX(7),
+%      ?IDX(8), ?IDX(9),
+%      ?IDX(10)] = ra_log:take(1, 9, Log),
+%     ok.
 
 last(Config) ->
     Log0 = ?config(ra_log, Config),
@@ -155,3 +173,46 @@ meta(Config) ->
     87 = ra_log:read_meta(current_term, Log),
     undefined = ra_log:read_meta(missing_key, Log),
     ok.
+
+snapshot(Config) ->
+    Log0 = ?config(ra_log, Config),
+    % no snapshot yet
+    undefined = ra_log:read_snapshot(Log0),
+    Log1 = append_in(1, "entry1", Log0),
+    Log2 = append_in(1, "entry2", Log1),
+    {LastIdx, LastTerm, _} = ra_log:last(Log2),
+    Cluster = #{node1 => #{}},
+    Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
+    Log = ra_log:write_snapshot(Snapshot, Log2),
+    % ensure entries prior to snapshot are no longer there
+    undefined = ra_log:fetch(LastIdx, Log),
+    undefined = ra_log:fetch(LastIdx-1, Log),
+    Snapshot = ra_log:read_snapshot(Log),
+    ok.
+
+
+% persistent ra_log implementations only
+init_close_init(Config) ->
+    InitFun = ?config(init_fun, Config),
+    Log0 = ?config(ra_log, Config),
+    Log1 = append_in(1, "entry1", Log0),
+    Log2 = append_in(2, "entry2", Log1),
+    {ok, Log} = ra_log:write_meta(current_term, 2, Log2),
+    ok = ra_log:close(Log),
+    LogA = InitFun(init_close_init),
+    {2, 2, _} = ra_log:last(LogA),
+    {2, 2, "entry2"} = ra_log:fetch(2, LogA),
+    {1, 1, "entry1"} = ra_log:fetch(1, LogA),
+    2 = ra_log:read_meta(current_term, LogA),
+    % ensure we can append after recovery
+    LogB = append_in(2, "entry3", LogA),
+    {1, 1, "entry1"} = ra_log:fetch(1, LogA),
+    {3, 2, "entry3"} = ra_log:fetch(3, LogB),
+    {2, 2, "entry2"} = ra_log:fetch(2, LogA),
+    ok.
+
+append_in(Term, Data, Log0) ->
+    Idx = ra_log:next_index(Log0),
+    Entry = {Idx, Term, Data},
+    {ok, Log} = ra_log:append(Entry, false, Log0),
+    Log.

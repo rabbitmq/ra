@@ -8,6 +8,7 @@
 
 all() ->
     [
+     init,
      election_timeout,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
@@ -39,7 +40,48 @@ all() ->
 groups() ->
     [ {tests, [], all()} ].
 
+end_per_testcase(_TestCase, Config) ->
+    meck:unload(),
+    Config.
+
 id(X) -> X.
+
+init(_Config) ->
+    #{id := Id,
+      machine_apply_fun := ApplyFun,
+      cluster := Cluster,
+      cluster_id := ClusterId,
+      current_term := CurrentTerm,
+      log := Log0} = base_state(3),
+    % ensure it is written to the log
+    InitConf = #{id => Id,
+                 log_module => ra_log_memory,
+                 log_init_args => #{},
+                 apply_fun => ApplyFun,
+                 cluster_id => ClusterId,
+                 initial_nodes => maps:keys(Cluster),
+                 initial_state => undefined},
+    % new
+    #{current_term := 0,
+      voted_for := undefined} = ra_node:init(InitConf),
+    % previous data
+    {ok, Log1} = ra_log:write_meta(voted_for, some_node, Log0),
+    {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log1),
+    ok = meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, init, fun (_, _) -> Log end),
+    #{current_term := 5,
+      voted_for := some_node} = ra_node:init(InitConf),
+    % snapshot
+    Snapshot = {3, 5, Cluster, "hi1+2+3"},
+    LogS = ra_log:write_snapshot(Snapshot, Log),
+    meck:expect(ra_log, init, fun (_, _) -> LogS end),
+    #{current_term := 5,
+      commit_index := 3,
+      snapshot_index_term := {3, 5},
+      machine_state := "hi1+2+3",
+      cluster := Cluster,
+      voted_for := some_node} = ra_node:init(InitConf),
+    ok.
 
 election_timeout(_Config) ->
     State = base_state(3),
@@ -810,7 +852,7 @@ init_nodes(NodeIds, ApplyFun, MacState) ->
                                  initial_nodes => NodeIds,
                                  cluster_id => test_cluster,
                                  log_module => ra_log_memory,
-                                 log_init_args => [],
+                                 log_init_args => #{},
                                  apply_fun => ApplyFun,
                                  initial_state => MacState},
                         Acc#{NodeId => {follower, ra_node:init(Args), []}}
@@ -1000,6 +1042,7 @@ base_state(NumNodes) ->
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
       cluster => Nodes,
+      cluster_id => test_cluster,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
       pending_cluster_changes => [],
@@ -1009,6 +1052,7 @@ base_state(NumNodes) ->
       machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
       log => {ra_log_memory, Log},
+      log_module => ra_log_memory,
       snapshot_index_term => {0, 0}}.
 
 usr_cmd(Data) ->
