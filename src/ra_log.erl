@@ -14,7 +14,9 @@
          write_snapshot/2,
          read_meta/2,
          read_meta/3,
-         write_meta/3
+         write_meta/3,
+         write_meta/4,
+         sync_meta/1
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -69,6 +71,9 @@
 -callback write_meta(Key :: ra_meta_key(), Value :: term(),
                      State :: ra_log_state()) ->
     {ok, ra_log_state()} | {error, term()}.
+
+-callback sync_meta(State :: ra_log_state()) ->
+    ok.
 
 %%
 %% API
@@ -130,18 +135,36 @@ read_meta(Key, {Mod, Log}) ->
     Mod:read_meta(Key, Log).
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log(),
-                Default :: term()) ->
-    term().
+                Default :: term()) -> term().
 read_meta(Key, {Mod, Log}, Default) ->
     ra_lib:default(Mod:read_meta(Key, Log), Default).
 
 -spec write_meta(Key :: ra_meta_key(), Value :: term(),
-                     State :: ra_log()) ->
+                 State :: ra_log(), Sync :: boolean()) ->
     {ok, ra_log()} | {error, term()}.
-write_meta(Key, Value, {Mod, Log}) ->
+write_meta(Key, Value, {Mod, Log}, true) ->
+    case Mod:write_meta(Key, Value, Log) of
+        {ok, Inner} ->
+            ok = Mod:sync_meta(Inner),
+            {ok, {Mod, Inner}};
+        {error, _} = Err ->
+            Err
+    end;
+write_meta(Key, Value, {Mod, Log}, false) ->
     case Mod:write_meta(Key, Value, Log) of
         {ok, Inner} ->
             {ok, {Mod, Inner}};
         {error, _} = Err ->
             Err
     end.
+
+-spec write_meta(Key :: ra_meta_key(), Value :: term(),
+                 State :: ra_log()) ->
+    {ok, ra_log()} | {error, term()}.
+write_meta(Key, Value, Log) ->
+    write_meta(Key, Value, Log, true).
+
+
+-spec sync_meta(State :: ra_log()) -> ok.
+sync_meta({Mod, Log}) ->
+    Mod:sync_meta(Log).

@@ -11,7 +11,8 @@
          write_snapshot/2,
          read_snapshot/1,
          read_meta/2,
-         write_meta/3
+         write_meta/3,
+         sync_meta/1
         ]).
 
 -include("ra.hrl").
@@ -118,6 +119,9 @@ read_meta(Key, {_LastIdx, _Log, Meta, _Snapshot}) ->
     {ok,  ra_log_memory_state()} | {error, term()}.
 write_meta(Key, Value, {_LastIdx, _Log, Meta, _Snapshot} = State) ->
     {ok, erlang:setelement(3, State, Meta#{Key => Value})}.
+
+sync_meta(_Log) ->
+    ok.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

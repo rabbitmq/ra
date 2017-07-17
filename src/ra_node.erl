@@ -594,9 +594,10 @@ update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
 
 update_meta(Updates, #{log := Log0} = State) ->
     {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
-                              {ok, Acc} = ra_log:write_meta(K, V, Acc0),
+                              {ok, Acc} = ra_log:write_meta(K, V, Acc0, false),
                               {maps:put(K, V, State0), Acc}
                       end, {State, Log0}, Updates),
+    ok = ra_log:sync_meta(Log),
     State1#{log => Log}.
 
 update_term(Term, State = #{current_term := CurTerm})

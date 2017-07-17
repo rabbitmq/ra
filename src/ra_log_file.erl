@@ -11,7 +11,8 @@
          write_snapshot/2,
          read_snapshot/1,
          read_meta/2,
-         write_meta/3
+         write_meta/3,
+         sync_meta/1
         ]).
 
 -include("ra.hrl").
@@ -167,9 +168,15 @@ read_meta(Key, #state{kv = Kv}) ->
                  State :: ra_log_file_state()) ->
     {ok,  ra_log_file_state()} | {error, term()}.
 write_meta(Key, Value, State = #state{kv = Kv}) ->
-    dets:insert(Kv, {Key, Value}),
-    dets:sync(Kv),
+    ok = dets:insert(Kv, {Key, Value}),
     {ok, State}.
+
+sync_meta(#state{kv = Kv}) ->
+    ok = dets:sync(Kv),
+    ok.
+
+%%% Local functions
+
 
 read_entry_at(Idx, Term, Offset, Fd) ->
     {ok, _} = file:position(Fd, Offset + 16),
