@@ -166,7 +166,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                     % leader is not in the cluster and the new cluster
                     % config has been committed
                     % time to say goodbye
-                    ?DBG("~p leader stopping - goodbye", [Id]),
+                    ?DBG("~p leader not in new cluster - goodbye", [Id]),
                     {stop, State, Effects};
                 _ ->
                     {leader, State, Effects}
@@ -320,13 +320,13 @@ handle_candidate(#request_vote_result{term = Term},
     ?DBG("~p candidate request_vote_result with higher term recieved ~p -> ~p",
          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
-    {follower, State#{current_term => Term}, []};
+    {follower, State, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm}) when Term >= CurTerm ->
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
-    {follower, State#{current_term => Term}, [{next_event, Msg}]};
+    {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{},
                  State = #{current_term := CurTerm}) ->
     % term must be older return success=false
@@ -335,14 +335,14 @@ handle_candidate(#append_entries_rpc{},
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  State0 = #{current_term := CurTerm}) when Term > CurTerm ->
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
-    {follower, State#{current_term => Term}, []};
+    {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm, id := Id})
   when Term > CurTerm ->
     ?DBG("~p candidate request_vote_rpc with higher term recieved ~p -> ~p",
          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
-    {follower, State#{current_term => Term}, [{next_event, Msg}]};
+    {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
@@ -369,8 +369,8 @@ handle_follower(#append_entries_rpc{term = Term,
             State1 = lists:foldl(fun append_log_follower/2,
                                  State0, Entries),
 
-            % ?DBG("~p: follower received ~p append_entries in ~p.",
-            %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
+            ?DBG("~p: follower received ~p append_entries in ~p.",
+                 [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
             % only apply snapshot related effects on non-leader
             {State, Effects0} = apply_to(LeaderCommit,
                                          State1#{leader_id => LeaderId}),
@@ -386,13 +386,20 @@ handle_follower(#append_entries_rpc{term = Term,
             Reply = append_entries_reply(Term, false, State0),
             {follower, State0#{leader_id => LeaderId}, [{reply, Reply}]}
     end;
-handle_follower(#append_entries_rpc{}, State = #{current_term := CurTerm}) ->
+handle_follower(#append_entries_rpc{term = Term}, State = #{id := Id,
+                                                 current_term := CurTerm}) ->
     Reply = append_entries_reply(CurTerm, false, State),
+    ?DBG("~p: follower request_vote_rpc in ~p  but current term ~p",
+         [Id, Term, CurTerm]),
     {follower, maps:without([leader_id], State), [{reply, Reply}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
-                State = #{current_term := Term, voted_for := VotedFor})
-  when VotedFor /= Cand ->
+                State = #{id := Id,
+                          current_term := Term,
+                          voted_for := VotedFor})
+  when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
+    ?DBG("~p: follower request_vote_rpc for ~p already voted for ~p in ~p",
+         [Id, Cand, VotedFor, Term]),
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {follower, maps:without([leader_id], State), [{reply, Reply}]};
 handle_follower(#request_vote_rpc{term = Term,
@@ -411,13 +418,16 @@ handle_follower(#request_vote_rpc{term = Term,
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
         false ->
-            ?DBG("~p declining vote to ~p for term ~p", [Id, Cand, Term]),
+            ?DBG("~p declining vote to ~p for term ~p, last log index ~p",
+                 [Id, Cand, Term, LLIdx]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State#{current_term => Term}, [{reply, Reply}]}
     end;
-handle_follower(#request_vote_rpc{term = Term},
-                State = #{current_term := CurTerm})
+handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand},
+                State = #{current_term := CurTerm, id := Id})
   when Term < CurTerm ->
+    ?DBG("~p declining vote to ~p for term ~p, current term ~p",
+         [Id, Cand, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = Term}},
@@ -567,8 +577,7 @@ handle_election_timeout(State0 = #{id := Id, current_term := CurrentTerm}) ->
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     State = update_meta([{current_term, NewTerm}, {voted_for, Id}], State0),
-    {candidate, State#{current_term => NewTerm,
-                       votes => 0}, [{next_event, cast, VoteForSelf},
+    {candidate, State#{votes => 0}, [{next_event, cast, VoteForSelf},
                                      {send_vote_requests, VoteRequests}]}.
 
 peers(#{id := Id, cluster := Nodes}) ->
@@ -584,15 +593,15 @@ update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
 update_meta(Updates, #{log := Log0} = State) ->
-    Log = lists:foldl(fun({K, V}, Acc0) ->
+    {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
                               {ok, Acc} = ra_log:write_meta(K, V, Acc0),
-                              Acc
-                      end, Log0, Updates),
-    State#{log => Log}.
+                              {maps:put(K, V, State0), Acc}
+                      end, {State, Log0}, Updates),
+    State1#{log => Log}.
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term > CurTerm ->
-        update_meta([{current_term, Term}], State#{current_term => Term});
+        update_meta([{current_term, Term}], State);
 update_term(_, State) ->
     State.
 

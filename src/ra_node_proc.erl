@@ -177,11 +177,17 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
                                           pending_commands = Pending}) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions0} = handle_effects(Effects, EventType, State1),
+            Actions = case Msg of
+                          election_timeout ->
+                              [election_timeout_action(candidate, State)
+                               | Actions0];
+                          _ -> Actions0
+                      end,
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            ?DBG("~p candidate -> follower term: ~p~n", [Id, Term]),
             {State, Actions} = handle_effects(Effects, EventType, State1),
+            ?DBG("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
             {next_state, follower, State,
              [election_timeout_action(follower, State) | Actions]};
         {leader, State1, Effects} ->
@@ -194,10 +200,12 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
     end.
 
 follower({call, From}, {leader_call, _Cmd},
-         State = #state{node_state = #{leader_id := LeaderId}}) ->
+         State = #state{node_state = #{leader_id := LeaderId, id := Id}}) ->
+    % ?DBG("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
 follower({call, From}, {leader_call, Msg},
-         State = #state{pending_commands = Pending}) ->
+         State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
+    ?DBG("~p follower leader call - leader not known. Dropping ~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
