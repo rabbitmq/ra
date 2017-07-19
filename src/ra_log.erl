@@ -5,6 +5,8 @@
 -export([init/2,
          close/1,
          append/3,
+         append/4,
+         sync/1,
          fetch/2,
          take/3,
          last/1,
@@ -31,13 +33,18 @@
               ra_log_snapshot/0
              ]).
 
--callback init(Args:: ra_log_init_args()) -> ra_log_state().
+-callback init(Args :: ra_log_init_args()) -> ra_log_state().
 
--callback close(State::  ra_log_state()) -> ok.
+-callback close(State :: ra_log_state()) -> ok.
 
--callback append(Entry::log_entry(), Overwrite::boolean(),
-                 State::ra_log_state()) ->
+-callback append(Entry :: log_entry(),
+                 overwrite | no_overwrite,
+                 sync | no_sync,
+                 State :: ra_log_state()) ->
     {ok, ra_log_state()} | {error, integrity_error}.
+
+-callback sync(State :: ra_log_state()) ->
+    ok.
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
@@ -86,16 +93,29 @@ close({Mod, Log}) ->
 fetch(Idx, {Mod, Log}) ->
     Mod:fetch(Idx, Log).
 
--spec append(Entry :: log_entry(), Overwrite::boolean(),
-                 State::ra_log()) ->
+-spec append(Entry :: log_entry(),
+             Overwrite :: overwrite | no_overwrite,
+             State::ra_log()) ->
     {ok, ra_log()} | {error, integrity_error}.
-append(Entry, Overwrite, {Mod, Log0}) ->
-    case Mod:append(Entry, Overwrite, Log0) of
+append(Entry, Overwrite, Log) ->
+    append(Entry, Overwrite, sync, Log).
+
+-spec append(Entry :: log_entry(),
+             Overwrite :: overwrite | no_overwrite,
+             Sync :: sync | no_sync,
+             State::ra_log()) ->
+    {ok, ra_log()} | {error, integrity_error}.
+append(Entry, Overwrite, Sync, {Mod, Log0}) ->
+    case Mod:append(Entry, Overwrite, Sync, Log0) of
         {ok, Log} ->
             {ok, {Mod, Log}};
         Err ->
             Err
     end.
+
+-spec sync(State::ra_log()) -> ok.
+sync({Mod, Log}) ->
+    Mod:sync(Log).
 
 -spec take(Start::ra_index(), Num::non_neg_integer(),
            State::ra_log()) -> [log_entry()].

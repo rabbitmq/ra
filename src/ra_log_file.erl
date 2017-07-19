@@ -2,7 +2,8 @@
 -behaviour(ra_log).
 -export([init/1,
          close/1,
-         append/3,
+         append/4,
+         sync/1,
          take/3,
          last/1,
          fetch/2,
@@ -55,30 +56,40 @@ close(#state{file = Fd, kv = Kv}) ->
     _ = dets:close(Kv),
     ok.
 
-write(State = #state{file = Fd, index = Index}, {Idx, Term, Data}) ->
+sync(#state{file = Fd}) ->
+    ok = file:sync(Fd),
+    ok.
+
+write(State = #state{file = Fd, index = Index}, {Idx, Term, Data}, Sync) ->
     {ok, Pos} = file:position(Fd, eof),
     DataB = term_to_binary(Data),
     Size = size(DataB),
     ok = file:write(Fd, [<<Idx:64>>, <<Term:64>>,
                          <<Size:64>>, DataB]),
-    ok = file:sync(Fd),
-    State#state{last_index = Idx,
-                index = Index#{Idx => {Term, Pos}} }.
+    case Sync of
+        sync -> ok = file:sync(Fd);
+        no_sync -> ok
+    end,
 
--spec append(Entry::log_entry(), Overwrite::boolean(),
-             State::ra_log_file_state()) ->
+    State#state{last_index = Idx,
+                index = Index#{Idx => {Term, Pos}}}.
+
+-spec append(Entry :: log_entry(),
+                 overwrite | no_overwrite,
+                 sync | no_sync,
+                 State :: ra_log_file_state()) ->
     {ok, ra_log_file_state()} | {error, integrity_error}.
-append(Entry, false, State = #state{last_index = LastIdx})
+append(Entry, no_overwrite, Sync, State = #state{last_index = LastIdx})
       when element(1, Entry) > LastIdx ->
-    {ok, write(State, Entry)};
-append(_Entry, false, _State) ->
+    {ok, write(State, Entry, Sync)};
+append(_Entry, no_overwrite, _Sync, _State) ->
     {error, integrity_error};
-append({Idx, _, _} = Entry, true, State0 = #state{last_index = LastIdx})
+append({Idx, _, _} = Entry, overwrite, Sync, State0 = #state{last_index = LastIdx})
   when LastIdx > Idx ->
     % we're overwriting entries
-    {ok, truncate_index(Idx + 1, LastIdx, write(State0, Entry))};
-append(Entry, true, State) ->
-    {ok, write(State, Entry)}.
+    {ok, truncate_index(Idx + 1, LastIdx, write(State0, Entry, Sync))};
+append(Entry, overwrite, Sync, State) ->
+    {ok, write(State, Entry, Sync)}.
 
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
@@ -209,7 +220,7 @@ truncate_index(From, To, State = #state{index = Index0}) ->
     State#state{index = Index}.
 
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
-    {ok, State} = append({0, 0, undefined}, false, State0),
+    {ok, State} = append({0, 0, undefined}, no_overwrite, sync, State0),
     State;
 maybe_append_0_0_entry(State) ->
     State.

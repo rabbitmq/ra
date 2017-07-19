@@ -366,8 +366,10 @@ handle_follower(#append_entries_rpc{term = Term,
     State0 = update_term(Term, State00),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
         true ->
+            % append_log_follower doesn't fsync each entry
             State1 = lists:foldl(fun append_log_follower/2,
                                  State0, Entries),
+            ok = sync_log(State1),
 
             % ?DBG("~p: follower received ~p append_entries in ~p.",
             %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
@@ -543,7 +545,6 @@ maybe_snapshot(Index, State = #{id := Id,
             ?DBG("~p: writing snapshot at index ~p~n", [Id, Index]),
             Snapshot = {Index, Term, Cluster, MachineState},
             Log = ra_log:write_snapshot(Snapshot, Log0),
-            % ?DBG("~p: post snapshot log ~p~n", [Id, Log]),
             % TODO: remove all points below index
             Points = maps:without([Index], Points0),
             State#{log => Log,
@@ -751,7 +752,7 @@ append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
-    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, false, Log0),
+    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, no_overwrite, Log0),
     {{NextIdx, Term}, State#{log => Log}}.
 
 append_log_follower({Idx, Term, Cmd} = Entry,
@@ -764,7 +765,7 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
-            {ok, Log} = ra_log:append(Entry, true, Log0),
+            {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
             State#{log => Log, cluster => Cluster,
                    cluster_index_term => {Idx, Term}};
         _ ->
@@ -776,11 +777,14 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     end;
 append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
                     State = #{log := Log0}) ->
-    {ok, Log} = ra_log:append(Entry, true, Log0),
+    {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
     State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}};
 append_log_follower(Entry, State = #{log := Log0}) ->
-    {ok, Log} = ra_log:append(Entry, true, Log0),
+    {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
     State#{log => Log}.
+
+sync_log(#{log := Log0}) ->
+    ra_log:sync(Log0).
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
@@ -792,7 +796,7 @@ append_cluster_change(Cluster, From, ReplyMode,
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
-    {ok, Log} = ra_log:append({NextIdx, Term, Command}, false, Log0),
+    {ok, Log} = ra_log:append({NextIdx, Term, Command}, no_overwrite, Log0),
     {IdxTerm, State#{log => Log, cluster => Cluster,
                      cluster_change_permitted => false,
                      cluster_index_term => IdxTerm,

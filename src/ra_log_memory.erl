@@ -2,7 +2,8 @@
 -behaviour(ra_log).
 -export([init/1,
          close/1,
-         append/3,
+         append/4,
+         sync/1,
          take/3,
          last/1,
          fetch/2,
@@ -35,20 +36,26 @@ close(_State) ->
     % not much to do here
     ok.
 
--spec append(Entry::log_entry(), Overwrite::boolean(),
-                 State::ra_log_memory_state()) ->
+-spec append(Entry::log_entry(),
+             Overwrite :: overwrite | no_overwrite,
+             Sync :: sync | no_sync,
+             State::ra_log_memory_state()) ->
     {ok, ra_log_memory_state()} | {error, integrity_error}.
-append({Idx, Term, Data}, false, {LastIdx, Log, Meta, Snapshot})
+append({Idx, Term, Data}, no_overwrite, _Sync, {LastIdx, Log, Meta, Snapshot})
       when Idx > LastIdx ->
     {ok, {Idx, Log#{Idx => {Term, Data}}, Meta, Snapshot}};
-append(_Entry, false, _State) ->
+append(_Entry, no_overwrite, _Sync, _State) ->
     {error, integrity_error};
-append({Idx, Term, Data}, true, {LastIdx, Log, Meta, Snapshot})  when LastIdx > Idx ->
+append({Idx, Term, Data}, overwrite, _Sync, {LastIdx, Log, Meta, Snapshot})
+  when LastIdx > Idx ->
     Log1 = maps:without(lists:seq(Idx+1, LastIdx), Log),
     {ok, {Idx, Log1#{Idx => {Term, Data}}, Meta, Snapshot}};
-append({Idx, Term, Data}, true, {_LastIdx, Log, Meta, Snapshot}) ->
+append({Idx, Term, Data}, overwrite, _Sync, {_LastIdx, Log, Meta, Snapshot}) ->
     {ok, {Idx, Log#{Idx => {Term, Data}}, Meta, Snapshot}}.
 
+
+sync(_Log) ->
+    ok.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->
     [log_entry()].
@@ -122,21 +129,21 @@ sync_meta(_Log) ->
 append_test() ->
     {0, #{}, _, _} = S = init([]),
     {ok, {1, #{1 := {1, <<"hi">>}}, _, _}} =
-    append({1, 1, <<"hi">>}, false, S).
+    append({1, 1, <<"hi">>}, no_overwrite, sync, S).
 
 append_twice_test() ->
     {0, #{}, _, _} = S = init([]),
     Entry = {1, 1, <<"hi">>},
-    {ok, S2} = append(Entry, false, S),
-    {error, integrity_error} = append(Entry, false, S2).
+    {ok, S2} = append(Entry, no_overwrite, sync, S),
+    {error, integrity_error} = append(Entry, no_overwrite, sync, S2).
 
 append_overwrite_test() ->
     {0, #{}, _, _} = S = init([]),
     Entry = {1, 1, <<"hi">>},
-    {ok, S2} = append(Entry, true, S),
+    {ok, S2} = append(Entry, overwrite, sync, S),
     % TODO: a proper implementation should validate the term isn't decremented
     % also it should truncate any item newer than the last written index
-    {ok,  {1, #{1 := {1, <<"hi">>}}, _, _}} = append(Entry, true, S2).
+    {ok,  {1, #{1 := {1, <<"hi">>}}, _, _}} = append(Entry, overwrite, sync, S2).
 
 take_test() ->
     Log = #{1 => {8, <<"one">>},

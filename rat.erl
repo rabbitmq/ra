@@ -115,7 +115,7 @@ query(Node) ->
     ra:dirty_query(Node, fun (S) -> S end).
 
 p(F) ->
-    lg:trace([ra_proxy, ra_node, ra_node_proc], lg_file_tracer,
+    lg:trace([ra_node, ra_node_proc, ra_log_file], lg_file_tracer,
              F ++ ".gz", #{running => false, mode => profile}).
 
 sp() ->

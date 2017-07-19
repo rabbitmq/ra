@@ -74,7 +74,7 @@ append_then_fetch(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    {ok, Log} = ra_log:append(Entry, false, Log0),
+    {ok, Log} = ra_log:append(Entry, no_overwrite, Log0),
     {Idx, Term, "entry"} = ra_log:fetch(Idx, Log),
     ok.
 
@@ -85,7 +85,7 @@ append_then_overwrite(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    {ok, Log} = ra_log:append(Entry2, true, Log1),
+    {ok, Log} = ra_log:append(Entry2, overwrite, Log1),
     {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
     ExpectedNextIndex = Idx + 1,
     % ensure last index is updated after overwrite
@@ -102,7 +102,7 @@ append_recover_then_overwrite(Config) ->
     Log2 = InitFun(append_recover_then_overwrite),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    {ok, Log} = ra_log:append(Entry2, true, Log2),
+    {ok, Log} = ra_log:append(Entry2, overwrite, Log2),
     {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
@@ -119,7 +119,7 @@ append_overwrite_then_recover(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    {ok, Log2} = ra_log:append(Entry2, true, Log1),
+    {ok, Log2} = ra_log:append(Entry2, overwrite, Log1),
     % close log
     ok = ra_log:close(Log2),
     % recover
@@ -134,9 +134,9 @@ append_overwrite_then_recover(Config) ->
 
 write_two(Idx, Term, Log0) ->
     Entry0 = {Idx, Term, "entry0"},
-    {ok, Log1} = ra_log:append(Entry0, false, Log0),
+    {ok, Log1} = ra_log:append(Entry0, no_overwrite, Log0),
     Entry1 = {ra_log:next_index(Log1), Term, "entry1"},
-    {ok, Log2} = ra_log:append(Entry1, false, Log1),
+    {ok, Log2} = ra_log:append(Entry1, no_overwrite, Log1),
     Log2.
 
 append_integrity_error(Config) ->
@@ -146,12 +146,12 @@ append_integrity_error(Config) ->
     Term = 1,
     {ok, Log1} =
         % this is ok even though entries are missing
-        ra_log:append({99, Term, "entry99"}, false, Log0),
+        ra_log:append({99, Term, "entry99"}, no_overwrite, Log0),
     % going backwards should fail with integrity error unless
     % we are overwriting
     Entry = {98, Term, "entry98"},
-    {error, integrity_error} = ra_log:append(Entry, false, Log1),
-    {ok, _Log} = ra_log:append(Entry, true, Log1),
+    {error, integrity_error} = ra_log:append(Entry, no_overwrite, Log1),
+    {ok, _Log} = ra_log:append(Entry, overwrite, Log1),
     ok.
 
 -define(IDX(T), {T, _, _}).
@@ -162,7 +162,7 @@ take(Config) ->
     Idx = ra_log:next_index(Log0),
     Log = lists:foldl(fun (I, L0) ->
                         Entry = {I, Term, "entry" ++ integer_to_list(I)},
-                        {ok, L} = ra_log:append(Entry, false, L0),
+                        {ok, L} = ra_log:append(Entry, no_overwrite, L0),
                         L
                       end, Log0, lists:seq(Idx, Idx + 9)),
     [?IDX(1)] = ra_log:take(1, 1, Log),
@@ -176,48 +176,13 @@ take(Config) ->
     ?assertEqual(10, length(Taken)),
     ok.
 
-% sparse_take(Config) ->
-%     % ensure we can take a windows even when entries may be missing
-%     Log0 = ?config(ra_log, Config),
-%     Term = 1,
-%     Idx = ra_log:next_index(Log0),
-%     % [1,4,7,10,13,16,19,22,25;28]
-%     Log = lists:foldl(fun (I, L0) ->
-%                         Entry = {I, Term, "entry" ++ integer_to_list(I)},
-%                         {ok, L} = ra_log:append(Entry, false, L0),
-%                         L
-%                       end, Log0, lists:seq(Idx, Idx + 27, 3)),
-%     [?IDX(1)] = ra_log:take(1, 1, Log),
-%     [?IDX(1), ?IDX(4)] = ra_log:take(1, 2, Log),
-%     [?IDX(10), ?IDX(13), ?IDX(16)] = ra_log:take(9, 3, Log),
-%     % completely out of range
-%     [?IDX(25), ?IDX(28)] = ra_log:take(24, 3, Log),
-%     % take all
-%     Taken = ra_log:take(1, 9, Log),
-%     ?assertEqual(9, length(Taken)),
-%     ok.
-
-% release(Config) ->
-%     Log0 = ?config(ra_log, Config),
-%     Term = 1,
-%     Idx = ra_log:next_index(Log0),
-%     Log1 = lists:foldl(fun (I, L0) ->
-%                         Entry = {I, Term, "entry" ++ integer_to_list(I)},
-%                         {ok, L} = ra_log:append(Entry, false, L0),
-%                         L
-%                       end, Log0, lists:seq(Idx, Idx + 9)),
-%     Log = ra_log:release([1,2,3,4,5], Log1),
-%     [?IDX(6), ?IDX(7),
-%      ?IDX(8), ?IDX(9),
-%      ?IDX(10)] = ra_log:take(1, 9, Log),
-%     ok.
 
 last(Config) ->
     Log0 = ?config(ra_log, Config),
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    {ok, Log} = ra_log:append(Entry, false, Log0),
+    {ok, Log} = ra_log:append(Entry, no_overwrite, Log0),
     {Idx, Term, "entry"} = ra_log:last(Log),
     ok.
 
@@ -268,5 +233,5 @@ init_close_init(Config) ->
 append_in(Term, Data, Log0) ->
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, Data},
-    {ok, Log} = ra_log:append(Entry, false, Log0),
+    {ok, Log} = ra_log:append(Entry, no_overwrite, Log0),
     Log.
