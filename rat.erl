@@ -23,6 +23,38 @@ qj(Leader) ->
     ra:start_node(q_test, [{q_test, Leader}], fun simple_apply/3, []),
     ok.
 
+pl() ->
+    Name = p_test,
+    start_persistent_node(Name, [], fun erlang:'+'/2, 0).
+
+pj(Leader) ->
+    {ok, _, _Leader} = ra:add_node({p_test, Leader}, {p_test, node()}),
+    start_persistent_node(p_test, [{p_test, Leader}], fun erlang:'+'/2, 0),
+    ok.
+
+ps(Peer) ->
+    start_persistent_node(p_test, [{p_test, Peer}], fun erlang:'+'/2, 0),
+    ok.
+
+p_cmds(Node0, C, Num) ->
+    Node = {p_test, Node0},
+    timer:tc(fun () ->
+                     [ra:send(Node, C) || _ <- lists:seq(2, Num)],
+                     ra:send_and_await_consensus(Node, C)
+             end).
+
+start_persistent_node(Name, Nodes, ApplyFun, InitialState) ->
+    Dir = filename:join(["./tmp", ra_lib:to_list(node()),
+                         ra_lib:to_list(Name)]),
+    ok = filelib:ensure_dir(Dir),
+    Conf = #{log_module => ra_log_file,
+             log_init_args => #{directory => Dir},
+             initial_nodes => Nodes,
+             apply_fun => ApplyFun,
+             initial_state => InitialState,
+             cluster_id => Name},
+    ra:start_node(Name, Conf).
+
 enq(Node0) ->
     Node = {q_test, Node0},
     ra:send(Node, {enq, <<"q">>}).

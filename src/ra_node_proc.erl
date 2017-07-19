@@ -200,7 +200,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
     end.
 
 follower({call, From}, {leader_call, _Cmd},
-         State = #state{node_state = #{leader_id := LeaderId, id := Id}}) ->
+         State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
     % ?DBG("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
 follower({call, From}, {leader_call, Msg},

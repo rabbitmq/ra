@@ -7,7 +7,6 @@
          last/1,
          fetch/2,
          next_index/1,
-         % release/2,
          write_snapshot/2,
          read_snapshot/1,
          read_meta/2,
@@ -46,6 +45,7 @@ init(#{directory := Dir}) ->
     State0 = #state{directory = Dir, file = Fd,
                     last_index = LastIndex,
                     kv = Kv, index = Index},
+
     maybe_append_0_0_entry(State0).
 
 -spec close(ra_log_file_state()) -> ok.
@@ -65,11 +65,6 @@ write(State = #state{file = Fd, index = Index}, {Idx, Term, Data}) ->
     State#state{last_index = Idx,
                 index = Index#{Idx => {Term, Pos}} }.
 
-truncate_index(From, State = #state{index = Index0,
-                                    last_index = LastIdx}) ->
-    Index = maps:without(lists:seq(From, LastIdx), Index0),
-    State#state{index = Index}.
-
 -spec append(Entry::log_entry(), Overwrite::boolean(),
              State::ra_log_file_state()) ->
     {ok, ra_log_file_state()} | {error, integrity_error}.
@@ -81,7 +76,7 @@ append(_Entry, false, _State) ->
 append({Idx, _, _} = Entry, true, State0 = #state{last_index = LastIdx})
   when LastIdx > Idx ->
     % we're overwriting entries
-    {ok, truncate_index(Idx + 1, write(State0, Entry))};
+    {ok, truncate_index(Idx + 1, LastIdx, write(State0, Entry))};
 append(Entry, true, State) ->
     {ok, write(State, Entry)}.
 
@@ -89,11 +84,14 @@ append(Entry, true, State) ->
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     [log_entry()].
 take(Start, Num, #state{file = Fd, index = Index}) ->
-    IdxEntries = maps:with(lists:seq(Start, Start + Num - 1), Index),
-    Entries = maps:fold(fun (Idx, {Term, Offset}, Acc) ->
-                                [read_entry_at(Idx, Term, Offset, Fd) | Acc]
-                        end, [], IdxEntries),
-    lists:reverse(Entries).
+    lists:foldl(fun (Idx, Acc) ->
+                        case Index of
+                            #{Idx := {Term, Offset}} ->
+                                [read_entry_at(Idx, Term, Offset, Fd) | Acc];
+                            _ ->
+                                Acc
+                        end
+                end, [], lists:seq(Start + Num - 1, Start, -1)).
 
 % % this allows for missing entries in the log
 % sparse_take(Idx, _Log, Num, Max, Res)
@@ -127,11 +125,6 @@ fetch(Idx, #state{file = Fd, index = Index}) ->
         _ ->
             undefined
     end.
-
-% -spec release(Indices :: [ra_index()], State :: ra_log_file_state()) ->
-%     ra_log_file_state().
-% release(_Indices, State) ->
-%     State. % noop
 
 -spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_file_state()) ->
@@ -199,12 +192,21 @@ read_index_entry(Fd) ->
 recover_index(Fd) ->
     {ok, 0} = file:position(Fd, 0),
     Gen = fun () -> read_index_entry(Fd) end,
-    recover_index0(Gen, Gen(), #{}).
+    recover_index0(Gen, Gen(), {-1, -1, #{}}).
 
-recover_index0(_GenFun, undefined, Index) ->
-    Index;
-recover_index0(GenFun, {Idx, TermPos}, Index) ->
-    recover_index0(GenFun, GenFun(), Index#{Idx => TermPos}).
+recover_index0(_GenFun, undefined, {LastIdx, MaxIdx, Index0}) ->
+    maps:without(lists:seq(LastIdx+1, MaxIdx), Index0);
+recover_index0(GenFun, {Idx, TermPos}, {_LastIdx, MaxIdx, Index0}) ->
+    % remove "higher indices in the log as they would have been overwritten
+    % and we don't want them to hang around.
+    Index = maps:filter(fun(K, _) when K > Idx -> false;
+                           (_, _) -> true
+                         end, Index0),
+    recover_index0(GenFun, GenFun(), {Idx, max(Idx, MaxIdx), Index#{Idx => TermPos}}).
+
+truncate_index(From, To, State = #state{index = Index0}) ->
+    Index = maps:without(lists:seq(From, To), Index0),
+    State#state{index = Index}.
 
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     {ok, State} = append({0, 0, undefined}, false, State0),

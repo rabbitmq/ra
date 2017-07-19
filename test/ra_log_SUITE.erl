@@ -32,7 +32,11 @@ all_tests() ->
 groups() ->
     [
      {ra_log_memory, [], all_tests()},
-     {ra_log_file, [], [ init_close_init | all_tests()]}
+     {ra_log_file, [], [
+                        init_close_init,
+                        append_recover_then_overwrite,
+                        append_overwrite_then_recover
+                        | all_tests()]}
     ].
 
 init_per_group(ra_log_memory, Config) ->
@@ -78,12 +82,62 @@ append_then_overwrite(Config) ->
     Log0 = ?config(ra_log, Config),
     Term = 1,
     Idx = ra_log:next_index(Log0),
-    Entry = {Idx, Term, "entry"},
-    {ok, Log} = ra_log:append(Entry, false, Log0),
-    Entry2 = {Idx, Term, "entry2"},
-    {ok, Log1} = ra_log:append(Entry2, true, Log),
-    {Idx, Term, "entry2"} = ra_log:fetch(Idx, Log1),
+    Log1 = write_two(Idx, Term, Log0),
+    % overwrite Idx
+    Entry2 = {Idx, Term, "entry0_2"},
+    {ok, Log} = ra_log:append(Entry2, true, Log1),
+    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    ExpectedNextIndex = Idx + 1,
+    % ensure last index is updated after overwrite
+    ExpectedNextIndex = ra_log:next_index(Log),
     ok.
+
+append_recover_then_overwrite(Config) ->
+    Log0 = ?config(ra_log, Config),
+    InitFun = ?config(init_fun, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    Log1 = write_two(Idx, Term, Log0),
+    ok = ra_log:close(Log1),
+    Log2 = InitFun(append_recover_then_overwrite),
+    % overwrite Idx
+    Entry2 = {Idx, Term, "entry0_2"},
+    {ok, Log} = ra_log:append(Entry2, true, Log2),
+    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    ExpectedNextIndex = Idx+1,
+    % ensure last index is updated after overwrite
+    ExpectedNextIndex = ra_log:next_index(Log),
+    % ensure previous indices aren't accessible
+    undefined = ra_log:fetch(Idx+1, Log),
+    ok.
+
+append_overwrite_then_recover(Config) ->
+    Log0 = ?config(ra_log, Config),
+    InitFun = ?config(init_fun, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    Log1 = write_two(Idx, Term, Log0),
+    % overwrite Idx
+    Entry2 = {Idx, Term, "entry0_2"},
+    {ok, Log2} = ra_log:append(Entry2, true, Log1),
+    % close log
+    ok = ra_log:close(Log2),
+    % recover
+    Log = InitFun(append_overwrite_then_recover),
+    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    ExpectedNextIndex = Idx+1,
+    % ensure last index is updated after overwrite
+    ExpectedNextIndex = ra_log:next_index(Log),
+    % ensure previous indices aren't accessible
+    undefined = ra_log:fetch(Idx+1, Log),
+    ok.
+
+write_two(Idx, Term, Log0) ->
+    Entry0 = {Idx, Term, "entry0"},
+    {ok, Log1} = ra_log:append(Entry0, false, Log0),
+    Entry1 = {ra_log:next_index(Log1), Term, "entry1"},
+    {ok, Log2} = ra_log:append(Entry1, false, Log1),
+    Log2.
 
 append_integrity_error(Config) ->
     % allow "missing entries" but do not allow overwrites

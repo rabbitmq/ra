@@ -369,8 +369,8 @@ handle_follower(#append_entries_rpc{term = Term,
             State1 = lists:foldl(fun append_log_follower/2,
                                  State0, Entries),
 
-            ?DBG("~p: follower received ~p append_entries in ~p.",
-                 [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
+            % ?DBG("~p: follower received ~p append_entries in ~p.",
+            %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
             % only apply snapshot related effects on non-leader
             {State, Effects0} = apply_to(LeaderCommit,
                                          State1#{leader_id => LeaderId}),
@@ -412,13 +412,13 @@ handle_follower(#request_vote_rpc{term = Term,
     LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true ->
-            ?DBG("~p granting vote to ~p for term ~p previous term was ~p",
+            ?DBG("~p granting vote for ~p for term ~p previous term was ~p",
                  [Id, Cand, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
         false ->
-            ?DBG("~p declining vote to ~p for term ~p, last log index ~p",
+            ?DBG("~p declining vote for ~p for term ~p, last log index ~p",
                  [Id, Cand, Term, LLIdx]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State#{current_term => Term}, [{reply, Reply}]}

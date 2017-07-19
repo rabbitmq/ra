@@ -7,7 +7,6 @@
          last/1,
          fetch/2,
          next_index/1,
-         release/2,
          write_snapshot/2,
          read_snapshot/1,
          read_meta/2,
@@ -87,12 +86,6 @@ fetch(Idx, {_LastIdx, Log, _Meta, _Snapshot}) ->
             {Idx, T, D};
         _ -> undefined
     end.
-
--spec release(Indices :: [ra_index()], State :: ra_log_memory_state()) ->
-    ra_log_memory_state().
-release(Indices, {Idx, Log0, Meta, Snapshot}) ->
-    Log = maps:without(Indices, Log0),
-    {Idx, Log, Meta, Snapshot}.
 
 -spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_memory_state()) ->

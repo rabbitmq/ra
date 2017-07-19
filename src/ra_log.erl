@@ -9,7 +9,6 @@
          take/3,
          last/1,
          next_index/1,
-         % release/2,
          read_snapshot/1,
          write_snapshot/2,
          read_meta/2,
@@ -52,10 +51,6 @@
 
 -callback last(State :: ra_log_state()) ->
     maybe(log_entry()).
-
-% % release log entries at specified indices
-% -callback release(Indices :: [ra_index()], State :: ra_log_state()) ->
-%     ra_log_state().
 
 % writes snapshot to storage and discards any prior entries
 -callback write_snapshot(Snapshot :: ra_log_snapshot(),
@@ -123,11 +118,6 @@ write_snapshot(Snapshot, {Mod, Log0}) ->
 -spec read_snapshot(State::ra_log()) -> maybe(ra_log_snapshot()).
 read_snapshot({Mod, Log0}) ->
     Mod:read_snapshot(Log0).
-
-% -spec release(Indices :: [ra_index()], State :: ra_log()) ->
-%     ra_log().
-% release(Indices, {Mod, Log}) ->
-%     {Mod, Mod:release(Indices, Log)}.
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log()) ->
     maybe(term()).
