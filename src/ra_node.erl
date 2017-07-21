@@ -60,7 +60,8 @@
                   {ra_node_id(), #append_entries_reply{}} |
                   #request_vote_rpc{} |
                   #request_vote_result{} |
-                  {command, term()}.
+                  {command, term()} |
+                  sync. % time to fsync
 
 -type ra_effect() ::
     {reply, ra_msg()} |
@@ -369,6 +370,8 @@ handle_follower(#append_entries_rpc{term = Term,
             % append_log_follower doesn't fsync each entry
             State1 = lists:foldl(fun append_log_follower/2,
                                  State0, Entries),
+            % TODO: optimisation: fsync after replying to rpc using
+            % a next_event action
             ok = sync_log(State1),
 
             % ?DBG("~p: follower received ~p append_entries in ~p.",
@@ -455,6 +458,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     ?DBG("~p: installing snapshot at index ~p in ~p", [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
     Log = ra_log:write_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
+    % TODO should we also update metadata?
     State = State0#{log => Log,
                     current_term => Term,
                     commit_index => LastIndex,
@@ -593,6 +597,9 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
+% TODO: optimisation idea
+% to avoid fsyncing _before_ we reply to a time sensitive interaction we could
+% update_meta using a next_event action.
 update_meta(Updates, #{log := Log0} = State) ->
     {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
                               {ok, Acc} = ra_log:write_meta(K, V, Acc0, false),
