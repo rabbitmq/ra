@@ -121,8 +121,8 @@ p(F) ->
 sp() ->
     lg:stop().
 
-lgc() ->
-    lg_callgrind:profile_many("ra1.gz.*", "ra1.out",#{running => false}).
+lgc(Name) ->
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}).
 
 
 

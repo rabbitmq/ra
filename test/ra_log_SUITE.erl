@@ -22,8 +22,6 @@ all_tests() ->
      append_then_overwrite,
      append_integrity_error,
      take,
-     % sparse_take,
-     % release,
      last,
      meta,
      snapshot

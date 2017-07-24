@@ -331,7 +331,12 @@ handle_effect({release_up_to, Index}, _EvtType,
 handle_effect({snapshot_point, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:record_snapshot_point(Index, NodeState0),
-    {State#state{node_state = NodeState}, Actions}.
+    {State#state{node_state = NodeState}, Actions};
+handle_effect(schedule_sync, _EvtType, State, Actions) ->
+    % No timer is actuallys started, instead it is enqueued to be processed after
+    % all currently queued events.
+    {State, [{event_timeout, 0, sync} |  Actions]}.
+
 
 
 election_timeout_action(follower, #state{broadcast_time = Timeout}) ->

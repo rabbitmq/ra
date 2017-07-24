@@ -68,7 +68,8 @@
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_rpcs, [{ra_node_id(), IsUrgent :: boolean(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
-    {send_msg, pid(), term()}.
+    {send_msg, pid(), term()} |
+    schedule_sync.
 
 -type ra_effects() :: [ra_effect()].
 
@@ -221,15 +222,28 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     State = State0#{cluster => Nodes#{PeerId => Peer}},
     AEs = make_rpcs(State),
     {leader, State, [{send_rpcs, false, AEs}]};
-handle_leader({command, Cmd}, State0 = #{id := Id}) ->
-    case append_log_leader(Cmd, State0) of
+handle_leader({command, Cmd}, State00 = #{id := Id}) ->
+    case append_log_leader(Cmd, State00) of
         {not_appended, State} ->
             ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
-        {IdxTerm, State}  ->
-            ?DBG("~p ~p command appended to log at ~p~n", [Id, first_or_atom(Cmd), IdxTerm]),
-            {State1, Effects0} = evaluate_quorum(State),
-            Effects1 = [{send_rpcs, true, make_rpcs(State1)} | Effects0],
+        {Sync, {Idx, _} = IdxTerm, State0}  ->
+            ?DBG("~p ~p command appended to log at ~p~n",
+                 [Id, first_or_atom(Cmd), IdxTerm]),
+            {State, Effects0} =
+                case Sync of
+                    sync ->
+                        % we have synced - forward leader match_index
+                        evaluate_quorum(update_match_index(Id, Idx, State0));
+                    no_sync ->
+                        % no point evaluating quorum if not synced as leader
+                        % won't have incrementd it's match_index.
+                        % Ask ra_node_proc to schedule a sync event.
+                        {State0, [schedule_sync]}
+                end,
+            Effects1 = [{send_rpcs, true, make_rpcs(State)} | Effects0],
+            % check if a reply is required.
+            % TODO: can this be made a bit nicer/more explicit?
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
                               Effects1;
@@ -240,8 +254,14 @@ handle_leader({command, Cmd}, State0 = #{id := Id}) ->
                           _ ->
                               Effects1
                       end,
-            {leader, State1, Effects}
+            {leader, State, Effects}
     end;
+handle_leader(sync, State0 = #{id := Id, log := Log}) ->
+    Idx = ra_log:next_index(Log) - 1, % TODO better function for this.
+    ?DBG("~p syncing log at ~p~n", [Id, Idx]),
+    ok = ra_log:sync(Log),
+    {State, Effects} = evaluate_quorum(update_match_index(Id, Idx, State0)),
+    {leader, State, Effects};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -759,8 +779,8 @@ append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
-    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, no_overwrite, Log0),
-    {{NextIdx, Term}, State#{log => Log}}.
+    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, no_overwrite, no_sync, Log0),
+    {no_sync, {NextIdx, Term}, State#{log => Log}}.
 
 append_log_follower({Idx, Term, Cmd} = Entry,
                     State = #{log := Log0,
@@ -804,10 +824,12 @@ append_cluster_change(Cluster, From, ReplyMode,
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
     {ok, Log} = ra_log:append({NextIdx, Term, Command}, no_overwrite, Log0),
-    {IdxTerm, State#{log => Log, cluster => Cluster,
-                     cluster_change_permitted => false,
-                     cluster_index_term => IdxTerm,
-                     previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
+    {sync, IdxTerm,
+     State#{log => Log,
+            cluster => Cluster,
+            cluster_change_permitted => false,
+            cluster_index_term => IdxTerm,
+            previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
 
 append_entries_reply(Term, Success, State) ->
     %% TODO: use snapshot index/term if not found
@@ -821,22 +843,23 @@ evaluate_quorum(State) ->
     apply_to(NewCommitIndex, State).
 
 increment_commit_index(State = #{current_term := CurrentTerm,
-                                 commit_index := CommitIndex}) ->
-    {LeaderIdx, _} = last_idx_term(State),
-    PotentialNewCommitIndex = agreed_commit(LeaderIdx, peers(State)),
+                                 commit_index := CommitIndex,
+                                 cluster := Nodes}) ->
+    PotentialNewCommitIndex = agreed_commit(Nodes),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
+    % TODO: optimise by introducing a ra_log:fetch_idx_term/2 function
     case fetch_entry(PotentialNewCommitIndex, State) of
         {_, CurrentTerm, _} ->
              PotentialNewCommitIndex;
         _ -> CommitIndex
     end.
 
--spec agreed_commit(ra_index(), map()) -> ra_index().
-agreed_commit(LeaderIdx, Peers) ->
+-spec agreed_commit(map()) -> ra_index().
+agreed_commit(Nodes) ->
     Idxs = maps:fold(fun(_K, #{match_index := Idx}, Acc) ->
                              [Idx | Acc]
-                     end, [LeaderIdx], Peers),
+                     end, [], Nodes),
     SortedIdxs = lists:sort(fun erlang:'>'/2, Idxs),
     Nth = trunc(length(Idxs) / 2) + 1,
     lists:nth(Nth, SortedIdxs).
@@ -851,6 +874,13 @@ first_or_atom(A) when is_atom(A) ->
 first_or_atom(X) ->
     X.
 
+update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
+    case Cluster of
+        #{Id := Node} ->
+            State#{cluster := Cluster#{Id := Node#{match_index => Idx}}};
+        _ -> State
+    end.
+
 %%% ===================
 %%% Internal unit tests
 %%% ===================
@@ -859,18 +889,23 @@ first_or_atom(X) ->
 -include_lib("eunit/include/eunit.hrl").
 
 agreed_commit_test() ->
-    Peers = #{n2 => #{match_index => 3},
+    Nodes = #{n1 => #{match_index => 4}, % leader
+              n2 => #{match_index => 3},
               n3 => #{match_index => 3}},
     % one node
-    4 = agreed_commit(4, #{}),
+    4 = agreed_commit(#{n1 => #{match_index => 4}}),
     % 2 nodes - only leader has seen new commit
-    3 = agreed_commit(4, #{n2 => #{match_index => 3}}),
+    3 = agreed_commit(#{n2 => #{match_index => 3}}),
     % 2 nodes - all nodes have seen new commit
-    4 = agreed_commit(4, Peers#{n2 => #{match_index => 4}}),
+    4 = agreed_commit(Nodes#{n2 => #{match_index => 4}}),
     % 3 nodes - leader + 1 node has seen new commit
-    4 = agreed_commit(4, #{n2 => #{match_index => 4}}),
+    4 = agreed_commit(#{n2 => #{match_index => 4}}),
+    % only other nodes have seen new commit
+    4 = agreed_commit(#{ n1 => #{match_index => 3},
+                         n2 => #{match_index => 4},
+                         n3 => #{match_index => 4}}),
     % 3 nodes - only leader has seen new commit
-    3 = agreed_commit(4, Peers),
+    3 = agreed_commit(Nodes),
     ok.
 
 -endif.

@@ -177,7 +177,7 @@ candidate_handles_append_entries_rpc(_Config) ->
     ok.
 
 append_entries_reply_success(_Config) ->
-    Cluster = #{n1 => #{},
+    Cluster = #{n1 => #{next_index => 5, match_index => 4},
                 n2 => #{next_index => 1, match_index => 0},
                 n3 => #{next_index => 2, match_index => 1}},
     State = (base_state(3))#{commit_index => 1,
@@ -360,16 +360,18 @@ higher_term_detected(_Config) ->
     ok.
 
 consistent_query(_Config) ->
-    Cluster = #{n1 => #{},
-                         n2 => #{next_index => 4, match_index => 3},
-                         n3 => #{next_index => 4, match_index => 3}},
+    Cluster = #{n1 => #{next_index => 5, match_index => 3},
+                n2 => #{next_index => 4, match_index => 3},
+                n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => Cluster},
-    {leader, State1, _} =
+    {leader, State0, _} =
     ra_node:handle_leader({command, {'$ra_query', self(),
                                      fun id/1, await_consensus}}, State),
+    {leader, State1, _} = ra_node:handle_leader(sync, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
+    ct:pal("Effects ~p", [Effects]),
     ?assert(lists:any(fun({reply, _, {{4, 5}, <<"hi3">>}}) -> true;
                          (_) -> false
                       end, Effects)),
@@ -377,8 +379,9 @@ consistent_query(_Config) ->
 
 leader_noop_operation_enables_cluster_change(_Config) ->
     State = (base_state(3))#{cluster_change_permitted => false},
-    {leader, #{cluster_change_permitted := false} = State1, _} =
+    {leader, #{cluster_change_permitted := false} = State0, _} =
         ra_node:handle_leader({command, noop}, State),
+    {leader, State1, _} = ra_node:handle_leader(sync, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
                                          last_index = 4, last_term = 5}},
     % noop consensus
@@ -386,14 +389,12 @@ leader_noop_operation_enables_cluster_change(_Config) ->
         ra_node:handle_leader(AEReply, State1),
     ok.
 
-
-
 leader_node_join(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => OldCluster},
-    NewCluster = #{n1 => #{},
+    NewCluster = #{n1 => #{next_index => 4, match_index => 4},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
@@ -403,44 +404,62 @@ leader_node_join(_Config) ->
                cluster_change_permitted := false}, Effects} =
         ra_node:handle_leader({command, {'$ra_join', self(),
                                          n4, await_consensus}}, State),
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(),
-                        NewCluster, await_consensus}},
-    AE = #append_entries_rpc{term = 5, leader_id = n1,
-                             prev_log_index = 3,
-                             prev_log_term = 5,
-                             leader_commit = 3,
-                             entries = [JoinEntry]},
-    [{send_rpcs, true, [{n4,
-                          #append_entries_rpc{entries =
-                                              [_, _, _, JoinEntry]}},
-                         {n3, AE}, {n2, AE}]}] = Effects,
+    [{send_rpcs, true,
+      [{n4, #append_entries_rpc{entries =
+                                [_, _, _, {4, 5, {'$ra_cluster_change', _,
+                                                  #{n1 := _, n2 := _,
+                                                    n3 := _, n4 := _},
+                                                  await_consensus}}]}},
+       {n3, #append_entries_rpc{entries =
+                                [{4, 5, {'$ra_cluster_change', _,
+                                         #{n1 := _, n2 := _, n3 := _, n4 := _},
+                                         await_consensus}}],
+                                term = 5, leader_id = n1,
+                                prev_log_index = 3,
+                                prev_log_term = 5,
+                                leader_commit = 3}},
+       {n2, #append_entries_rpc{entries =
+                                [{4, 5, {'$ra_cluster_change', _,
+                                         #{n1 := _, n2 := _, n3 := _, n4 := _},
+                                         await_consensus}}],
+                                term = 5, leader_id = n1,
+                                prev_log_index = 3,
+                                prev_log_term = 5,
+                                leader_commit = 3}}]}] = Effects,
     ok.
 
 leader_node_leave(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
     State = (base_state(3))#{cluster => OldCluster},
-    NewCluster = #{n1 => #{},
+    NewCluster = #{n1 => #{next_index => 4, match_index => 4},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     % raft nodes should switch to the new configuration after log append
-    {leader, #{cluster := NewCluster}, Effects} =
+    {leader, #{cluster := NewCluster}, [{send_rpcs, true, [N3, N2]}]} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
                               State),
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(), NewCluster, await_consensus}},
-    AE = #append_entries_rpc{term = 5, leader_id = n1,
+    % the leaving node is no longer included
+    {n3, #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
                              leader_commit = 3,
-                             entries = [JoinEntry]},
-    % the leaving node is no longer included
-    [{send_rpcs, true, [{n3, AE}, {n2, AE}]}] = Effects,
+                             entries = [{4, 5, {'$ra_cluster_change', _,
+                                                #{n1 := _, n2 := _, n3 := _},
+                                                await_consensus}}]}} = N3,
+    {n2, #append_entries_rpc{term = 5, leader_id = n1,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3,
+                             entries = [{4, 5, {'$ra_cluster_change', _,
+                                                #{n1 := _, n2 := _, n3 := _},
+                                                await_consensus}}]}} = N2,
     ok.
 
 leader_is_removed(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
@@ -459,12 +478,12 @@ leader_is_removed(_Config) ->
     ok.
 
 follower_cluster_change(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{id => n2,
                              cluster => OldCluster},
-    NewCluster = #{n1 => #{},
+    NewCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1}},
@@ -480,10 +499,10 @@ follower_cluster_change(_Config) ->
     ok.
 
 leader_applies_new_cluster(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
-    NewCluster = #{n1 => #{},
+    NewCluster = #{n1 => #{next_index => 4, match_index => 4},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
@@ -531,10 +550,10 @@ leader_applies_new_cluster(_Config) ->
     ok.
 
 leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
-    OldCluster = #{n1 => #{},
+    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
-    NewCluster = #{n1 => #{},
+    NewCluster = #{n1 => #{next_index => 4, match_index => 4},
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1, match_index => 0}},
@@ -574,9 +593,14 @@ command(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3
                             },
-    {leader, _, [{reply, Self, {4, 5}}, {send_rpcs, true,
-                                         [{n3, AE}, {n2, AE}]}]} =
+    {leader, _, [{reply, Self, {4, 5}},
+                 {send_rpcs, true, [{n3, AE}, {n2, AE}]},
+                 schedule_sync]} =
         ra_node:handle_leader({command, Cmd}, State),
+    ok.
+
+sync(_Config) ->
+    % TODO leader receives a sync message
     ok.
 
 quorum(_Config) ->
@@ -684,8 +708,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     % should decrement next_index for n2
     ExpectedN2NextIndex = 2,
     {leader, #{cluster := #{n2 := #{next_index := ExpectedN2NextIndex}}},
-     Effects} = ra_node:handle_leader({n2, AER}, Leader0),
-    dump(Effects),
+     _Effects} = ra_node:handle_leader({n2, AER}, Leader0),
     ok.
 
 leader_receives_install_snapshot_result(_Config) ->
@@ -807,12 +830,20 @@ past_leader_overwrites_entry(_Config) ->
                          % {enq, banana} addint another one for good measure
                          fun (S) ->
                                  S1 = interact_without(n2, n1, {command, usr({enq, apple})}, S),
-                                 dump(strip_send_rpcs_for(n2, n1, S1))
+                                 strip_send_rpcs_for(n2, n1, S1)
                          end,
                          fun (S) -> run_effects_leader(n2, S) end,
                          % replicate
                          fun (S) -> run_effects_leader(n2, S) end,
+                         fun (S) -> run_effects_leader(n2, S) end,
+                         fun (S) ->
+                                 % remove any rpc calls from old leader
+                                 strip_send_rpcs_for(n1, n3, strip_send_rpcs_for(n1, n2, S))
+                         end,
+                         fun (S) -> run_effects_leader(n2, S) end,
+                         fun (S) -> run_effects_leader(n2, S) end,
                          fun (S) -> run_effects_on_all(4, S) end
+
                         ]),
     Assertion = fun (#{log := Log}) ->
                         % ensure no node still has a banana
@@ -825,7 +856,6 @@ past_leader_overwrites_entry(_Config) ->
     assert_node_state(n1, Nodes, Assertion),
     assert_node_state(n2, Nodes, Assertion),
     assert_node_state(n3, Nodes, Assertion),
-    % dump(Nodes),
     % assert banana is not in log of anyone as it was never committed
     ok.
 
@@ -898,6 +928,8 @@ run_effect(NodeId, Nodes0) ->
     case next_effect(NodeId, Nodes0) of
         {{next_event, cast, NextEvent},  Nodes} ->
             interact(NodeId, NextEvent, Nodes);
+        {{next_event, NextEvent}, Nodes} ->
+            interact(NodeId, NextEvent, Nodes);
         {{send_vote_requests, Requests}, Nodes} ->
             lists:foldl(fun ({Id, VoteReq}, Acc) ->
                                 rpc_interact(Id, NodeId, VoteReq, Acc)
@@ -932,21 +964,30 @@ next_effect(NodeId, Nodes) ->
 
 rpc_interact(Id, FromId, Interaction, Nodes0) ->
     case interact(Id, Interaction, Nodes0) of
-        #{Id := {_, _, Effects0}} = Nodes1 ->
-            % interact(Id, Interaction, Nodes0),
+        #{Id := {_St, _, Effects0}} = Nodes1 ->
             Effects = list(Effects0),
             % there should only ever be one reply really?
             Replies = lists:filter(fun({reply, _}) -> true;
+                                      ({reply,_, _}) -> true;
                                       (_) -> false
                                    end, Effects),
             Nodes2 = case Replies of
                          [{reply, Reply}] ->
                              % interact with caller
                              interact(FromId, fixup_reply(Id, Reply), Nodes1);
+                         [{reply, _, Reply}] ->
+                             % interact with caller
+                             interact(FromId, fixup_reply(Id, Reply), Nodes1);
                          _ -> Nodes1
                      end,
+            % move next events to the top
+            NextEvents = lists:filter(fun({next_event, _}) -> true;
+                                         (_) -> false
+                                      end, Effects),
+            Effects1 = NextEvents ++ (Effects -- NextEvents),
+
             % remove replies from remaining effects
-            maps:update_with(Id, fun (X) -> setelement(3, X, Effects -- Replies) end, Nodes2);
+            maps:update_with(Id, fun (X) -> setelement(3, X, Effects1 -- Replies) end, Nodes2);
         _ ->
             Nodes0
     end.
@@ -1019,10 +1060,12 @@ interact(Id, {candidate, State, Effects}, Interaction, Nodes) ->
         Nodes#{Id => {NewRaState, NewState,
                       drop_all_aers_but_last(Effects ++ list(NewEffects))}};
 interact(Id, {leader, State, Effects}, Interaction, Nodes) ->
-        {NewRaState, NewState, NewEffects} =
+        {NewRaState, NewState0, NewEffects0} =
             ra_node:handle_leader(Interaction, State),
+        {_NewRaState, NewState, NewEffects} =
+            ra_node:handle_leader(sync, NewState0),
         Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ list(NewEffects))}}.
+                      drop_all_aers_but_last(Effects ++ list(NewEffects0 ++ NewEffects))}}.
 
 
 list(L) when is_list(L) -> L;
