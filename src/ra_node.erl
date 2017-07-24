@@ -196,11 +196,11 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
     % match_index and update next_index directly
-    Peer = case ra_log:fetch(LastIdx, Log) of
-               {_, LastTerm, _} when LastIdx >= MI -> % entry exists forward all things
+    Peer = case ra_log:fetch_term(LastIdx, Log) of
+               LastTerm when LastIdx >= MI -> % entry exists we can forward
                    Peer0#{match_index => LastIdx,
                           next_index => LastIdx + 1};
-               _  when LastIdx < MI ->
+               _Term when LastIdx < MI ->
                    % TODO: this can only really happen when peers are non-persistent.
                    % should they turn-into non-voters when this sitution is detected
                    error_logger:warning_msg(
@@ -209,7 +209,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                      [Id, LastIdx, LastTerm, MI]),
                    Peer0#{match_index => LastIdx,
                           next_index => LastIdx + 1};
-               {_, EntryTerm, _} ->
+               EntryTerm ->
                    ?DBG("~p leader received last_index with different term ~p~n",
                         [Id, EntryTerm]),
                    % last_index has a different term
@@ -507,9 +507,9 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log,
                                            current_term := Term,
                                            commit_index := CommitIndex,
                                            snapshot_index_term := {SIdx, STerm}}) ->
-    Prev = Next - 1,
-    case ra_log:fetch(Prev, Log) of
-        {PrevIdx, PrevTerm, _} ->
+    PrevIdx = Next - 1,
+    case ra_log:fetch_term(PrevIdx, Log) of
+        PrevTerm when PrevTerm /= undefined ->
             % TODO: either we could keep some state of the last append entries
             % generated to see if we really need to load a new set of entries
             % or we could rely on the log implementation to keep an LRU like
@@ -522,7 +522,7 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log,
                                          prev_log_index = PrevIdx,
                                          prev_log_term = PrevTerm,
                                          leader_commit = CommitIndex}};
-        undefined when Prev =:= SIdx ->
+        undefined when PrevIdx =:= SIdx ->
             % Previous index is the same as snapshot index
             Entries = ra_log:take(Next, 5, Log),
             {PeerId, #append_entries_rpc{entries = Entries,
@@ -653,15 +653,14 @@ is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
 has_log_entry_or_snapshot(Idx, Term,
                           #{log := Log,
                             snapshot_index_term := {SIdx, STerm}}) ->
-    case ra_log:fetch(Idx, Log) of
-        {Idx, Term, _} ->
-            true;
+    case ra_log:fetch_term(Idx, Log) of
+        Term -> true;
         _ ->
             SIdx =:= Idx andalso STerm =:= Term
     end.
 
-fetch_entry(Idx, #{log := Log}) ->
-    ra_log:fetch(Idx, Log).
+fetch_term(Idx, #{log := Log}) ->
+    ra_log:fetch_term(Idx, Log).
 
 fetch_entries(From, To, #{log := Log}) ->
     ra_log:take(From, To - From + 1, Log).
@@ -849,10 +848,8 @@ increment_commit_index(State = #{current_term := CurrentTerm,
     PotentialNewCommitIndex = agreed_commit(Nodes),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
-    % TODO: optimise by introducing a ra_log:fetch_idx_term/2 function
-    case fetch_entry(PotentialNewCommitIndex, State) of
-        {_, CurrentTerm, _} ->
-             PotentialNewCommitIndex;
+    case fetch_term(PotentialNewCommitIndex, State) of
+        CurrentTerm -> PotentialNewCommitIndex;
         _ -> CommitIndex
     end.
 

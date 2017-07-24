@@ -7,6 +7,7 @@
          take/3,
          last/1,
          fetch/2,
+         fetch_term/2,
          next_index/1,
          write_snapshot/2,
          read_snapshot/1,
@@ -91,6 +92,15 @@ fetch(Idx, {_LastIdx, Log, _Meta, _Snapshot}) ->
     case Log of
         #{Idx := {T, D}} ->
             {Idx, T, D};
+        _ -> undefined
+    end.
+
+-spec fetch_term(ra_index(), ra_log_memory_state()) ->
+    maybe(ra_term()).
+fetch_term(Idx, {_LastIdx, Log, _Meta, _Snapshot}) ->
+    case Log of
+        #{Idx := {T, _}} ->
+            T;
         _ -> undefined
     end.
 

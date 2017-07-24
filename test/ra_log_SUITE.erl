@@ -60,11 +60,13 @@ init_per_testcase(TestCase, Config) ->
 fetch_when_empty(Config) ->
     Log = ?config(ra_log, Config),
     {0, 0, undefined} = ra_log:fetch(0, Log),
+    0 = ra_log:fetch_term(0, Log),
     ok.
 
 fetch_not_found(Config) ->
     Log = ?config(ra_log, Config),
     undefined = ra_log:fetch(99, Log),
+    undefined = ra_log:fetch_term(99, Log),
     ok.
 
 append_then_fetch(Config) ->
@@ -74,6 +76,7 @@ append_then_fetch(Config) ->
     Entry = {Idx, Term, "entry"},
     {ok, Log} = ra_log:append(Entry, no_overwrite, Log0),
     {Idx, Term, "entry"} = ra_log:fetch(Idx, Log),
+    Term = ra_log:fetch_term(Idx, Log),
     ok.
 
 append_then_overwrite(Config) ->

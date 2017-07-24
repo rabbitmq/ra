@@ -8,6 +8,7 @@
          append/4,
          sync/1,
          fetch/2,
+         fetch_term/2,
          take/3,
          last/1,
          next_index/1,
@@ -92,6 +93,10 @@ close({Mod, Log}) ->
 -spec fetch(Idx::ra_index(), Log::ra_log()) -> maybe(log_entry()).
 fetch(Idx, {Mod, Log}) ->
     Mod:fetch(Idx, Log).
+
+-spec fetch_term(Idx::ra_index(), Log::ra_log()) -> maybe(ra_term()).
+fetch_term(Idx, {Mod, Log}) ->
+    Mod:fetch_term(Idx, Log).
 
 -spec append(Entry :: log_entry(),
              Overwrite :: overwrite | no_overwrite,

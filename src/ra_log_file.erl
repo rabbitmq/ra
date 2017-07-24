@@ -7,6 +7,7 @@
          take/3,
          last/1,
          fetch/2,
+         fetch_term/2,
          next_index/1,
          write_snapshot/2,
          read_snapshot/1,
@@ -104,20 +105,6 @@ take(Start, Num, #state{file = Fd, index = Index}) ->
                         end
                 end, [], lists:seq(Start + Num - 1, Start, -1)).
 
-% % this allows for missing entries in the log
-% sparse_take(Idx, _Log, Num, Max, Res)
-%     when length(Res) =:= Num orelse
-%          Idx > Max ->
-%     lists:reverse(Res);
-% sparse_take(Idx, Log, Num, Max, Res) ->
-%     case Log of
-%         #{Idx := {T, D}} ->
-%             sparse_take(Idx+1, Log, Num, Max, [{Idx, T, D} | Res]);
-%         _ ->
-%             sparse_take(Idx+1, Log, Num, Max, Res)
-%     end.
-
-
 -spec last(ra_log_file_state()) ->
     maybe(log_entry()).
 last(#state{last_index = LastIdx} = State) ->
@@ -133,6 +120,16 @@ fetch(Idx, #state{file = Fd, index = Index}) ->
     case Index of
         #{Idx := {Term, Offset}} ->
             read_entry_at(Idx, Term,  Offset, Fd);
+        _ ->
+            undefined
+    end.
+
+-spec fetch_term(ra_index(), ra_log_file_state()) ->
+    maybe(ra_term()).
+fetch_term(Idx, #state{index = Index}) ->
+    case Index of
+        #{Idx := {Term, _}} ->
+            Term;
         _ ->
             undefined
     end.
