@@ -761,7 +761,7 @@ leader_receives_install_snapshot_result(_Config) ->
 %%% scenario testing
 %%%
 take_snapshot(_Config) ->
-    % * takes snapshot in response to state machine release_up_to effect
+    % * takes snapshot in response to state machine release_cursor effect
     InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
@@ -941,7 +941,7 @@ run_effect(NodeId, Nodes0) ->
         {{snapshot_point, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
             NodeState = ra_node:record_snapshot_point(Idx, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
-        {{release_up_to, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
+        {{release_cursor, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
             NodeState = ra_node:maybe_snapshot(Idx, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
         {undefined, Nodes} ->

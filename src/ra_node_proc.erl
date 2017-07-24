@@ -324,7 +324,7 @@ handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = Proxy} = State, Actions) ->
     ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State, Actions};
-handle_effect({release_up_to, Index}, _EvtType,
+handle_effect({release_cursor, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:maybe_snapshot(Index, NodeState0),
     {State#state{node_state = NodeState}, Actions};

@@ -20,7 +20,7 @@
     % "release" all indices up to and including this
     % indicates that none of the preceeding entries contribute to the
     % current machine state
-    {release_up_to, ra_index()} |
+    {release_cursor, ra_index()} |
     % instruct ra to record a snapshot point at the current index
     {snapshot_point, ra_index()}.
 
@@ -399,7 +399,7 @@ handle_follower(#append_entries_rpc{term = Term,
             % only apply snapshot related effects on non-leader
             {State, Effects0} = apply_to(LeaderCommit,
                                          State1#{leader_id => LeaderId}),
-            Effects = lists:filter(fun ({release_up_to, _}) -> true;
+            Effects = lists:filter(fun ({release_cursor, _}) -> true;
                                        ({snapshot_point, _}) -> true;
                                        (_) -> false
                                    end, Effects0),
