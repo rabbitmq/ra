@@ -11,6 +11,7 @@
          fetch_term/2,
          take/3,
          last/1,
+         last_index_term/1,
          next_index/1,
          read_snapshot/1,
          write_snapshot/2,
@@ -57,8 +58,14 @@
 -callback fetch(Inx :: ra_index(), State :: ra_log_state()) ->
     maybe(log_entry()).
 
+-callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
+    maybe(ra_term()).
+
 -callback last(State :: ra_log_state()) ->
     maybe(log_entry()).
+
+-callback last_index_term(State :: ra_log_state()) ->
+    maybe(ra_idxterm()).
 
 % writes snapshot to storage and discards any prior entries
 -callback write_snapshot(Snapshot :: ra_log_snapshot(),
@@ -130,6 +137,10 @@ take(Start, Num, {Mod, Log}) ->
 -spec last(State::ra_log()) -> maybe(log_entry()).
 last({Mod, Log}) ->
     Mod:last(Log).
+
+-spec last_index_term(State::ra_log()) -> maybe(ra_idxterm()).
+last_index_term({Mod, Log}) ->
+    Mod:last_index_term(Log).
 
 -spec next_index(State::ra_log()) -> ra_index().
 next_index({Mod, Log}) ->

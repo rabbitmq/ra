@@ -410,10 +410,10 @@ handle_follower(#append_entries_rpc{term = Term,
             Reply = append_entries_reply(Term, false, State0),
             {follower, State0#{leader_id => LeaderId}, [{reply, Reply}]}
     end;
-handle_follower(#append_entries_rpc{term = Term}, State = #{id := Id,
-                                                 current_term := CurTerm}) ->
+handle_follower(#append_entries_rpc{term = Term},
+                State = #{id := Id, current_term := CurTerm}) ->
     Reply = append_entries_reply(CurTerm, false, State),
-    ?DBG("~p: follower request_vote_rpc in ~p  but current term ~p",
+    ?DBG("~p: follower request_vote_rpc in ~p but current term ~p",
          [Id, Term, CurTerm]),
     {follower, maps:without([leader_id], State), [{reply, Reply}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
@@ -634,8 +634,8 @@ update_term(_, State) ->
     State.
 
 last_idx_term(#{log := Log} = State) ->
-    case ra_log:last(Log) of
-        {Idx, Term, _Data} ->
+    case ra_log:last_index_term(Log) of
+        {Idx, Term} ->
             {Idx, Term};
         undefined ->
             maps:get(snapshot_index_term, State)

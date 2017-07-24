@@ -6,6 +6,7 @@
          sync/1,
          take/3,
          last/1,
+         last_index_term/1,
          fetch/2,
          fetch_term/2,
          next_index/1,
@@ -81,6 +82,21 @@ sparse_take(Idx, Log, Num, Max, Res) ->
     maybe(log_entry()).
 last({LastIdx, _Data, _Meta, _Snapshot} = LogState) ->
     fetch(LastIdx, LogState).
+
+-spec last_index_term(ra_log_memory_state()) -> maybe(ra_idxterm()).
+last_index_term({LastIdx, Log, _Meta, Snapshot}) ->
+    case Log of
+        #{LastIdx := {LastTerm, _Data}} ->
+            {LastIdx, LastTerm};
+        _ ->
+            % If not found fall back on snapshot if snapshot matches last term.
+            case Snapshot of
+                {LastIdx, LastTerm, _, _} ->
+                    {LastIdx, LastTerm};
+                _ ->
+                    undefined
+            end
+    end.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
 next_index({LastIdx, _Data, _Meta, _Snapshot}) ->

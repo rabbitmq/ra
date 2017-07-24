@@ -6,6 +6,7 @@
          sync/1,
          take/3,
          last/1,
+         last_index_term/1,
          fetch/2,
          fetch_term/2,
          next_index/1,
@@ -109,6 +110,22 @@ take(Start, Num, #state{file = Fd, index = Index}) ->
     maybe(log_entry()).
 last(#state{last_index = LastIdx} = State) ->
     fetch(LastIdx, State).
+
+-spec last_index_term(ra_log_file_state()) -> maybe(ra_idxterm()).
+last_index_term(#state{last_index = LastIdx,
+                       index = Index} = State) ->
+    case Index of
+        #{LastIdx := {LastTerm, _Offset}} ->
+            {LastIdx, LastTerm};
+        _ ->
+            % If not found fall back on snapshot if snapshot matches last term.
+            case read_snapshot(State) of
+                {LastIdx, LastTerm, _, _} ->
+                    {LastIdx, LastTerm};
+                _ ->
+                    undefined
+            end
+    end.
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->

@@ -185,6 +185,7 @@ last(Config) ->
     Entry = {Idx, Term, "entry"},
     {ok, Log} = ra_log:append(Entry, no_overwrite, Log0),
     {Idx, Term, "entry"} = ra_log:last(Log),
+    {Idx, Term} = ra_log:last_index_term(Log),
     ok.
 
 meta(Config) ->
@@ -207,6 +208,8 @@ snapshot(Config) ->
     % ensure entries prior to snapshot are no longer there
     undefined = ra_log:fetch(LastIdx, Log),
     undefined = ra_log:fetch(LastIdx-1, Log),
+    % falls back to snapshot idxterm
+    {LastIdx, LastTerm} = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),
     ok.
 
