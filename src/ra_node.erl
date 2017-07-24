@@ -390,9 +390,8 @@ handle_follower(#append_entries_rpc{term = Term,
             % append_log_follower doesn't fsync each entry
             State1 = lists:foldl(fun append_log_follower/2,
                                  State0, Entries),
-            % TODO: optimisation: fsync after replying to rpc using
-            % a next_event action
-            ok = sync_log(State1),
+            % only sync if we have received entries
+            ok = maybe_sync_log(Entries, State1),
 
             % ?DBG("~p: follower received ~p append_entries in ~p.",
             %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
@@ -810,7 +809,9 @@ append_log_follower(Entry, State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
     State#{log => Log}.
 
-sync_log(#{log := Log0}) ->
+maybe_sync_log([], _State) ->
+    ok;
+maybe_sync_log(_Entries, #{log := Log0}) ->
     ra_log:sync(Log0).
 
 append_cluster_change(Cluster, From, ReplyMode,
