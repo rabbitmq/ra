@@ -395,9 +395,9 @@ leader_node_join(_Config) ->
                    n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => OldCluster},
     NewCluster = #{n1 => #{next_index => 4, match_index => 4},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3},
-                   n4 => #{next_index => 1, match_index => 0}},
+                   n2 => #{next_index => 5, match_index => 3},
+                   n3 => #{next_index => 5, match_index => 3},
+                   n4 => #{next_index => 5, match_index => 0}},
     % raft nodes should switch to the new configuration after log append
     % and further cluster changes should be disallowed
     {leader, #{cluster := NewCluster,
@@ -435,8 +435,8 @@ leader_node_leave(_Config) ->
                    n4 => #{next_index => 1, match_index => 0}},
     State = (base_state(3))#{cluster => OldCluster},
     NewCluster = #{n1 => #{next_index => 4, match_index => 4},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3}},
+                   n2 => #{next_index => 5, match_index => 3},
+                   n3 => #{next_index => 5, match_index => 3}},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := NewCluster}, [{send_rpcs, true, [N3, N2]}]} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
@@ -503,9 +503,9 @@ leader_applies_new_cluster(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     NewCluster = #{n1 => #{next_index => 4, match_index => 4},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3},
-                   n4 => #{next_index => 1, match_index => 0}},
+                   n2 => #{next_index => 5, match_index => 3},
+                   n3 => #{next_index => 5, match_index => 3},
+                   n4 => #{next_index => 5, match_index => 0}},
 
     State = (base_state(3))#{id => n1, cluster => OldCluster},
     Command = {command, {'$ra_join', self(), n4, await_consensus}},
@@ -554,9 +554,9 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3}},
     NewCluster = #{n1 => #{next_index => 4, match_index => 4},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3},
-                   n4 => #{next_index => 1, match_index => 0}},
+                   n2 => #{next_index => 5, match_index => 3},
+                   n3 => #{next_index => 5, match_index => 3},
+                   n4 => #{next_index => 5, match_index => 0}},
 
     State = (base_state(3))#{id => n1, cluster => OldCluster},
     Command = {command, {'$ra_join', self(), n4, await_consensus}},
@@ -841,8 +841,9 @@ past_leader_overwrites_entry(_Config) ->
                                  strip_send_rpcs_for(n1, n3, strip_send_rpcs_for(n1, n2, S))
                          end,
                          fun (S) -> run_effects_leader(n2, S) end,
+                         fun (S) -> run_effects_on_all(10, S) end,
                          fun (S) -> run_effects_leader(n2, S) end,
-                         fun (S) -> run_effects_on_all(4, S) end
+                         fun (S) -> run_effects_on_all(10, S) end
 
                         ]),
     Assertion = fun (#{log := Log}) ->
@@ -944,6 +945,13 @@ run_effect(NodeId, Nodes0) ->
         {{release_cursor, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
             NodeState = ra_node:maybe_snapshot(Idx, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
+        {{reply, #append_entries_reply{} = Reply}, Nodes} ->
+            Leader = maps:filter(fun (_, {leader, _, _}) -> true;
+                                     (_, _) -> false
+                                 end, Nodes),
+            [{LeaderId, _}] = maps:to_list(Leader),
+            interact(LeaderId, {NodeId, Reply}, Nodes);
+            % assume leader reply
         {undefined, Nodes} ->
             Nodes;
         {Ef, Nodes} ->
@@ -968,14 +976,14 @@ rpc_interact(Id, FromId, Interaction, Nodes0) ->
             Effects = list(Effects0),
             % there should only ever be one reply really?
             Replies = lists:filter(fun({reply, _}) -> true;
-                                      ({reply,_, _}) -> true;
+                                      ({reply, _, _}) -> true;
                                       (_) -> false
                                    end, Effects),
             Nodes2 = case Replies of
-                         [{reply, Reply}] ->
+                         [{reply, Reply} | _] ->
                              % interact with caller
                              interact(FromId, fixup_reply(Id, Reply), Nodes1);
-                         [{reply, _, Reply}] ->
+                         [{reply, _, Reply} | _] ->
                              % interact with caller
                              interact(FromId, fixup_reply(Id, Reply), Nodes1);
                          _ -> Nodes1
@@ -996,7 +1004,7 @@ rpc_interact(Id, FromId, Interaction, Nodes0) ->
 % in response to a result
 strip_send_rpcs(Id, Nodes) ->
     {S, St, Effects} = maps:get(Id, Nodes),
-    Node = {S, St, lists:filter(fun ({send_rpcs,_, _}) -> false;
+    Node = {S, St, lists:filter(fun ({send_rpcs, _, _}) -> false;
                                     (_) -> true
                                 end, Effects)},
     Nodes#{Id => Node}.
@@ -1004,8 +1012,8 @@ strip_send_rpcs(Id, Nodes) ->
 strip_send_rpcs_for(Id, TargetId, Nodes) ->
     {S, St, Effects} = maps:get(Id, Nodes),
     Node = {S, St,
-            lists:map(fun ({send_rpcs,_, AEs}) ->
-                              {send_rpcs,
+            lists:map(fun ({send_rpcs, Urgent, AEs}) ->
+                              {send_rpcs, Urgent,
                                lists:filter(fun({I, _}) when I =:= TargetId ->
                                                     false;
                                                (_) -> true
@@ -1053,19 +1061,19 @@ interact(Id, {follower, State, Effects}, Interaction, Nodes) ->
         {NewRaState, NewState, NewEffects} =
             ra_node:handle_follower(Interaction, State),
         Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ list(NewEffects))}};
+                      Effects ++ drop_all_aers_but_last(NewEffects)}};
 interact(Id, {candidate, State, Effects}, Interaction, Nodes) ->
         {NewRaState, NewState, NewEffects} =
             ra_node:handle_candidate(Interaction, State),
         Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ list(NewEffects))}};
+                      Effects ++ drop_all_aers_but_last(NewEffects)}};
 interact(Id, {leader, State, Effects}, Interaction, Nodes) ->
         {NewRaState, NewState0, NewEffects0} =
             ra_node:handle_leader(Interaction, State),
         {_NewRaState, NewState, NewEffects} =
             ra_node:handle_leader(sync, NewState0),
         Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ list(NewEffects0 ++ NewEffects))}}.
+                      drop_all_aers_but_last(Effects ++ NewEffects0 ++ NewEffects)}}.
 
 
 list(L) when is_list(L) -> L;

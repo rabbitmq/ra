@@ -144,10 +144,10 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
                        node_state = NodeState = #{id := Id}}) ->
     ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
-    AppendEntries = ra_node:make_rpcs(NodeState),
+    Rpcs = ra_node:make_rpcs(NodeState),
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
-    ok = ra_proxy:proxy(Proxy, true, AppendEntries),
-    {keep_state, State0#state{proxy = Proxy}};
+    ok = ra_proxy:proxy(Proxy, true, Rpcs),
+    {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
