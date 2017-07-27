@@ -29,6 +29,7 @@
 -define(SERVER, ?MODULE).
 -define(TEST_LOG, ra_log_memory).
 -define(DEFAULT_BROADCAST_TIME, 100).
+-define(SYNC_INTERVAL, 10).
 
 
 -type command_reply_mode() :: after_log_append | await_consensus
@@ -53,6 +54,7 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
+                sync_scheduled = false :: boolean(),
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
 %%%===================================================================
@@ -102,9 +104,13 @@ leader_call(ServerRef, Msg, Timeout) ->
 
 init([Config]) ->
     process_flag(trap_exit, true),
-    State = #state{node_state = ra_node:init(Config),
+    #{id := Id,
+      cluster := Cluster,
+      machine_state := MacState} = NodeState = ra_node:init(Config),
+    State = #state{node_state = NodeState,
                    broadcast_time = ?DEFAULT_BROADCAST_TIME},
-    ?DBG("init state ~p~n", [State]),
+    ?DBG("~p init machine_state ~p Cluster ~p~n",
+         [Id, MacState, maps:keys(Cluster)]),
     {ok, follower, State, election_timeout_action(follower, State)}.
 
 %% callback mode
@@ -148,6 +154,11 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
+leader(EventType, sync, State0) ->
+    {leader, State1, Effects} = handle_leader(sync,
+                                              State0#state{sync_scheduled = false}),
+    {State, Actions} = handle_effects(Effects, EventType, State1),
+    {keep_state, State, Actions};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -332,10 +343,15 @@ handle_effect({snapshot_point, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:record_snapshot_point(Index, NodeState0),
     {State#state{node_state = NodeState}, Actions};
+handle_effect(schedule_sync, _EvtType, State = #state{sync_scheduled = true},
+              Actions) ->
+    {State, Actions};
 handle_effect(schedule_sync, _EvtType, State, Actions) ->
-    % No timer is actuallys started, instead it is enqueued to be processed after
+    % No timer is actually started, instead it is enqueued to be processed after
     % all currently queued events.
-    {State, [{event_timeout, 0, sync} |  Actions]}.
+    % {State, [{event_timeout, 0, sync} |  Actions]}.
+    {State#state{sync_scheduled = true},
+     [{generic_timeout, ?SYNC_INTERVAL, sync} |  Actions]}.
 
 
 

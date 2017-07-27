@@ -51,7 +51,8 @@
       machine_state => term(),
       initial_machine_state => term(),
       snapshot_index_term => ra_idxterm(),
-      snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}}
+      snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}},
+      sync_scheduled => boolean()
       }.
 
 -type ra_state() :: leader | follower | candidate.
@@ -104,7 +105,7 @@ init(#{id := Id,
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
     {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log0),
-    {CommitIndex, Cluster, MacState, SnapshotIndexTerm} =
+    {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log) of
             undefined ->
                 {0, make_cluster(InitialNodes), InitialMachineState, {0, 0}};
@@ -112,23 +113,43 @@ init(#{id := Id,
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
 
-    #{id => Id,
-      cluster_id => ClusterId,
-      cluster => Cluster,
-      cluster_change_permitted => false,
-      cluster_index_term => {0, 0}, %% TODO?
-      pending_cluster_changes => [],
-      current_term => CurrentTerm,
-      voted_for => VotedFor,
-      commit_index => CommitIndex,
-      last_applied => CommitIndex,
-      log => Log,
-      machine_apply_fun => wrap_machine_fun(MachineApplyFun),
-      machine_state => MacState,
-      % for snapshots
-      initial_machine_state => InitialMachineState,
-      snapshot_index_term => SnapshotIndexTerm,
-      snapshot_points => #{}}.
+    State = #{id => Id,
+              cluster_id => ClusterId,
+              cluster => Cluster0,
+              cluster_change_permitted => false,
+              cluster_index_term => {0, 0}, %% TODO?
+              pending_cluster_changes => [],
+              current_term => CurrentTerm,
+              voted_for => VotedFor,
+              commit_index => CommitIndex,
+              last_applied => CommitIndex,
+              log => Log,
+              machine_apply_fun => wrap_machine_fun(MachineApplyFun),
+              machine_state => MacState,
+              % for snapshots
+              initial_machine_state => InitialMachineState,
+              snapshot_index_term => SnapshotIndexTerm,
+              snapshot_points => #{},
+              sync_scheduled => false},
+    % Find last cluster change and idxterm and use as initial cluster
+    {ClusterIndexTerm, Cluster} =
+        fold_log_from(CommitIndex,
+                      fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
+                              {{Idx, Term}, Cluster};
+                         (_, Acc) ->
+                              Acc
+                      end, {SnapshotIndexTerm, Cluster0}, Log),
+    State#{cluster => Cluster,
+           cluster_index_term => ClusterIndexTerm}.
+
+fold_log_from(From, Folder, St, Log) ->
+    case ra_log:take(From, 5, Log) of
+        [] ->
+            St;
+        Entries ->
+            St1 = lists:foldl(Folder, St, Entries),
+            fold_log_from(From+5, Folder, St1, Log)
+    end.
 
 wrap_machine_fun(Fun) ->
     case erlang:fun_info(Fun, arity) of
@@ -227,8 +248,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
         {Sync, {Idx, _} = IdxTerm, State0}  ->
-            % ?DBG("~p ~p command appended to log at ~p~n",
-            %      [Id, first_or_atom(Cmd), IdxTerm]),
+            % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
+            %      [Id, first_or_atom(Cmd), IdxTerm, Sync]),
             {State1, Effects0} =
                 case Sync of
                     sync ->
@@ -259,8 +280,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             {leader, State, Effects}
     end;
 handle_leader(sync, State0 = #{id := Id, log := Log}) ->
-    Idx = ra_log:next_index(Log) - 1, % TODO better function for this.
-    % ?DBG("~p syncing log at ~p~n", [Id, Idx]),
+    {Idx, _} = ra_log:last_index_term(Log),
     ok = ra_log:sync(Log),
     {State, Effects} = evaluate_quorum(update_match_index(Id, Idx, State0)),
     {leader, State, Effects};
@@ -742,7 +762,7 @@ apply_with(_ApplyFun, {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
             {State, MacSt, Effects};
 apply_with(_ApplyFun, {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
          {State0, MacSt, Effects0}) ->
-            ?DBG("ra cluster change to ~p~n", [New]),
+            ?DBG("applying ra cluster change to ~p~n", [New]),
             Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
             State = State0#{cluster_change_permitted => true},
             % add pending cluster change as next event

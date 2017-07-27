@@ -25,7 +25,8 @@
                 directory :: list(),
                 file :: file:io_device(),
                 kv :: reference(),
-                index = #{} :: #{ra_index() => {ra_term(), offset()}}
+                index = #{} :: #{ra_index() => {ra_term(), offset()}},
+                cache = undefined :: maybe(log_entry()) % last written log entry
                }).
 
 -type ra_log_file_state() :: term().
@@ -49,7 +50,9 @@ init(#{directory := Dir}) ->
                     last_index = LastIndex,
                     kv = Kv, index = Index},
 
-    maybe_append_0_0_entry(State0).
+    State = maybe_append_0_0_entry(State0),
+    ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
+    State.
 
 -spec close(ra_log_file_state()) -> ok.
 close(#state{file = Fd, kv = Kv}) ->
@@ -62,7 +65,8 @@ sync(#state{file = Fd}) ->
     ok = file:sync(Fd),
     ok.
 
-write(State = #state{file = Fd, index = Index}, {Idx, Term, Data}, Sync) ->
+write(State = #state{file = Fd, index = Index},
+      {Idx, Term, Data} = Entry, Sync) ->
     {ok, Pos} = file:position(Fd, eof),
     DataB = term_to_binary(Data),
     Size = size(DataB),
@@ -74,6 +78,7 @@ write(State = #state{file = Fd, index = Index}, {Idx, Term, Data}, Sync) ->
     end,
 
     State#state{last_index = Idx,
+                cache = Entry,
                 index = Index#{Idx => {Term, Pos}}}.
 
 -spec append(Entry :: log_entry(),
@@ -96,15 +101,15 @@ append(Entry, overwrite, Sync, State) ->
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     [log_entry()].
-take(Start, Num, #state{file = Fd, index = Index}) ->
+take(Start, Num, #state{file = _Fd, index = _Index} = State) ->
     lists:foldl(fun (Idx, Acc) ->
-                        case Index of
-                            #{Idx := {Term, Offset}} ->
-                                [read_entry_at(Idx, Term, Offset, Fd) | Acc];
-                            _ ->
-                                Acc
-                        end
+                        maybe_append(fetch(Idx, State), Acc)
                 end, [], lists:seq(Start + Num - 1, Start, -1)).
+
+maybe_append(undefined, L) ->
+    L;
+maybe_append(I, L) ->
+    [I | L].
 
 -spec last(ra_log_file_state()) ->
     maybe(log_entry()).
@@ -133,6 +138,8 @@ next_index(#state{last_index = LastIdx}) ->
 
 -spec fetch(ra_index(), ra_log_file_state()) ->
     maybe(log_entry()).
+fetch(Idx, #state{cache = {Idx, _, _} = Entry}) ->
+    Entry;
 fetch(Idx, #state{file = Fd, index = Index}) ->
     case Index of
         #{Idx := {Term, Offset}} ->
@@ -159,7 +166,8 @@ write_snapshot({Idx, _, _, _} = Snapshot,
     File = filename:join(Dir, "ra.snapshot"),
     file:write_file(File, term_to_binary(Snapshot)),
     % just deleting entries in the index here no on disk gc atm
-    State#state{index = maps:filter(fun(K, _) -> K > Idx end, Index)}.
+    State#state{index = maps:filter(fun(K, _) -> K > Idx end, Index),
+                cache = undefined}.
 
 -spec read_snapshot(State :: ra_log_file_state()) ->
     maybe(ra_log:ra_log_snapshot()).

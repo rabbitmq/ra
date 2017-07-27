@@ -13,3 +13,5 @@ DEP_PLUGINS = elvis_mk
 DIALYZER_OPTS += --src -r test
 
 include erlang.mk
+
+shell: app
