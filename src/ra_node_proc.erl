@@ -352,6 +352,8 @@ handle_effect(schedule_sync, _EvtType, State, Actions) ->
     % No timer is actually started, instead it is enqueued to be processed after
     % all currently queued events.
     % {State, [{event_timeout, 0, sync} |  Actions]}.
+    % TODO: consider allowing sync stategy to be controlled via configuration
+    % Schedule sync after sync interval
     {State#state{sync_scheduled = true},
      [{generic_timeout, ?SYNC_INTERVAL, sync} |  Actions]}.
 
