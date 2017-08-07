@@ -250,10 +250,12 @@ terminate(Reason, _StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-%% TODO:
-format_status(_Opt, [_PDict, _StateName, _State]) ->
-    Status = some_term,
-    Status.
+%% TODO: we should provide a nice overview here including status
+format_status(Opt, [_PDict, StateName, #state{node_state = #{id := Id}}]) ->
+    [{id, Id},
+     {opt, Opt},
+     {raft_state, StateName}
+    ].
 
 %%%===================================================================
 %%% Internal functions

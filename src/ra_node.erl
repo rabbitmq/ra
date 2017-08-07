@@ -29,7 +29,6 @@
         fun((ra_index(), term(), term()) -> ra_machine_apply_fun_return()) |
         fun((term(), term()) -> ra_machine_apply_fun_return()).
 
-% TODO: some of this state needs to be persisted
 -type ra_node_state() ::
     #{id => ra_node_id(),
       leader_id => maybe(ra_node_id()),
@@ -93,6 +92,7 @@ name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
 
+% TODO: needs more tests around recovery / restart
 -spec init(ra_node_config()) -> ra_node_state().
 init(#{id := Id,
        initial_nodes := InitialNodes,
@@ -117,7 +117,7 @@ init(#{id := Id,
               cluster_id => ClusterId,
               cluster => Cluster0,
               cluster_change_permitted => false,
-              cluster_index_term => {0, 0}, %% TODO?
+              cluster_index_term => {0, 0},
               pending_cluster_changes => [],
               current_term => CurrentTerm,
               voted_for => VotedFor,
@@ -163,7 +163,8 @@ wrap_machine_fun(Fun) ->
 % the peer id in the append_entries_reply message is an artifact of
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
 % is joined with the msg itself. In this instance it is treated as an info
-% message. TODO: we probably cannot rely on this behaviour. This may need to
+% message.
+% TODO: we probably cannot rely on this behaviour. This may need to
 % change when the peer proxy gets refactored.
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
@@ -261,12 +262,12 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                         % Ask ra_node_proc to schedule a sync event.
                         {State0, [schedule_sync]}
                 end,
-            % only "pipeline" in response to a command
+            % Only "pipeline" in response to a command
             % Observation: pipelining and "urgent" flag go together?
             {State, Rpcs} = make_pipelined_rpcs(State1),
             Effects1 = [{send_rpcs, true, Rpcs} | Effects0],
             % check if a reply is required.
-            % TODO: can this be made a bit nicer/more explicit?
+            % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
                               Effects1;
@@ -499,7 +500,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     ?DBG("~p: installing snapshot at index ~p in ~p", [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
     Log = ra_log:write_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
-    % TODO should we also update metadata?
+    % TODO: should we also update metadata?
     State = State0#{log => Log,
                     current_term => Term,
                     commit_index => LastIndex,
@@ -540,11 +541,8 @@ append_entries_or_snapshot(PeerId, Next,
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log) of
         PrevTerm when PrevTerm =/= undefined ->
-            % TODO: either we could keep some state of the last append entries
-            % generated to see if we really need to load a new set of entries
-            % or we could rely on the log implementation to keep an LRU like
-            % cache to avoid reloading receintly read entries from persistent
-            % storage.
+            % The log backend implementation will be responsible for
+            % keeping a cache of recently accessed entries.
             Entries = ra_log:take(Next, 5, Log),
             LastIndex = case Entries of
                             [] -> PrevIdx;
@@ -660,9 +658,6 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-% TODO: optimisation idea
-% to avoid fsyncing _before_ we reply to a time sensitive interaction we could
-% update_meta using a next_event action.
 update_meta(Updates, #{log := Log0} = State) ->
     {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
                               {ok, Acc} = ra_log:write_meta(K, V, Acc0, false),
