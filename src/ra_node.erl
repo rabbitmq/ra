@@ -108,7 +108,7 @@ init(#{id := Id,
     {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log) of
             undefined ->
-                {0, make_cluster(InitialNodes), InitialMachineState, {0, 0}};
+                {0, make_cluster(Id, InitialNodes), InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
@@ -132,6 +132,8 @@ init(#{id := Id,
               snapshot_points => #{},
               sync_scheduled => false},
     % Find last cluster change and idxterm and use as initial cluster
+    % This is required as otherwise a node could restart without any known
+    % peers and become a leader
     {ClusterIndexTerm, Cluster} =
         fold_log_from(CommitIndex,
                       fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
@@ -141,24 +143,6 @@ init(#{id := Id,
                       end, {SnapshotIndexTerm, Cluster0}, Log),
     State#{cluster => Cluster,
            cluster_index_term => ClusterIndexTerm}.
-
-fold_log_from(From, Folder, St, Log) ->
-    case ra_log:take(From, 5, Log) of
-        [] ->
-            St;
-        Entries ->
-            St1 = lists:foldl(Folder, St, Entries),
-            fold_log_from(From+5, Folder, St1, Log)
-    end.
-
-wrap_machine_fun(Fun) ->
-    case erlang:fun_info(Fun, arity) of
-        {arity, 2} ->
-            % user is not insterested in the index
-            % of the entry
-            fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
-        {arity, 3} -> Fun
-    end.
 
 % the peer id in the append_entries_reply message is an artifact of
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
@@ -704,10 +688,17 @@ fetch_term(Idx, #{log := Log}) ->
 fetch_entries(From, To, #{log := Log}) ->
     ra_log:take(From, To - From + 1, Log).
 
-make_cluster(Nodes) ->
-    lists:foldl(fun(N, Acc) ->
-                        Acc#{N => #{match_index => 0}}
-                end, #{}, Nodes).
+make_cluster(Self, Nodes) ->
+    case lists:foldl(fun(N, Acc) ->
+                                  Acc#{N => #{match_index => 0}}
+                          end, #{}, Nodes) of
+        #{Self := _} = Cluster ->
+            % current node is already in cluster - do nothing
+            Cluster;
+        Cluster ->
+            % add current node to cluster
+            Cluster#{Self => #{match_index => 0}}
+    end.
 
 initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     PeerIds = peer_ids(State),
@@ -916,6 +907,24 @@ update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
         #{Id := Node} ->
             State#{cluster := Cluster#{Id := Node#{match_index => Idx}}};
         _ -> State
+    end.
+
+fold_log_from(From, Folder, St, Log) ->
+    case ra_log:take(From, 5, Log) of
+        [] ->
+            St;
+        Entries ->
+            St1 = lists:foldl(Folder, St, Entries),
+            fold_log_from(From+5, Folder, St1, Log)
+    end.
+
+wrap_machine_fun(Fun) ->
+    case erlang:fun_info(Fun, arity) of
+        {arity, 2} ->
+            % user is not insterested in the index
+            % of the entry
+            fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
+        {arity, 3} -> Fun
     end.
 
 %%% ===================

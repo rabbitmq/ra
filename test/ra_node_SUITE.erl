@@ -9,6 +9,7 @@
 all() ->
     [
      init,
+     init_restores_cluster_changes,
      election_timeout,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
@@ -59,7 +60,7 @@ init(_Config) ->
                  log_init_args => #{},
                  apply_fun => ApplyFun,
                  cluster_id => ClusterId,
-                 initial_nodes => maps:keys(Cluster),
+                 initial_nodes => [], % init without known peers
                  initial_state => undefined},
     % new
     #{current_term := 0,
@@ -81,6 +82,38 @@ init(_Config) ->
       machine_state := "hi1+2+3",
       cluster := Cluster,
       voted_for := some_node} = ra_node:init(InitConf),
+    ok.
+
+init_restores_cluster_changes(_Config) ->
+    InitConf = #{id => n1,
+                 log_module => ra_log_memory,
+                 log_init_args => #{},
+                 apply_fun => fun erlang:'+'/2,
+                 cluster_id => some_cluster,
+                 initial_nodes => [], % init without known peers
+                 initial_state => 0},
+    % new
+    {leader, State00, _} =
+        ra_node:handle_candidate(#request_vote_result{term = 0,
+                                                      vote_granted = true},
+                                 (ra_node:init(InitConf))#{votes => 0,
+                                                           voted_for => n1}),
+    {leader, State0 = #{cluster := Cluster0}, _} =
+        ra_node:handle_leader({command, noop}, State00),
+    {leader, State, _} = ra_node:handle_leader(sync, State0),
+    ?assert(maps:size(Cluster0) =:= 1),
+
+    % n2 joins
+    {leader, #{cluster := Cluster,
+               log := Log0}, _} =
+        ra_node:handle_leader({command, {'$ra_join', self(),
+                                         n2, await_consensus}}, State),
+    ?assert(maps:size(Cluster) =:= 2),
+    % intercept ra_log:init call to simulate persisted log data
+    ok = meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, init, fun (_, _) -> Log0 end),
+
+    #{cluster := #{n1 := _, n2 := _}} = ra_node:init(InitConf),
     ok.
 
 election_timeout(_Config) ->
