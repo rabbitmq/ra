@@ -424,7 +424,7 @@ handle_follower(#append_entries_rpc{term = Term},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
-    {follower, maps:without([leader_id], State), [{reply, Reply}]};
+    {follower, State, [{reply, Reply}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{id := Id, current_term := Term,
                           voted_for := VotedFor})
@@ -710,7 +710,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(Commit, State0 = #{id := _Id,
+apply_to(Commit, State0 = #{id := Id,
                             last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
                             machine_state := MacState0})
@@ -719,12 +719,12 @@ apply_to(Commit, State0 = #{id := _Id,
         [] ->
             {State0, []};
         Entries ->
-            % ?DBG("~p: applying {Index, Term}: ~p", [Id, [{I,T} || {I, T, _} <- Entries]]),
             {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
                             {State0, MacState0, []}, Entries),
-            {LastEntryIdx, _, _} = lists:last(Entries),
+            {LastEntryIdx, LastEntryTerm, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
+            ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
             {State#{last_applied => NewCommit,
                     commit_index => NewCommit,
                     machine_state => MacState}, NewEffects}

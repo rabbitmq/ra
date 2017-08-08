@@ -36,12 +36,19 @@ ps(Peer) ->
     start_persistent_node(p_test, [{p_test, Peer}], fun erlang:'+'/2, 0),
     ok.
 
-p_cmds(Node0, C, Num) ->
+p_tp(Node0, C, Num) ->
     Node = {p_test, Node0},
     timer:tc(fun () ->
                      [ra:send(Node, C) || _ <- lists:seq(2, Num)],
                      ra:send_and_await_consensus(Node, C)
              end).
+
+p_lat(Node0, C) ->
+    Node = {p_test, Node0},
+    timer:tc(fun () ->
+                     ra:send_and_await_consensus(Node, C)
+             end).
+
 
 start_persistent_node(Name, Nodes, ApplyFun, InitialState) ->
     Dir = filename:join(["./tmp", ra_lib:to_list(node()),

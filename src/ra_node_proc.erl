@@ -27,13 +27,16 @@
         ]).
 
 -define(SERVER, ?MODULE).
--define(TEST_LOG, ra_log_memory).
 -define(DEFAULT_BROADCAST_TIME, 100).
--define(SYNC_INTERVAL, 10).
+% this should be approx twice as long as the time it takes to perform an
+% fsync operation to increase the chance of committing only based on peers having
+% persisted the logs - currently set to quite a generous default.
+% TODO: make configurable.
+-define(DEFAULT_SYNC_INTERVAL, 20).
 
 
--type command_reply_mode() :: after_log_append | await_consensus
-                                             | notify_on_consensus.
+-type command_reply_mode() ::
+    after_log_append | await_consensus | notify_on_consensus.
 
 -type query_fun() :: fun((term()) -> term()).
 
@@ -107,10 +110,19 @@ init([Config]) ->
     #{id := Id,
       cluster := Cluster,
       machine_state := MacState} = NodeState = ra_node:init(Config),
+    Peers = maps:keys(maps:remove(Id, Cluster)),
+    % connect to each peer node before starting election timeout
+    % this should allow a current leader to detect the node is back and begin
+    % sending append entries again
+    lists:foreach(fun ({_, Node}) ->
+                          net_kernel:connect_node(Node);
+                      (_) -> node()
+                  end, Peers),
     State = #state{node_state = NodeState,
                    broadcast_time = ?DEFAULT_BROADCAST_TIME},
-    ?DBG("~p init machine_state ~p Cluster ~p~n",
-         [Id, MacState, maps:keys(Cluster)]),
+    ?DBG("~p init machine_state ~p Cluster ~p~n", [Id, MacState, Peers]),
+    % TODO: should we have a longer election timeout here if a prior leader
+    % has been voted for as this would imply the existence of a current cluster
     {ok, follower, State, election_timeout_action(follower, State)}.
 
 %% callback mode
@@ -155,8 +167,10 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(EventType, sync, State0) ->
-    {leader, State1, Effects} = handle_leader(sync,
-                                              State0#state{sync_scheduled = false}),
+    ?DBG("receiving sync at ~p", [erlang:monotonic_time(millisecond)]),
+    {Taken, {leader, State1, Effects}} =
+        timer:tc(fun () -> handle_leader(sync, State0#state{sync_scheduled = false}) end),
+    ?DBG("sync took ~bms", [Taken]),
     {State, Actions} = handle_effects(Effects, EventType, State1),
     {keep_state, State, Actions};
 leader(EventType, Msg, State0) ->
@@ -354,8 +368,9 @@ handle_effect(schedule_sync, _EvtType, State, Actions) ->
     % {State, [{event_timeout, 0, sync} |  Actions]}.
     % TODO: consider allowing sync stategy to be controlled via configuration
     % Schedule sync after sync interval
+    ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
     {State#state{sync_scheduled = true},
-     [{generic_timeout, ?SYNC_INTERVAL, sync} |  Actions]}.
+     [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]}.
 
 
 
@@ -364,6 +379,9 @@ election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
     {state_timeout, T, election_timeout};
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 5) + (Timeout * 2),
+    {state_timeout, T, election_timeout};
+election_timeout_action(initial, #state{broadcast_time = Timeout}) ->
+    T = rand:uniform(Timeout * 10),
     {state_timeout, T, election_timeout}.
 
 follower_leader_change(#state{node_state = #{leader_id := L}},
