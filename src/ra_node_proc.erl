@@ -32,7 +32,7 @@
 % fsync operation to increase the chance of committing only based on peers having
 % persisted the logs - currently set to quite a generous default.
 % TODO: make configurable.
--define(DEFAULT_SYNC_INTERVAL, 20).
+-define(DEFAULT_SYNC_INTERVAL, 50).
 
 
 -type command_reply_mode() ::
@@ -57,6 +57,7 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
+                monitors = #{} :: #{pid() => reference()},
                 sync_scheduled = false :: boolean(),
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
@@ -156,6 +157,13 @@ leader({call, From}, {state_query, Spec},
          State = #state{node_state = NodeState}) ->
     Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+leader(EventType, sync, State0) ->
+    % ?DBG("receiving sync at ~p", [erlang:monotonic_time(millisecond)]),
+    {_Taken, {leader, State1, Effects}} =
+        timer:tc(fun () -> handle_leader(sync, State0#state{sync_scheduled = false}) end),
+    % ?DBG("sync took ~bms", [Taken]),
+    {State, Actions} = handle_effects(Effects, EventType, State1),
+    {keep_state, State, Actions};
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
                        broadcast_time = Interval,
@@ -166,13 +174,28 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     {ok, Proxy} = ra_proxy:start_link(self(), Interval),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
-leader(EventType, sync, State0) ->
-    ?DBG("receiving sync at ~p", [erlang:monotonic_time(millisecond)]),
-    {Taken, {leader, State1, Effects}} =
-        timer:tc(fun () -> handle_leader(sync, State0#state{sync_scheduled = false}) end),
-    ?DBG("sync took ~bms", [Taken]),
-    {State, Actions} = handle_effects(Effects, EventType, State1),
-    {keep_state, State, Actions};
+leader(info, {'DOWN', MRef, process, Pid, _Info},
+       State0 = #state{monitors = Monitors0,
+                       node_state = NodeState0}) ->
+    case maps:take(Pid, Monitors0) of
+        {MRef, Monitors} ->
+            % there is a monitor with the correct ref - create next_event action
+            {leader, NodeState, Effects} =
+                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid}, after_log_append}},
+                                      NodeState0),
+            {State, Actions0} = handle_effects(Effects, call,
+                                              State0#state{node_state = NodeState,
+                                                           monitors = Monitors}),
+            % remove replies
+            % TODO: make this nicer
+            Actions = lists:filter(fun({reply, _}) -> false;
+                                      ({reply, _, _}) -> false;
+                                      (_) -> true
+                                   end, Actions0),
+            {keep_state, State, Actions};
+        error ->
+            {keep_state, State0, []}
+    end;
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -189,6 +212,7 @@ leader(EventType, Msg, State0) ->
             {State, _Actions} = handle_effects(Effects, EventType, State1),
             {stop, normal, State}
     end.
+
 
 candidate({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
@@ -313,6 +337,8 @@ handle_effects(Effects, EvtType, State0) ->
                         handle_effect(Effect, EvtType, State, Actions)
                 end, {State0, []}, Effects).
 
+% -spec handle_effect(ra_node:ra_effect(), term(), #state{}, list()) ->
+%     {#state{}, list()}.
 handle_effect({next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
@@ -362,13 +388,33 @@ handle_effect({snapshot_point, Index}, _EvtType,
 handle_effect(schedule_sync, _EvtType, State = #state{sync_scheduled = true},
               Actions) ->
     {State, Actions};
+handle_effect({monitor, process, Pid}, _EvtType,
+              #state{monitors = Monitors} = State, Actions) ->
+    case Monitors of
+        #{Pid := _MRef} ->
+            % monitor is already in place - do nothing
+            {State, Actions};
+        _ ->
+            MRef = erlang:monitor(process, Pid),
+            {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
+    end;
+handle_effect({demonitor, Pid}, _EvtType,
+              #state{monitors = Monitors0} = State, Actions) ->
+    case maps:take(Pid, Monitors0) of
+        {MRef, Monitors} ->
+            true = erlang:demonitor(MRef),
+            {State#state{monitors = Monitors}, Actions};
+        error ->
+            % ref not known - do nothing
+            {State, Actions}
+    end;
 handle_effect(schedule_sync, _EvtType, State, Actions) ->
     % No timer is actually started, instead it is enqueued to be processed after
     % all currently queued events.
     % {State, [{event_timeout, 0, sync} |  Actions]}.
     % TODO: consider allowing sync stategy to be controlled via configuration
     % Schedule sync after sync interval
-    ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
+    % ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
     {State#state{sync_scheduled = true},
      [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]}.
 
@@ -379,9 +425,6 @@ election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
     {state_timeout, T, election_timeout};
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * 5) + (Timeout * 2),
-    {state_timeout, T, election_timeout};
-election_timeout_action(initial, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * 10),
     {state_timeout, T, election_timeout}.
 
 follower_leader_change(#state{node_state = #{leader_id := L}},

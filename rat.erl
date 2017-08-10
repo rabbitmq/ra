@@ -32,6 +32,10 @@ pj(Leader) ->
     start_persistent_node(p_test, [{p_test, Leader}], fun erlang:'+'/2, 0),
     ok.
 
+ps() ->
+    start_persistent_node(p_test, [], fun erlang:'+'/2, 0),
+    ok.
+
 ps(Peer) ->
     start_persistent_node(p_test, [{p_test, Peer}], fun erlang:'+'/2, 0),
     ok.
@@ -40,7 +44,7 @@ p_tp(Node0, C, Num) ->
     Node = {p_test, Node0},
     timer:tc(fun () ->
                      [ra:send(Node, C) || _ <- lists:seq(2, Num)],
-                     ra:send_and_await_consensus(Node, C)
+                     ra:send_and_await_consensus(Node, C, 30000)
              end).
 
 p_lat(Node0, C) ->

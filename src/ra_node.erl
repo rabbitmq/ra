@@ -16,17 +16,19 @@
 
 -type ra_machine_effect() ::
     {send_msg, pid() | atom() | {atom(), atom()}, term()} |
-    {release, [ra_index()]} | % for releasing individual raft indices
-    % "release" all indices up to and including this
+    {monitor, process, pid()} |
+    {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
     % current machine state
     {release_cursor, ra_index()} |
     % instruct ra to record a snapshot point at the current index
     {snapshot_point, ra_index()}.
 
+-type ra_machine_command() :: {down, pid()} | term().
+
 -type ra_machine_apply_fun_return() :: term() | {effects, term(), [ra_machine_effect()]}.
 -type ra_machine_apply_fun() ::
-        fun((ra_index(), term(), term()) -> ra_machine_apply_fun_return()) |
+        fun((ra_index(), Command :: ra_machine_command(), term()) -> ra_machine_apply_fun_return()) |
         fun((term(), term()) -> ra_machine_apply_fun_return()).
 
 -type ra_node_state() ::
@@ -64,11 +66,12 @@
                   sync. % time to fsync
 
 -type ra_effect() ::
+    ra_machine_effect() |
     {reply, ra_msg()} |
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
-    {send_msg, pid(), term()} |
+    % {send_msg, pid(), term()} |
     schedule_sync.
 
 -type ra_effects() :: [ra_effect()].
@@ -85,7 +88,8 @@
               ra_node_config/0,
               ra_machine_apply_fun/0,
               ra_msg/0,
-              ra_effect/0]).
+              ra_effect/0,
+              ra_effects/0]).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
@@ -405,10 +409,14 @@ handle_follower(#append_entries_rpc{term = Term,
             %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
 
             % only apply log related effects on non-leader
+            % monitor effects need to be done as well in case a follower is required
+            % to take over as leader.
             {State, Effects0} = apply_to(LeaderCommit,
                                          State1#{leader_id => LeaderId}),
             Effects = lists:filter(fun ({release_cursor, _}) -> true;
                                        ({snapshot_point, _}) -> true;
+                                       ({monitor, process, _}) -> true;
+                                       ({demonitor, _}) -> true;
                                        (_) -> false
                                    end, Effects0),
             Reply = append_entries_reply(Term, true, State),
@@ -841,7 +849,9 @@ append_log_follower(Entry, State = #{log := Log0}) ->
 maybe_sync_log([], _State) ->
     ok;
 maybe_sync_log(_Entries, #{log := Log0}) ->
-    ra_log:sync(Log0).
+    {ST, _} = timer:tc(fun () -> ra_log:sync(Log0) end),
+    ?DBG("sync took ~p~n", [ST]),
+    ok.
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
