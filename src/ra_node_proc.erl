@@ -51,6 +51,8 @@
 
 -type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm()).
 
+-type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
+
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0]).
 
@@ -65,6 +67,7 @@
 %%% API
 %%%===================================================================
 
+-spec start_link(ra_node:ra_node_config()) -> gen_statem_start_ret().
 start_link(Config = #{id := Id}) ->
     Name = ra_node_id_to_local_name(Id),
     gen_statem:start_link({local, Name}, ?MODULE, [Config], []).

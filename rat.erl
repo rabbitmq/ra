@@ -32,13 +32,21 @@ pj(Leader) ->
     start_persistent_node(p_test, [{p_test, Leader}], fun erlang:'+'/2, 0),
     ok.
 
+pj(Leader, Vol) ->
+    Dir = filename:join(["/Volumes", Vol]),
+    {ok, _, _Leader} = ra:add_node({p_test, Leader}, {p_test, node()}),
+    start_persistent_node0(p_test, [{p_test, Leader}], fun erlang:'+'/2, 0, Dir),
+    ok.
+
 ps() ->
     start_persistent_node(p_test, [], fun erlang:'+'/2, 0),
     ok.
 
-ps(Peer) ->
-    start_persistent_node(p_test, [{p_test, Peer}], fun erlang:'+'/2, 0),
+ps(Vol) ->
+    Dir = filename:join(["/Volumes", Vol]),
+    start_persistent_node0(p_test, [], fun erlang:'+'/2, 0, Dir),
     ok.
+
 
 p_tp(Node0, C, Num) ->
     Node = {p_test, Node0},
@@ -53,11 +61,13 @@ p_lat(Node0, C) ->
                      ra:send_and_await_consensus(Node, C)
              end).
 
-
 start_persistent_node(Name, Nodes, ApplyFun, InitialState) ->
     Dir = filename:join(["./tmp", ra_lib:to_list(node()),
                          ra_lib:to_list(Name)]),
     ok = filelib:ensure_dir(Dir),
+    start_persistent_node0(Name, Nodes, ApplyFun, InitialState, Dir).
+
+start_persistent_node0(Name, Nodes, ApplyFun, InitialState, Dir) ->
     Conf = #{log_module => ra_log_file,
              log_init_args => #{directory => Dir},
              initial_nodes => Nodes,
