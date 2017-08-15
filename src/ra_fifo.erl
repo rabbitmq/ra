@@ -21,6 +21,10 @@
 
 -type raq_msg() :: {msg, Idx :: idx(), Msg :: msg()}.
 
+-define(METRICS_TABLE, ra_fifo_metrics).
+% metrics tuple format:
+% {Key, Enqueues, Checkouts, Settlements, Returns}
+
 -record(customer, {checked_out = #{} :: #{MsgIndex :: idx() => {RaftIndex :: idx(), msg()}},
                    num = 0 :: non_neg_integer(),
                    seen = 0 :: non_neg_integer(), % number of allocated messages
@@ -48,11 +52,13 @@ apply(RaftIdx, {enqueue, Msg}, #state{queue = Queue, low_index = Low,
     State1 = State0#state{queue = Queue#{Next => {RaftIdx, Msg}},
                           low_index = min(Next, Low), next_index = Next+1},
     {State, Effects} = checkout(State1),
-    {effects, State, Effects};
+    Metric = {incr_metrics, ?METRICS_TABLE, [{2, 1}, {3, length(Effects)}]},
+    {effects, State, [Metric | Effects]};
 apply(_RaftId, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State, Effects} = checkout(State1),
-    {effects, State, [{monitor, process, Customer} | Effects]};
+    Metric = {incr_metrics, ?METRICS_TABLE, [{3, length(Effects)}]},
+    {effects, State, [{monitor, process, Customer}, Metric | Effects]};
 apply(_RaftId, {settle, Idx, CustomerId},
       #state{customers = Custs0, service_queue = SQ0} = State0) ->
     case Custs0 of
@@ -62,7 +68,9 @@ apply(_RaftId, {settle, Idx, CustomerId},
                 update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
             {State, Effects} = checkout(State0#state{customers = Custs,
                                                      service_queue = SQ}),
-            {effects, State, Efxs ++ Effects};
+            Metric = {incr_metrics, ?METRICS_TABLE,
+                      [{3, length(Effects)}, {4, 1}]},
+            {effects, State, Efxs ++ [Metric | Effects]};
         _ ->
             {effects, State0, []}
     end;
@@ -73,7 +81,8 @@ apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
             State = maps:fold(fun (MsgId, Msg, S) ->
                                       return(MsgId, Msg, S)
                               end, State0, Checked),
-            {effects, State#state{customers = Custs}, []};
+            Metric = {incr_metrics, ?METRICS_TABLE, [{5, maps:size(Checked)}]},
+            {effects, State#state{customers = Custs}, [Metric]};
         error ->
             % already removed - do nothing
             {effects, State0, []}
