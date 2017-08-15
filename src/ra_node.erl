@@ -71,7 +71,7 @@
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
-    % {send_msg, pid(), term()} |
+    {incr_metrics, Table :: atom(), [{Pos :: non_neg_integer(), Incr :: integer()}]} |
     schedule_sync.
 
 -type ra_effects() :: [ra_effect()].
@@ -175,7 +175,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             {State, Effects0, Applied} = evaluate_quorum(State1),
             Rpcs = make_rpcs(State),
             Effects = [{send_rpcs, false, Rpcs},
-                       {incr_ra_metrics, [{3, Applied}]} | Effects0],
+                       {incr_metrics, ra_metrics, [{3, Applied}]} | Effects0],
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -260,7 +260,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             % Observation: pipelining and "urgent" flag go together?
             {State, Rpcs} = make_pipelined_rpcs(State1),
             Effects1 = [{send_rpcs, true, Rpcs},
-                        {incr_ra_metrics, [{2, 1}, {3, Applied}]}
+                        {incr_metrics, ra_metrics, [{2, 1}, {3, Applied}]}
                         | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
@@ -281,7 +281,7 @@ handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     ok = ra_log:sync(Log),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
-    {leader, State, [{incr_ra_metrics, [{3, Applied}]} | Effects]};
+    {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -430,7 +430,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                    end, Effects0),
             Reply = append_entries_reply(Term, true, State),
             {follower, State, [{reply, Reply},
-                               {incr_ra_metrics, [{3, Applied}]} | Effects]};
+                               {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
         false ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),

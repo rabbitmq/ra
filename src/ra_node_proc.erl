@@ -425,8 +425,9 @@ handle_effect(schedule_sync, _EvtType, State, Actions) ->
     % ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
     {State#state{sync_scheduled = true},
      [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]};
-handle_effect({incr_ra_metrics, Ops}, _EvtType, State = #state{name = Key}, Actions) ->
-    _ = ets:update_counter(ra_metrics, Key, Ops),
+handle_effect({incr_metrics, Table, Ops}, _EvtType,
+              State = #state{name = Key}, Actions) ->
+    _ = ets:update_counter(Table, Key, Ops),
     {State, Actions}.
 
 

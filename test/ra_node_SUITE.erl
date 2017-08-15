@@ -461,7 +461,7 @@ leader_node_join(_Config) ->
                                 prev_log_index = 3,
                                 prev_log_term = 5,
                                 leader_commit = 3}}]},
-     {incr_ra_metrics,[{2,1},{3,0}]}] = Effects,
+     {incr_metrics, ra_metrics, [{2,1},{3,0}]}] = Effects,
     ok.
 
 leader_node_leave(_Config) ->
