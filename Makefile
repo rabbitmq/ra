@@ -1,6 +1,7 @@
 PROJECT = ra
 PROJECT_DESCRIPTION = Experimental raft library
 PROJECT_VERSION = 0.1.0
+PROJECT_MOD = ra_app
 
 TEST_DEPS = proper meck eunit_formatters
 

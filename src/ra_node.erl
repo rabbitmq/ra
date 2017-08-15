@@ -1,4 +1,4 @@
-module(ra_node).
+-module(ra_node).
 
 -include("ra.hrl").
 
