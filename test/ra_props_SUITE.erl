@@ -19,6 +19,13 @@ groups() ->
 
 -type op() :: {add, 1..100} | {subtract, 1..100} | {divide, 2..10} | {mult, 1..10}.
 
+init_per_suite(Config) ->
+    application:ensure_all_started(ra),
+    Config.
+
+end_per_suite(Config) ->
+    application:stop(ra),
+    Config.
 
 %% this test mixes associative with non-associative operations to tests that
 %% all nodes apply operations in the same order

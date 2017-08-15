@@ -38,6 +38,14 @@ groups() ->
 
 suite() -> [{timetrap, {seconds, 30}}].
 
+init_per_suite(Config) ->
+    application:ensure_all_started(ra),
+    Config.
+
+end_per_suite(Config) ->
+    application:stop(ra),
+    Config.
+
 init_per_group(ra_log_memory, Config) ->
     Fun = fun (_TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->

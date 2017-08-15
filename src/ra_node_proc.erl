@@ -57,6 +57,7 @@
               ra_cmd_ret/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
+                name :: atom(),
                 broadcast_time :: non_neg_integer(),
                 proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
@@ -113,6 +114,8 @@ init([Config]) ->
     process_flag(trap_exit, true),
     #{id := Id, cluster := Cluster,
       machine_state := MacState} = NodeState = ra_node:init(Config),
+    Key = ra_node_id_to_local_name(Id),
+    _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
     % connect to each peer node before starting election timeout
     % this should allow a current leader to detect the node is back and begin
     % sending append entries again
@@ -121,7 +124,7 @@ init([Config]) ->
                               net_kernel:connect_node(Node);
                           (_) -> node()
                       end, Peers),
-    State = #state{node_state = NodeState,
+    State = #state{node_state = NodeState, name = Key,
                    broadcast_time = ?DEFAULT_BROADCAST_TIME},
     ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
@@ -281,8 +284,10 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, _StateName,
-          State = #state{node_state = NodeState = #{id := Id}}) ->
+          State = #state{node_state = NodeState = #{id := Id},
+                         name = Key}) ->
     ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
+    _ = ets:delete(ra_metrics, Key),
     _ = stop_proxy(State),
     _ = ra_node:terminate(NodeState),
     ok.
@@ -418,8 +423,10 @@ handle_effect(schedule_sync, _EvtType, State, Actions) ->
     % Schedule sync after sync interval
     % ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
     {State#state{sync_scheduled = true},
-     [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]}.
-
+     [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]};
+handle_effect({incr_ra_metrics, Ops}, _EvtType, State = #state{name = Key}, Actions) ->
+    _ = ets:update_counter(ra_metrics, Key, Ops),
+    {State, Actions}.
 
 
 election_timeout_action(follower, #state{broadcast_time = Timeout}) ->

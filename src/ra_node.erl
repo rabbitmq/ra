@@ -170,9 +170,10 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, LastIdx+1)},
             State1 = update_peer(PeerId, Peer, State0),
-            {State, Effects0} = evaluate_quorum(State1),
+            {State, Effects0, Applied} = evaluate_quorum(State1),
             Rpcs = make_rpcs(State),
-            Effects = [{send_rpcs, false, Rpcs} | Effects0],
+            Effects = [{send_rpcs, false, Rpcs},
+                       {incr_ra_metrics, [{3, Applied}]} | Effects0],
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -242,7 +243,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
         {Sync, {Idx, _} = IdxTerm, State0}  ->
             % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
             %      [Id, first_or_atom(Cmd), IdxTerm, Sync]),
-            {State1, Effects0} =
+            {State1, Effects0, Applied} =
                 case Sync of
                     sync ->
                         % we have synced - forward leader match_index
@@ -251,12 +252,14 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                         % no point evaluating quorum if not synced as leader
                         % won't have incrementd it's match_index.
                         % Ask ra_node_proc to schedule a sync event.
-                        {State0, [schedule_sync]}
+                        {State0, [schedule_sync], 0}
                 end,
             % Only "pipeline" in response to a command
             % Observation: pipelining and "urgent" flag go together?
             {State, Rpcs} = make_pipelined_rpcs(State1),
-            Effects1 = [{send_rpcs, true, Rpcs} | Effects0],
+            Effects1 = [{send_rpcs, true, Rpcs},
+                        {incr_ra_metrics, [{2, 1}, {3, Applied}]}
+                        | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
@@ -274,8 +277,9 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
 handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     {Idx, _} = ra_log:last_index_term(Log),
     ok = ra_log:sync(Log),
-    {State, Effects} = evaluate_quorum(update_match_index(Id, Idx, State0)),
-    {leader, State, Effects};
+    {State, Effects, Applied} =
+        evaluate_quorum(update_match_index(Id, Idx, State0)),
+    {leader, State, [{incr_ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -414,8 +418,8 @@ handle_follower(#append_entries_rpc{term = Term,
             % only apply log related effects on non-leader
             % monitor effects need to be done as well in case a follower is required
             % to take over as leader.
-            {State, Effects0} = apply_to(LeaderCommit,
-                                         State1#{leader_id => LeaderId}),
+            {State, Effects0, Applied} =
+                apply_to(LeaderCommit, State1#{leader_id => LeaderId}),
             Effects = lists:filter(fun ({release_cursor, _}) -> true;
                                        ({snapshot_point, _}) -> true;
                                        ({monitor, process, _}) -> true;
@@ -423,7 +427,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                        (_) -> false
                                    end, Effects0),
             Reply = append_entries_reply(Term, true, State),
-            {follower, State, [{reply, Reply} | Effects]};
+            {follower, State, [{reply, Reply},
+                               {incr_ra_metrics, [{3, Applied}]} | Effects]};
         false ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),
@@ -728,7 +733,7 @@ apply_to(Commit, State0 = #{id := Id,
   when Commit > LastApplied ->
     case fetch_entries(LastApplied + 1, Commit, State0) of
         [] ->
-            {State0, []};
+            {State0, [], 0};
         Entries ->
             {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
@@ -738,9 +743,10 @@ apply_to(Commit, State0 = #{id := Id,
             ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
             {State#{last_applied => NewCommit,
                     commit_index => NewCommit,
-                    machine_state => MacState}, NewEffects}
+                    machine_state => MacState}, NewEffects, Commit - LastApplied}
     end;
-apply_to(_Commit, State) -> {State, []}.
+apply_to(_Commit, State) ->
+    {State, [], 0}.
 
 apply_with(ApplyFun, {Idx, Term, {'$usr', From, Cmd, ReplyType}},
         {State, MacSt, Effects0}) ->
