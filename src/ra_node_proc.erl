@@ -111,20 +111,19 @@ leader_call(ServerRef, Msg, Timeout) ->
 
 init([Config]) ->
     process_flag(trap_exit, true),
-    #{id := Id,
-      cluster := Cluster,
+    #{id := Id, cluster := Cluster,
       machine_state := MacState} = NodeState = ra_node:init(Config),
-    Peers = maps:keys(maps:remove(Id, Cluster)),
     % connect to each peer node before starting election timeout
     % this should allow a current leader to detect the node is back and begin
     % sending append entries again
-    lists:foreach(fun ({_, Node}) ->
-                          net_kernel:connect_node(Node);
-                      (_) -> node()
-                  end, Peers),
+    Peers = maps:keys(maps:remove(Id, Cluster)),
+    _ = lists:foreach(fun ({_, Node}) ->
+                              net_kernel:connect_node(Node);
+                          (_) -> node()
+                      end, Peers),
     State = #state{node_state = NodeState,
                    broadcast_time = ?DEFAULT_BROADCAST_TIME},
-    ?DBG("~p init machine_state ~p Cluster ~p~n", [Id, MacState, Peers]),
+    ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
     {ok, follower, State, election_timeout_action(follower, State)}.

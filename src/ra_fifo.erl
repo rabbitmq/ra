@@ -1,6 +1,6 @@
 -module(ra_fifo).
 
--compile({no_auto_import,[apply/3]}).
+-compile({no_auto_import, [apply/3]}).
 
 -export([
          empty_state/0,
@@ -11,7 +11,7 @@
 -type idx() :: non_neg_integer().
 -type customer_id() :: pid(). % the entity that receives messages
 
--type checkout_spec() :: {once | cont, Num :: non_neg_integer()}.
+-type checkout_spec() :: {once | auto, Num :: non_neg_integer()}.
 
 -type protocol() ::
     {enqueue, Msg :: msg()} |
@@ -33,9 +33,12 @@
                 service_queue = queue:new() :: queue:queue()
                }).
 
+-type state() :: #state{}.
+
 -export_type([protocol/0,
               raq_msg/0]).
 
+-spec empty_state() -> state().
 empty_state() ->
     #state{}.
 
@@ -54,7 +57,6 @@ apply(_RaftId, {settle, Idx, CustomerId},
     case Custs0 of
         #{CustomerId := Cust0 = #customer{checked_out = Checked}} ->
             Cust = Cust0#customer{checked_out = maps:remove(Idx, Checked)},
-            % TODO: issue demonitor effect if Cust was completed
             {Custs, SQ, Efxs} =
                 update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
             {State, Effects} = checkout(State0#state{customers = Custs,

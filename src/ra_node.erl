@@ -1,4 +1,4 @@
--module(ra_node).
+module(ra_node).
 
 -include("ra.hrl").
 
@@ -120,6 +120,9 @@ init(#{id := Id,
     State = #{id => Id,
               cluster_id => ClusterId,
               cluster => Cluster0,
+              % TODO: there may be scenarios when a single node starts up but hasn't
+              % yet re-applied it's noop command that we may receive other join
+              % commands that can't be applied.
               cluster_change_permitted => false,
               cluster_index_term => {0, 0},
               pending_cluster_changes => [],

@@ -75,7 +75,7 @@ stop_node(ServerRef) ->
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
-    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
+    ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus},
                          ?DEFAULT_TIMEOUT).
 
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
@@ -89,12 +89,12 @@ start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
     case ra_node_proc:command(ServerRef, JoinCmd, ?DEFAULT_TIMEOUT) of
         {ok, _, _} -> ok;
         {timeout, Who} ->
-            ?DBG("request to ~p timed out trying to join the cluster", [Who]),
+            ?DBG("~p: request to ~p timed out trying to join the cluster", [NodeId, Who]),
             % this is awkward - we don't know if the request was received or not
             % it may still get processed so we have to leave the server up
             timeout;
         {error, _} = Err ->
-            ?DBG("request errored whilst ~p tried to join the cluster~p~n",
+            ?DBG("~p: request errored whilst ~p tried to join the cluster~n",
                  [NodeId, Err]),
             % shut down server
             stop_node(NodeId),
