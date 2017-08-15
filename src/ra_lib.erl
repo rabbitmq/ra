@@ -6,7 +6,8 @@
          dump/1,
          id/1,
          % cohercion
-         to_list/1
+         to_list/1,
+         ra_node_id_to_local_name/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -37,3 +38,7 @@ to_list(B) when is_binary(B) ->
     binary_to_list(B);
 to_list(L) when is_list(L) ->
     L.
+
+ra_node_id_to_local_name({Name, _}) -> Name;
+ra_node_id_to_local_name(Name) when is_atom(Name) -> Name.
+

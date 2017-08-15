@@ -81,7 +81,7 @@
                             log_init_args => ra_log:ra_log_init_args(),
                             initial_nodes => [ra_node_id()],
                             apply_fun => ra_machine_apply_fun(),
-                            initial_state => term(),
+                            init_fun => fun((atom()) -> term()),
                             cluster_id => atom()}.
 
 -export_type([ra_node_state/0,
@@ -104,11 +104,13 @@ init(#{id := Id,
        log_module := LogMod,
        log_init_args := LogInitArgs,
        apply_fun := MachineApplyFun,
-       initial_state := InitialMachineState}) ->
+       init_fun := MachineInitFun}) ->
+    Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
     {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log0),
+    InitialMachineState = MachineInitFun(Name),
     {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log) of
             undefined ->

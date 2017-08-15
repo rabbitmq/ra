@@ -53,7 +53,7 @@ init_per_group(ra_log_memory, Config) ->
                                    log_init_args => #{},
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
-                                   initial_state => InitialState,
+                                   init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name},
                           ra:start_node(Name, Conf)
                   end
@@ -69,7 +69,7 @@ init_per_group(ra_log_file, Config) ->
                                    log_init_args => #{directory => Dir},
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
-                                   initial_state => InitialState,
+                                   init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name},
                           ra:start_node(Name, Conf)
                   end

@@ -3,7 +3,7 @@
 -compile({no_auto_import, [apply/3]}).
 
 -export([
-         empty_state/0,
+         init/1,
          apply/3
         ]).
 
@@ -26,7 +26,8 @@
                    seen = 0 :: non_neg_integer(), % number of allocated messages
                    lifetime = once :: once | auto}).
 
--record(state, {queue = #{} :: map(),
+-record(state, {name :: atom(),
+                queue = #{} :: map(),
                 next_index = 0 :: idx(),
                 low_index :: idx() | undefined,
                 customers = #{} :: #{customer_id() =>  #customer{}},
@@ -38,9 +39,9 @@
 -export_type([protocol/0,
               raq_msg/0]).
 
--spec empty_state() -> state().
-empty_state() ->
-    #state{}.
+-spec init(atom()) -> state().
+init(Name) ->
+    #state{name = Name}.
 
 apply(RaftIdx, {enqueue, Msg}, #state{queue = Queue, low_index = Low,
                                       next_index = Next} = State0) ->
@@ -221,7 +222,7 @@ checkout_enq_settle_test() ->
     ok.
 
 down_customer_returns_unsettled_test() ->
-    {effects, State0, []} = enq(1, second, empty_state()),
+    {effects, State0, []} = enq(1, second, init(test)),
     {effects, State1, [{monitor, process, Pid}, Del]} = check(2, State0),
     {effects, State2, []} = apply(3, {down, Pid}, State1),
     {effects, _State, [{monitor, process, Pid}, Del]} = check(4, State2),
@@ -229,7 +230,7 @@ down_customer_returns_unsettled_test() ->
 
 
 completed_customer_yields_demonitor_effect_test() ->
-    {effects, State0, []} = enq(1, second, empty_state()),
+    {effects, State0, []} = enq(1, second, init(test)),
     {effects, State1, [{monitor, process, Pid}, _Msg]} = check(2, State0),
     {effects, _, [{demonitor, Pid}]} = settle(3, 0, State1),
     ok.

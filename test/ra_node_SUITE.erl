@@ -62,7 +62,7 @@ init(_Config) ->
                  apply_fun => ApplyFun,
                  cluster_id => ClusterId,
                  initial_nodes => [], % init without known peers
-                 initial_state => undefined},
+                 init_fun => fun (_) -> undefined end},
     % new
     #{current_term := 0,
       voted_for := undefined} = ra_node:init(InitConf),
@@ -92,7 +92,7 @@ init_restores_cluster_changes(_Config) ->
                  apply_fun => fun erlang:'+'/2,
                  cluster_id => some_cluster,
                  initial_nodes => [], % init without known peers
-                 initial_state => 0},
+                 init_fun => fun (_) -> 0 end},
     % new
     {leader, State00, _} =
         ra_node:handle_candidate(#request_vote_result{term = 0,
@@ -922,7 +922,7 @@ init_nodes(NodeIds, ApplyFun, MacState) ->
                                  log_module => ra_log_memory,
                                  log_init_args => #{},
                                  apply_fun => ApplyFun,
-                                 initial_state => MacState},
+                                 init_fun => fun (_) -> MacState end},
                         Acc#{NodeId => {follower, ra_node:init(Args), []}}
                 end, #{}, NodeIds).
 

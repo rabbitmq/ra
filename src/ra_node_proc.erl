@@ -70,7 +70,7 @@
 
 -spec start_link(ra_node:ra_node_config()) -> gen_statem_start_ret().
 start_link(Config = #{id := Id}) ->
-    Name = ra_node_id_to_local_name(Id),
+    Name = ra_lib:ra_node_id_to_local_name(Id),
     gen_statem:start_link({local, Name}, ?MODULE, [Config], []).
 
 -spec command(ra_node_id(), ra_command(), timeout()) ->
@@ -113,8 +113,9 @@ leader_call(ServerRef, Msg, Timeout) ->
 init([Config]) ->
     process_flag(trap_exit, true),
     #{id := Id, cluster := Cluster,
-      machine_state := MacState} = NodeState = ra_node:init(Config),
-    Key = ra_node_id_to_local_name(Id),
+      machine_state := MacState} = NodeState
+        = ra_node:init(Config),
+    Key = ra_lib:ra_node_id_to_local_name(Id),
     _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
     % connect to each peer node before starting election timeout
     % this should allow a current leader to detect the node is back and begin
@@ -450,9 +451,6 @@ follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L,
      || {From, _Data} <- Pending],
     New#state{pending_commands = []};
 follower_leader_change(_Old, New) -> New.
-
-ra_node_id_to_local_name({Name, _}) -> Name;
-ra_node_id_to_local_name(Name) when is_atom(Name) -> Name.
 
 gen_statem_safe_call(ServerRef, Msg, Timeout) ->
     try
