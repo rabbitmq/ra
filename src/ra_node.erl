@@ -426,6 +426,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                        ({snapshot_point, _}) -> true;
                                        ({monitor, process, _}) -> true;
                                        ({demonitor, _}) -> true;
+                                       ({incr_metrics, _, _}) -> true;
                                        (_) -> false
                                    end, Effects0),
             Reply = append_entries_reply(Term, true, State),
