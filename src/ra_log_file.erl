@@ -41,7 +41,6 @@ init(#{directory := Dir}) ->
     File = filename:join(Dir, "ra_log.log"),
     Dets = filename:join(Dir, "ra.dets"),
     ok = filelib:ensure_dir(File),
-    ok = filelib:ensure_dir(Dets),
     {ok, Fd} = file:open(File, [raw, binary, read, append]),
     {ok, Kv} = dets:open_file(Dets, []),
     Index = recover_index(Fd),

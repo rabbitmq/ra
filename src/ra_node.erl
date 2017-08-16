@@ -281,6 +281,7 @@ handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     ok = ra_log:sync(Log),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
+    ?DBG("leader effects after sync ~p~n", [Effects]),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
@@ -346,11 +347,10 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State0 = #{current_term := Term, votes := Votes,
-                            cluster := Nodes, id := Id}) ->
+                            cluster := Nodes}) ->
     NewVotes = Votes+1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            ?DBG("~p candidate becoming leader of term ~p", [Id, Term]),
             State = initialise_peers(State0),
             {leader, maps:without([votes, leader_id], State),
              [{next_event, cast, {command, noop}}]};
@@ -728,7 +728,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(Commit, State0 = #{id := Id,
+apply_to(Commit, State0 = #{id := _Id,
                             last_applied := LastApplied,
                             machine_apply_fun := ApplyFun0,
                             machine_state := MacState0})
@@ -740,9 +740,9 @@ apply_to(Commit, State0 = #{id := Id,
             {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
                             {State0, MacState0, []}, Entries),
-            {LastEntryIdx, LastEntryTerm, _} = lists:last(Entries),
+            {LastEntryIdx, _LastEntryTerm, _} = lists:last(Entries),
             NewCommit = min(Commit, LastEntryIdx),
-            ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
+            % ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
             {State#{last_applied => NewCommit,
                     commit_index => NewCommit,
                     machine_state => MacState}, NewEffects, Commit - LastApplied}
