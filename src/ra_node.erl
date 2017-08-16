@@ -860,8 +860,7 @@ append_log_follower(Entry, State = #{log := Log0}) ->
 maybe_sync_log([], _State) ->
     ok;
 maybe_sync_log(_Entries, #{log := Log0}) ->
-    {ST, _} = timer:tc(fun () -> ra_log:sync(Log0) end),
-    ?DBG("sync took ~p~n", [ST]),
+    ok = ra_log:sync(Log0),
     ok.
 
 append_cluster_change(Cluster, From, ReplyMode,
