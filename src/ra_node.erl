@@ -281,7 +281,7 @@ handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     ok = ra_log:sync(Log),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
-    ?DBG("leader effects after sync ~p~n", [Effects]),
+    % ?DBG("leader effects after sync ~p~n", [Effects]),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
