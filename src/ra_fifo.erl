@@ -217,31 +217,31 @@ find_next_larger(Idx, High, Queue) when Idx < High ->
 enq_enq_checkout_test() ->
     {effects, State1, _} = enq(1, first, #state{}),
     {effects, State2, _} = enq(2, second, State1),
-    {effects, State3, [{monitor, _, _}, _, _]} =
+    {effects, State3, [{monitor, _, _}, _, _, _]} =
         apply(3, {checkout, {once, 2}, self()}, State2),
     ra_lib:dump(State3),
     ok.
 
 checkout_enq_settle_test() ->
-    {effects, State1, [{monitor, _, _}]} = check(1, #state{}),
-    {effects, State2, [{send_msg, _, {msg, 0, first}}]} =
+    {effects, State1, [{monitor, _, _}, _]} = check(1, #state{}),
+    {effects, State2, [_, {send_msg, _, {msg, 0, first}}]} =
         enq(1, first, State1),
-    {effects, State3, []} = enq(2, second, State2),
+    {effects, State3, [_]} = enq(2, second, State2),
     {effects, _, _} = settle(3, 0, State3),
     ok.
 
 down_customer_returns_unsettled_test() ->
-    {effects, State0, []} = enq(1, second, init(test)),
-    {effects, State1, [{monitor, process, Pid}, Del]} = check(2, State0),
-    {effects, State2, []} = apply(3, {down, Pid}, State1),
-    {effects, _State, [{monitor, process, Pid}, Del]} = check(4, State2),
+    {effects, State0, [_]} = enq(1, second, init(test)),
+    {effects, State1, [{monitor, process, Pid}, _, Del]} = check(2, State0),
+    {effects, State2, [_]} = apply(3, {down, Pid}, State1),
+    {effects, _State, [{monitor, process, Pid}, _, Del]} = check(4, State2),
     ok.
 
 
 completed_customer_yields_demonitor_effect_test() ->
-    {effects, State0, []} = enq(1, second, init(test)),
-    {effects, State1, [{monitor, process, Pid}, _Msg]} = check(2, State0),
-    {effects, _, [{demonitor, Pid}]} = settle(3, 0, State1),
+    {effects, State0, [{incr_metrics, _, _}]} = enq(1, second, init(test)),
+    {effects, State1, [{monitor, process, Pid}, _, _Msg]} = check(2, State0),
+    {effects, _, [{demonitor, Pid}, _]} = settle(3, 0, State1),
     ok.
 
 enq(Idx, Msg, State) ->
