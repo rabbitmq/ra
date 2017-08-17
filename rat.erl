@@ -68,11 +68,12 @@ start_persistent_node(Name, Nodes, ApplyFun, InitialState) ->
     start_persistent_node0(Name, Nodes, ApplyFun, InitialState, Dir).
 
 start_persistent_node0(Name, Nodes, ApplyFun, InitialState, Dir) ->
+    application:ensure_all_started(ra),
     Conf = #{log_module => ra_log_file,
              log_init_args => #{directory => Dir},
              initial_nodes => Nodes,
              apply_fun => ApplyFun,
-             initial_state => InitialState,
+             init_fun => fun (_) -> InitialState end,
              cluster_id => Name},
     ra:start_node(Name, Conf).
 

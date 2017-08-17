@@ -1141,7 +1141,8 @@ base_state(NumNodes) ->
       machine_state => <<"hi3">>, % last entry has been applied
       log => {ra_log_memory, Log},
       log_module => ra_log_memory,
-      snapshot_index_term => {0, 0}}.
+      snapshot_index_term => {0, 0},
+      sync_strategy => always}.
 
 usr_cmd(Data) ->
     {command, usr(Data)}.

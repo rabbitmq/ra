@@ -53,7 +53,7 @@
       initial_machine_state => term(),
       snapshot_index_term => ra_idxterm(),
       snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}},
-      sync_scheduled => boolean()
+      sync_strategy => always | except_usr
       }.
 
 -type ra_state() :: leader | follower | candidate.
@@ -139,7 +139,7 @@ init(#{id := Id,
               initial_machine_state => InitialMachineState,
               snapshot_index_term => SnapshotIndexTerm,
               snapshot_points => #{},
-              sync_scheduled => false},
+              sync_strategy => except_usr},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -243,18 +243,22 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
         {Sync, {Idx, _} = IdxTerm, State0}  ->
-            % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
-            %      [Id, first_or_atom(Cmd), IdxTerm, Sync]),
+            ?DBG("~p ~p command appended to log at ~p sync ~p~n",
+                 [Id, first_or_atom(Cmd), IdxTerm, Sync]),
             {State1, Effects0, Applied} =
                 case Sync of
                     sync ->
                         % we have synced - forward leader match_index
                         evaluate_quorum(update_match_index(Id, Idx, State0));
                     no_sync ->
-                        % no point evaluating quorum if not synced as leader
-                        % won't have incrementd it's match_index.
-                        % Ask ra_node_proc to schedule a sync event.
-                        {State0, [schedule_sync], 0}
+                        % ask ra_node_proc to schedule a sync depending on
+                        % sync_strategy
+                        case State0 of
+                            #{sync_strategy := always} ->
+                                {State0, [schedule_sync], 0};
+                            #{sync_strategy := except_usr} ->
+                                evaluate_quorum(update_match_index(Id, Idx, State0))
+                        end
                 end,
             % Only "pipeline" in response to a command
             % Observation: pipelining and "urgent" flag go together?
@@ -278,10 +282,10 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     end;
 handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     {Idx, _} = ra_log:last_index_term(Log),
+    ?DBG("~p: leader sync at ~b~n", [Id, Idx]),
     ok = ra_log:sync(Log),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
-    % ?DBG("leader effects after sync ~p~n", [Effects]),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
@@ -840,7 +844,7 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
-            {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
+            {ok, Log} = ra_log:append(Entry, overwrite, sync, Log0),
             State#{log => Log, cluster => Cluster,
                    cluster_index_term => {Idx, Term}};
         _ ->
@@ -852,7 +856,9 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     end;
 append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
                     State = #{log := Log0}) ->
-    {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
+    % TODO: for the always sync_strategy we may want to delay sync until after
+    % all entries have been appended.
+    {ok, Log} = ra_log:append(Entry, overwrite, sync, Log0),
     State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}};
 append_log_follower(Entry, State = #{log := Log0}) ->
     {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
@@ -860,7 +866,9 @@ append_log_follower(Entry, State = #{log := Log0}) ->
 
 maybe_sync_log([], _State) ->
     ok;
-maybe_sync_log(_Entries, #{log := Log0}) ->
+maybe_sync_log(_Entries, #{sync_strategy := except_usr}) ->
+    ok;
+maybe_sync_log(_Entries, #{log := Log0, sync_strategy := always}) ->
     ok = ra_log:sync(Log0),
     ok.
 
@@ -916,12 +924,12 @@ agreed_commit(Nodes) ->
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?DBG("~p ~p received unhandled msg: ~p~n", [Id, RaState, Msg]).
 
-% first_or_atom(T) when is_tuple(T) ->
-%     element(1, T);
-% first_or_atom(A) when is_atom(A) ->
-%     A;
-% first_or_atom(X) ->
-%     X.
+first_or_atom(T) when is_tuple(T) ->
+    element(1, T);
+first_or_atom(A) when is_atom(A) ->
+    A;
+first_or_atom(X) ->
+    X.
 
 update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
     case Cluster of
