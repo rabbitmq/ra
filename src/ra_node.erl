@@ -82,6 +82,7 @@
                             initial_nodes => [ra_node_id()],
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
+                            sync_strategy => always | except_usr,
                             cluster_id => atom()}.
 
 -export_type([ra_node_state/0,
@@ -104,7 +105,7 @@ init(#{id := Id,
        log_module := LogMod,
        log_init_args := LogInitArgs,
        apply_fun := MachineApplyFun,
-       init_fun := MachineInitFun}) ->
+       init_fun := MachineInitFun} = Config) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
@@ -139,7 +140,7 @@ init(#{id := Id,
               initial_machine_state => InitialMachineState,
               snapshot_index_term => SnapshotIndexTerm,
               snapshot_points => #{},
-              sync_strategy => except_usr},
+              sync_strategy => maps:get(sync_strategy, Config, except_usr)},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -243,8 +244,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
             {leader, State, []};
         {Sync, {Idx, _} = IdxTerm, State0}  ->
-            ?DBG("~p ~p command appended to log at ~p sync ~p~n",
-                 [Id, first_or_atom(Cmd), IdxTerm, Sync]),
+            % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
+            %      [Id, first_or_atom(Cmd), IdxTerm, Sync]),
             {State1, Effects0, Applied} =
                 case Sync of
                     sync ->
@@ -924,12 +925,12 @@ agreed_commit(Nodes) ->
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?DBG("~p ~p received unhandled msg: ~p~n", [Id, RaState, Msg]).
 
-first_or_atom(T) when is_tuple(T) ->
-    element(1, T);
-first_or_atom(A) when is_atom(A) ->
-    A;
-first_or_atom(X) ->
-    X.
+% first_or_atom(T) when is_tuple(T) ->
+%     element(1, T);
+% first_or_atom(A) when is_atom(A) ->
+%     A;
+% first_or_atom(X) ->
+%     X.
 
 update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
     case Cluster of

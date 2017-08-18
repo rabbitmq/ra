@@ -33,7 +33,8 @@ all_tests() ->
 groups() ->
     [
      {ra_log_memory, [], all_tests()},
-     {ra_log_file, [], all_tests()}
+     {ra_log_file, [], all_tests()},
+     {ra_log_file_sync_always, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -59,8 +60,13 @@ init_per_group(ra_log_memory, Config) ->
                   end
           end,
    [{start_node_fun, Fun} | Config];
-init_per_group(ra_log_file, Config) ->
+init_per_group(Group, Config)
+  when Group == ra_log_file orelse Group == ra_log_file_sync_always ->
     PrivDir = ?config(priv_dir, Config),
+    SyncStrategy = case Group of
+                       ra_log_file -> except_usr;
+                       _ -> always
+                   end,
     Fun = fun (TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Dir = filename:join([PrivDir, TestCase, ra_lib:to_list(Name)]),
@@ -70,6 +76,7 @@ init_per_group(ra_log_file, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
+                                   sync_strategy => SyncStrategy,
                                    cluster_id => Name},
                           ra:start_node(Name, Conf)
                   end
