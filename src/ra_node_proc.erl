@@ -28,6 +28,7 @@
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 100).
+-define(DEFAULT_ELECTION_MULT, 3).
 % this should be approx twice as long as the time it takes to perform an
 % fsync operation to increase the chance of committing only based on peers having
 % persisted the logs - currently set to quite a generous default.
@@ -59,6 +60,7 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
                 broadcast_time :: non_neg_integer(),
+                election_timeout_multiplier :: non_neg_integer(),
                 proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
                 sync_scheduled = false :: boolean(),
@@ -126,7 +128,9 @@ init([Config]) ->
                           (_) -> node()
                       end, Peers),
     State = #state{node_state = NodeState, name = Key,
-                   broadcast_time = ?DEFAULT_BROADCAST_TIME},
+                   broadcast_time = maps:get(broadcast_time, Config, ?DEFAULT_BROADCAST_TIME),
+                   election_timeout_multiplier = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT)
+                  },
     ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
@@ -431,11 +435,13 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     {State, Actions}.
 
 
-election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * 3) + (Timeout * 2),
+election_timeout_action(follower, #state{broadcast_time = Timeout,
+                                         election_timeout_multiplier = Mult}) ->
+    T = rand:uniform(Timeout * Mult) + (Timeout * 2),
     {state_timeout, T, election_timeout};
-election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * 5) + (Timeout * 2),
+election_timeout_action(candidate, #state{broadcast_time = Timeout,
+                                          election_timeout_multiplier = Mult}) ->
+    T = rand:uniform(Timeout * Mult) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
 follower_leader_change(#state{node_state = #{leader_id := L}},

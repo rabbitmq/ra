@@ -74,7 +74,8 @@ start_persistent_node0(Name, Nodes, ApplyFun, InitialState, Dir) ->
              initial_nodes => Nodes,
              apply_fun => ApplyFun,
              init_fun => fun (_) -> InitialState end,
-             cluster_id => Name},
+             cluster_id => Name,
+             election_timeout_multiplier => 50},
     ra:start_node(Name, Conf).
 
 enq(Node0) ->

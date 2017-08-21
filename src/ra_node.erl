@@ -53,7 +53,8 @@
       initial_machine_state => term(),
       snapshot_index_term => ra_idxterm(),
       snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}},
-      sync_strategy => always | except_usr
+      sync_strategy => always | except_usr,
+      broadcast_time => non_neg_integer() % milliseconds
       }.
 
 -type ra_state() :: leader | follower | candidate.
@@ -83,6 +84,8 @@
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
                             sync_strategy => always | except_usr,
+                            broadcast_time => non_neg_integer(), % milliseconds
+                            election_timeout_multiplier => non_neg_integer(),
                             cluster_id => atom()}.
 
 -export_type([ra_node_state/0,
@@ -283,7 +286,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     end;
 handle_leader(sync, State0 = #{id := Id, log := Log}) ->
     {Idx, _} = ra_log:last_index_term(Log),
-    ?DBG("~p: leader sync at ~b~n", [Id, Idx]),
+    % ?DBG("~p: leader sync at ~b~n", [Id, Idx]),
     ok = ra_log:sync(Log),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
