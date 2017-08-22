@@ -243,8 +243,9 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     {leader, State, [{send_rpcs, false, Rpcs}]};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
-        {not_appended, State} ->
-            ?DBG("~p command ~p NOT appended to log ~p~n", [Id, Cmd, State]),
+        {not_appended, State = #{cluster_change_permitted := CCP}} ->
+            ?DBG("~p command ~p NOT appended to log, cluster_change_permitted ~p~n",
+                 [Id, Cmd, CCP]),
             {leader, State, []};
         {Sync, {Idx, _} = IdxTerm, State0}  ->
             % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
