@@ -680,7 +680,8 @@ update_meta(Updates, #{log := Log0} = State) ->
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term > CurTerm ->
-        update_meta([{current_term, Term}], State);
+        update_meta([{current_term, Term},
+                     {voted_for, undefined}], State);
 update_term(_, State) ->
     State.
 

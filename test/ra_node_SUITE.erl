@@ -358,16 +358,15 @@ higher_term_detected(_Config) ->
     IncomingTerm = 6,
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
                                          last_index = 3, last_term = 5}},
-    {ok, ExpectLog} = ra_log:write_meta(current_term, IncomingTerm, Log),
-    {ok, ExpectLogWithVotedFor} = ra_log:write_meta(voted_for, undefined,
-                                                    ExpectLog),
+    {ok, ExpectLog0} = ra_log:write_meta(current_term, IncomingTerm, Log),
+    {ok, ExpectLog} = ra_log:write_meta(voted_for, undefined, ExpectLog0),
     {follower, #{current_term := IncomingTerm,
                  log := ExpectLog}, []} = ra_node:handle_leader(AEReply, State),
     {follower, #{current_term := IncomingTerm,
                  log := ExpectLog}, []} = ra_node:handle_follower(AEReply, State),
     {follower, #{current_term := IncomingTerm,
-                 log := ExpectLogWithVotedFor}, []}
-    = ra_node:handle_candidate(AEReply, State),
+                 log := ExpectLog}, []}
+        = ra_node:handle_candidate(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
                                 prev_log_index = 3, prev_log_term = 5,
@@ -384,7 +383,7 @@ higher_term_detected(_Config) ->
                  log := ExpectLog},
      [{next_event, Vote}]} = ra_node:handle_leader(Vote, State),
     {follower, #{current_term := IncomingTerm,
-                 log := ExpectLogWithVotedFor},
+                 log := ExpectLog},
      [{next_event, Vote}]} = ra_node:handle_candidate(Vote, State),
 
     IRS = #install_snapshot_result{term = IncomingTerm,

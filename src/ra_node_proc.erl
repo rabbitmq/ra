@@ -23,7 +23,8 @@
 -export([start_link/1,
          command/3,
          query/3,
-         state_query/2
+         state_query/2,
+         trigger_election/1
         ]).
 
 -define(SERVER, ?MODULE).
@@ -93,6 +94,9 @@ query(ServerRef, QueryFun, consistent) ->
 -spec state_query(ra_node_id(), all | members) ->  ra_leader_call_ret(term()).
 state_query(ServerRef, Spec) ->
     leader_call(ServerRef, {state_query, Spec}, ?DEFAULT_TIMEOUT).
+
+trigger_election(ServerRef) ->
+    gen_statem:cast(ServerRef, trigger_election).
 
 leader_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, {leader_call, Msg},
@@ -270,6 +274,8 @@ follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+follower(_Type, trigger_election, State) ->
+    {keep_state, State, [{next_event, cast, election_timeout}]};
 follower(EventType, Msg, State0 = #state{node_state = #{id := Id}}) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
