@@ -35,7 +35,7 @@
 % persisted the logs - currently set to quite a generous default.
 % TODO: make configurable.
 -define(DEFAULT_SYNC_INTERVAL, 50).
-
+-define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 
 -type command_reply_mode() ::
     after_log_append | await_consensus | notify_on_consensus.
@@ -65,7 +65,9 @@
                 proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
                 sync_scheduled = false :: boolean(),
-                pending_commands = [] :: [{{pid(), any()}, term()}]}).
+                pending_commands = [] :: [{{pid(), any()}, term()}],
+                stop_follower_election :: boolean(),
+                leader_monitor :: reference() | undefined }).
 
 %%%===================================================================
 %%% API
@@ -133,7 +135,9 @@ init([Config]) ->
                       end, Peers),
     State = #state{node_state = NodeState, name = Key,
                    broadcast_time = maps:get(broadcast_time, Config, ?DEFAULT_BROADCAST_TIME),
-                   election_timeout_multiplier = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT)
+                   election_timeout_multiplier = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT),
+                   stop_follower_election = maps:get(stop_follower_election, Config,
+                                                     ?DEFAULT_STOP_FOLLOWER_ELECTION)
                   },
     ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
@@ -181,11 +185,12 @@ leader(EventType, sync, State0) ->
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
                        broadcast_time = Interval,
+                       stop_follower_election = StopFollowerElection,
                        node_state = NodeState = #{id := Id}}) ->
     ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
     Rpcs = ra_node:make_rpcs(NodeState),
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval),
+    {ok, Proxy} = ra_proxy:start_link(self(), Interval, StopFollowerElection),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
@@ -219,7 +224,7 @@ leader(EventType, Msg, State0) ->
             State2 = stop_proxy(State1),
             {State, Actions} = handle_effects(Effects, EventType, State2),
             {next_state, follower, State,
-             [election_timeout_action(follower, State) | Actions]};
+             maybe_stop_follower_election(State, Actions)};
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
@@ -252,7 +257,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
             {next_state, follower, State,
-             [election_timeout_action(follower, State) | Actions]};
+             maybe_stop_follower_election(State, Actions)};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> leader term: ~p~n", [Id, Term]),
@@ -276,17 +281,21 @@ follower({call, From}, {dirty_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 follower(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
-follower(EventType, Msg, State0 = #state{node_state = #{id := Id}}) ->
+follower(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
+    {keep_state, State#state{leader_monitor = undefined},
+     [election_timeout_action(follower, State)]};
+follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
+                                         leader_monitor = MRef}) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
-            {keep_state, NewState,
-             [election_timeout_action(follower, NewState) | Actions]};
+            {keep_state, NewState, maybe_stop_follower_election(State, Actions)};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
-            {next_state, candidate, State,
+            _ = stop_monitor(MRef),
+            {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]}
     end.
 
@@ -386,9 +395,10 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
      end || {N, M} <- VoteRequests],
     {State, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
-               #state{proxy = undefined, broadcast_time = Interval} = State,
+               #state{proxy = undefined, broadcast_time = Interval,
+                      stop_follower_election = StopFollowerElection} = State,
                Actions) ->
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval),
+    {ok, Proxy} = ra_proxy:start_link(self(), Interval, StopFollowerElection),
     ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State#state{proxy = Proxy}, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
@@ -441,6 +451,11 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     {State, Actions}.
 
 
+maybe_stop_follower_election(#state{stop_follower_election = true}, Actions) ->
+    [{state_timeout, infinity, election_timeout} | Actions];
+maybe_stop_follower_election(State, Actions) ->
+    [election_timeout_action(follower, State) | Actions].
+
 election_timeout_action(follower, #state{broadcast_time = Timeout,
                                          election_timeout_multiplier = Mult}) ->
     T = rand:uniform(Timeout * Mult) + (Timeout * 2),
@@ -456,14 +471,27 @@ follower_leader_change(#state{node_state = #{leader_id := L}},
     New;
 follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L,
                                                    current_term := Term},
-                                    pending_commands = Pending} = New)
+                                    pending_commands = Pending,
+                                    leader_monitor = OldMRef } = New)
   when L /= undefined ->
+    MRef = swap_monitor(OldMRef, L),
     % leader has either changed or just been set
     ?DBG("~p detected a new leader ~p in term ~p~n", [Id, L, Term]),
     [ok = gen_statem:reply(From, {redirect, L})
      || {From, _Data} <- Pending],
-    New#state{pending_commands = []};
+    New#state{pending_commands = [],
+              leader_monitor = MRef};
 follower_leader_change(_Old, New) -> New.
+
+swap_monitor(MRef, L) ->
+    stop_monitor(MRef),
+    erlang:monitor(process, L).
+
+stop_monitor(undefined) ->
+    ok;
+stop_monitor(MRef) ->
+    erlang:demonitor(MRef),
+    ok.
 
 gen_statem_safe_call(ServerRef, Msg, Timeout) ->
     try

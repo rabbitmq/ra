@@ -7,7 +7,8 @@
 all() ->
     [
      {group, ra_log_memory},
-     {group, ra_log_file}
+     {group, ra_log_file},
+     {group, ra_reduce_network_usage}
     ].
 
 all_tests() ->
@@ -27,14 +28,16 @@ all_tests() ->
      queue_example,
      ramp_up_and_ramp_down,
      start_and_join_then_leave_and_terminate,
-     leader_steps_down_after_replicating_new_cluster
+     leader_steps_down_after_replicating_new_cluster,
+     stop_leader_and_wait_for_elections
     ].
 
 groups() ->
     [
      {ra_log_memory, [], all_tests()},
      {ra_log_file, [], all_tests()},
-     {ra_log_file_sync_always, [], all_tests()}
+     {ra_log_file_sync_always, [], all_tests()},
+     {ra_reduce_network_usage, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -81,7 +84,21 @@ init_per_group(Group, Config)
                           ra:start_node(Name, Conf)
                   end
           end,
-    [{start_node_fun, Fun} | Config].
+    [{start_node_fun, Fun} | Config];
+init_per_group(ra_reduce_network_usage, Config) ->
+    Fun = fun (_TestCase) ->
+                  fun (Name, Nodes, ApplyFun, InitialState) ->
+                          Conf = #{log_module => ra_log_memory,
+                                   log_init_args => #{},
+                                   initial_nodes => Nodes,
+                                   apply_fun => ApplyFun,
+                                   init_fun => fun (_) -> InitialState end,
+                                   cluster_id => Name,
+                                   stop_follower_election => true},
+                          ra:start_node(Name, Conf)
+                  end
+          end,
+   [{start_node_fun, Fun} | Config].
 
 end_per_group(_, Config) ->
     Config.
@@ -273,12 +290,13 @@ consistent_query(Config) ->
     terminate_cluster(Cluster).
 
 add_node(Config) ->
+    StartNode = ?config(start_node_fun, Config),
     [A, _B] = Cluster = start_local_cluster(2, "test", fun erlang:'+'/2, 0,
                                             Config),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9),
     C = ra_node:name("test", "3"),
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, C),
-    ok = ra:start_node(C, Cluster, fun erlang:'+'/2, 0),
+    ok = StartNode(C, Cluster, fun erlang:'+'/2, 0),
     timer:sleep(2000),
     {ok, {{_, Term}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
@@ -305,6 +323,29 @@ snapshot(Config) ->
     {ok, {_, Res}, _} = ra:dirty_query(N3, fun ra_lib:id/1),
     % check that the message isn't delivered multiple times
     terminate_cluster([N3 | InitialNodes]).
+
+stop_leader_and_wait_for_elections(Config) ->
+    StartNode = ?config(start_node_fun, Config),
+    % start the first node and wait a bit
+    ok = StartNode (n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    % start second node
+    ok = StartNode(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    % a consensus command tells us there is a functioning cluster
+    {ok, {2, Term}, _Leader} = ra:send_and_await_consensus({n1, node()}, 5),
+    % start the 3rd node and issue another command
+    ok = StartNode(n3, [{n1, node()}, {n2, node()}], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    % issue command
+    {ok, {3, Term}, Leader} = ra:send_and_await_consensus({n3, node()}, 5),
+    % shut down the leader
+    gen_statem:stop(Leader, normal, 2000),
+    timer:sleep(10000),
+    % issue command to confirm a new leader is elected
+    NewTerm = Term + 1,
+    {ok, {5, NewTerm}, {NewLeader, _}} = ra:send_and_await_consensus({n3, node()}, 5),
+    true = (NewLeader =/= n1),
+    terminate_cluster([n1, n2, n3] -- [element(1, Leader)]).
 
 queue_example(Config) ->
     Self = self(),

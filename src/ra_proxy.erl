@@ -5,7 +5,7 @@
 -include("ra.hrl").
 
 %% API functions
--export([start_link/2,
+-export([start_link/3,
          proxy/3]).
 
 %% gen_server callbacks
@@ -20,14 +20,15 @@
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
                 timer_ref :: reference(),
-                nodes :: #{node() => ok}}).
+                nodes :: #{node() => ok},
+                stop_timer :: boolean()}).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
 
-start_link(ParentPid, Interval) ->
-    gen_server:start_link(?MODULE, [ParentPid, Interval], []).
+start_link(ParentPid, Interval, StopFollowerElection) ->
+    gen_server:start_link(?MODULE, [ParentPid, Interval, StopFollowerElection], []).
 
 proxy(Pid, IsUrgent, Appends) ->
     gen_server:cast(Pid, {appends, IsUrgent, Appends}).
@@ -36,7 +37,7 @@ proxy(Pid, IsUrgent, Appends) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Parent, Interval]) ->
+init([Parent, Interval, StopFollowerElection]) ->
     TRef = erlang:send_after(Interval, self(), broadcast),
     ok = net_kernel:monitor_nodes(true),
     Nodes = lists:foldl(fun(N, Acc) ->
@@ -46,15 +47,21 @@ init([Parent, Interval]) ->
                 parent = Parent,
                 interval = Interval,
                 timer_ref = TRef,
-                nodes = Nodes}}.
+                nodes = Nodes,
+                stop_timer = StopFollowerElection}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+handle_cast({appends, _, Appends}, #state{appends = Appends,
+                                          stop_timer = true} = State) ->
+    %% Nothing has changed, we can go silent
+    {noreply, stop_timer(State)};
 handle_cast({appends, false, Appends}, State0) ->
     % not urgent just update appends and wait for next interval
-    {noreply, State0#state{appends = Appends}};
+    % if the timer had stopped, we must restart it
+    {noreply, ensure_timer(State0#state{appends = Appends})};
 handle_cast({appends, true, Appends}, State0) ->
     % urgent send append entries now
     State = State0#state{appends = Appends},
@@ -85,11 +92,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-reset_timer(State = #state{timer_ref = Ref0, interval = Interval}) ->
+reset_timer(State) ->
     % should we use the async flag here to ensure minimal blocking
-    _ = erlang:cancel_timer(Ref0),
+    ensure_timer(stop_timer(State)).
+
+ensure_timer(State = #state{timer_ref = undefined, interval = Interval}) ->
     Ref = erlang:send_after(Interval, self(), broadcast),
-    State#state{timer_ref = Ref}.
+    State#state{timer_ref = Ref};
+ensure_timer(State) ->
+    State.
+
+stop_timer(State = #state{timer_ref = undefined}) ->
+    State;
+stop_timer(State = #state{timer_ref = Ref}) ->
+    _ = erlang:cancel_timer(Ref),
+    State#state{timer_ref = undefined}.
 
 broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
     [begin
