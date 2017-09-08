@@ -139,6 +139,7 @@ init([Config]) ->
                    stop_follower_election = maps:get(stop_follower_election, Config,
                                                      ?DEFAULT_STOP_FOLLOWER_ELECTION)
                   },
+    ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
@@ -193,6 +194,8 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
     {ok, Proxy} = ra_proxy:start_link(self(), Interval, StopFollowerElection),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
+leader(info, {node_down, _}, State) ->
+    {keep_state, State};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
        State0 = #state{monitors = Monitors0,
                        node_state = NodeState0}) ->
@@ -240,6 +243,8 @@ candidate({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+candidate(info, {node_down, _}, State) ->
+    {keep_state, State};
 candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
                                                          current_term := Term},
                                           pending_commands = Pending}) ->
@@ -282,8 +287,14 @@ follower({call, From}, {dirty_query, QueryFun},
 follower(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
 follower(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
+    ?DBG("Leader monitor down, triggering election", []),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
+follower(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
+    ?DBG("Leader ~p down, triggering election", [LeaderNode]),
+    {keep_state, State, [election_timeout_action(follower, State)]};
+follower(info, {node_down, _}, State) ->
+    {keep_state, State};
 follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
                                          leader_monitor = MRef}) ->
     case handle_follower(Msg, State0) of
@@ -307,6 +318,7 @@ terminate(Reason, _StateName,
           State = #state{node_state = NodeState = #{id := Id},
                          name = Key}) ->
     ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
+    _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     _ = stop_proxy(State),
     _ = ra_node:terminate(NodeState),
