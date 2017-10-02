@@ -30,12 +30,6 @@
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 100).
 -define(DEFAULT_ELECTION_MULT, 3).
-% this should be approx twice as long as the time it takes to perform an
-% fsync operation to increase the chance of committing only based on peers having
-% persisted the logs - currently set to quite a generous default.
-% TODO: make configurable.
--define(DEFAULT_SYNC_INTERVAL, 50).
-
 
 -type command_reply_mode() ::
     after_log_append | await_consensus | notify_on_consensus.
@@ -64,7 +58,6 @@
                 election_timeout_multiplier :: non_neg_integer(),
                 proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
-                sync_scheduled = false :: boolean(),
                 pending_commands = [] :: [{{pid(), any()}, term()}]}).
 
 %%%===================================================================
@@ -131,9 +124,11 @@ init([Config]) ->
                               net_kernel:connect_node(Node);
                           (_) -> node()
                       end, Peers),
+    BroadcastTime = maps:get(broadcast_time, Config, ?DEFAULT_BROADCAST_TIME),
+    Mult = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT),
     State = #state{node_state = NodeState, name = Key,
-                   broadcast_time = maps:get(broadcast_time, Config, ?DEFAULT_BROADCAST_TIME),
-                   election_timeout_multiplier = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT)
+                   broadcast_time = BroadcastTime,
+                   election_timeout_multiplier = Mult
                   },
     ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
@@ -171,13 +166,6 @@ leader({call, From}, {state_query, Spec},
          State = #state{node_state = NodeState}) ->
     Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
-leader(EventType, sync, State0) ->
-    % ?DBG("receiving sync at ~p", [erlang:monotonic_time(millisecond)]),
-    {_Taken, {leader, State1, Effects}} =
-        timer:tc(fun () -> handle_leader(sync, State0#state{sync_scheduled = false}) end),
-    % ?DBG("sync took ~bms", [Taken]),
-    {State, Actions} = handle_effects(Effects, EventType, State1),
-    {keep_state, State, Actions};
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
                        broadcast_time = Interval,
@@ -367,6 +355,9 @@ handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
 handle_effect({notify, Who, Reply}, _EvtType, State, Actions) ->
     _ = Who ! {consensus, Reply},
     {State, Actions};
+handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
+    ok = gen_server:cast(To, Msg),
+    {State, Actions};
 % TODO: optimisation we could send the reply using gen_statem:reply to
 % avoid waiting for all effects to finishe processing
 handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
@@ -403,9 +394,6 @@ handle_effect({snapshot_point, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:record_snapshot_point(Index, NodeState0),
     {State#state{node_state = NodeState}, Actions};
-handle_effect(schedule_sync, _EvtType, State = #state{sync_scheduled = true},
-              Actions) ->
-    {State, Actions};
 handle_effect({monitor, process, Pid}, _EvtType,
               #state{monitors = Monitors} = State, Actions) ->
     case Monitors of
@@ -426,15 +414,6 @@ handle_effect({demonitor, Pid}, _EvtType,
             % ref not known - do nothing
             {State, Actions}
     end;
-handle_effect(schedule_sync, _EvtType, State, Actions) ->
-    % No timer is actually started, instead it is enqueued to be processed after
-    % all currently queued events.
-    % {State, [{event_timeout, 0, sync} |  Actions]}.
-    % TODO: consider allowing sync stategy to be controlled via configuration
-    % Schedule sync after sync interval
-    % ?DBG("sheduling sync at ~p", [erlang:monotonic_time(millisecond)]),
-    {State#state{sync_scheduled = true},
-     [{generic_timeout, ?DEFAULT_SYNC_INTERVAL, sync} |  Actions]};
 handle_effect({incr_metrics, Table, Ops}, _EvtType,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),

@@ -53,7 +53,6 @@
       initial_machine_state => term(),
       snapshot_index_term => ra_idxterm(),
       snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}},
-      sync_strategy => always | except_usr,
       broadcast_time => non_neg_integer() % milliseconds
       }.
 
@@ -83,7 +82,6 @@
                             initial_nodes => [ra_node_id()],
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
-                            sync_strategy => always | except_usr,
                             broadcast_time => non_neg_integer(), % milliseconds
                             election_timeout_multiplier => non_neg_integer(),
                             cluster_id => atom()}.
@@ -108,7 +106,7 @@ init(#{id := Id,
        log_module := LogMod,
        log_init_args := LogInitArgs,
        apply_fun := MachineApplyFun,
-       init_fun := MachineInitFun} = Config) ->
+       init_fun := MachineInitFun}) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
@@ -142,8 +140,7 @@ init(#{id := Id,
               % for snapshots
               initial_machine_state => InitialMachineState,
               snapshot_index_term => SnapshotIndexTerm,
-              snapshot_points => #{},
-              sync_strategy => maps:get(sync_strategy, Config, except_usr)},
+              snapshot_points => #{}},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -166,6 +163,7 @@ init(#{id := Id,
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
+                                             next_index = NextIdx,
                                              last_index = LastIdx}},
               State0 = #{current_term := Term, id := Id}) ->
     case peer(PeerId, State0) of
@@ -174,7 +172,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
-                          next_index => max(NI, LastIdx+1)},
+                          next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State, Effects0, Applied} = evaluate_quorum(State1),
             Rpcs = make_rpcs(State),
@@ -208,6 +206,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
             {follower, update_term(Term, State0), []}
     end;
 handle_leader({PeerId, #append_entries_reply{success = false,
+                                             next_index = NextIdx,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
               State0 = #{id := Id, cluster := Nodes, log := Log}) ->
@@ -218,7 +217,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     Peer = case ra_log:fetch_term(LastIdx, Log) of
                LastTerm when LastIdx >= MI -> % entry exists we can forward
                    Peer0#{match_index => LastIdx,
-                          next_index => LastIdx + 1};
+                          % TODO: should we take max of NI and NextIndex?
+                          next_index => NextIdx};
                _Term when LastIdx < MI ->
                    % TODO: this can only really happen when peers are non-persistent.
                    % should they turn-into non-voters when this sitution is detected
@@ -247,23 +247,16 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             ?DBG("~p command ~p NOT appended to log, cluster_change_permitted ~p~n",
                  [Id, Cmd, CCP]),
             {leader, State, []};
-        {Sync, {Idx, _} = IdxTerm, State0}  ->
+        {Status, Idx, Term, State0}  ->
             % ?DBG("~p ~p command appended to log at ~p sync ~p~n",
             %      [Id, first_or_atom(Cmd), IdxTerm, Sync]),
             {State1, Effects0, Applied} =
-                case Sync of
-                    sync ->
+                case Status of
+                    written ->
                         % we have synced - forward leader match_index
                         evaluate_quorum(update_match_index(Id, Idx, State0));
-                    no_sync ->
-                        % ask ra_node_proc to schedule a sync depending on
-                        % sync_strategy
-                        case State0 of
-                            #{sync_strategy := always} ->
-                                {State0, [schedule_sync], 0};
-                            #{sync_strategy := except_usr} ->
-                                evaluate_quorum(update_match_index(Id, Idx, State0))
-                        end
+                    queued ->
+                        {State0, [], 0}
                 end,
             % Only "pipeline" in response to a command
             % Observation: pipelining and "urgent" flag go together?
@@ -279,18 +272,19 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                           {_, undefined, _, _} ->
                               Effects1;
                           {_, From, _, _} ->
-                              [{reply, From, IdxTerm} | Effects1];
+                              [{reply, From, {Idx, Term}} | Effects1];
                           _ ->
                               Effects1
                       end,
             {leader, State, Effects}
     end;
-handle_leader(sync, State0 = #{id := Id, log := Log}) ->
-    {Idx, _} = ra_log:last_index_term(Log),
-    % ?DBG("~p: leader sync at ~b~n", [Id, Idx]),
-    ok = ra_log:sync(Log),
+handle_leader({written, Idx}, State0 = #{id := Id}) ->
+    % {Idx, _} = ra_log:last_index_term(Log),
+    % ?DBG("~p: leader written at ~b~n", [Id, Idx]),
     {State, Effects, Applied} =
         evaluate_quorum(update_match_index(Id, Idx, State0)),
+    % TODO: should we send rpcs in case commit_index was incremented?
+    % {State, Rpcs} = make_pipelined_rpcs(State1),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
@@ -379,9 +373,10 @@ handle_candidate(#append_entries_rpc{term = Term} = Msg,
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{},
-                 State = #{current_term := CurTerm}) ->
+                 State = #{current_term := CurTerm,
+                           last_applied := LastApplied}) ->
     % term must be older return success=false
-    Reply = append_entries_reply(CurTerm, false, State),
+    Reply = append_entries_reply(CurTerm, false, LastApplied, State),
     {candidate, State, [{reply, Reply}]};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  State0 = #{current_term := CurTerm}) when Term > CurTerm ->
@@ -412,44 +407,64 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_term = PLTerm,
                                     entries = Entries},
                 State00 = #{id := Id,
+                            last_applied := LastApplied,
                             current_term := CurTerm})
   when Term >= CurTerm ->
     State0 = update_term(Term, State00),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
         true ->
             % append_log_follower doesn't fsync each entry
-            State1 = lists:foldl(fun append_log_follower/2,
-                                 State0, Entries),
-            % only sync if we have received entries
-            ok = maybe_sync_log(Entries, State1),
+            {Status, State1} = lists:foldl(fun append_log_follower/2,
+                                           {written, State0}, Entries),
+            % % ?DBG("~p: follower received ~p append_entries in ~p.",
+            % %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
 
-            % ?DBG("~p: follower received ~p append_entries in ~p.",
-            %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
-
-            % only apply log related effects on non-leader
-            % monitor effects need to be done as well in case a follower is required
-            % to take over as leader.
-            {State, Effects0, Applied} =
-                apply_to(LeaderCommit, State1#{leader_id => LeaderId}),
-            Effects = lists:filter(fun ({release_cursor, _}) -> true;
-                                       ({snapshot_point, _}) -> true;
-                                       ({monitor, process, _}) -> true;
-                                       ({demonitor, _}) -> true;
-                                       ({incr_metrics, _, _}) -> true;
-                                       (_) -> false
-                                   end, Effects0),
-            Reply = append_entries_reply(Term, true, State),
-            {follower, State, [{reply, Reply},
-                               {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
+            Effects = case Status of
+                          written ->
+                              % schedule a written next_event
+                              % we can use last idx here as the log store
+                              % is now fullly up to date.
+                              {Idx, _} = last_idx_term(State1),
+                              [{next_event, {written, Idx}}];
+                          queued -> []
+                      end,
+            % Increment only commit_index here as we are not applying anything
+            % at this point.
+            % last_applied will be incremented when the written event is
+            % processed
+            {follower, State1#{commit_index := LeaderCommit,
+                               leader_id => LeaderId}, Effects};
         false ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),
-            Reply = append_entries_reply(Term, false, State0),
+            Reply = append_entries_reply(Term, false, LastApplied, State0),
             {follower, State0#{leader_id => LeaderId}, [{reply, Reply}]}
     end;
+handle_follower({written, Idx}, State0 = #{current_term := Term, id := Id,
+                                           commit_index := CommitIndex,
+                                           leader_id := LeaderId}) ->
+    % as writes are async we can't use the index of the last available entry
+    % in the log as they may not have been fully persisted yet
+    % Take the smaller of the two values as commit index may be higher
+    % than the last entry received
+    EffectiveCommitIndex = min(Idx, CommitIndex),
+    {State, Effects0, Applied} =
+        apply_to(EffectiveCommitIndex, State0),
+    % filter the effects that should be applied on a follower
+    Effects = lists:filter(fun ({release_cursor, _}) -> true;
+                               ({snapshot_point, _}) -> true;
+                               ({monitor, process, _}) -> true;
+                               ({demonitor, _}) -> true;
+                               ({incr_metrics, _, _}) -> true;
+                               (_) -> false
+                           end, Effects0),
+    Reply = append_entries_reply(Term, true, Idx, State),
+    {follower, State, [{cast, LeaderId, {Id, Reply}},
+                       {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_follower(#append_entries_rpc{term = Term},
-                State = #{id := Id, current_term := CurTerm}) ->
-    Reply = append_entries_reply(CurTerm, false, State),
+                State = #{id := Id, current_term := CurTerm,
+                          last_applied := LastApplied}) ->
+    Reply = append_entries_reply(CurTerm, false, LastApplied, State),
     ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
     {follower, State, [{reply, Reply}]};
@@ -739,26 +754,26 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(Commit, State0 = #{id := _Id,
-                            last_applied := LastApplied,
-                            machine_apply_fun := ApplyFun0,
-                            machine_state := MacState0})
-  when Commit > LastApplied ->
-    case fetch_entries(LastApplied + 1, Commit, State0) of
+apply_to(ApplyTo, State0 = #{id := _Id,
+                             last_applied := LastApplied,
+                             machine_apply_fun := ApplyFun0,
+                             machine_state := MacState0})
+  when ApplyTo > LastApplied ->
+    case fetch_entries(LastApplied + 1, ApplyTo, State0) of
         [] ->
             {State0, [], 0};
         Entries ->
             {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
                             {State0, MacState0, []}, Entries),
-            {LastEntryIdx, _LastEntryTerm, _} = lists:last(Entries),
-            NewCommit = min(Commit, LastEntryIdx),
+            {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
+            % NewApplied = min(ApplyTo, LastEntryIdx),
             % ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
-            {State#{last_applied => NewCommit,
-                    commit_index => NewCommit,
-                    machine_state => MacState}, NewEffects, Commit - LastApplied}
+            {State#{last_applied => AppliedTo,
+                    machine_state => MacState}, NewEffects,
+             AppliedTo - LastApplied}
     end;
-apply_to(_Commit, State) ->
+apply_to(_ApplyTo, State) ->
     {State, [], 0}.
 
 apply_with(ApplyFun, {Idx, Term, {'$usr', From, Cmd, ReplyType}},
@@ -815,7 +830,7 @@ append_log_leader({CmdTag, _, _, _} = Cmd,
     % in this term - stash the request
     {not_appended, State#{pending_cluster_changes => Pending ++ [Cmd]}};
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-           State = #{cluster := OldCluster}) ->
+                  State = #{cluster := OldCluster}) ->
     case OldCluster of
         #{JoiningNode := _} ->
             % already a member do nothing
@@ -837,12 +852,18 @@ append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
-    {ok, Log} = ra_log:append({NextIdx, Term, Cmd}, no_overwrite, no_sync, Log0),
-    {no_sync, {NextIdx, Term}, State#{log => Log}}.
+    case ra_log:append({NextIdx, Term, Cmd}, no_overwrite, Log0) of
+        {queued, Log} ->
+            {queued, NextIdx, Term, State#{log => Log}};
+        {written, Log} ->
+            {written, NextIdx, Term, State#{log => Log}};
+        {error, _} = Err ->
+            throw(Err) % TODO: what else?
+    end.
 
 append_log_follower({Idx, Term, Cmd} = Entry,
-                    State = #{log := Log0,
-                              cluster_index_term := {Idx, CITTerm}})
+                    {Status, State = #{log := Log0,
+                                       cluster_index_term := {Idx, CITTerm}}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster
@@ -850,33 +871,30 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
-            {ok, Log} = ra_log:append(Entry, overwrite, sync, Log0),
-            State#{log => Log, cluster => Cluster,
-                   cluster_index_term => {Idx, Term}};
+            Log = sync_ra_log_append(Entry, overwrite, Log0),
+            {written, State#{log => Log, cluster => Cluster,
+                             cluster_index_term => {Idx, Term}}};
         _ ->
             % revert back to previous cluster
             {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
-            append_log_follower(Entry, State1)
+            append_log_follower(Entry, {Status, State1})
     end;
 append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
-                    State = #{log := Log0}) ->
-    % TODO: for the always sync_strategy we may want to delay sync until after
+                    {_Status, State = #{log := Log0}}) ->
+    % TODO: we may want to delay sync until after
     % all entries have been appended.
-    {ok, Log} = ra_log:append(Entry, overwrite, sync, Log0),
-    State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}};
-append_log_follower(Entry, State = #{log := Log0}) ->
-    {ok, Log} = ra_log:append(Entry, overwrite, no_sync, Log0),
-    State#{log => Log}.
-
-maybe_sync_log([], _State) ->
-    ok;
-maybe_sync_log(_Entries, #{sync_strategy := except_usr}) ->
-    ok;
-maybe_sync_log(_Entries, #{log := Log0, sync_strategy := always}) ->
-    ok = ra_log:sync(Log0),
-    ok.
+    Log = sync_ra_log_append(Entry, overwrite, Log0),
+    {written,
+     State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}}};
+append_log_follower(Entry, {_Status, State = #{log := Log0}}) ->
+    case ra_log:append(Entry, overwrite, Log0) of
+        {error, _} = Err ->
+            exit(Err);
+        {Status, Log} ->
+            {Status, State#{log => Log}}
+    end.
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
@@ -888,34 +906,61 @@ append_cluster_change(Cluster, From, ReplyMode,
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
-    {ok, Log} = ra_log:append({NextIdx, Term, Command}, no_overwrite, Log0),
-    {sync, IdxTerm,
+    % TODO: can we even do this async?
+    Log = sync_ra_log_append({NextIdx, Term, Command}, no_overwrite, Log0),
+    {written, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,
             cluster_change_permitted => false,
             cluster_index_term => IdxTerm,
             previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
 
-append_entries_reply(Term, Success, State) ->
+append_entries_reply(Term, Success, SyncIdx, State = #{log := Log}) ->
+    % ah - we can't use the the last recieved idx
+    % as it may not have been persisted yet
+    % also we can use the last writted Idx as then
+    % the follower may resent items that are currently waiting to
+    % be written.
     %% TODO: use snapshot index/term if not found
-    {LastIdx, LastTerm} = last_idx_term(State),
+    SyncTerm = ra_log:fetch_term(SyncIdx, Log),
+    {LastIdx, _} = last_idx_term(State),
     #append_entries_reply{term = Term, success = Success,
-                          last_index = LastIdx,
-                          last_term = LastTerm}.
+                          next_index = LastIdx + 1,
+                          last_index = SyncIdx,
+                          last_term = SyncTerm}.
 
-evaluate_quorum(State) ->
-    NewCommitIndex = increment_commit_index(State),
-    apply_to(NewCommitIndex, State).
+sync_ra_log_append({Idx, _, _} = Entry, Overwrite, Log0) ->
+    case ra_log:append(Entry, Overwrite, Log0) of
+        {written, Log} ->
+            Log;
+        {queued, Log} ->
+            receive
+                % TODO: we could now end up re-ordering written notifications
+                % so need to handle that later
+                {written, Idx} ->
+                    Log
+            after 5000 ->
+                      throw(ra_log_append_timeout)
+            end;
+        {error, _} = Err ->
+            throw(Err)
+    end.
+
+
+evaluate_quorum(State0) ->
+    State = #{commit_index := CI} = increment_commit_index(State0),
+    apply_to(CI, State).
 
 increment_commit_index(State = #{current_term := CurrentTerm,
-                                 commit_index := CommitIndex,
                                  cluster := Nodes}) ->
     PotentialNewCommitIndex = agreed_commit(Nodes),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State) of
-        CurrentTerm -> PotentialNewCommitIndex;
-        _ -> CommitIndex
+        CurrentTerm ->
+            State#{commit_index => PotentialNewCommitIndex};
+        _ ->
+            State
     end.
 
 -spec agreed_commit(map()) -> ra_index().

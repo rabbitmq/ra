@@ -2,13 +2,13 @@
 -behaviour(ra_log).
 -export([init/1,
          close/1,
-         append/4,
-         sync/1,
+         append/3,
          take/3,
          last/1,
          last_index_term/1,
          fetch/2,
          fetch_term/2,
+         flush/2,
          next_index/1,
          write_snapshot/2,
          read_snapshot/1,
@@ -19,91 +19,75 @@
 
 -include("ra.hrl").
 
--type offset() :: non_neg_integer().
+-type tid() :: reference() | atom().
 
--record(state, {last_index = -1 :: -1 | ra_index(),
+-record(state, {first_index = -1 :: ra_index(),
+                last_index = -1 :: -1 | ra_index(),
+                id :: atom(),
+                tid :: maybe(tid()),
                 directory :: list(),
-                file :: file:io_device(),
                 kv :: reference(),
-                index = #{} :: #{ra_index() => {ra_term(), offset()}},
-                cache = undefined :: maybe(log_entry()) % last written log entry
+                cache = #{} :: #{ra_index() => {ra_term(), log_entry()}}
                }).
 
 -type ra_log_file_state() :: term().
 
 
-
 -spec init(ra_log:ra_log_init_args()) -> ra_log_file_state().
-init(#{directory := Dir}) ->
+init(#{directory := Dir, id := Id}) ->
+    % TODO: rebuild from persisted state if present
+    Dets = filename:join(Dir, "ra.dets"),
+    ok = filelib:ensure_dir(Dets),
+    {ok, Kv} = dets:open_file(Dets, []),
+    % index recovery is done by the storage engine
+    % at some point we need to recover some kind of index of
+    % flushed segments
+    {FirstIndex, LastIndex} = last_index_from_mem_table(Id),
+    State0 = #state{directory = Dir, id = Id,
+                    first_index = FirstIndex,
+                    last_index = LastIndex, kv = Kv},
+
     % initialized with a deafault 0 index 0 term dummy value
     % and an empty meta data map
-    % TODO: rebuild from persisted state if present
-    File = filename:join(Dir, "ra_log.log"),
-    Dets = filename:join(Dir, "ra.dets"),
-    ok = filelib:ensure_dir(File),
-    {ok, Fd} = file:open(File, [raw, binary, read, append]),
-    {ok, Kv} = dets:open_file(Dets, []),
-    Index = recover_index(Fd),
-    LastIndex = last_index_from_index(Index),
-    State0 = #state{directory = Dir, file = Fd,
-                    last_index = LastIndex,
-                    kv = Kv, index = Index},
-
     State = maybe_append_0_0_entry(State0),
-    ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
-    State.
+    % ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
+    State#state{tid = get_mem_tbl(Id)}.
 
 -spec close(ra_log_file_state()) -> ok.
-close(#state{file = Fd, kv = Kv}) ->
+close(#state{kv = Kv}) ->
     % deliberately ignoring return value
-    _ = file:close(Fd),
     _ = dets:close(Kv),
     ok.
 
-sync(#state{file = Fd}) ->
-    ok = file:sync(Fd),
-    ok.
-
-write(State = #state{file = Fd, index = Index},
-      {Idx, Term, Data} = Entry, Sync) ->
-    {ok, Pos} = file:position(Fd, eof),
-    DataB = term_to_binary(Data),
-    Size = size(DataB),
-    ok = file:write(Fd, [<<Idx:64>>, <<Term:64>>,
-                         <<Size:64>>, DataB]),
-    case Sync of
-        sync -> ok = file:sync(Fd);
-        no_sync -> ok
-    end,
-
-    State#state{last_index = Idx,
-                cache = Entry,
-                index = Index#{Idx => {Term, Pos}}}.
+write(State = #state{id = Id, cache = Cache},
+      {Idx, Term, Data}) ->
+    ok = ra_log_wal:write(Id, ra_log_wal, Idx, Term, Data),
+    State#state{last_index = Idx, cache = Cache#{Idx => {Term, Data}}}.
 
 -spec append(Entry :: log_entry(),
-                 overwrite | no_overwrite,
-                 sync | no_sync,
-                 State :: ra_log_file_state()) ->
-    {ok, ra_log_file_state()} | {error, integrity_error}.
-append(Entry, no_overwrite, Sync, State = #state{last_index = LastIdx})
-      when element(1, Entry) > LastIdx ->
-    {ok, write(State, Entry, Sync)};
-append(_Entry, no_overwrite, _Sync, _State) ->
+             overwrite | no_overwrite,
+             State :: ra_log_file_state()) ->
+    {queued, ra_log_file_state()} |
+    {error, integrity_error}.
+append(Entry, no_overwrite, #state{last_index = LastIdx})
+      when element(1, Entry) =< LastIdx ->
     {error, integrity_error};
-append({Idx, _, _} = Entry, overwrite, Sync, State0 = #state{last_index = LastIdx})
-  when LastIdx > Idx ->
-    % we're overwriting entries
-    {ok, truncate_index(Idx + 1, LastIdx, write(State0, Entry, Sync))};
-append(Entry, overwrite, Sync, State) ->
-    {ok, write(State, Entry, Sync)}.
+append(Entry, overwrite, State) ->
+    {queued, write(State, Entry)};
+append(Entry, no_overwrite, State = #state{last_index = LastIdx})
+      when element(1, Entry) > LastIdx ->
+    {queued, write(State, Entry)}.
 
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     [log_entry()].
-take(Start, Num, #state{file = _Fd, index = _Index} = State) ->
+take(Start, Num, #state{} = State) ->
     lists:foldl(fun (Idx, Acc) ->
                         maybe_append(fetch(Idx, State), Acc)
                 end, [], lists:seq(Start + Num - 1, Start, -1)).
+
+get_mem_tbl(Id) ->
+    lookup_element(ra_log_open_mem_tables, Id, 4).
 
 maybe_append(undefined, L) ->
     L;
@@ -116,19 +100,19 @@ last(#state{last_index = LastIdx} = State) ->
     fetch(LastIdx, State).
 
 -spec last_index_term(ra_log_file_state()) -> maybe(ra_idxterm()).
-last_index_term(#state{last_index = LastIdx,
-                       index = Index} = State) ->
-    case Index of
-        #{LastIdx := {LastTerm, _Offset}} ->
-            {LastIdx, LastTerm};
-        _ ->
+last_index_term(#state{last_index = LastIdx} = State) ->
+    % TODO is it safe to do a cache hit here?
+    case fetch_term(LastIdx, State) of
+        undefined ->
             % If not found fall back on snapshot if snapshot matches last term.
             case read_snapshot(State) of
                 {LastIdx, LastTerm, _, _} ->
                     {LastIdx, LastTerm};
                 _ ->
                     undefined
-            end
+            end;
+        Term ->
+            {LastIdx, Term}
     end.
 
 -spec next_index(ra_log_file_state()) -> ra_index().
@@ -137,36 +121,58 @@ next_index(#state{last_index = LastIdx}) ->
 
 -spec fetch(ra_index(), ra_log_file_state()) ->
     maybe(log_entry()).
-fetch(Idx, #state{cache = {Idx, _, _} = Entry}) ->
-    Entry;
-fetch(Idx, #state{file = Fd, index = Index}) ->
-    case Index of
-        #{Idx := {Term, Offset}} ->
-            read_entry_at(Idx, Term,  Offset, Fd);
+fetch(Idx, #state{last_index = Last, first_index = First})
+  when Idx > Last orelse Idx < First ->
+    undefined;
+fetch(Idx, #state{tid = Tid, cache = Cache}) ->
+    case Cache of
+        #{Idx := {Term, Data}} ->
+            {Idx, Term, Data};
         _ ->
-            undefined
+            case ets:lookup(Tid, Idx) of
+                [Entry] ->
+                    Entry;
+                _ ->
+                    undefined
+            end
     end.
 
 -spec fetch_term(ra_index(), ra_log_file_state()) ->
     maybe(ra_term()).
-fetch_term(Idx, #state{index = Index}) ->
-    case Index of
-        #{Idx := {Term, _}} ->
-            Term;
-        _ ->
+fetch_term(Idx, #state{tid = Tid, cache = Cache}) ->
+    ra_lib:lazy_default(lookup_element(Tid, Idx, 2),
+                        fun () ->
+                                case Cache of
+                                    #{Idx := {Term, _}} ->
+                                        Term;
+                                    _ ->
+                                        undefined
+                                end
+                        end).
+
+flush(Idx, State = #state{cache = Cache0}) ->
+    Cache = maps:filter(fun (K, _) when K > Idx -> true;
+                            (_, _) -> false
+                        end, Cache0),
+    State#state{cache = Cache}.
+
+lookup_element(Tid, Key, Pos) ->
+    try
+        ets:lookup_element(Tid, Key, Pos)
+    catch
+        _:badarg ->
             undefined
     end.
+
 
 -spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_file_state()) ->
     ra_log_file_state().
-write_snapshot({Idx, _, _, _} = Snapshot,
-               State = #state{directory = Dir, index = Index}) ->
+write_snapshot({Idx, _, _, _} = Snapshot, State = #state{directory = Dir}) ->
     File = filename:join(Dir, "ra.snapshot"),
     file:write_file(File, term_to_binary(Snapshot)),
-    % just deleting entries in the index here no on disk gc atm
-    State#state{index = maps:filter(fun(K, _) -> K > Idx end, Index),
-                cache = undefined}.
+    % update first index to the index following the latest snapshot
+    flush(Idx, State#state{first_index = Idx+1}).
 
 -spec read_snapshot(State :: ra_log_file_state()) ->
     maybe(ra_log:ra_log_snapshot()).
@@ -203,52 +209,35 @@ sync_meta(#state{kv = Kv}) ->
 %%% Local functions
 
 
-read_entry_at(Idx, Term, Offset, Fd) ->
-    {ok, _} = file:position(Fd, Offset + 16),
-    {ok, <<Length:64/integer>>} = file:read(Fd, 8),
-    {ok, Bin} = file:read(Fd, Length),
-    {Idx, Term, binary_to_term(Bin)}.
+% recover_index(Fd) ->
+%     {ok, 0} = file:position(Fd, 0),
+%     Gen = fun () -> read_index_entry(Fd) end,
+%     recover_index0(Gen, Gen(), {-1, -1, #{}}).
 
-read_index_entry(Fd) ->
-    {ok, Pos} = file:position(Fd, cur),
-    case file:read(Fd, 24) of
-        eof ->
-            undefined;
-        {ok, <<Idx:64/integer,
-               Term:64/integer,
-               Length:64/integer>>} ->
-            {ok, _NewPos} = file:position(Fd, {cur, Length}),
-            {Idx, {Term, Pos}}
-    end.
+% recover_index0(_GenFun, undefined, {LastIdx, MaxIdx, Index0}) ->
+%     maps:without(lists:seq(LastIdx+1, MaxIdx), Index0);
+% recover_index0(GenFun, {Idx, TermPos}, {_LastIdx, MaxIdx, Index0}) ->
+%     % remove "higher indices in the log as they would have been overwritten
+%     % and we don't want them to hang around.
+%     Index = maps:filter(fun(K, _) when K > Idx -> false;
+%                            (_, _) -> true
+%                          end, Index0),
+%     recover_index0(GenFun, GenFun(), {Idx, max(Idx, MaxIdx), Index#{Idx => TermPos}}).
 
-recover_index(Fd) ->
-    {ok, 0} = file:position(Fd, 0),
-    Gen = fun () -> read_index_entry(Fd) end,
-    recover_index0(Gen, Gen(), {-1, -1, #{}}).
-
-recover_index0(_GenFun, undefined, {LastIdx, MaxIdx, Index0}) ->
-    maps:without(lists:seq(LastIdx+1, MaxIdx), Index0);
-recover_index0(GenFun, {Idx, TermPos}, {_LastIdx, MaxIdx, Index0}) ->
-    % remove "higher indices in the log as they would have been overwritten
-    % and we don't want them to hang around.
-    Index = maps:filter(fun(K, _) when K > Idx -> false;
-                           (_, _) -> true
-                         end, Index0),
-    recover_index0(GenFun, GenFun(), {Idx, max(Idx, MaxIdx), Index#{Idx => TermPos}}).
-
-truncate_index(From, To, State = #state{index = Index0}) ->
-    Index = maps:without(lists:seq(From, To), Index0),
-    State#state{index = Index}.
+% truncate_index(From, To, State = #state{index = Index0}) ->
+%     Index = maps:without(lists:seq(From, To), Index0),
+%     State#state{index = Index}.
 
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
-    {ok, State} = append({0, 0, undefined}, no_overwrite, sync, State0),
-    State;
+    {queued, State} = append({0, 0, undefined}, no_overwrite, State0),
+    receive
+        {written, 0} -> ok
+    end,
+    State#state{first_index = 0};
 maybe_append_0_0_entry(State) ->
     State.
 
-last_index_from_index(Map) when map_size(Map) =:= 0 ->
-    -1;
-last_index_from_index(Index) ->
-    lists:max(maps:keys(Index)).
-
-
+last_index_from_mem_table(Id) ->
+    Last = ra_lib:default(lookup_element(ra_log_open_mem_tables, Id, 3), -1),
+    First = ra_lib:default(lookup_element(ra_log_open_mem_tables, Id, 2), -1),
+    {First, Last}.

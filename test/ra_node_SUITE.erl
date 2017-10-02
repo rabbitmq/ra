@@ -142,17 +142,27 @@ follower_handles_append_entries_rpc(_Config) ->
                                   prev_log_term = 5,
                                   leader_commit = 3},
     % success case - everything is up to date leader id got updated
-    {follower, #{leader_id := n1},
-     [{reply, #append_entries_reply{term = 5, success = true,
-                                    last_index = 3, last_term = 5}}, _]}
-        = ra_node:handle_follower(EmptyAE, State),
+    {follower, #{leader_id := n1, current_term := 5},
+     [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
+                                            next_index = 4,
+                                            last_index = 3, last_term = 5}}}, _]}
+    = begin
+          {follower, Inter, [{next_event, {written, Idx}}]}
+              = ra_node:handle_follower(EmptyAE, State),
+          ra_node:handle_follower({written, Idx}, Inter)
+      end,
 
     % success case when leader term is higher
     % reply term should be updated
-    {follower, #{leader_id := n1},
-     [{reply, #append_entries_reply{term = 6, success = true,
-                                   last_index = 3, last_term = 5}}, _Metrics]}
-        = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
+    {follower, #{leader_id := n1, current_term := 6},
+     [{cast, n1, {n1, #append_entries_reply{term = 6, success = true,
+                                            next_index = 4, last_index = 3,
+                                            last_term = 5}}}, _Metrics]}
+    = begin
+          {follower, Inter2, [{next_event, {written, 3}}]}
+          = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
+          ra_node:handle_follower({written, 3}, Inter2)
+      end,
 
     % reply false if term < current_term (5.1)
     {follower, _, [{reply, #append_entries_reply{term = 5, success = false}}]}
@@ -174,26 +184,38 @@ follower_handles_append_entries_rpc(_Config) ->
                              entries = [{2, 4, {'$usr', Self, <<"hi">>,
                                                 after_log_append}}]},
 
-    ExpectedLog = {2, #{0 => {0, undefined}, 1 => {1, usr(<<"hi1">>)},
+    ExpectedLog = {2, #{0 => {0, undefined},
+                        1 => {1, usr(<<"hi1">>)},
                         2 => {4, usr(<<"hi">>)}}, #{}, undefined},
     {follower,  #{log := {ra_log_memory, ExpectedLog}},
-     [{reply, #append_entries_reply{term = 5, success = true,
-                                    last_index = 2, last_term = 4}}, _Metric0]}
-        = ra_node:handle_follower(AE, State#{last_applied => 1}),
+     [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
+                                            next_index = 3, last_index = 2,
+                                            last_term = 4}}}, _Metric0]}
+    = begin
+          {follower, Inter3, [{next_event, {written, 2}}]}
+          = ra_node:handle_follower(AE, State#{last_applied => 1}),
+          ra_node:handle_follower({written, 2}, Inter3)
+      end,
 
     % append new entries not in the log
-    % if leader_commit > commit_index set commit_index = min(leader_commit, index of last new entry)
+    % if leader_commit > the last entry received ensure last_applied does not
+    % match commit_index
     ExpectedLogEntry = usr(<<"hi4">>),
     {follower, #{log := {ra_log_memory, {4, #{4 := {5, ExpectedLogEntry}}, #{}, undefined}},
-                 commit_index := 4, last_applied := 4,
+                 commit_index := 5, last_applied := 4,
                  machine_state := <<"hi4">>},
-     [{reply, #append_entries_reply{term = 5, success = true,
-                                   last_index = 4, last_term = 5}}, _Metrics1]}
+     [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
+                                            last_index = 4,
+                                            last_term = 5}}}, _Metrics1]}
+    = begin
+          {follower, Inter4, [{next_event, {written, WrIdx}}]}
         = ra_node:handle_follower(
             EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
                    machine_state => usr(<<"hi1">>)}),
+          ra_node:handle_follower({written, WrIdx}, Inter4)
+      end,
     ok.
 
 candidate_handles_append_entries_rpc(_Config) ->
@@ -219,6 +241,7 @@ append_entries_reply_success(_Config) ->
                              cluster => Cluster,
                              machine_state => <<"hi1">>},
     Msg = {n2, #append_entries_reply{term = 5, success = true,
+                                     next_index = 4,
                                      last_index = 3, last_term = 5}},
     ExpectedEffects =
         {send_rpcs, false,
@@ -241,6 +264,7 @@ append_entries_reply_success(_Config) ->
         ra_node:handle_leader(Msg, State),
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
+                                      next_index = 4,
                                       last_index = 3, last_term = 5}},
     {leader, #{cluster := #{n2 := #{next_index := 4,
                                              match_index := 3}},
@@ -261,7 +285,7 @@ append_entries_reply_no_success(_Config) ->
                              cluster => Cluster,
                              machine_state => <<"hi1">>},
     % n2 has only seen index 1
-    Msg = {n2, #append_entries_reply{term = 5, success = false,
+    Msg = {n2, #append_entries_reply{term = 5, success = false, next_index = 2,
                                      last_index = 1, last_term = 1}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 1,
@@ -344,6 +368,7 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
     {leader, State, []} = ra_node:handle_leader(Vote, State),
 
     AEReply = {unknown_peer, #append_entries_reply{term = 6, success = false,
+                                                   next_index = 4,
                                                    last_index = 3,
                                                    last_term = 5}},
     {leader, State, []} = ra_node:handle_leader(AEReply , State),
@@ -357,6 +382,7 @@ higher_term_detected(_Config) ->
     State = #{log := Log} = base_state(3),
     IncomingTerm = 6,
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
+                                         next_index = 4,
                                          last_index = 3, last_term = 5}},
     {ok, ExpectLog0} = ra_log:write_meta(current_term, IncomingTerm, Log),
     {ok, ExpectLog} = ra_log:write_meta(voted_for, undefined, ExpectLog0),
@@ -399,10 +425,11 @@ consistent_query(_Config) ->
                 n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => Cluster},
     {leader, State0, _} =
-    ra_node:handle_leader({command, {'$ra_query', self(),
-                                     fun id/1, await_consensus}}, State),
-    {leader, State1, _} = ra_node:handle_leader(sync, State0),
+        ra_node:handle_leader({command, {'$ra_query', self(),
+                                         fun id/1, await_consensus}}, State),
+    {leader, State1, _} = ra_node:handle_leader({written, 5}, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
+                                         next_index = 5,
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
     ct:pal("Effects ~p", [Effects]),
@@ -417,6 +444,7 @@ leader_noop_operation_enables_cluster_change(_Config) ->
         ra_node:handle_leader({command, noop}, State),
     {leader, State1, _} = ra_node:handle_leader(sync, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
+                                         next_index = 5,
                                          last_index = 4, last_term = 5}},
     % noop consensus
     {leader, #{cluster_change_permitted := true}, _} =
@@ -505,7 +533,7 @@ leader_is_removed(_Config) ->
                               State),
 
     % replies coming in
-    AEReply = #append_entries_reply{term = 5, success = true,
+    AEReply = #append_entries_reply{term = 5, success = true, next_index = 5,
                                     last_index = 4, last_term = 5},
     {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1),
     % after committing the new entry the leader steps down
@@ -530,7 +558,12 @@ follower_cluster_change(_Config) ->
                              entries = [JoinEntry]},
     {follower, #{cluster := NewCluster,
                  cluster_index_term := {4, 5}},
-     [{reply, #append_entries_reply{}}, _Metrics]} = ra_node:handle_follower(AE, State),
+     [{cast, n1, {n2, #append_entries_reply{}}}, _Metrics]} =
+        begin
+            {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AE, State),
+            ra_node:handle_follower(Next, Int)
+        end,
+
     ok.
 
 leader_applies_new_cluster(_Config) ->
@@ -561,6 +594,7 @@ leader_applies_new_cluster(_Config) ->
 
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true,
+                                    next_index = 5,
                                     last_index = 4, last_term = 5},
     % leader does not yet have consensus as will need at least 3 votes
     {leader, State3 = #{commit_index := 3,
@@ -630,8 +664,7 @@ command(_Config) ->
                             },
     {leader, _, [{reply, Self, {4, 5}},
                  {send_rpcs, true, [{n3, AE}, {n2, AE}]},
-                 _,
-                 schedule_sync]} =
+                 _]} =
         ra_node:handle_leader({command, Cmd}, State),
     ok.
 
@@ -706,8 +739,12 @@ snapshotted_follower_received_append_entries(_Config) ->
                               prev_log_term = 1,
                               leader_commit = 4 % entry is already committed
                              },
-    {follower, _FState, [{reply, #append_entries_reply{success = true}}, _Metrics]}
-        = ra_node:handle_follower(AER, FState1),
+    {follower, _FState, [{cast, n1, {n3, #append_entries_reply{success = true}}},
+                         _Metrics]} =
+    begin
+        {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AER, FState1),
+        ra_node:handle_follower(Next, Int)
+    end,
     ok.
 
 leader_received_append_entries_reply_with_stale_last_index(_Config) ->
@@ -739,6 +776,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 snapshot_points => #{}},
     AER = #append_entries_reply{success = false,
                                 term = Term,
+                                next_index = 3,
                                 last_index = 2, % refer to stale entry
                                 last_term = 1}, % in previous term
     % should decrement next_index for n2

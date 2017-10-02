@@ -5,10 +5,9 @@
 -export([init/2,
          close/1,
          append/3,
-         append/4,
-         sync/1,
          fetch/2,
          fetch_term/2,
+         flush/2,
          take/3,
          last/1,
          last_index_term/1,
@@ -41,12 +40,10 @@
 
 -callback append(Entry :: log_entry(),
                  overwrite | no_overwrite,
-                 sync | no_sync,
                  State :: ra_log_state()) ->
-    {ok, ra_log_state()} | {error, integrity_error}.
-
--callback sync(State :: ra_log_state()) ->
-    ok.
+    {queued, ra_log_state()} |
+    {written, ra_log_state()} |
+    {error, integrity_error}.
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
@@ -60,6 +57,8 @@
 
 -callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
     maybe(ra_term()).
+
+-callback flush(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
 
 -callback last(State :: ra_log_state()) ->
     maybe(log_entry()).
@@ -105,29 +104,23 @@ fetch(Idx, {Mod, Log}) ->
 fetch_term(Idx, {Mod, Log}) ->
     Mod:fetch_term(Idx, Log).
 
--spec append(Entry :: log_entry(),
-             Overwrite :: overwrite | no_overwrite,
-             State::ra_log()) ->
-    {ok, ra_log()} | {error, integrity_error}.
-append(Entry, Overwrite, Log) ->
-    append(Entry, Overwrite, sync, Log).
+-spec flush(Idx :: ra_index(), Log :: ra_log()) -> ra_log().
+flush(Idx, {Mod, Log}) ->
+    {Mod, Mod:flush(Idx, Log)}.
 
 -spec append(Entry :: log_entry(),
              Overwrite :: overwrite | no_overwrite,
-             Sync :: sync | no_sync,
              State::ra_log()) ->
-    {ok, ra_log()} | {error, integrity_error}.
-append(Entry, Overwrite, Sync, {Mod, Log0}) ->
-    case Mod:append(Entry, Overwrite, Sync, Log0) of
-        {ok, Log} ->
-            {ok, {Mod, Log}};
-        Err ->
-            Err
+    {queued, ra_log()} |
+    {written, ra_log()} |
+    {error, integrity_error}.
+append(Entry, Overwrite, {Mod, Log0}) ->
+    case Mod:append(Entry, Overwrite, Log0) of
+        {error, _} = Err ->
+            Err;
+        {Status, Log} ->
+            {Status, {Mod, Log}}
     end.
-
--spec sync(State::ra_log()) -> ok.
-sync({Mod, Log}) ->
-    Mod:sync(Log).
 
 -spec take(Start::ra_index(), Num::non_neg_integer(),
            State::ra_log()) -> [log_entry()].
