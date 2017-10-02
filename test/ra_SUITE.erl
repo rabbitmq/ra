@@ -39,6 +39,8 @@ groups() ->
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     application:ensure_all_started(ra),
     Config.
 
