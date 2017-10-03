@@ -415,7 +415,7 @@ handle_follower(#append_entries_rpc{term = Term,
         true ->
             % append_log_follower doesn't fsync each entry
             {Status, State1} = lists:foldl(fun append_log_follower/2,
-                                           {written, State0}, Entries),
+                                           {queued, State0}, Entries),
             % % ?DBG("~p: follower received ~p append_entries in ~p.",
             % %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
 
