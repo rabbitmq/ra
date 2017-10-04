@@ -53,7 +53,7 @@ init(#{directory := Dir, id := Id}) ->
     % initialized with a deafault 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_0_0_entry(State0),
-    % ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
+    ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
     State#state{tid = get_mem_tbl(Id)}.
 
 -spec close(ra_log_file_state()) -> ok.
