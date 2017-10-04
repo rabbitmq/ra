@@ -6,6 +6,8 @@
          take/3,
          last/1,
          last_index_term/1,
+         handle_written/2,
+         last_written/1,
          fetch/2,
          fetch_term/2,
          flush/2,
@@ -23,6 +25,7 @@
 
 -record(state, {first_index = -1 :: ra_index(),
                 last_index = -1 :: -1 | ra_index(),
+                last_written_index_term = {0, 0} :: ra_idxterm(),
                 id :: atom(),
                 tid :: maybe(tid()),
                 directory :: list(),
@@ -114,6 +117,15 @@ last_index_term(#state{last_index = LastIdx} = State) ->
         Term ->
             {LastIdx, Term}
     end.
+
+-spec last_written(ra_log_file_state()) -> ra_idxterm().
+last_written(#state{last_written_index_term = LWTI}) ->
+    LWTI.
+
+-spec handle_written(ra_index(), ra_log_file_state()) ->  ra_log_file_state().
+handle_written(Idx, State) ->
+    Term = fetch_term(Idx, State),
+    State#state{last_written_index_term = {Idx, Term}}.
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -233,7 +245,7 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     receive
         {written, 0} -> ok
     end,
-    State#state{first_index = 0};
+    State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->
     State.
 

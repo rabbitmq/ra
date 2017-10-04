@@ -67,7 +67,7 @@ init_per_group(ra_log_file, Config) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Dir = filename:join([PrivDir, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
-                          {ok, _} = ra_log_wal:start_link(#{dir => Dir}, []),
+                          % {ok, _} = ra_log_wal:start_link(#{dir => Dir}, []),
                           Conf = #{log_module => ra_log_file,
                                    log_init_args => #{directory => Dir,
                                                       id => Name},
@@ -298,7 +298,7 @@ add_node(Config) ->
                                             Config),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9),
     C = ra_node:name(?config(test_name, Config), "3"),
-    {ok, {_, Term}, _Leader} = ra:add_node(Leader, C),
+    {ok, {_, Term}, _Leader} = ra:add_node(Leader, {C, node()}),
     ok = ra:start_node(C, Cluster, fun erlang:'+'/2, 0),
     timer:sleep(2000),
     {ok, {{_, Term}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),

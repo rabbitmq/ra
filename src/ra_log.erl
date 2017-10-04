@@ -5,12 +5,15 @@
 -export([init/2,
          close/1,
          append/3,
+         append_sync/3,
          fetch/2,
          fetch_term/2,
          flush/2,
          take/3,
          last/1,
          last_index_term/1,
+         handle_written/2,
+         last_written/1,
          next_index/1,
          read_snapshot/1,
          write_snapshot/2,
@@ -18,7 +21,8 @@
          read_meta/3,
          write_meta/3,
          write_meta/4,
-         sync_meta/1
+         sync_meta/1,
+         exists/2
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -58,7 +62,9 @@
 -callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
     maybe(ra_term()).
 
--callback flush(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
+-callback handle_written(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
+
+-callback last_written(Log :: ra_log_state()) -> ra_idxterm().
 
 -callback last(State :: ra_log_state()) ->
     maybe(log_entry()).
@@ -83,6 +89,8 @@
 
 -callback sync_meta(State :: ra_log_state()) ->
     ok.
+
+
 
 %%
 %% API
@@ -122,6 +130,25 @@ append(Entry, Overwrite, {Mod, Log0}) ->
             {Status, {Mod, Log}}
     end.
 
+append_sync({Idx, _, _} = Entry, Overwrite, Log0) ->
+    case ra_log:append(Entry, Overwrite, Log0) of
+        {written, Log} ->
+            ra_log:handle_written(Idx, Log);
+        {queued, Log} ->
+            receive
+                % TODO: we could now end up re-ordering written notifications
+                % so need to handle that later
+                {written, Idx} ->
+                    ra_log:handle_written(Idx, Log)
+            after 5000 ->
+                      throw(ra_log_append_timeout)
+            end;
+        {error, _} = Err ->
+            throw(Err)
+    end.
+
+
+
 -spec take(Start::ra_index(), Num::non_neg_integer(),
            State::ra_log()) -> [log_entry()].
 take(Start, Num, {Mod, Log}) ->
@@ -134,6 +161,14 @@ last({Mod, Log}) ->
 -spec last_index_term(State::ra_log()) -> maybe(ra_idxterm()).
 last_index_term({Mod, Log}) ->
     Mod:last_index_term(Log).
+
+-spec handle_written(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
+handle_written(Idx, {Mod, Log}) ->
+    {Mod, Mod:handle_written(Idx, Log)}.
+
+-spec last_written(Log :: ra_log_state()) -> ra_idxterm().
+last_written({Mod, Log}) ->
+    Mod:last_written(Log).
 
 -spec next_index(State::ra_log()) -> ra_index().
 next_index({Mod, Log}) ->
@@ -187,3 +222,10 @@ write_meta(Key, Value, Log) ->
 -spec sync_meta(State :: ra_log()) -> ok.
 sync_meta({Mod, Log}) ->
     Mod:sync_meta(Log).
+
+-spec exists(ra_idxterm(), ra_log()) -> boolean().
+exists({Idx, Term}, Log) ->
+    case ra_log:fetch_term(Idx, Log) of
+        Term -> true;
+        _ -> false
+    end.

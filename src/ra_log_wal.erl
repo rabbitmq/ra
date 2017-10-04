@@ -219,6 +219,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
     State = State0#state{cursor = NextCursor},
+    % error_logger:info_msg("completing batch ~p~n", [Waiting]),
 
     % TODO emit metrics of time taken to sync and write batch size
     % notify processes that have synced map(Pid, Token)
