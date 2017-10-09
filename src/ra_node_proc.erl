@@ -227,7 +227,7 @@ leader(EventType, Msg, State0) ->
             State2 = stop_proxy(State1),
             {State, Actions} = handle_effects(Effects, EventType, State2),
             {next_state, follower, State,
-             maybe_stop_follower_election(State, Actions)};
+             maybe_set_election_timeout(State, Actions)};
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
@@ -262,7 +262,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
             {next_state, follower, State,
-             maybe_stop_follower_election(State, Actions)};
+             maybe_set_election_timeout(State, Actions)};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> leader term: ~p~n", [Id, Term]),
@@ -301,7 +301,7 @@ follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
-            {keep_state, NewState, maybe_stop_follower_election(State, Actions)};
+            {keep_state, NewState, maybe_set_election_timeout(State, Actions)};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
@@ -463,9 +463,9 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     {State, Actions}.
 
 
-maybe_stop_follower_election(#state{stop_follower_election = true}, Actions) ->
+maybe_set_election_timeout(#state{stop_follower_election = true}, Actions) ->
     [{state_timeout, infinity, election_timeout} | Actions];
-maybe_stop_follower_election(State, Actions) ->
+maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(follower, State) | Actions].
 
 election_timeout_action(follower, #state{broadcast_time = Timeout,

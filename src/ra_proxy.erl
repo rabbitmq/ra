@@ -21,7 +21,7 @@
                 interval = 100 :: non_neg_integer(),
                 timer_ref :: reference(),
                 nodes :: #{node() => ok},
-                stop_timer :: boolean()}).
+                quiesce :: boolean()}).
 
 %%%===================================================================
 %%% API functions
@@ -48,16 +48,16 @@ init([Parent, Interval, StopFollowerElection]) ->
                 interval = Interval,
                 timer_ref = TRef,
                 nodes = Nodes,
-                stop_timer = StopFollowerElection}}.
+                quiesce = StopFollowerElection}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
 handle_cast({appends, _, Appends}, #state{appends = Appends,
-                                          stop_timer = true} = State) ->
+                                          quiesce = true} = State) ->
     %% Nothing has changed, we can go silent
-    {noreply, stop_timer(State)};
+    {noreply, quiesce(State)};
 handle_cast({appends, false, Appends}, State0) ->
     % not urgent just update appends and wait for next interval
     % if the timer had stopped, we must restart it
@@ -94,7 +94,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 reset_timer(State) ->
     % should we use the async flag here to ensure minimal blocking
-    ensure_timer(stop_timer(State)).
+    ensure_timer(quiesce(State)).
 
 ensure_timer(State = #state{timer_ref = undefined, interval = Interval}) ->
     Ref = erlang:send_after(Interval, self(), broadcast),
@@ -102,9 +102,9 @@ ensure_timer(State = #state{timer_ref = undefined, interval = Interval}) ->
 ensure_timer(State) ->
     State.
 
-stop_timer(State = #state{timer_ref = undefined}) ->
+quiesce(State = #state{timer_ref = undefined}) ->
     State;
-stop_timer(State = #state{timer_ref = Ref}) ->
+quiesce(State = #state{timer_ref = Ref}) ->
     _ = erlang:cancel_timer(Ref),
     State#state{timer_ref = undefined}.
 
