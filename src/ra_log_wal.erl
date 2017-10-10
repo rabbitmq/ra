@@ -111,7 +111,7 @@ recover_wal(Dir, AdditionalModes) ->
     _ = file:delete(File),
     ok = filelib:ensure_dir(File),
     Modes = [raw, append, binary] ++ AdditionalModes,
-    {ok, Fd} = file:open("blah", Modes),
+    {ok, Fd} = file:open(File, Modes),
     #state{fd = Fd}.
 
 
