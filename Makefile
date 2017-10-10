@@ -5,7 +5,7 @@ PROJECT_MOD = ra_app
 
 define PROJECT_ENV
 [
-	{data_dir, "/var/vcap/ra/shared"}
+	{data_dir, "/var/vcap/store/ra/shared"}
 ]
 endef
 
