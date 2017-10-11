@@ -213,7 +213,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                       fd = Fd, cursor = Cursor} = State0,
                Debug0) ->
     TS = os:system_time(millisecond),
-    _ = file:datasync(Fd),
+    _ = file:sync(Fd),
     SyncTS = os:system_time(millisecond),
     _ = ets:update_element(ra_log_wal_metrics, Cursor,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
