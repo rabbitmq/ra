@@ -361,7 +361,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     end;
 handle_candidate(#request_vote_result{term = Term},
                  State0 = #{current_term := CurTerm, id := Id}) when Term > CurTerm ->
-    ?DBG("~p candidate request_vote_result with higher term recieved ~p -> ~p",
+    ?DBG("~p candidate request_vote_result with higher term received ~p -> ~p",
          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, []};
@@ -383,7 +383,7 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm, id := Id})
   when Term > CurTerm ->
-    ?DBG("~p candidate request_vote_rpc with higher term recieved ~p -> ~p",
+    ?DBG("~p candidate request_vote_rpc with higher term received ~p -> ~p",
          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, [{next_event, Msg}]};
@@ -943,7 +943,7 @@ append_cluster_change(Cluster, From, ReplyMode,
             previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
 
 append_entries_reply(Term, Success, State = #{log := Log}) ->
-    % ah - we can't use the the last recieved idx
+    % ah - we can't use the the last received idx
     % as it may not have been persisted yet
     % also we can use the last writted Idx as then
     % the follower may resent items that are currently waiting to

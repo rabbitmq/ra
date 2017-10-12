@@ -66,7 +66,7 @@ handle_info(broadcast, State) ->
     ok = broadcast(State),
     {noreply, reset_timer(State)};
 handle_info({nodeup, Node}, State = #state{nodes = Nodes}) ->
-    ?DBG("proxy: nodeup recieved x ~p~n", [Node]),
+    ?DBG("proxy: nodeup received x ~p~n", [Node]),
     {noreply, State#state{nodes = maps:put(Node, ok, Nodes)}};
 handle_info({nodedown, Node}, State = #state{nodes = Nodes}) ->
     {noreply, State#state{nodes = maps:remove(Node, Nodes)}};
