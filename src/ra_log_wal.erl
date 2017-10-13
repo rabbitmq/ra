@@ -225,7 +225,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     % notify processes that have synced map(Pid, Token)
     Debug = maps:fold(fun (Id, Tok, Dbg) ->
                               Msg = {written, Tok},
-                              Id ! Msg,
+                              catch (Id ! Msg),
                               Evt = {out, {self(), Msg}, Id},
                               sys:handle_debug(Dbg, fun write_debug/3,
                                                ?MODULE, Evt)
