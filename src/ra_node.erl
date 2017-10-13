@@ -695,8 +695,11 @@ handle_election_timeout(State0 = #{id := Id, current_term := CurrentTerm}) ->
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     State = update_meta([{current_term, NewTerm}, {voted_for, Id}], State0),
-    {candidate, State#{votes => 0}, [{next_event, cast, VoteForSelf},
-                                     {send_vote_requests, VoteRequests}]}.
+    {candidate,
+     State#{leader_id => undefined,
+            votes => 0},
+     [{next_event, cast, VoteForSelf},
+      {send_vote_requests, VoteRequests}]}.
 
 peers(#{id := Id, cluster := Nodes}) ->
     maps:remove(Id, Nodes).
