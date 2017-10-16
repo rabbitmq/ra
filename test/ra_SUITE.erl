@@ -4,6 +4,8 @@
 
 -include_lib("common_test/include/ct.hrl").
 
+-define(SEND_AND_AWAIT_CONSENSUS_TIMEOUT, 60000).
+
 all() ->
     [
      {group, ra_log_memory},
@@ -36,13 +38,14 @@ groups() ->
     [
      {ra_log_memory, [], all_tests()},
      {ra_log_file, [], all_tests()},
-     {ra_log_file_sync_always, [], all_tests()},
      {ra_reduce_network_usage, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     application:ensure_all_started(ra),
     Config.
 
@@ -63,23 +66,19 @@ init_per_group(ra_log_memory, Config) ->
                   end
           end,
    [{start_node_fun, Fun} | Config];
-init_per_group(Group, Config)
-  when Group == ra_log_file orelse Group == ra_log_file_sync_always ->
+init_per_group(ra_log_file, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    SyncStrategy = case Group of
-                       ra_log_file -> except_usr;
-                       _ -> always
-                   end,
     Fun = fun (TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Dir = filename:join([PrivDir, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
+                          % {ok, _} = ra_log_wal:start_link(#{dir => Dir}, []),
                           Conf = #{log_module => ra_log_file,
-                                   log_init_args => #{directory => Dir},
+                                   log_init_args => #{directory => Dir,
+                                                      id => Name},
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   sync_strategy => SyncStrategy,
                                    cluster_id => Name},
                           ra:start_node(Name, Conf)
                   end
@@ -107,158 +106,186 @@ init_per_testcase(TestCase, Config0) ->
     Fun0 = ?config(start_node_fun, Config0),
     Fun = Fun0(TestCase), % "partial application"
     Config = proplists:delete(start_node_fun, Config0),
-    [{start_node_fun, Fun} | Config].
+    [{test_name, ra_lib:to_list(TestCase)}, {start_node_fun, Fun} | Config].
 
 single_node(Config) ->
     StartNode = ?config(start_node_fun, Config),
-    ok = StartNode(n1, [], fun erlang:'+'/2, 0),
+    N1 = nn(Config, 1),
+    ok = StartNode(N1, [], fun erlang:'+'/2, 0),
     timer:sleep(1000),
     % index is 2 as leaders commit a noop entry on becoming leaders
-    {ok, {2,1}, _} = ra:send_and_await_consensus({n1, node()}, 5, 2000),
-    terminate_cluster([n1]).
+    {ok, {2,1}, _} = ra:send_and_await_consensus({N1, node()}, 5, 2000),
+    terminate_cluster([N1]).
 
 stop_node_idemp(Config) ->
     StartNode = ?config(start_node_fun, Config),
-    ok = StartNode(n1, [], fun erlang:'+'/2, 0),
+    N1 = nn(Config, 1),
+    ok = StartNode(N1, [], fun erlang:'+'/2, 0),
     timer:sleep(1000),
-    ok = ra:stop_node({n1, node()}),
+    ok = ra:stop_node({N1, node()}),
     % should not raise exception
-    ok = ra:stop_node({n1, node()}),
-    ok = ra:stop_node({n1, randomnode@bananas}),
+    ok = ra:stop_node({N1, node()}),
+    ok = ra:stop_node({N1, randomnode@bananas}),
     ok.
 
 leader_steps_down_after_replicating_new_cluster(Config) ->
-    ok = new_node(n1, Config),
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
+    ok = new_node(N1, Config),
     timer:sleep(1000),
-    _ = issue_op(n1, 5),
-    validate(n1, 5),
-    ok = start_and_join(n1, n2, Config),
-    _ = issue_op(n1, 5),
-    validate(n1, 10),
-    ok = start_and_join(n1, n3, Config),
-    _ = issue_op(n1, 5),
-    validate(n1, 15),
-    % allow n3 some time to catch up
+    _ = issue_op(N1, 5),
+    validate(N1, 5),
+    ok = start_and_join(N1, N2, Config),
+    _ = issue_op(N1, 5),
+    validate(N1, 10),
+    ok = start_and_join(N1, N3, Config),
+    _ = issue_op(N1, 5),
+    validate(N1, 15),
+    % allow N3 some time to catch up
     timer:sleep(1000),
     % remove leader node
     % the leader should here replicate the new cluster config
     % then step down + shut itself down
-    ok = remove_node(n1),
+    ok = remove_node(N1),
     timer:sleep(1000),
-    {error, noproc} = ra:send_and_await_consensus(n1, 5, 2000),
-    _ = issue_op(n2, 5),
-    validate(n2, 20),
-    terminate_cluster([n2, n3]).
+    {error, noproc} = ra:send_and_await_consensus(N1, 5, 2000),
+    _ = issue_op(N2, 5),
+    validate(N2, 20),
+    terminate_cluster([N2, N3]).
 
 
 start_and_join_then_leave_and_terminate(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
     % safe node removal
-    ok = new_node(n1, Config),
+    ok = new_node(N1, Config),
     timer:sleep(1000),
-    _ = issue_op(n1, 5),
-    validate(n1, 5),
-    ok = start_and_join(n1, n2, Config),
-    _ = issue_op(n2, 5),
-    validate(n2, 10),
-    ok = ra:leave_and_terminate({n1, node()}, {n2, node()}),
-    validate(n1, 10),
-    terminate_cluster([n1]),
+    _ = issue_op(N1, 5),
+    validate(N1, 5),
+    ok = start_and_join(N1, N2, Config),
+    _ = issue_op(N2, 5),
+    validate(N2, 10),
+    ok = ra:leave_and_terminate({N1, node()}, {N2, node()}),
+    validate(N1, 10),
+    terminate_cluster([N1]),
     ok.
 
-
 ramp_up_and_ramp_down(Config) ->
-    ok = new_node(n1, Config),
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
+    ok = new_node(N1, Config),
     timer:sleep(1000),
-    _ = issue_op(n1, 5),
-    validate(n1, 5),
+    _ = issue_op(N1, 5),
+    validate(N1, 5),
 
-    ok = start_and_join(n1, n2, Config),
-    _ = issue_op(n2, 5),
-    validate(n2, 10),
+    ok = start_and_join(N1, N2, Config),
+    _ = issue_op(N2, 5),
+    validate(N2, 10),
 
-    ok = start_and_join(n1, n3, Config),
-    _ = issue_op(n3, 5),
-    validate(n3, 15),
+    ok = start_and_join(N1, N3, Config),
+    _ = issue_op(N3, 5),
+    validate(N3, 15),
 
-    ok = ra:leave_and_terminate({n3, node()}),
-    _ = issue_op(n2, 5),
-    validate(n2, 20),
+    ok = ra:leave_and_terminate({N3, node()}),
+    _ = issue_op(N2, 5),
+    validate(N2, 20),
 
     % this is dangerous territory
     % we need a quorum from the node that is to be removed for the cluster
     % change. if we stop the node before removing it from the cluster
     % configuration the cluster becomes non-functional
-    ok = remove_node(n2),
+    ok = remove_node(N2),
     % a longish sleep here simulates a node that has been removed but not
     % shut down and thus may start issuing request_vote_rpcs
     timer:sleep(1000),
-    ok = stop_node(n2),
-    _ = issue_op(n1, 5),
-    validate(n1, 25),
-    terminate_cluster([n1]).
+    ok = stop_node(N2),
+    _ = issue_op(N1, 5),
+    validate(N1, 25),
+    terminate_cluster([N1]).
 
 minority(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
     StartNode = ?config(start_node_fun, Config),
-    ok = StartNode(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
-    {timeout, _} = ra:send_and_await_consensus({n1, node()}, 5, 500),
-    terminate_cluster([n1]).
+    ok = StartNode(N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0),
+    {timeout, _} = ra:send_and_await_consensus({N1, node()}, 5, 500),
+    terminate_cluster([N1]).
 
 start_nodes(Config) ->
     StartNode = ?config(start_node_fun, Config),
+    % suite unique node names
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
     % start the first node and wait a bit
-    ok = StartNode (n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
-    timer:sleep(1000),
+    ok = StartNode (N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0),
     % start second node
-    ok = StartNode(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    ok = StartNode(N2, [{N1, node()}, {N3, node()}], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
     % a consensus command tells us there is a functioning cluster
-    {ok, {2, Term}, _Leader} = ra:send_and_await_consensus({n1, node()}, 5),
+    {ok, _, _Leader} = ra:send_and_await_consensus({N1, node()}, 5,
+                                                   ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % start the 3rd node and issue another command
-    ok = StartNode(n3, [{n1, node()}, {n2, node()}], fun erlang:'+'/2, 0),
+    ok = StartNode(N3, [{N1, node()}, {N2, node()}], fun erlang:'+'/2, 0),
     timer:sleep(1000),
     % issue command
-    {ok, {3, Term}, Leader} = ra:send_and_await_consensus({n3, node()}, 5),
+    {ok, {3, Term}, Leader} = ra:send_and_await_consensus({N3, node()}, 5,
+                                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % shut down non leader
     Target = case Leader of
-                 {n1, _} -> {n2, node()};
-                 _ -> {n1, node()}
+                 {N1, _} -> {N2, node()};
+                 _ -> {N1, node()}
              end,
     gen_statem:stop(Target, normal, 2000),
     % issue command to confirm n3 joined the cluster successfully
-    {ok, {4, Term}, _} = ra:send_and_await_consensus({n3, node()}, 5),
-    terminate_cluster([n1, n2, n3] -- [element(1, Target)]).
+    {ok, {4, Term}, _} = ra:send_and_await_consensus({N3, node()}, 5,
+                                                     ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+    terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
 node_recovery(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
+
     StartNode = ?config(start_node_fun, Config),
     % start the first node and wait a bit
-    ok = StartNode(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    ok = StartNode(N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0),
     % start second node
-    ok = StartNode(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0),
+    ok = StartNode(N2, [{N1, node()}, {N3, node()}], fun erlang:'+'/2, 0),
     % a consensus command tells us there is a functioning 2 node cluster
-    {ok, {_, _}, Leader} = ra:send_and_await_consensus({n2, node()}, 5),
+    {ok, {_, _}, Leader} = ra:send_and_await_consensus({N2, node()}, 5,
+                                                       ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % restart Leader
     gen_statem:stop(Leader, normal, 2000),
     timer:sleep(1000),
     N = node(),
     case Leader of
-        {n1, N} ->
-            ok = StartNode(n1, [{n2, node()}, {n3, node()}], fun erlang:'+'/2, 0);
-        {n2, N} ->
-            ok = StartNode(n2, [{n1, node()}, {n3, node()}], fun erlang:'+'/2, 0)
+        {N1, N} ->
+            ok = StartNode(N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0);
+        {N2, N} ->
+            ok = StartNode(N2, [{N1, node()}, {N3, node()}], fun erlang:'+'/2, 0)
     end,
     timer:sleep(1000),
     % issue command
-    {ok, {_, _}, _Leader} = ra:send_and_await_consensus({n2, node()}, 5),
-    terminate_cluster([n1, n2]).
+    {ok, {_, _}, _Leader} = ra:send_and_await_consensus({N2, node()}, 5,
+                                                        ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+    terminate_cluster([N1, N2]).
 
 send_and_await_consensus(Config) ->
     [A, _B, _C] = Cluster =
-        start_local_cluster(3, "test", fun erlang:'+'/2, 9, Config),
-    {ok, {_, _}, _Leader} = ra:send_and_await_consensus(A, 5),
+        start_local_cluster(3, ?config(test_name, Config),
+                            fun erlang:'+'/2, 9, Config),
+    {ok, {_, _}, _Leader} = ra:send_and_await_consensus(A, 5,
+                                                        ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     terminate_cluster(Cluster).
 
 send_and_notify(Config) ->
     [A, _B, _C] = Cluster =
-        start_local_cluster(3, "test", fun erlang:'+'/2, 9, Config),
+        start_local_cluster(3, ?config(test_name, Config),
+                            fun erlang:'+'/2, 9, Config),
     {ok, IdxTerm, _Leader} = ra:send_and_notify(A, 5),
     receive
         {consensus, IdxTerm} -> ok
@@ -268,23 +295,28 @@ send_and_notify(Config) ->
     terminate_cluster(Cluster).
 
 dirty_query(Config) ->
-    [A, B, _C] = Cluster = start_local_cluster(3, "test",
+    [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                fun erlang:'+'/2, 9, Config),
     {ok, {{_, _}, 9}, _} = ra:dirty_query(B, fun(S) -> S end),
-    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 5),
+    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 5,
+                                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     {ok, {{_, Term}, 14}, _} = ra:dirty_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
 members(Config) ->
-    Cluster = start_local_cluster(3, "test", fun erlang:'+'/2, 9, Config),
-    {ok, _, Leader} = ra:send_and_await_consensus(hd(Cluster), 5),
+    Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                  fun erlang:'+'/2, 9, Config),
+    {ok, _, Leader} = ra:send_and_await_consensus(hd(Cluster), 5,
+                                                  ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     {ok, Cluster, Leader} = ra:members(Leader),
     terminate_cluster(Cluster).
 
 consistent_query(Config) ->
-    [A, _B, _C]  = Cluster = start_local_cluster(3, "test", fun erlang:'+'/2,
+    [A, _B, _C]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                 fun erlang:'+'/2,
                                                  0, Config),
-    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9),
+    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9,
+                                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     {ok, {_, Term}, _Leader} = ra:send(Leader, 5),
     {ok, {{_, Term}, 14}, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
@@ -295,27 +327,31 @@ add_node(Config) ->
                                             Config),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9),
     C = ra_node:name("test", "3"),
-    {ok, {_, Term}, _Leader} = ra:add_node(Leader, C),
+    {ok, {_, Term}, _Leader} = ra:add_node(Leader, {C, node()}),
     ok = StartNode(C, Cluster, fun erlang:'+'/2, 0),
     timer:sleep(2000),
     {ok, {{_, Term}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
 snapshot(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
     StartNode = ?config(start_node_fun, Config),
-    InitialNodes = [{n1, node()}, {n2, node()}],
+    InitialNodes = [{N1, node()}, {N2, node()}],
     %%TODO look into cluster changes WITH INVALID NAMES!!!
 
     % start two nodes
-    ok = StartNode(n1, InitialNodes, fun ra_queue:simple_apply/3, []),
-    ok = StartNode(n2, InitialNodes, fun ra_queue:simple_apply/3, []),
-    N1 = {n1, node()}, N2 = {n2, node()}, N3 = {n3, node()},
-    {ok, {_, Term}, Leader} = ra:send(n1, {enq, banana}),
+    ok = StartNode(N1, InitialNodes, fun ra_queue:simple_apply/3, []),
+    ok = StartNode(N2, InitialNodes, fun ra_queue:simple_apply/3, []),
+    % N1 = {N1, node()}, N2 = {N2, node()}, N3 = {N3, node()},
+    {ok, {_, Term}, Leader} = ra:send(N1, {enq, banana}),
     {ok, {_, Term}, Leader} = ra:send(Leader, {deq, self()}),
-    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple}),
+    {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
+                                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % waitfor(banana, apply_timeout),
-    ok = ra:start_node(n3, InitialNodes, fun ra_queue:simple_apply/3, []),
-    {ok, {_, Term}, _Leader} = ra:add_node(Leader, N3),
+    ok = ra:start_node(N3, InitialNodes, fun ra_queue:simple_apply/3, []),
+    {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point snapshot should have been taken
     {ok, {_, Res}, _} = ra:dirty_query(N1, fun ra_lib:id/1),
@@ -349,7 +385,8 @@ stop_leader_and_wait_for_elections(Config) ->
 
 queue_example(Config) ->
     Self = self(),
-    [A, _B, _C] = Cluster = start_local_cluster(3, "test", fun queue_apply/2,
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                fun queue_apply/2,
                                                 #{queue => queue:new(),
                                                   pending_dequeues => []}, Config),
 
@@ -426,6 +463,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState, Config) ->
     StartNode = ?config(start_node_fun, Config),
     Nodes0 = [{ra_node:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
+    ct:pal("NOdes ~p~n", [Nodes0]),
     [Head | _] = Nodes = [begin
                               ok = StartNode(N, Nodes0, ApplyFun, InitialState),
                               Id
@@ -448,3 +486,7 @@ validate(Name, Expected) ->
 dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),
     T.
+
+nn(Config, N) when is_integer(N) ->
+    ra_node:name(?config(test_name, Config), erlang:integer_to_list(N)).
+

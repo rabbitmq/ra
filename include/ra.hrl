@@ -52,6 +52,10 @@
          % because we aren't doing true rpc we may have multiple append
          % entries in flight we need to communicate what we are replying
          % to
+         % because writes are fsynced asynchronously we need to indicate
+         % the last index seen as well as the last index persisted.
+         next_index :: ra_index(),
+         % the last index that has been fsynced to disk
          last_index :: ra_index(),
          last_term :: ra_term()}).
 

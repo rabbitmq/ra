@@ -17,4 +17,11 @@ init([]) ->
                   type => worker,
                   modules => [ra_heartbeat_monitor]},
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
-    {ok, {SupFlags, [Heartbeat]}}.
+    {ok, DataDir} = application:get_env(data_dir),
+    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    WriterConf = #{dir => DataDir,
+                   additional_wal_file_modes => Modes},
+    Writer = #{id => ra_log_wal,
+               start => {ra_log_wal, start_link, [WriterConf, []]}},
+	Procs = [Writer, Heartbeat],
+	{ok, {SupFlags, Procs}}.
