@@ -19,7 +19,7 @@
 -record(state, {appends :: list(),
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
-                timer_ref :: reference(),
+                timer_ref :: maybe(reference()),
                 nodes :: #{node() => ok},
                 quiesce :: boolean()}).
 

@@ -378,8 +378,8 @@ stop_leader_and_wait_for_elections(Config) ->
     gen_statem:stop(Leader, normal, 2000),
     timer:sleep(10000),
     % issue command to confirm a new leader is elected
-    NewTerm = Term + 1,
     {ok, {5, NewTerm}, {NewLeader, _}} = ra:send_and_await_consensus({n3, node()}, 5),
+    true = (NewTerm > Term),
     true = (NewLeader =/= n1),
     terminate_cluster([n1, n2, n3] -- [element(1, Leader)]).
 

@@ -83,7 +83,8 @@
                             init_fun => fun((atom()) -> term()),
                             broadcast_time => non_neg_integer(), % milliseconds
                             election_timeout_multiplier => non_neg_integer(),
-                            cluster_id => atom()}.
+                            cluster_id => atom(),
+                            stop_follower_election => boolean()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
