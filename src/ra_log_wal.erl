@@ -70,7 +70,7 @@ tbl_lookup([_ | Tail], Idx) ->
 %% kv data, the first key should always be present
 
 %% Mem Tables - ra_log_wal_meta_data
-%% There should only ever be one "open" tableggj
+%% There should only ever be one "open" table
 %% i.e. a table that is currently being written to
 %% Num is a monotonically incrementing id to be used to
 %% determine the order the tables were written to

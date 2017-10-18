@@ -125,7 +125,8 @@ last_written(#state{last_written_index_term = LWTI}) ->
 -spec handle_written(ra_index(), ra_log_file_state()) ->  ra_log_file_state().
 handle_written(Idx, State) ->
     Term = fetch_term(Idx, State),
-    State#state{last_written_index_term = {Idx, Term}}.
+    % TODO: this flush could hamper performance but it needs to be done
+    flush(Idx, State#state{last_written_index_term = {Idx, Term}}).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
