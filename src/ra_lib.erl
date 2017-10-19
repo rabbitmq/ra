@@ -7,6 +7,8 @@
          dump/1,
          dump/2,
          id/1,
+         % maybe
+         iter_maybe/2,
          % cohercion
          to_list/1,
          to_atom/1,
@@ -42,6 +44,12 @@ dump(Prefix, Term) ->
 
 id(X) -> X.
 
+
+iter_maybe(undefined, _F) ->
+    ok;
+iter_maybe(M, F) ->
+    _ = F(M),
+    ok.
 
 -spec to_list(atom() | binary() | list()) -> list().
 to_list(A) when is_atom(A) ->

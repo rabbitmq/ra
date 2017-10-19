@@ -4,9 +4,6 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% common ra_log tests to ensure behaviour is equivalent across
-%% ra_log backends
-
 all() ->
     [
      {group, tests}
@@ -16,7 +13,9 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
-     write_many
+     write_many,
+     roll_over
+     % recover
     ].
 
 groups() ->
@@ -25,6 +24,8 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
+    % application:ensure_all_started(sasl),
+    application:ensure_all_started(lg),
     Config.
 
 end_per_group(tests, Config) ->
@@ -34,7 +35,7 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     register(TestCase, self()),
-    [{wal_dir, Dir} | Config].
+    [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
 
 basic_log_writes(Config) ->
@@ -62,6 +63,7 @@ write_many(Config) ->
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
+    % start_profile(Config, [ra_log_wal, ets, file, os]),
     {Taken, _} =
         timer:tc(
           fun () ->
@@ -70,12 +72,56 @@ write_many(Config) ->
                    end || Idx <- lists:seq(1, NumWrites)],
                   await_written(Self, NumWrites)
           end),
+
+    % stop_profile(Config),
     ct:pal("~b writes took ~p milliseconds~nFile modes: ~p~n",
            [NumWrites, Taken / 1000, Modes]),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
     ok.
+
+roll_over(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    NumWrites = 5,
+    % configure max_wal_size_bytes
+    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
+                                         max_wal_size_bytes => 1024 * NumWrites,
+                                         table_writer => Self}, []),
+    % write enough entries to trigger roll over
+    Data = crypto:strong_rand_bytes(1024),
+    [begin
+         ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     end || Idx <- lists:seq(1, NumWrites)],
+    % wait for writes
+    receive {written, NumWrites} -> ok
+    after 5000 -> throw(written_timeout)
+    end,
+
+    % validate we receive the new mem tables notifications as if we were
+    % the writer process
+    receive
+        {log, {new_table_data, [{Self, _Fst, _Lst, Tid}]}} ->
+            [{Self, 5, 5, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, Self),
+            % the current tid is not the same as the rolled over one
+            ?assert(Tid =/= CurrentTid),
+            % ensure closed mem tables contain the previous mem_table
+            [{Self, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, Self)
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+
+    % TODO: validate we can read first and last written
+    ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 1)),
+    ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 5)),
+    ok.
+
+recover(_Config) ->
+    % open wal and write a few entreis
+    % close wal + delete mem_tables
+    % re-open wal and validate mem_tables are re-created
+    exit(recover_test_not_impl).
 
 await_written(Id, Idx) ->
     receive
@@ -84,3 +130,23 @@ await_written(Id, Idx) ->
     after 5000 ->
               throw(written_timeout)
     end.
+
+start_profile(Config, Modules) ->
+    Dir = ?config(priv_dir, Config),
+    Case = ?config(test_case, Config),
+    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
+    ct:pal("Profiling to ~p~n", [GzFile]),
+
+    lg:trace(Modules, lg_file_tracer,
+             GzFile, #{running => false, mode => profile}).
+
+stop_profile(Config) ->
+    Case = ?config(test_case, Config),
+    ct:pal("Stopping profiling for ~p~n", [Case]),
+    lg:stop(),
+    Dir = ?config(priv_dir, Config),
+    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    timer:sleep(2000),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}),
+    lg_callgrind:profile_many("lg_write_many.gz.*", "lg_write_many.out",#{running => false}),
+    ok.
