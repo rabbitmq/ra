@@ -80,6 +80,7 @@ init_per_group(ra_log_file, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name},
+                          ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
                   end
           end,

@@ -254,7 +254,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                 case Status of
                     written ->
                         % fake written event
-                        {State0, [{next_event, {written, Idx}}]};
+                        {State0, [{next_event, {written, {Idx, Term}}}]};
                         % we have synced - forward leader match_index
                         % evaluate_quorum(State0);
                     queued ->
@@ -280,8 +280,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                       end,
             {leader, State, Effects}
     end;
-handle_leader({written, Idx}, State0 = #{log := Log0}) ->
-    Log = ra_log:handle_written(Idx, Log0),
+handle_leader({written, IdxTerm}, State0 = #{log := Log0}) ->
+    Log = ra_log:handle_written(IdxTerm, Log0),
     {State, Effects, Applied} = evaluate_quorum(State0#{log => Log}),
     % TODO: should we send rpcs in case commit_index was incremented?
     % {State, Rpcs} = make_pipelined_rpcs(State1),
@@ -427,19 +427,20 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     Reply = append_entries_reply(Term, true, State),
                     {follower, State,
                      [{cast, LeaderId, {Id, Reply}} | Effects]};
-                [{FirstIdx, _, _} | _] ->
+                [{FirstIdx, FirstTerm, _} | _] ->
 
-                    {Status, LastIdx, State1}
+                    {Status, {LastIdx, _LastTerm}, State1}
                         = lists:foldl(fun append_log_follower/2,
-                                      {queued, FirstIdx, State0}, Entries),
+                                      {queued, {FirstIdx, FirstTerm}, State0},
+                                      Entries),
 
                     Effects = case Status of
                                   written ->
                                       % schedule a written next_event
                                       % we can use last idx here as the log store
                                       % is now fullly up to date.
-                                      {Idx, _} = last_idx_term(State1),
-                                      [{next_event, {written, Idx}}];
+                                      LastIdxTerm = last_idx_term(State1),
+                                      [{next_event, {written, LastIdxTerm}}];
                                   queued -> []
                               end,
                     % ?DBG("~p: follower received ~p append_entries in ~p.~nEffects ~p",
@@ -460,11 +461,11 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
             {follower, State0#{leader_id => LeaderId},
              [{cast, LeaderId, {Id, Reply}}]}
     end;
-handle_follower({written, Idx}, State00 = #{current_term := Term, id := Id,
-                                            log := Log0,
-                                            leader_id := LeaderId}) ->
+handle_follower({written, IdxTerm},
+                State00 = #{current_term := Term, id := Id,
+                            log := Log0, leader_id := LeaderId}) ->
 
-    State0 = State00#{log => ra_log:handle_written(Idx, Log0)},
+    State0 = State00#{log => ra_log:handle_written(IdxTerm, Log0)},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
     {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
@@ -903,8 +904,8 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
             Log = ra_log:append_sync(Entry, overwrite, Log0),
-            {written, Idx, State#{log => Log, cluster => Cluster,
-                             cluster_index_term => {Idx, Term}}};
+            {written, {Idx, Term}, State#{log => Log, cluster => Cluster,
+                                          cluster_index_term => {Idx, Term}}};
         _ ->
             % revert back to previous cluster
             {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
@@ -917,14 +918,15 @@ append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
     % TODO: we may want to delay sync until after
     % all entries have been appended.
     Log = ra_log:append_sync(Entry, overwrite, Log0),
-    {written, Idx,
+    {written, {Idx, Term},
      State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}}};
-append_log_follower(Entry = {Idx, _, _}, {_Status, _, State = #{log := Log0}}) ->
+append_log_follower(Entry = {Idx, Term, _},
+                    {_Status, _, State = #{log := Log0}}) ->
     case ra_log:append(Entry, overwrite, Log0) of
         {error, _} = Err ->
             exit(Err);
         {Status, Log} ->
-            {Status, Idx, State#{log => Log}}
+            {Status, {Idx, Term}, State#{log => Log}}
     end.
 
 append_cluster_change(Cluster, From, ReplyMode,

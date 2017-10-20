@@ -122,11 +122,16 @@ last_index_term(#state{last_index = LastIdx} = State) ->
 last_written(#state{last_written_index_term = LWTI}) ->
     LWTI.
 
--spec handle_written(ra_index(), ra_log_file_state()) ->  ra_log_file_state().
-handle_written(Idx, State) ->
-    Term = fetch_term(Idx, State),
-    % TODO: this flush could hamper performance but it needs to be done
-    flush(Idx, State#state{last_written_index_term = {Idx, Term}}).
+-spec handle_written(ra_idxterm(), ra_log_file_state()) ->
+    ra_log_file_state().
+handle_written({Idx, Term} = IdxTerm, State) ->
+    case fetch_term(Idx, State) of
+        Term ->
+            % TODO: this flush could hamper performance but it needs to be done
+            flush(Idx, State#state{last_written_index_term = IdxTerm});
+        _ ->
+            State
+    end.
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -153,14 +158,15 @@ fetch(Idx, #state{tid = Tid, cache = Cache}) ->
 -spec fetch_term(ra_index(), ra_log_file_state()) ->
     maybe(ra_term()).
 fetch_term(Idx, #state{tid = Tid, cache = Cache}) ->
-    ra_lib:lazy_default(lookup_element(Tid, Idx, 2),
+    % needs to check cache first
+    ra_lib:lazy_default(case Cache of
+                            #{Idx := {Term, _}} ->
+                                Term;
+                            _ ->
+                                undefined
+                        end,
                         fun () ->
-                                case Cache of
-                                    #{Idx := {Term, _}} ->
-                                        Term;
-                                    _ ->
-                                        undefined
-                                end
+                                lookup_element(Tid, Idx, 2)
                         end).
 
 flush(Idx, State = #state{cache = Cache0}) ->
@@ -244,7 +250,7 @@ sync_meta(#state{kv = Kv}) ->
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     {queued, State} = append({0, 0, undefined}, no_overwrite, State0),
     receive
-        {written, 0} -> ok
+        {written, {0, 0}} -> ok
     end,
     State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->

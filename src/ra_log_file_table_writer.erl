@@ -1,4 +1,4 @@
--module(ra_log_file_dets_writer).
+-module(ra_log_file_table_writer).
 -behaviour(gen_server).
 
 -export([start_link/0]).
@@ -15,6 +15,8 @@
 %%% ra_log_file_dets_writer
 %%% receives a set of mem_tables from the wal
 %%% appends to the current dets table for the target and flushes
+%%% each dets table has a "range" key with the start and end indexes
+%%% is is also named in sequential order (?? what about compaction)
 %%% notifies ra_log_file_reader if a new dets tables were created
 %%% removes the table from ra_log_closed_mem_tables
 %%% schedules ETS table deletions

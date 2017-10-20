@@ -43,9 +43,9 @@ basic_log_writes(Config) ->
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     ok = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
-    {12, 1, "value"} = await_written(Self, 12),
+    {12, 1, "value"} = await_written(Self, {12, 1}),
     ok = ra_log_wal:write(Self, ra_log_wal, 13, 1, "value2"),
-    {13, 1, "value2"} = await_written(Self, 13),
+    {13, 1, "value2"} = await_written(Self, {13, 1}),
     % previous log value is still there
     {12, 1, "value"} = ra_log_wal:mem_tbl_read(Self, 12),
     undefined = ra_log_wal:mem_tbl_read(Self, 14),
@@ -70,7 +70,7 @@ write_many(Config) ->
                   [begin
                        ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
                    end || Idx <- lists:seq(1, NumWrites)],
-                  await_written(Self, NumWrites)
+                  await_written(Self, {NumWrites, 1})
           end),
 
     % stop_profile(Config),
@@ -95,7 +95,7 @@ roll_over(Config) ->
          ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
-    receive {written, NumWrites} -> ok
+    receive {written, {NumWrites, 1}} -> ok
     after 5000 -> throw(written_timeout)
     end,
 
@@ -123,9 +123,9 @@ recover(_Config) ->
     % re-open wal and validate mem_tables are re-created
     exit(recover_test_not_impl).
 
-await_written(Id, Idx) ->
+await_written(Id, IdxTerm) ->
     receive
-        {written, Idx} ->
+        {written, {Idx, _} = IdxTerm} ->
             ra_log_wal:mem_tbl_read(Id, Idx)
     after 5000 ->
               throw(written_timeout)

@@ -113,10 +113,16 @@ last_written(#state{last_written = LastWritten}) ->
     % remain api compatible with  ra_log_file, for now at least.
     LastWritten.
 
--spec handle_written(ra_index(), ra_log_memory_state()) ->  ra_log_memory_state().
-handle_written(Idx, State) ->
-    Term = fetch_term(Idx, State),
-    State#state{last_written = {Idx, Term}}.
+-spec handle_written(ra_idxterm(),
+                     ra_log_memory_state()) ->  ra_log_memory_state().
+handle_written({Idx, Term} = IdxTerm, State) ->
+    case fetch_term(Idx, State) of
+        Term ->
+            State#state{last_written = IdxTerm};
+        _ ->
+            % if the term doesn't match we just ignore it
+            State
+    end.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->

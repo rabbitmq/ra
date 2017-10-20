@@ -246,7 +246,7 @@ append_data(#state{fd = Fd, batch = Batch,
             Id, Idx, Term, Entry, DataSize, Data) ->
     ok = file:write(Fd, Data),
     true = update_mem_table(Id, Idx, Term, Entry),
-    State#state{batch = incr_batch(Batch, Id, Idx),
+    State#state{batch = incr_batch(Batch, Id, {Idx, Term}),
                 wal_file_size = FileSize + DataSize}.
 
 update_mem_table(Id, Idx, Term, Entry) ->
@@ -316,8 +316,8 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
 
     % TODO emit metrics of time taken to sync and write batch size
     % notify processes that have synced map(Pid, Token)
-    Debug = maps:fold(fun (Id, Tok, Dbg) ->
-                              Msg = {written, Tok},
+    Debug = maps:fold(fun (Id, IdxTerm, Dbg) ->
+                              Msg = {written, IdxTerm},
                               Id ! Msg,
                               Evt = {out, {self(), Msg}, Id},
                               sys:handle_debug(Dbg, fun write_debug/3,
@@ -326,9 +326,9 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     {State, Debug}.
 
 incr_batch(#batch{writes = Writes,
-                  waiting = Waiting} = Batch, Id, Idx) ->
+                  waiting = Waiting} = Batch, Id, IdxTerm) ->
     Batch#batch{writes = Writes + 1,
-                waiting = Waiting#{Id => Idx}}.
+                waiting = Waiting#{Id => IdxTerm}}.
 
 %% Here are the sys call back functions
 

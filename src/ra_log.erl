@@ -62,7 +62,8 @@
 -callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
     maybe(ra_term()).
 
--callback handle_written(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
+-callback handle_written(Idx :: ra_idxterm(),
+                         Log :: ra_log_state()) -> ra_log_state().
 
 -callback last_written(Log :: ra_log_state()) -> ra_idxterm().
 
@@ -130,16 +131,16 @@ append(Entry, Overwrite, {Mod, Log0}) ->
             {Status, {Mod, Log}}
     end.
 
-append_sync({Idx, _, _} = Entry, Overwrite, Log0) ->
+append_sync({Idx, Term, _} = Entry, Overwrite, Log0) ->
     case ra_log:append(Entry, Overwrite, Log0) of
         {written, Log} ->
-            ra_log:handle_written(Idx, Log);
+            ra_log:handle_written({Idx, Term}, Log);
         {queued, Log} ->
             receive
                 % TODO: we could now end up re-ordering written notifications
                 % so need to handle that later
-                {written, Idx} ->
-                    ra_log:handle_written(Idx, Log)
+                {written, IdxTerm} ->
+                    ra_log:handle_written(IdxTerm, Log)
             after 5000 ->
                       throw(ra_log_append_timeout)
             end;
@@ -162,9 +163,10 @@ last({Mod, Log}) ->
 last_index_term({Mod, Log}) ->
     Mod:last_index_term(Log).
 
--spec handle_written(Idx :: ra_index(), Log :: ra_log_state()) -> ra_log_state().
-handle_written(Idx, {Mod, Log}) ->
-    {Mod, Mod:handle_written(Idx, Log)}.
+-spec handle_written(Idx :: ra_idxterm(), Log :: ra_log_state()) ->
+    ra_log_state().
+handle_written(IdxTerm, {Mod, Log}) ->
+    {Mod, Mod:handle_written(IdxTerm, Log)}.
 
 -spec last_written(Log :: ra_log_state()) -> ra_idxterm().
 last_written({Mod, Log}) ->
