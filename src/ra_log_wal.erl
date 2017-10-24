@@ -222,6 +222,7 @@ handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
     %% TODO: cache binary Id representation?
     EntryData = term_to_binary(Entry),
     EntryDataLen = byte_size(EntryData),
+    % TODO adler32 checksum check for EntryData
     Data = <<IdDataLen:16/integer, % 2
              IdData/binary,
              Idx:64/integer,
@@ -294,7 +295,7 @@ roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
 
 open_mem_table(Id, Idx) ->
     Tid = ets:new(Id, [set, protected, {read_concurrency, true}]),
-    true = ets:insert(ra_log_open_mem_tables, {Id, Idx, Idx,Tid}),
+    true = ets:insert(ra_log_open_mem_tables, {Id, Idx, Idx, Tid}),
     Tid.
 
 start_batch(State) ->
