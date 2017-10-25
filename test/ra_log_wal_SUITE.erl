@@ -73,9 +73,9 @@ write_many(Config) ->
                   await_written(Self, {NumWrites, 1})
           end),
 
-    % stop_profile(Config),
     ct:pal("~b writes took ~p milliseconds~nFile modes: ~p~n",
            [NumWrites, Taken / 1000, Modes]),
+    % stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
@@ -88,7 +88,7 @@ roll_over(Config) ->
     % configure max_wal_size_bytes
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
                                          max_wal_size_bytes => 1024 * NumWrites,
-                                         table_writer => Self}, []),
+                                         segment_writer => Self}, []),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
@@ -102,7 +102,7 @@ roll_over(Config) ->
     % validate we receive the new mem tables notifications as if we were
     % the writer process
     receive
-        {log, {new_table_data, [{Self, _Fst, _Lst, Tid}]}} ->
+        {'$gen_cast', {mem_tables, [{Self, _Fst, _Lst, Tid}], _}} ->
             [{Self, 5, 5, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, Self),
             % the current tid is not the same as the rolled over one
             ?assert(Tid =/= CurrentTid),

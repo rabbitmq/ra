@@ -17,6 +17,7 @@ all_tests() ->
     [
      open_close_persists_max_count,
      write_then_read,
+     write_close_open_write,
      full_file,
      try_read_missing,
      overwrite
@@ -47,7 +48,7 @@ open_close_persists_max_count(Config) ->
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = crypto:strong_rand_bytes(1024),
+    Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn, #{max_count => 2}),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data),
     {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
@@ -55,11 +56,39 @@ full_file(Config) ->
     ok = ra_log_file_segment:close(Seg),
     ok.
 
+write_close_open_write(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    % create unique data so that the CRC check is trigged in case we
+    % write to the wrong offset
+    Data = fun (Num) ->
+                   I = integer_to_binary(Num),
+                   <<"data", I/binary>>
+           end,
+    {ok, Seg0} = ra_log_file_segment:open(Fn),
+    {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data(1)),
+    {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data(2)),
+    ok = ra_log_file_segment:sync(Seg),
+    ok = ra_log_file_segment:close(Seg),
+
+    % reopen file and append again
+    {ok, SegA0} = ra_log_file_segment:open(Fn),
+    % also open a reader
+    {ok, SegA} = ra_log_file_segment:append(SegA0, 3, 2, Data(3)),
+    ok = ra_log_file_segment:sync(SegA),
+    % need to re-read index
+    {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
+    [{1, 2, <<"data1">>}, {2, 2, <<"data2">>}, {3, 2, <<"data3">>}] =
+        ra_log_file_segment:read(SegR, 1, 3),
+    ok = ra_log_file_segment:close(SegA),
+    ok = ra_log_file_segment:close(SegR),
+    ok.
+
 write_then_read(Config) ->
     % tests items are bing persisted and index can be recovered
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = crypto:strong_rand_bytes(1024),
+    Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data),
     {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
@@ -76,7 +105,7 @@ try_read_missing(Config) ->
     % tests items are bing persisted and index can be recovered
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = crypto:strong_rand_bytes(1024),
+    Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg} = ra_log_file_segment:append(Seg0, 1, 2, Data),
     ok = ra_log_file_segment:sync(Seg),
@@ -89,7 +118,7 @@ try_read_missing(Config) ->
 overwrite(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = crypto:strong_rand_bytes(1024),
+    Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 5, 2, Data),
     % overwrite - simulates follower receiving entries from new leader
@@ -100,3 +129,10 @@ overwrite(Config) ->
     [] = ra_log_file_segment:read(SegR, 5, 1),
     [{2, 2, Data}] = ra_log_file_segment:read(SegR, 2, 1),
     ok.
+
+
+
+%%% Internal
+%%% p
+make_data(Size) ->
+    term_to_binary(crypto:strong_rand_bytes(Size)).

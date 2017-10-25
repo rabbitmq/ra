@@ -6,7 +6,8 @@
          sync/1,
          read/3,
          close/1,
-         max_count/1]).
+         max_count/1,
+         filename/1]).
 % , append/4, read/3, from_ets/2, close/1]).
 
 -include("ra.hrl").
@@ -40,35 +41,41 @@
 
 -type ra_log_file_segment_options() :: #{max_count => non_neg_integer(),
                                          mode => append | read}.
--type ra_log_file_segment_state() :: #state{}.
+-type state() :: #state{}.
+
+-export_type([state/0]).
 
 -spec open(Filename :: file:filename_all()) ->
-    {ok, ra_log_file_segment_state()} | {error, term()}.
+    {ok, state()} | {error, term()}.
 open(Filename) ->
     open(Filename, #{}).
 
 -spec open(Filename :: file:filename_all(),
            Options :: ra_log_file_segment_options()) ->
-    {ok, ra_log_file_segment_state()} | {error, term()}.
+    {ok, state()} | {error, term()}.
 open(Filename, Options) ->
     AbsFilename = filename:absname(Filename),
     FileExists = filelib:is_file(AbsFilename),
-    {ok, Fd} = file:open(AbsFilename, [read, write, raw, binary, read_ahead]),
     Mode = maps:get(mode, Options, append),
+    {ok, Fd} = case Mode of
+                   append ->
+                       file:open(AbsFilename, [read, write, raw, binary]);
+                   read ->
+                       file:open(AbsFilename, [read, raw, read_ahead, binary])
+               end,
     case FileExists of
         true ->
             % it is a new file
             % READ and validate VERSION
-            % read index size (configurable)
             MaxCount = read_header(Fd),
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            {NumIndexRecords, Index} = recover_index(Fd, MaxCount),
+            {NumIndexRecords, DataOffset, Index} = recover_index(Fd, MaxCount),
             {ok, #state{version = 1, max_count = MaxCount,
                         filename = Filename, fd = Fd, index_size = IndexSize,
                         mode = Mode,
                         data_start = ?HEADER_SIZE + IndexSize,
-                        data_offset = ?HEADER_SIZE + IndexSize,
-                        index_offset = NumIndexRecords * ?INDEX_RECORD_SIZE,
+                        data_offset = DataOffset,
+                        index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
                         % TODO: we don't need an index in memory in append mode
                         index = Index}};
         false ->
@@ -86,8 +93,8 @@ open(Filename, Options) ->
                         data_offset = ?HEADER_SIZE + IndexSize}}
     end.
 
--spec append(ra_log_file_segment_state(), ra_index(), ra_term(), binary()) ->
-    {ok, ra_log_file_segment_state()} | {error, segment_full}.
+-spec append(state(), ra_index(), ra_term(), binary()) ->
+    {ok, state()} | {error, segment_full}.
 append(#state{fd = Fd, index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
@@ -110,16 +117,16 @@ append(#state{fd = Fd, index_offset = IndexOffset,
             {error, full}
      end.
 
--spec sync(ra_log_file_segment_state()) -> ok.
+-spec sync(state()) -> ok.
 sync(#state{fd = Fd}) ->
     ok = file:sync(Fd),
     ok.
 
--spec read(ra_log_file_segment_state(), Idx :: ra_index(),
-           Num :: non_neg_integer()) ->
+-spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
 read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
     % TODO: should we better indicate when records aren't found?
+    % This depends on the semantics we want from a segment
     {Locs, IdxTermCrcs} =
         lists:foldl(fun (Idx, {Ls, ITs} = Acc) ->
                             case Index of
@@ -131,19 +138,22 @@ read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
                             end
                     end, {[], []}, lists:seq(Idx0 + Num - 1, Idx0, -1)),
     {ok, Datas} = file:pread(Fd, Locs),
-    % TODO: checksum assertion
+
     lists:zipwith(fun(TermIdx = {_, _, Crc}, Data) ->
                           Crc = erlang:crc32(Data), % checksum assertion
                           erlang:setelement(3, TermIdx, Data)
                   end,  IdxTermCrcs, Datas).
 
 
--spec max_count(ra_log_file_segment_state()) -> non_neg_integer().
+-spec max_count(state()) -> non_neg_integer().
 max_count(#state{max_count = Max}) ->
     Max.
 
+-spec filename(state()) -> file:filename().
+filename(#state{filename = Fn}) ->
+    filename:absname(Fn).
 
--spec close(ra_log_file_segment_state()) ->
+-spec close(state()) ->
     ok.
 close(#state{fd = Fd}) ->
     _ = file:close(Fd),
@@ -154,32 +164,32 @@ close(#state{fd = Fd}) ->
 recover_index(Fd, MaxCount) ->
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
     {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+    DataOffset = ?HEADER_SIZE + IndexSize,
     case file:read(Fd, IndexSize) of
         {ok, Data} ->
-            parse_index_data(Data);
+            parse_index_data(Data, DataOffset);
         eof ->
             % if no entries have been written the file hasn't "stretched"
             % to where the data offset starts.
-            {0, #{}}
+            {0, DataOffset, #{}}
     end.
 
-parse_index_data(Data) ->
-    parse_index_data(Data, 0, 0, #{}).
+parse_index_data(Data, DataOffset) ->
+    parse_index_data(Data, 0, 0, DataOffset, #{}).
 
-parse_index_data(<<>>, Num, _LastIdx, Index) ->
+parse_index_data(<<>>, Num, _LastIdx, DataOffset, Index) ->
     % end of data
-    {Num, Index};
-parse_index_data(<<0:64/integer, 0:64/integer,
-                   0:32/integer, 0:32/integer,
-                   0:32/integer, _Rest/binary>>,
-                 Num, _LastIdx, Index) ->
+    {Num, DataOffset, Index};
+parse_index_data(<<0:64/integer, 0:64/integer, 0:32/integer,
+                   0:32/integer, 0:32/integer, _Rest/binary>>,
+                 Num, _LastIdx, DataOffset, Index) ->
     % partially written index
     % end of written data
-    {Num, Index};
+    {Num, DataOffset, Index};
 parse_index_data(<<Idx:64/integer, Term:64/integer,
                    Offset:32/integer, Length:32/integer,
                    Crc:32/integer, Rest/binary>>,
-                 Num, LastIdx, Index0) ->
+                 Num, LastIdx, _DataOffset, Index0) ->
     % trim index entries if Idx goes "backwards"
     Index = case Idx < LastIdx of
                 true -> maps:filter(fun (K, _) when K > Idx -> false;
@@ -188,7 +198,7 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
                 false -> Index0
             end,
 
-    parse_index_data(Rest, Num+1, Idx,
+    parse_index_data(Rest, Num+1, Idx, Offset + Length,
                      Index#{Idx => {Term, Offset, Length, Crc}}).
 
 write_header(MaxCount, Fd) ->

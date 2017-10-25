@@ -1,4 +1,4 @@
--module(ra_log_file_table_writer_SUITE).
+-module(ra_log_file_segment_writer_SUITE).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -15,7 +15,7 @@ all() ->
 
 all_tests() ->
     [
-     receive_tables
+     receive_segments
     ].
 
 groups() ->
@@ -36,24 +36,25 @@ init_per_testcase(TestCase, Config) ->
     register(TestCase, self()),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
-receive_tables(Config) ->
+receive_segments(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_file_table_writer:start_link(#{data_dir => Dir}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    % fake up a mem table for Self
+    % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Tid = make_mem_table(Self, Entries),
     MemTables = [{Self, 1, 3, Tid}],
-    WalFile = filename:join(Dir, "recieve_tables.wal"),
+    WalFile = filename:join(Dir, "recieve_segments.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
-    ok = ra_log_file_table_writer:receive_tables(MemTables, WalFile),
+    ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {log_event, {new_tables, [{1, 3, Tid, {DetsName, DetsFile}}]}} ->
-            {ok, DetsName} = dets:open_file(DetsName, [{file, DetsFile}]),
+        {ra_log_event, {new_segments, [{1, 3, Tid, SegmentFile}]}} ->
+            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
-            Entries = lists:sort(dets:match_object(DetsName, '_'))
+            Entries = [ {I, T, binary_to_term(B)}
+                        || {I, T, B} <- ra_log_file_segment:read(Seg, 1, 3)]
     after 3000 ->
-              throw(new_tables_timeout)
+              throw(ra_log_event_timeout)
     end,
 
     % assert wal file has been deleted.
@@ -62,27 +63,27 @@ receive_tables(Config) ->
 
     ok.
 
-receive_tables_append(_Config) ->
-    % append to a previously written dets table
+receive_segments_append(_Config) ->
+    % append to a previously written dets segment
     not_impl.
 
-receive_tables_overwrite(_Config) ->
+receive_segments_overwrite(_Config) ->
     % append indexes 1 - 10
     % then write indexes 5 - 20
     % validate 1 - 20 have the expected values
     not_impl.
 
-recieve_tables_rollover(_Config) ->
-    % configure max dets table size
-    % receive then receive again to breach table size limit
-    % ensure dets table is closed and writer id notified: {log_event, {table_closed, Path}}
+recieve_segments_rollover(_Config) ->
+    % configure max dets segment size
+    % receive then receive again to breach segment size limit
+    % ensure dets segment is closed and writer id notified: {log_event, {segment_closed, Path}}
     not_impl.
 
-recieve_tables_rollover_overwrite(_Config) ->
-    % create rolled over table for indexes 10 - 20
+recieve_segments_rollover_overwrite(_Config) ->
+    % create rolled over segment for indexes 10 - 20
     % then write 1 - 30
     % TODO: what should happen here
-    % who shouold clean up the first table
+    % who shouold clean up the first segment
     not_impl.
 
 

@@ -27,11 +27,12 @@
 
 -record(state, {file_num = 0 :: non_neg_integer(),
                 fd :: maybe(file:io_device()),
+                filename :: maybe(file:filename()),
                 file_modes :: [file:mode()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
                 max_wal_size_bytes = unlimited :: non_neg_integer(), % TODO: better default
-                table_writer = ra_log_table_writer :: atom(),
+                segment_writer = ra_log_file_segment_writer :: atom(),
                 batch = #batch{} :: #batch{},
                 metrics_cursor = 0 :: non_neg_integer(),
                 wal_file_size = 0 :: non_neg_integer()
@@ -40,7 +41,7 @@
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
-                      table_writer => atom(),
+                      segment_writer => atom(),
                       additional_wal_file_modes => [file:mode()]
                      }.
 
@@ -54,7 +55,7 @@ write(From, Wal, Idx, Term, Entry) ->
 sized_binary(Bin) when is_binary(Bin) ->
     {byte_size(Bin), Bin};
 sized_binary(Term) ->
-    Bin = term_to_binary(Term),
+    Bin = to_binary(Term),
     {byte_size(Bin), Bin}.
 
 mem_tbl_read(Id, Idx) ->
@@ -147,7 +148,7 @@ make_file_name(Num) ->
 %     Int.
 
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
-                   table_writer := TblWriter,
+                   segment_writer := TblWriter,
                    additional_wal_file_modes := AdditionalModes}) ->
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
@@ -161,7 +162,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                      dir = Dir,
                      file_modes = Modes,
                      max_wal_size_bytes = MaxWalSize,
-                     table_writer = TblWriter
+                     segment_writer = TblWriter
                     }).
 
 loop_wait(State0, Parent, Debug0) ->
@@ -220,7 +221,7 @@ handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
     % TODO: needing the "Id" in the shared wal is pretty wasteful
     % can we create someting fixed length to use instead?
     %% TODO: cache binary Id representation?
-    EntryData = term_to_binary(Entry),
+    EntryData = to_binary(Entry),
     EntryDataLen = byte_size(EntryData),
     % TODO adler32 checksum check for EntryData
     Data = <<IdDataLen:16/integer, % 2
@@ -265,8 +266,8 @@ update_mem_table(Id, Idx, Term, Entry) ->
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
-                 file_modes = Modes, table_writer = TblWriter} = State) ->
+roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
+                 file_modes = Modes, segment_writer = TblWriter} = State) ->
     Num = Num0 + 1,
     ?DBG("wal: rolling over to ~p~n", [Num]),
     NextFile = filename:join(Dir, make_file_name(Num)),
@@ -284,14 +285,12 @@ roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
     % reset open mem tables table
     true = ets:delete_all_objects(ra_log_open_mem_tables),
 
-    % notify table_writer of new unflushed memtables
-    case MemTables of
-        [] -> ok;
-        _ ->
-            TblWriter ! {log, {new_table_data, MemTables}}
-    end,
+    % notify segment_writer of new unflushed memtables
+    ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
+                                                      Filename),
 
-    State#state{fd = Fd, wal_file_size = 0, file_num = Num}.
+    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
+                file_num = Num}.
 
 open_mem_table(Id, Idx) ->
     Tid = ets:new(Id, [set, protected, {read_concurrency, true}]),
@@ -319,7 +318,14 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     % notify processes that have synced map(Pid, Token)
     Debug = maps:fold(fun (Id, IdxTerm, Dbg) ->
                               Msg = {written, IdxTerm},
-                              Id ! Msg,
+                              try Id ! Msg  of
+                                  _ -> ok
+                              catch
+                                  error:badarg ->
+                                      % this will happen if Id is no longer alive
+                                      % and registered
+                                      error_logger:warning_msg("wal: failed to send written notification to ~p~n", [Id])
+                              end,
                               Evt = {out, {self(), Msg}, Id},
                               sys:handle_debug(Dbg, fun write_debug/3,
                                                ?MODULE, Evt)
@@ -345,8 +351,10 @@ write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
 
 merge_conf_defaults(Conf) ->
-    maps:merge(#{table_writer => ra_log_table_writer,
+    maps:merge(#{segment_writer => ra_log_file_segment_writer,
                  max_wal_size_bytes => unlimited, % TODO: better default
                  additional_wal_file_modes => []},
                Conf).
 
+to_binary(Term) ->
+    term_to_binary(Term).
