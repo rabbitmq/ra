@@ -12,7 +12,9 @@
          % cohercion
          to_list/1,
          to_atom/1,
-         ra_node_id_to_local_name/1
+         ra_node_id_to_local_name/1,
+         zpad_filename/3,
+         zpad_filename_incr/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -70,3 +72,29 @@ to_atom(L) when is_list(L) ->
 ra_node_id_to_local_name({Name, _}) -> Name;
 ra_node_id_to_local_name(Name) when is_atom(Name) -> Name.
 
+zpad_filename("", Ext, Num) ->
+    lists:flatten(io_lib:format("~8..0B.~s", [Num, Ext]));
+zpad_filename(Prefix, Ext, Num) ->
+    lists:flatten(io_lib:format("~s_~8..0B.~s", [Prefix, Num, Ext])).
+
+zpad_filename_incr(Fn) ->
+    case re:run(Fn, "(.*)([0-9]{8})(.*)", [{capture, all_but_first, list}]) of
+        {match, [Prefix, NumStr, Ext]} ->
+            Num = list_to_integer(NumStr),
+            lists:flatten(io_lib:format("~s~8..0B~s", [Prefix, Num+1, Ext]));
+        _ ->
+            undefined
+    end.
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+zpad_filename_incr_test() ->
+    Fn = "/lib/blah/prefix_00000001.segment",
+    Ex = "/lib/blah/prefix_00000002.segment",
+    Ex = zpad_filename_incr(Fn),
+    undefined = zpad_filename_incr("0000001"),
+    ok.
+
+-endif.

@@ -42,6 +42,7 @@ open_close_persists_max_count(Config) ->
     ok = ra_log_file_segment:close(Seg0),
     {ok, Seg} = ra_log_file_segment:open(Fn),
     128 = ra_log_file_segment:max_count(Seg),
+    undefined = ra_log_file_segment:range(Seg),
     ok = ra_log_file_segment:close(Seg),
     ok.
 
@@ -53,6 +54,7 @@ full_file(Config) ->
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data),
     {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
     {error, full} = ra_log_file_segment:append(Seg, 3, 2, Data),
+    {1,2} = ra_log_file_segment:range(Seg),
     ok = ra_log_file_segment:close(Seg),
     ok.
 
@@ -78,6 +80,7 @@ write_close_open_write(Config) ->
     ok = ra_log_file_segment:sync(SegA),
     % need to re-read index
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
+    {1, 3} = ra_log_file_segment:range(SegR),
     [{1, 2, <<"data1">>}, {2, 2, <<"data2">>}, {3, 2, <<"data3">>}] =
         ra_log_file_segment:read(SegR, 1, 3),
     ok = ra_log_file_segment:close(SegA),
@@ -98,6 +101,7 @@ write_then_read(Config) ->
     % read two consequtive entries from index 1
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
     [{1, 2, Data}, {2, 2, Data}] = ra_log_file_segment:read(SegR, 1, 2),
+    {1, 2} = ra_log_file_segment:range(SegR),
     ok = ra_log_file_segment:close(SegR),
     ok.
 
@@ -123,13 +127,14 @@ overwrite(Config) ->
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 5, 2, Data),
     % overwrite - simulates follower receiving entries from new leader
     {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
+    {2, 2} = ra_log_file_segment:range(Seg),
     ok = ra_log_file_segment:sync(Seg),
     ok = ra_log_file_segment:close(Seg),
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
+    {2, 2} = ra_log_file_segment:range(Seg),
     [] = ra_log_file_segment:read(SegR, 5, 1),
     [{2, 2, Data}] = ra_log_file_segment:read(SegR, 2, 1),
     ok.
-
 
 
 %%% Internal

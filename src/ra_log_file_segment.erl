@@ -6,6 +6,7 @@
          sync/1,
          read/3,
          close/1,
+         range/1,
          max_count/1,
          filename/1]).
 % , append/4, read/3, from_ets/2, close/1]).
@@ -36,7 +37,8 @@
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          mode = append :: read | append,
-         index = undefined :: maybe(ra_segment_index())
+         index = undefined :: maybe(ra_segment_index()),
+         range :: maybe({ra_index(), ra_index()})
         }).
 
 -type ra_log_file_segment_options() :: #{max_count => non_neg_integer(),
@@ -69,13 +71,18 @@ open(Filename, Options) ->
             % READ and validate VERSION
             MaxCount = read_header(Fd),
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            {NumIndexRecords, DataOffset, Index} = recover_index(Fd, MaxCount),
-            {ok, #state{version = 1, max_count = MaxCount,
-                        filename = Filename, fd = Fd, index_size = IndexSize,
+            {NumIndexRecords, DataOffset, Range, Index} =
+                recover_index(Fd, MaxCount),
+            {ok, #state{version = 1,
+                        max_count = MaxCount,
+                        filename = Filename,
+                        fd = Fd,
+                        index_size = IndexSize,
                         mode = Mode,
                         data_start = ?HEADER_SIZE + IndexSize,
                         data_offset = DataOffset,
                         index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
+                        range = Range,
                         % TODO: we don't need an index in memory in append mode
                         index = Index}};
         false ->
@@ -98,6 +105,7 @@ open(Filename, Options) ->
 append(#state{fd = Fd, index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
+              range = Range0,
               mode = append} = State,
        Index, Term, Data) ->
     % check if file is full
@@ -110,9 +118,11 @@ append(#state{fd = Fd, index_offset = IndexOffset,
                           DataOffset:32/integer, Length:32/integer,
                           Checksum:32/integer>>,
             ok = file:pwrite(Fd, [{DataOffset, Data}, {IndexOffset, IndexData}]),
+            Range = update_range(Range0, Index),
             % fsync is done explicitly
             {ok, State#state{index_offset = IndexOffset + ?INDEX_RECORD_SIZE,
-                             data_offset = DataOffset + Length}};
+                             data_offset = DataOffset + Length,
+                             range = Range}};
         false ->
             {error, full}
      end.
@@ -144,6 +154,9 @@ read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
                           erlang:setelement(3, TermIdx, Data)
                   end,  IdxTermCrcs, Datas).
 
+-spec range(state()) -> maybe({ra_index(), ra_index()}).
+range(#state{range = Range}) ->
+    Range.
 
 -spec max_count(state()) -> non_neg_integer().
 max_count(#state{max_count = Max}) ->
@@ -161,6 +174,11 @@ close(#state{fd = Fd}) ->
 
 %%% Internal
 
+update_range(undefined, Idx) ->
+    {Idx, Idx};
+update_range({First, _Last}, Idx) ->
+    {min(First, Idx), Idx}.
+
 recover_index(Fd, MaxCount) ->
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
     {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
@@ -171,25 +189,25 @@ recover_index(Fd, MaxCount) ->
         eof ->
             % if no entries have been written the file hasn't "stretched"
             % to where the data offset starts.
-            {0, DataOffset, #{}}
+            {0, DataOffset, undefined, #{}}
     end.
 
 parse_index_data(Data, DataOffset) ->
-    parse_index_data(Data, 0, 0, DataOffset, #{}).
+    parse_index_data(Data, 0, 0, DataOffset, undefined, #{}).
 
-parse_index_data(<<>>, Num, _LastIdx, DataOffset, Index) ->
+parse_index_data(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
     % end of data
-    {Num, DataOffset, Index};
+    {Num, DataOffset, Range, Index};
 parse_index_data(<<0:64/integer, 0:64/integer, 0:32/integer,
                    0:32/integer, 0:32/integer, _Rest/binary>>,
-                 Num, _LastIdx, DataOffset, Index) ->
+                 Num, _LastIdx, DataOffset, Range, Index) ->
     % partially written index
     % end of written data
-    {Num, DataOffset, Index};
+    {Num, DataOffset, Range, Index};
 parse_index_data(<<Idx:64/integer, Term:64/integer,
                    Offset:32/integer, Length:32/integer,
                    Crc:32/integer, Rest/binary>>,
-                 Num, LastIdx, _DataOffset, Index0) ->
+                 Num, LastIdx, _DataOffset, Range, Index0) ->
     % trim index entries if Idx goes "backwards"
     Index = case Idx < LastIdx of
                 true -> maps:filter(fun (K, _) when K > Idx -> false;
@@ -198,7 +216,9 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
                 false -> Index0
             end,
 
-    parse_index_data(Rest, Num+1, Idx, Offset + Length,
+    parse_index_data(Rest, Num+1, Idx,
+                     Offset + Length,
+                     update_range(Range, Idx),
                      Index#{Idx => {Term, Offset, Length, Crc}}).
 
 write_header(MaxCount, Fd) ->

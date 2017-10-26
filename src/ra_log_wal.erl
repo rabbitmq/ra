@@ -139,14 +139,6 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
     Debug = sys:debug_options(Options),
     loop_wait(State, Parent, Debug).
 
-make_file_name(Num) ->
-    lists:flatten(io_lib:format("~5..0B.wal", [Num])).
-
-% parse_file_name(File) ->
-%     Name = filename:basename(File, ".wal"),
-%     {Int, _} = string:to_integer(Name),
-%     Int.
-
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
                    additional_wal_file_modes := AdditionalModes}) ->
@@ -270,7 +262,7 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
                  file_modes = Modes, segment_writer = TblWriter} = State) ->
     Num = Num0 + 1,
     ?DBG("wal: rolling over to ~p~n", [Num]),
-    NextFile = filename:join(Dir, make_file_name(Num)),
+    NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
     ra_lib:iter_maybe(Fd0, fun (F) -> ok = file:close(F) end),
     {ok, Fd} = file:open(NextFile, Modes),
 

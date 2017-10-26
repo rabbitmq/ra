@@ -81,8 +81,8 @@ handle_info(Msg, State) ->
     ?DBG("proxy: handle info unknown ~p~n", [Msg]),
     {noreply, State}.
 
-terminate(Reason, State) ->
-    ?DBG("proxy: terminate ~p ~p~n", [Reason, State]),
+terminate(Reason, _State) ->
+    ?DBG("proxy: terminating with ~p~n", [Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

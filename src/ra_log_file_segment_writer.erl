@@ -14,6 +14,7 @@
          code_change/3]).
 
 -record(state, {data_dir :: filename:filename(),
+                segment_conf = #{} :: #{atom() => term()}, % TODO refine type
                 active_segments = #{} :: #{atom() => ra_log_file_segment:state()}}).
 
 -include("ra.hrl").
@@ -44,8 +45,10 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([#{data_dir := DataDir}]) ->
-    {ok, #state{data_dir = DataDir}}.
+init([#{data_dir := DataDir} = Conf]) ->
+    SegmentConf = maps:get(segment_conf, Conf, #{}),
+    {ok, #state{data_dir = DataDir,
+                segment_conf = SegmentConf}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -54,16 +57,19 @@ handle_call(_Request, _From, State) ->
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
     % delete wal file once done
-    ok = file:delete(WalFile),
+    % TODO: test scenario when node crashes after segments but before
+    % deleting walfile
+    % can we make segment writer idempotent somehow
+    _ = file:delete(WalFile),
 
     {noreply, State}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{active_segments = Segments}) ->
+terminate(_Reason, #state{active_segments = ActiveSegments}) ->
     % ensure any open segments are closed
-    [ok = ra_log_file_segment:close(Seg) || Seg <- maps:values(Segments)],
+    [ok = ra_log_file_segment:close(Seg) || Seg <- maps:values(ActiveSegments)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -75,50 +81,70 @@ code_change(_OldVsn, State, _Extra) ->
 
 do_segment({RaNodeId, StartIdx, EndIdx, Tid},
          #state{data_dir = DataDir,
-                active_segments = Segments} = State) ->
+                segment_conf = SegConf,
+                active_segments = ActiveSegments} = State) ->
     % ?DBG("do_segment: range: ~p-~p ETS: ~p", [StartIdx, EndIdx, ets:tab2list(Tid)]),
-    Segment0 = case Segments of
+    Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
+    Segment0 = case ActiveSegments of
                   #{RaNodeId := S} -> S;
-                  _ ->
-                      Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
-                      open_file(RaNodeId, Dir)
+                  _ -> open_file(Dir, SegConf)
               end,
 
-    % TODO: replace with recursive function
-    Segment =
-        lists:foldl(fun (Idx, Seg0) ->
+    % TODO: replace with recursive function to avoid creating the list of
+    % integers
+    {Segment, Closed0} =
+        lists:foldl(fun (Idx, {Seg0, Segs}) ->
                          [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
                           Data = term_to_binary(Data0),
-                          {ok, Seg} = ra_log_file_segment:append(Seg0, Idx, Term, Data),
-                          Seg
-                  end, Segment0, lists:seq(StartIdx, EndIdx)),
+                          case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
+                              {ok, Seg} ->
+                                  {Seg, Segs};
+                              {error, full} ->
+                                  % close and open a new segment
+                                  ok = ra_log_file_segment:sync(Seg0),
+                                  ok = ra_log_file_segment:close(Seg0),
+                                  Seg1 = open_successor_segment(Seg0, SegConf),
+                                  {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
+                                  {Seg, [Seg0 | Segs]}
+                          end
+                  end, {Segment0, []}, lists:seq(StartIdx, EndIdx)),
     % fsync
     ok = ra_log_file_segment:sync(Segment),
-    % TODO: check size and roll over to new segement(s)
 
     % notify writerid of new segment update
-    % TODO: should StartIdx be the first index in the segment or the first
-    % index in the update?
-    SegFile = ra_log_file_segment:filename(Segment),
-    RaNodeId ! {ra_log_event, {new_segments, [{StartIdx, EndIdx, Tid, SegFile}]}},
+    % includes the full range of the segment
+    Segments = [begin
+                    {Start, End} = ra_log_file_segment:range(S),
+                    {Start, End, ra_log_file_segment:filename(S)}
+                end || S <- lists:reverse([Segment | Closed0])],
 
-    State#state{active_segments = Segments#{RaNodeId => Segment}}.
+    ?DBG("SEgs ~p", [Segments]),
+
+    RaNodeId ! {ra_log_event, {new_segments, Tid, Segments}},
+
+    State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
 
 find_segment_files(Dir) ->
     lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))).
 
-open_file(Id0, Dir) ->
-    Id = atom_to_list(Id0),
-    case find_segment_files(Dir) of
-        [] ->
-            Name0 = Id ++ "_0.segment",
-            File = filename:join(Dir, Name0),
-            _ = file:make_dir(Dir),
-            {ok, Segment} = ra_log_file_segment:open(File, #{mode => append}),
-            Segment;
-        [File | _Old] ->
-            {ok, Segment} = ra_log_file_segment:open(File, #{mode => append}),
-            Segment
-    end.
+open_successor_segment(CurSeg, SegConf) ->
+    Fn0 = ra_log_file_segment:filename(CurSeg),
+    Fn = ra_lib:zpad_filename_incr(Fn0),
+    ok = ra_log_file_segment:close(CurSeg),
+    {ok, Seg} = ra_log_file_segment:open(Fn, SegConf),
+    Seg.
+
+open_file(Dir, SegConf) ->
+    File = case find_segment_files(Dir) of
+               [] ->
+                   F = ra_lib:zpad_filename("", "segment", 1),
+                   Fn = filename:join(Dir, F),
+                   _ = file:make_dir(Dir),
+                   Fn;
+               [F | _Old] ->
+                   F
+           end,
+    {ok, Segment} = ra_log_file_segment:open(File, SegConf#{mode => append}),
+    Segment.
 
 
