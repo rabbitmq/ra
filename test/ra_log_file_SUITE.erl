@@ -24,6 +24,16 @@ groups() ->
      {tests, [], all_tests()}
     ].
 
+init_per_suite(Config) ->
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
+    application:ensure_all_started(ra),
+    Config.
+
+end_per_suite(Config) ->
+    application:stop(ra),
+    Config.
+
 init_per_group(tests, Config) ->
     Config.
 
@@ -38,12 +48,11 @@ init_per_testcase(TestCase, Config) ->
 
 handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     {queued, Log1} = ra_log_file:append({20, 1, "value"}, overwrite, Log0),
     receive
-        {written, {20, 1}} -> ok
+        {ra_log_event, {written, {20, 1}}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
@@ -53,11 +62,12 @@ handle_overwrite(Config) ->
     {queued, Log3} = ra_log_file:append({20, 2, "value"}, overwrite, Log2),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    Log = ra_log_file:handle_written({20, 1}, Log3),
+    Log = ra_log_file:handle_event({written, {20, 1}}, Log3),
     ra_lib:dump("log", Log3),
     % ensure last written has not been incremented
     {0, 0} = ra_log_file:last_written(Log),
-    {20, 2} = ra_log_file:last_written(ra_log_file:handle_written({20, 2}, Log)),
+    {20, 2} = ra_log_file:last_written(
+                ra_log_file:handle_event({written, {20, 2}}, Log)),
     ok.
 
 

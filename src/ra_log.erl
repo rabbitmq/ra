@@ -12,7 +12,7 @@
          take/3,
          last/1,
          last_index_term/1,
-         handle_written/2,
+         handle_event/2,
          last_written/1,
          next_index/1,
          read_snapshot/1,
@@ -30,12 +30,14 @@
 -type ra_log() :: {Module :: module(), ra_log_state()}.
 -type ra_meta_key() :: atom().
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
+-type ra_log_event() :: {written, ra_idxterm()}.
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,
               ra_log/0,
               ra_meta_key/0,
-              ra_log_snapshot/0
+              ra_log_snapshot/0,
+              ra_log_event/0
              ]).
 
 -callback init(Args :: ra_log_init_args()) -> ra_log_state().
@@ -62,8 +64,8 @@
 -callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
     maybe(ra_term()).
 
--callback handle_written(Idx :: ra_idxterm(),
-                         Log :: ra_log_state()) -> ra_log_state().
+-callback handle_event(Evt :: ra_log_event(),
+                       Log :: ra_log_state()) -> ra_log_state().
 
 -callback last_written(Log :: ra_log_state()) -> ra_idxterm().
 
@@ -134,13 +136,13 @@ append(Entry, Overwrite, {Mod, Log0}) ->
 append_sync({Idx, Term, _} = Entry, Overwrite, Log0) ->
     case ra_log:append(Entry, Overwrite, Log0) of
         {written, Log} ->
-            ra_log:handle_written({Idx, Term}, Log);
+            ra_log:handle_event({written, {Idx, Term}}, Log);
         {queued, Log} ->
             receive
                 % TODO: we could now end up re-ordering written notifications
                 % so need to handle that later
-                {written, IdxTerm} ->
-                    ra_log:handle_written(IdxTerm, Log)
+                {ra_log_event, {written, IdxTerm}} ->
+                    ra_log:handle_event({written, IdxTerm}, Log)
             after 5000 ->
                       throw(ra_log_append_timeout)
             end;
@@ -163,10 +165,10 @@ last({Mod, Log}) ->
 last_index_term({Mod, Log}) ->
     Mod:last_index_term(Log).
 
--spec handle_written(Idx :: ra_idxterm(), Log :: ra_log_state()) ->
+-spec handle_event(Evt :: ra_log_event(), Log :: ra_log_state()) ->
     ra_log_state().
-handle_written(IdxTerm, {Mod, Log}) ->
-    {Mod, Mod:handle_written(IdxTerm, Log)}.
+handle_event(Evt, {Mod, Log}) ->
+    {Mod, Mod:handle_event(Evt, Log)}.
 
 -spec last_written(Log :: ra_log_state()) -> ra_idxterm().
 last_written({Mod, Log}) ->

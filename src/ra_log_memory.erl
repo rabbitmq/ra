@@ -6,7 +6,7 @@
          take/3,
          last/1,
          last_index_term/1,
-         handle_written/2,
+         handle_event/2,
          last_written/1,
          fetch/2,
          fetch_term/2,
@@ -113,9 +113,9 @@ last_written(#state{last_written = LastWritten}) ->
     % remain api compatible with  ra_log_file, for now at least.
     LastWritten.
 
--spec handle_written(ra_idxterm(),
-                     ra_log_memory_state()) ->  ra_log_memory_state().
-handle_written({Idx, Term} = IdxTerm, State) ->
+-spec handle_event(ra_log:ra_log_event(), ra_log_memory_state()) ->
+    ra_log_memory_state().
+handle_event({written, {Idx, Term} = IdxTerm}, State) ->
     case fetch_term(Idx, State) of
         Term ->
             State#state{last_written = IdxTerm};

@@ -175,7 +175,7 @@ follower_aer_1(_Config) ->
      [{cast, n1, {Self, #append_entries_reply{next_index = 3,
                                               last_term = 1,
                                               last_index = 1}}}, _]}
-        = ra_node:handle_follower({written, {1, 1}}, State2),
+        = ra_node:handle_follower({ra_log_event, {written, {1, 1}}}, State2),
 
     % AER with index [3], commit = 3 -> commit_index = 3
     AER3 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 2,
@@ -193,7 +193,7 @@ follower_aer_1(_Config) ->
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}}, _]}
-        = ra_node:handle_follower({written, {2, 1}}, State4),
+        = ra_node:handle_follower({ra_log_event, {written, {2, 1}}}, State4),
 
     % AER with index [] -> last_applied: 2 - replies with last_index = 2, next_index = 4
     % empty AER before {written, 3} is received
@@ -215,7 +215,7 @@ follower_aer_1(_Config) ->
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 3}}}, _]}
-        = ra_node:handle_follower({written, {3, 1}}, State6),
+        = ra_node:handle_follower({ra_log_event, {written, {3, 1}}}, State6),
     ok.
 
 follower_aer_2(_Config) ->
@@ -237,7 +237,7 @@ follower_aer_2(_Config) ->
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}, _]}
-        = ra_node:handle_follower({written, {1, 1}}, State1),
+        = ra_node:handle_follower({ra_log_event, {written, {1, 1}}}, State1),
 
     % AER with index [], leader_commit = 1 -> last_applied: 1, reply: last_index = 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 1,
@@ -266,7 +266,7 @@ follower_aer_3(_Config) ->
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}, _]}
-        = ra_node:handle_follower({written, {1, 1}}, State1),
+        = ra_node:handle_follower({ra_log_event, {written, {1, 1}}}, State1),
     % AER with index [3] -> last_applied = 1 - reply(false): last_index, 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 2,
                                prev_log_term = 1, leader_commit = 3,
@@ -297,7 +297,7 @@ follower_aer_3(_Config) ->
                                             success = true,
                                             last_term = 1,
                                             last_index = 4}}} | _]}
-    = ra_node:handle_follower({written, {4, 1}}, State4),
+    = ra_node:handle_follower({ra_log_event, {written, {4, 1}}}, State4),
 
     % AER with index [2,3,4], commit_index = 4
     % async failed AER reverted back leader's next_index for follower
@@ -339,7 +339,7 @@ follower_aer_4(_Config) ->
      [{cast, n1, {n2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
                                             last_index = 4}}}, _]}
-        = ra_node:handle_follower({written, {4, 1}}, State1),
+        = ra_node:handle_follower({ra_log_event, {written, {4, 1}}}, State1),
     % AER with index [5], commit_index = 10 -> last_applied = 4, commit_index = 5
     ok.
 
@@ -390,9 +390,9 @@ follower_handles_append_entries_rpc(_Config) ->
                                             next_index = 3, last_index = 2,
                                             last_term = 4}}}, _Metric0]}
     = begin
-          {follower, Inter3, [{next_event, {written, {2, 4}}}]}
+          {follower, Inter3, [{next_event, {ra_log_event, {written, {2, 4}}}}]}
           = ra_node:handle_follower(AE, State#{last_applied => 1}),
-          ra_node:handle_follower({written, {2, 4}}, Inter3)
+          ra_node:handle_follower({ra_log_event, {written, {2, 4}}}, Inter3)
       end,
     [{0, 0, undefined},
      {1, 1, _}, {2, 4, _}] = ra_log_memory:to_list(Log),
@@ -408,13 +408,13 @@ follower_handles_append_entries_rpc(_Config) ->
                                             last_index = 4,
                                             last_term = 5}}}, _Metrics1]}
     = begin
-          {follower, Inter4, [{next_event, {written, WrIdxTerm}}]}
+          {follower, Inter4, [{next_event, {ra_log_event, {written, WrIdxTerm}}}]}
         = ra_node:handle_follower(
             EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
                    machine_state => usr(<<"hi1">>)}),
-          ra_node:handle_follower({written, WrIdxTerm}, Inter4)
+          ra_node:handle_follower({ra_log_event, {written, WrIdxTerm}}, Inter4)
       end,
     ok.
 
@@ -628,7 +628,7 @@ consistent_query(_Config) ->
         ra_node:handle_leader({command, {'$ra_query', self(),
                                          fun id/1, await_consensus}}, State),
     % ct:pal("next ~p", [Next]),
-    {leader, State1, _} = ra_node:handle_leader({written, {4, 5}}, State0),
+    {leader, State1, _} = ra_node:handle_leader({ra_log_event, {written, {4, 5}}}, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
@@ -642,7 +642,7 @@ leader_noop_operation_enables_cluster_change(_Config) ->
     State00 = (base_state(3))#{cluster_change_permitted => false},
     {leader, #{cluster_change_permitted := false} = State0, _Effects} =
         ra_node:handle_leader({command, noop}, State00),
-    {leader, State, _} = ra_node:handle_leader({written, {4, 5}}, State0),
+    {leader, State, _} = ra_node:handle_leader({ra_log_event, {written, {4, 5}}}, State0),
     AEReply = {n2, #append_entries_reply{term = 5, success = true,
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
@@ -685,7 +685,7 @@ leader_node_join(_Config) ->
                                 prev_log_index = 3,
                                 prev_log_term = 5,
                                 leader_commit = 3}}]},
-     {next_event, {written, {4, 5}}}] = Effects,
+     {next_event, {ra_log_event, {written, {4, 5}}}}] = Effects,
     ok.
 
 leader_node_leave(_Config) ->

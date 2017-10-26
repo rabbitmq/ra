@@ -254,7 +254,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                 case Status of
                     written ->
                         % fake written event
-                        {State0, [{next_event, {written, {Idx, Term}}}]};
+                        {State0,
+                         [{next_event, {ra_log_event, {written, {Idx, Term}}}}]};
                         % we have synced - forward leader match_index
                         % evaluate_quorum(State0);
                     queued ->
@@ -280,8 +281,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                       end,
             {leader, State, Effects}
     end;
-handle_leader({written, IdxTerm}, State0 = #{log := Log0}) ->
-    Log = ra_log:handle_written(IdxTerm, Log0),
+handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
+    Log = ra_log:handle_event(Evt, Log0),
     {State, Effects, Applied} = evaluate_quorum(State0#{log => Log}),
     % TODO: should we send rpcs in case commit_index was incremented?
     % {State, Rpcs} = make_pipelined_rpcs(State1),
@@ -440,7 +441,8 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                                       % we can use last idx here as the log store
                                       % is now fullly up to date.
                                       LastIdxTerm = last_idx_term(State1),
-                                      [{next_event, {written, LastIdxTerm}}];
+                                      [{next_event,
+                                        {ra_log_event, {written, LastIdxTerm}}}];
                                   queued -> []
                               end,
                     % ?DBG("~p: follower received ~p append_entries in ~p.~nEffects ~p",
@@ -461,11 +463,11 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
             {follower, State0#{leader_id => LeaderId},
              [{cast, LeaderId, {Id, Reply}}]}
     end;
-handle_follower({written, IdxTerm},
+handle_follower({ra_log_event, {written, _} = Evt},
                 State00 = #{current_term := Term, id := Id,
                             log := Log0, leader_id := LeaderId}) ->
 
-    State0 = State00#{log => ra_log:handle_written(IdxTerm, Log0)},
+    State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
     {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};

@@ -6,7 +6,7 @@
          take/3,
          last/1,
          last_index_term/1,
-         handle_written/2,
+         handle_event/2,
          last_written/1,
          fetch/2,
          fetch_term/2,
@@ -34,6 +34,7 @@
                }).
 
 -type ra_log_file_state() :: term().
+
 
 
 -spec init(ra_log:ra_log_init_args()) -> ra_log_file_state().
@@ -122,9 +123,9 @@ last_index_term(#state{last_index = LastIdx} = State) ->
 last_written(#state{last_written_index_term = LWTI}) ->
     LWTI.
 
--spec handle_written(ra_idxterm(), ra_log_file_state()) ->
+-spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
-handle_written({Idx, Term} = IdxTerm, State) ->
+handle_event({written, {Idx, Term} = IdxTerm}, State) ->
     case fetch_term(Idx, State) of
         Term ->
             % TODO: this flush could hamper performance but it needs to be done
@@ -250,7 +251,7 @@ sync_meta(#state{kv = Kv}) ->
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     {queued, State} = append({0, 0, undefined}, no_overwrite, State0),
     receive
-        {written, {0, 0}} -> ok
+        {ra_log_event, {written, {0, 0}}} -> ok
     end,
     State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->

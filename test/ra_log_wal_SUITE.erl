@@ -95,7 +95,7 @@ roll_over(Config) ->
          ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
-    receive {written, {NumWrites, 1}} -> ok
+    receive {ra_log_event, {written, {NumWrites, 1}}} -> ok
     after 5000 -> throw(written_timeout)
     end,
 
@@ -125,7 +125,7 @@ recover(_Config) ->
 
 await_written(Id, IdxTerm) ->
     receive
-        {written, {Idx, _} = IdxTerm} ->
+        {ra_log_event, {written, {Idx, _} = IdxTerm}} ->
             ra_log_wal:mem_tbl_read(Id, Idx)
     after 5000 ->
               throw(written_timeout)

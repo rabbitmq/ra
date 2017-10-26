@@ -309,7 +309,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     % TODO emit metrics of time taken to sync and write batch size
     % notify processes that have synced map(Pid, Token)
     Debug = maps:fold(fun (Id, IdxTerm, Dbg) ->
-                              Msg = {written, IdxTerm},
+                              Msg = {ra_log_event, {written, IdxTerm}},
                               try Id ! Msg  of
                                   _ -> ok
                               catch
