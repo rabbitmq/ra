@@ -633,6 +633,7 @@ consistent_query(_Config) ->
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
+    ct:pal("Effects ~p", [Effects]),
     ?assert(lists:any(fun({reply, _, {{4, 5}, <<"hi3">>}}) -> true;
                          (_) -> false
                       end, Effects)),
@@ -1051,7 +1052,7 @@ take_snapshot(_Config) ->
                         ]),
     % assert snapshots have been taken on all nodes
     Assertion = fun (#{log := Log}) ->
-                        length(ra_log:take(0, 100, Log)) =:= 1
+                        length(element(1, ra_log:take(0, 100, Log))) =:= 1
                 end,
     assert_node_state(n1, Nodes, Assertion),
     assert_node_state(n2, Nodes, Assertion),
@@ -1082,7 +1083,7 @@ send_snapshot(_Config) ->
     % assert snapshots have been taken on all nodes and new nodes has seen
     % snapshot as well as the new enqueue
     Assertion = fun (#{log := Log}) ->
-                        length(ra_log:take(0, 100, Log)) =:= 2
+                        length(element(1, ra_log:take(0, 100, Log))) =:= 2
                 end,
     assert_node_state(n1, Nodes, Assertion),
     assert_node_state(n2, Nodes, Assertion),
@@ -1123,7 +1124,7 @@ past_leader_overwrites_entry(_Config) ->
                         ]),
     Assertion = fun (#{log := Log}) ->
                         % ensure no node still has a banana
-                        Entries = ra_log:take(0, 100, Log),
+                        {Entries, _} = ra_log:take(0, 100, Log),
                         not lists:any(fun({_, _, {'$usr',_, {enq, banana}, _}}) ->
                                               true;
                                          (_) -> false

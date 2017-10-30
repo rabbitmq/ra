@@ -51,7 +51,7 @@ accept_mem_tables(Config) ->
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {ra_log_event, {new_segments, Tid, [{1, 3, SegmentFile}]}} ->
+        {ra_log_event, {segments, Tid, [{1, 3, SegmentFile}]}} ->
             {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
@@ -80,7 +80,7 @@ accept_mem_tables_append(Config) ->
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables2, WalFile2),
     AllEntries = Entries ++ Entries2,
     receive
-        {ra_log_event, {new_segments, _Tid, [{1, 5, SegmentFile}]}} ->
+        {ra_log_event, {segments, _Tid, [{1, 5, SegmentFile}]}} ->
             {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             AllEntries = [{I, T, binary_to_term(B)}
@@ -104,7 +104,7 @@ accept_mem_tables_overwrite(Config) ->
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables2, WalFile2),
 
     receive
-        {ra_log_event, {new_segments, _Tid, [{1, 3, SegmentFile}]}} ->
+        {ra_log_event, {segments, _Tid, [{1, 3, SegmentFile}]}} ->
             {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             C2 = term_to_binary(c2),
             [{1, 43, _}, {2, 43, _}] = ra_log_file_segment:read(Seg, 1, 2),
@@ -127,7 +127,7 @@ accept_mem_tables_rollover(Config) ->
     {MemTables, WalFile} = fake_mem_table(Dir, Entries),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {ra_log_event, {new_segments, _Tid, [{1, 8, _Seg1}, {9, 10, _Seg2}]}} ->
+        {ra_log_event, {segments, _Tid, [{1, 8, _Seg1}, {9, 10, _Seg2}]}} ->
             ok
     after 3000 ->
               throw(ra_log_event_timeout)

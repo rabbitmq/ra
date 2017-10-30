@@ -43,20 +43,24 @@ init_per_group(ra_log_memory, Config) ->
     [{init_fun, InitFun} | Config];
 init_per_group(ra_log_file, Config) ->
     PrivDir = ?config(priv_dir, Config),
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, PrivDir),
+    application:ensure_all_started(ra),
     InitFun = fun (TestCase) ->
-                      try register(TestCase, self())
+                      try
+                          register(TestCase, self())
                       catch
                           _:_ -> ok
                       end,
                       Dir = filename:join(PrivDir, TestCase),
                       ok = filelib:ensure_dir(Dir),
-                      _ = ra_log_wal:start_link(#{dir => Dir}, []),
                       ra_log:init(ra_log_file, #{directory => Dir,
                                                  id => TestCase})
               end,
     [{init_fun, InitFun} | Config].
 
 end_per_group(_, Config) ->
+    _ = application:stop(ra),
     Config.
 
 init_per_testcase(TestCase, Config) ->
@@ -65,15 +69,15 @@ init_per_testcase(TestCase, Config) ->
     [{ra_log, Log} | Config].
 
 fetch_when_empty(Config) ->
-    Log = ?config(ra_log, Config),
-    {0, 0, undefined} = ra_log:fetch(0, Log),
-    0 = ra_log:fetch_term(0, Log),
+    Log0 = ?config(ra_log, Config),
+    {{0, 0, undefined}, Log1} = ra_log:fetch(0, Log0),
+    {0, _} = ra_log:fetch_term(0, Log1),
     ok.
 
 fetch_not_found(Config) ->
-    Log = ?config(ra_log, Config),
-    undefined = ra_log:fetch(99, Log),
-    undefined = ra_log:fetch_term(99, Log),
+    Log0 = ?config(ra_log, Config),
+    {undefined, Log} = ra_log:fetch(99, Log0),
+    {undefined, _} = ra_log:fetch_term(99, Log),
     ok.
 
 append_then_fetch(Config) ->
@@ -81,10 +85,10 @@ append_then_fetch(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log = ra_log:append_sync(Entry, no_overwrite, Log0),
-    {Idx, Term, "entry"} = ra_log:fetch(Idx, Log),
+    Log1 = ra_log:append_sync(Entry, no_overwrite, Log0),
+    {{Idx, Term, "entry"}, Log} = ra_log:fetch(Idx, Log1),
     {Idx, Term} = ra_log:last_written(Log),
-    Term = ra_log:fetch_term(Idx, Log),
+    {Term, _} = ra_log:fetch_term(Idx, Log),
     ok.
 
 append_then_fetch_no_wait(Config) ->
@@ -92,18 +96,18 @@ append_then_fetch_no_wait(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log = case ra_log:append(Entry, no_overwrite, Log0) of
-              {written, L} -> L;
-              {queued, L} ->
-                  % check last written hasn't been incremented
-                  {0, 0} = ra_log:last_written(L),
-                  L
-          end,
+    Log1 = case ra_log:append(Entry, no_overwrite, Log0) of
+               {written, L} -> L;
+               {queued, L} ->
+                   % check last written hasn't been incremented
+                   {0, 0} = ra_log:last_written(L),
+                   L
+           end,
     % log entry should be immediately visible to allow
     % leaders to send append entries for entries not yet
     % flushed
-    {Idx, Term, "entry"} = ra_log:fetch(Idx, Log),
-    Term = ra_log:fetch_term(Idx, Log),
+    {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
+    {Term, Log} = ra_log:fetch_term(Idx, Log2),
     % if we get async written notification check that handling that
     % results in the last written being updated
     receive
@@ -124,8 +128,8 @@ append_then_overwrite(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log = ra_log:append_sync(Entry2, overwrite, Log1),
-    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    Log2 = ra_log:append_sync(Entry2, overwrite, Log1),
+    {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log2),
     ExpectedNextIndex = Idx + 1,
     % ensure last index is updated after overwrite
     ExpectedNextIndex = ra_log:next_index(Log),
@@ -141,13 +145,13 @@ append_recover_then_overwrite(Config) ->
     Log2 = InitFun(append_recover_then_overwrite),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log = ra_log:append_sync(Entry2, overwrite, Log2),
-    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    Log3 = ra_log:append_sync(Entry2, overwrite, Log2),
+    {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log3),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
     ExpectedNextIndex = ra_log:next_index(Log),
     % ensure previous indices aren't accessible
-    undefined = ra_log:fetch(Idx+1, Log),
+    {undefined, _} = ra_log:fetch(Idx+1, Log),
     ok.
 
 append_overwrite_then_recover(Config) ->
@@ -162,13 +166,13 @@ append_overwrite_then_recover(Config) ->
     % close log
     ok = ra_log:close(Log2),
     % recover
-    Log = InitFun(append_overwrite_then_recover),
-    {Idx, Term, "entry0_2"} = ra_log:fetch(Idx, Log),
+    Log3 = InitFun(append_overwrite_then_recover),
+    {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log3),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
     ExpectedNextIndex = ra_log:next_index(Log),
     % ensure previous indices aren't accessible
-    undefined = ra_log:fetch(Idx+1, Log),
+    {undefined, _} = ra_log:fetch(Idx+1, Log),
     ok.
 
 write_two(Idx, Term, Log0) ->
@@ -199,19 +203,19 @@ take(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     LastIdx = Idx + 9,
-    Log = lists:foldl(fun (I, L0) ->
-                        Entry = {I, Term, "entry" ++ integer_to_list(I)},
-                        ra_log:append_sync(Entry, no_overwrite, L0)
-                      end, Log0, lists:seq(Idx, LastIdx)),
+    Log1 = lists:foldl(fun (I, L0) ->
+                               Entry = {I, Term, "entry" ++ integer_to_list(I)},
+                               ra_log:append_sync(Entry, no_overwrite, L0)
+                       end, Log0, lists:seq(Idx, LastIdx)),
     % wont work for memory
-    [?IDX(1)] = ra_log:take(1, 1, Log),
-    [?IDX(1), ?IDX(2)] = ra_log:take(1, 2, Log),
+    {[?IDX(1)], Log2} = ra_log:take(1, 1, Log1),
+    {[?IDX(1), ?IDX(2)], Log3} = ra_log:take(1, 2, Log2),
     % partly out of range
-    [?IDX(9), ?IDX(10)] = ra_log:take(9, 3, Log),
+    {[?IDX(9), ?IDX(10)], Log4} = ra_log:take(9, 3, Log3),
     % completely out of range
-    [] = ra_log:take(11, 3, Log),
+    {[], Log5} = ra_log:take(11, 3, Log4),
     % take all
-    Taken = ra_log:take(1, 10, Log),
+    {Taken, _} = ra_log:take(1, 10, Log5),
     ?assertEqual(10, length(Taken)),
     ok.
 
@@ -222,7 +226,6 @@ last(Config) ->
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
     Log = ra_log:append_sync(Entry, no_overwrite, Log0),
-    {Idx, Term, "entry"} = ra_log:last(Log),
     {Idx, Term} = ra_log:last_index_term(Log),
     ok.
 
@@ -239,15 +242,15 @@ snapshot(Config) ->
     undefined = ra_log:read_snapshot(Log0),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(1, "entry2", Log1),
-    {LastIdx, LastTerm, _} = ra_log:last(Log2),
+    {LastIdx, LastTerm} = ra_log:last_index_term(Log2),
     Cluster = #{node1 => #{}},
     Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
-    Log = ra_log:write_snapshot(Snapshot, Log2),
+    Log3 = ra_log:write_snapshot(Snapshot, Log2),
     % ensure entries prior to snapshot are no longer there
-    undefined = ra_log:fetch(LastIdx, Log),
-    undefined = ra_log:fetch(LastIdx-1, Log),
+    {undefined, Log4} = ra_log:fetch(LastIdx, Log3),
+    {undefined, Log} = ra_log:fetch(LastIdx-1, Log4),
     % falls back to snapshot idxterm
-    {LastIdx, LastTerm} = ra_log:last_index_term(Log),
+    {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),
     ok.
 
@@ -261,15 +264,15 @@ init_close_init(Config) ->
     {ok, Log} = ra_log:write_meta(current_term, 2, Log2),
     ok = ra_log:close(Log),
     LogA = InitFun(init_close_init),
-    {2, 2, _} = ra_log:last(LogA),
-    {2, 2, "entry2"} = ra_log:fetch(2, LogA),
-    {1, 1, "entry1"} = ra_log:fetch(1, LogA),
+    {2, 2} = ra_log:last_index_term(LogA),
+    {{2, 2, "entry2"}, LogA1} = ra_log:fetch(2, LogA),
+    {{1, 1, "entry1"}, LogA2} = ra_log:fetch(1, LogA1),
     2 = ra_log:read_meta(current_term, LogA),
     % ensure we can append after recovery
-    LogB = append_in(2, "entry3", LogA),
-    {1, 1, "entry1"} = ra_log:fetch(1, LogA),
-    {3, 2, "entry3"} = ra_log:fetch(3, LogB),
-    {2, 2, "entry2"} = ra_log:fetch(2, LogA),
+    LogB = append_in(2, "entry3", LogA2),
+    {{1, 1, "entry1"}, LogB1} = ra_log:fetch(1, LogB),
+    {{3, 2, "entry3"}, LogB2} = ra_log:fetch(3, LogB1),
+    {{2, 2, "entry2"}, _} = ra_log:fetch(2, LogB2),
     ok.
 
 append_in(Term, Data, Log0) ->
