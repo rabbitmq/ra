@@ -17,8 +17,8 @@
 -define(DEFAULT_HEARTBEAT_TIMEOUT, 30000).
 
 -record(state, {nodes :: [node()],
-                index :: erlang:dict(),
-                node_mapping :: erlang:dict(),
+                index :: dict:dict(),
+                node_mapping :: dict:dict(),
                 interval :: integer(),
                 timer_ref :: reference(),
                 beat_timeout :: integer()}).

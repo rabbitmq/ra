@@ -111,10 +111,10 @@ init(#{id := Id,
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
-    {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log0),
+    {ok, Log1} = ra_log:write_meta(current_term, CurrentTerm, Log0),
     InitialMachineState = MachineInitFun(Name),
     {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
-        case ra_log:read_snapshot(Log) of
+        case ra_log:read_snapshot(Log1) of
             undefined ->
                 {0, make_cluster(Id, InitialNodes), InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
@@ -134,7 +134,7 @@ init(#{id := Id,
               voted_for => VotedFor,
               commit_index => CommitIndex,
               last_applied => CommitIndex,
-              log => Log,
+              log => Log1,
               machine_apply_fun => wrap_machine_fun(MachineApplyFun),
               machine_state => MacState,
               % for snapshots
@@ -144,15 +144,16 @@ init(#{id := Id,
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
-    {ClusterIndexTerm, Cluster} =
+    {{ClusterIndexTerm, Cluster}, Log} =
         fold_log_from(CommitIndex,
                       fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
                               {{Idx, Term}, Cluster};
                          (_, Acc) ->
                               Acc
-                      end, {SnapshotIndexTerm, Cluster0}, Log),
+                      end, {{SnapshotIndexTerm, Cluster0}, Log1}),
     State#{cluster => Cluster,
-           cluster_index_term => ClusterIndexTerm}.
+           cluster_index_term => ClusterIndexTerm,
+           log => Log}.
 
 % the peer id in the append_entries_reply message is an artifact of
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
@@ -174,8 +175,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
-            {State, Effects0, Applied} = evaluate_quorum(State1),
-            Rpcs = make_rpcs(State),
+            {State2, Effects0, Applied} = evaluate_quorum(State1),
+            {State, Rpcs} = make_rpcs(State2),
             Effects = [{send_rpcs, false, Rpcs},
                        {incr_metrics, ra_metrics, [{3, Applied}]} | Effects0],
             case State of
@@ -209,37 +210,37 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
-              State0 = #{id := Id, cluster := Nodes, log := Log}) ->
+              State0 = #{id := Id, cluster := Nodes, log := Log0}) ->
     #{PeerId := Peer0 = #{match_index := MI,
                           next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
     % match_index and update next_index directly
-    Peer = case ra_log:fetch_term(LastIdx, Log) of
-               LastTerm when LastIdx >= MI -> % entry exists we can forward
-                   Peer0#{match_index => LastIdx,
-                          % TODO: should we take max of NI and NextIndex?
-                          next_index => NextIdx};
-               _Term when LastIdx < MI ->
-                   % TODO: this can only really happen when peers are non-persistent.
-                   % should they turn-into non-voters when this sitution is detected
-                   error_logger:warning_msg(
-                     "~p leader: peer returned last_index [~p in ~p] lower than recorded "
-                     "match index [~p]. Resetting peers state to last_index.~n",
-                     [Id, LastIdx, LastTerm, MI]),
-                   Peer0#{match_index => LastIdx,
-                          next_index => LastIdx + 1};
-               EntryTerm ->
-                   ?DBG("~p leader received last_index with different term ~p~n",
-                        [Id, EntryTerm]),
-                   % last_index has a different term
-                   % The peer must have received an entry from a previous leader
-                   % and the current leader wrote a different entry at the same
-                   % index in a different term.
-                   % decrement next_index but don't go lower than match index.
-                   Peer0#{next_index => max(min(NI-1, LastIdx), MI)}
-           end,
-    State = State0#{cluster => Nodes#{PeerId => Peer}},
-    Rpcs = make_rpcs(State),
+    {Peer, Log} = case ra_log:fetch_term(LastIdx, Log0) of
+                      {LastTerm, L} when LastIdx >= MI -> % entry exists we can forward
+                          {Peer0#{match_index => LastIdx,
+                                  % TODO: should we take max of NI and NextIndex?
+                                  next_index => NextIdx}, L};
+                      {_Term, L} when LastIdx < MI ->
+                          % TODO: this can only really happen when peers are non-persistent.
+                          % should they turn-into non-voters when this sitution is detected
+                          error_logger:warning_msg(
+                            "~p leader: peer returned last_index [~p in ~p] lower than recorded "
+                            "match index [~p]. Resetting peers state to last_index.~n",
+                            [Id, LastIdx, LastTerm, MI]),
+                          {Peer0#{match_index => LastIdx,
+                                  next_index => LastIdx + 1}, L};
+                      {EntryTerm, L} ->
+                          ?DBG("~p leader received last_index with different term ~p~n",
+                               [Id, EntryTerm]),
+                          % last_index has a different term
+                          % The peer must have received an entry from a previous leader
+                          % and the current leader wrote a different entry at the same
+                          % index in a different term.
+                          % decrement next_index but don't go lower than match index.
+                          {Peer0#{next_index => max(min(NI-1, LastIdx), MI)}, L}
+                  end,
+    State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
+    {State, Rpcs} = make_rpcs(State1),
     {leader, State, [{send_rpcs, false, Rpcs}]};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
@@ -306,11 +307,11 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             ?DBG("~p saw install_snapshot_result from unknown peer ~p~n", [Id, PeerId]),
             {leader, State0, []};
         Peer0 ->
-            State = update_peer(PeerId, Peer0#{match_index => LastIndex,
-                                               next_index => LastIndex + 1},
-                                State0),
+            State1 = update_peer(PeerId, Peer0#{match_index => LastIndex,
+                                                next_index => LastIndex + 1},
+                                 State0),
 
-            Rpcs = make_rpcs(State),
+            {State, Rpcs} = make_rpcs(State1),
             Effects = [{send_rpcs, false, Rpcs}],
             {leader, State, Effects}
     end;
@@ -398,6 +399,16 @@ handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
 
+dropexisting({Log0, []}) ->
+    {Log0, []};
+dropexisting({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
+    case ra_log:exists({Idx, Trm}, Log0) of
+        {true, Log} ->
+            dropexisting({Log, Tail});
+        {false, Log} ->
+            {Log, Entries}
+    end.
+
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
@@ -405,15 +416,13 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries0},
-                State00 = #{id := Id, log := Log, current_term := CurTerm})
+                State000 = #{id := Id, log := Log0, current_term := CurTerm})
   when Term >= CurTerm ->
-    State0 = update_term(Term, State00),
-    case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
-        true ->
+    State00 = update_term(Term, State000),
+    case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
+        {true, State0} ->
             % filter entries already seen
-            Entries = lists:dropwhile(fun ({Idx, Trm, _}) ->
-                                              ra_log:exists({Idx, Trm}, Log)
-                                      end, Entries0),
+            {Log, Entries} = dropexisting({Log0, Entries0}),
             case Entries of
                 [] ->
                     % update commit index to be the min of the last
@@ -456,7 +465,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     {follower, State1#{commit_index := min(LeaderCommit, LastIdx),
                                        leader_id => LeaderId}, Effects}
             end;
-        false ->
+        {false, State0} ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
@@ -577,29 +586,30 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
     Effects = [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects1],
     {State, Effects}.
 
-make_pipelined_rpcs(State) ->
-    maps:fold(fun(PeerId, Peer = #{next_index := Next}, {S, Entries}) ->
-                      {LastIdx, Entry} =
-                          append_entries_or_snapshot(PeerId, Next, State),
+make_pipelined_rpcs(State0) ->
+    maps:fold(fun(PeerId, Peer = #{next_index := Next}, {S0, Entries}) ->
+                      {LastIdx, Entry, S} =
+                          append_entries_or_snapshot(PeerId, Next, S0),
                       {update_peer(PeerId, Peer#{next_index => LastIdx+1}, S),
                        [Entry | Entries]}
-              end, {State, []}, peers(State)).
+              end, {State0, []}, peers(State0)).
 
 make_rpcs(State) ->
-    maps:fold(fun(PeerId, #{next_index := Next}, Acc) ->
-                      [element(2, append_entries_or_snapshot(PeerId, Next, State)) | Acc]
-              end, [], peers(State)).
+    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
+                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
+                      {S, [Entry | Entries]}
+              end, {State, []}, peers(State)).
 
 append_entries_or_snapshot(PeerId, Next,
-                           #{id := Id, log := Log, current_term := Term,
+                           #{id := Id, log := Log0, current_term := Term,
                              commit_index := CommitIndex,
-                             snapshot_index_term := {SIdx, STerm}}) ->
+                             snapshot_index_term := {SIdx, STerm}} = State) ->
     PrevIdx = Next - 1,
-    case ra_log:fetch_term(PrevIdx, Log) of
-        PrevTerm when PrevTerm =/= undefined ->
+    case ra_log:fetch_term(PrevIdx, Log0) of
+        {PrevTerm, Log1} when PrevTerm =/= undefined ->
             % The log backend implementation will be responsible for
             % keeping a cache of recently accessed entries.
-            Entries = ra_log:take(Next, 5, Log),
+            {Entries, Log} = ra_log:take(Next, 5, Log1),
             LastIndex = case Entries of
                             [] -> PrevIdx;
                             _ ->
@@ -612,10 +622,11 @@ append_entries_or_snapshot(PeerId, Next,
                                           leader_id = Id,
                                           prev_log_index = PrevIdx,
                                           prev_log_term = PrevTerm,
-                                          leader_commit = CommitIndex}}};
-        undefined when PrevIdx =:= SIdx ->
+                                          leader_commit = CommitIndex}},
+            State#{log => Log}};
+        {undefined, Log1} when PrevIdx =:= SIdx ->
             % Previous index is the same as snapshot index
-            Entries = ra_log:take(Next, 5, Log),
+            {Entries, Log} = ra_log:take(Next, 5, Log1),
             LastIndex = case Entries of
                             [] -> PrevIdx;
                             _ ->
@@ -628,8 +639,9 @@ append_entries_or_snapshot(PeerId, Next,
                                           leader_id = Id,
                                           prev_log_index = SIdx,
                                           prev_log_term = STerm,
-                                          leader_commit = CommitIndex}}};
-        undefined  ->
+                                          leader_commit = CommitIndex}},
+            State#{log => Log}};
+        {undefined, Log} ->
             % TODO: The assumption here is that a missing entry means we need
             % to send a snapshot. This may not be the case in a sparse log and would
             % require changes if using incremental cleaning in combination with
@@ -642,7 +654,8 @@ append_entries_or_snapshot(PeerId, Next,
                                                        last_index = LastIndex,
                                                        last_term = LastTerm,
                                                        last_config = Config,
-                                                       data = MacState}}}
+                                                       data = MacState}},
+            State#{log => Log}}
 
     end.
 
@@ -750,24 +763,27 @@ is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
     false.
 
 has_log_entry_or_snapshot(Idx, Term,
-                          #{log := Log,
-                            snapshot_index_term := {SIdx, STerm}}) ->
-    case ra_log:fetch_term(Idx, Log) of
-        Term -> true;
-        _ ->
-            SIdx =:= Idx andalso STerm =:= Term
+                          #{log := Log0,
+                            snapshot_index_term := {SIdx, STerm}} = State) ->
+    case ra_log:fetch_term(Idx, Log0) of
+        {Term, Log} ->
+            {true, State#{log => Log}};
+        {_, Log} ->
+            {SIdx =:= Idx andalso STerm =:= Term,
+             State#{log => Log}}
     end.
 
 fetch_term(Idx, #{log := Log}) ->
     ra_log:fetch_term(Idx, Log).
 
-fetch_entries(From, To, #{log := Log}) ->
-    ra_log:take(From, To - From + 1, Log).
+fetch_entries(From, To, #{log := Log0} = State) ->
+    {Entries, Log} = ra_log:take(From, To - From + 1, Log0),
+    {Entries, State#{log => Log}}.
 
 make_cluster(Self, Nodes) ->
     case lists:foldl(fun(N, Acc) ->
-                                  Acc#{N => #{match_index => 0}}
-                          end, #{}, Nodes) of
+                             Acc#{N => #{match_index => 0}}
+                     end, #{}, Nodes) of
         #{Self := _} = Cluster ->
             % current node is already in cluster - do nothing
             Cluster;
@@ -792,12 +808,12 @@ apply_to(ApplyTo, State0 = #{id := _Id,
                              machine_state := MacState0})
   when ApplyTo > LastApplied ->
     case fetch_entries(LastApplied + 1, ApplyTo, State0) of
-        [] ->
-            {State0, [], 0};
-        Entries ->
+        {[], State} ->
+            {State, [], 0};
+        {Entries, State1} ->
             {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(ApplyFun0, E, St) end,
-                            {State0, MacState0, []}, Entries),
+                            {State1, MacState0, []}, Entries),
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
             % NewApplied = min(ApplyTo, LastEntryIdx),
             % ?DBG("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
@@ -974,8 +990,9 @@ increment_commit_index(State = #{current_term := CurrentTerm}) ->
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State) of
-        CurrentTerm ->
-            State#{commit_index => PotentialNewCommitIndex};
+        {CurrentTerm, Log}  ->
+            State#{commit_index => PotentialNewCommitIndex,
+                   log => Log};
         _ ->
             State
     end.
@@ -1010,13 +1027,13 @@ log_unhandled_msg(RaState, Msg, #{id := Id}) ->
 %         _ -> State
 %     end.
 
-fold_log_from(From, Folder, St, Log) ->
-    case ra_log:take(From, 5, Log) of
-        [] ->
-            St;
-        Entries ->
+fold_log_from(From, Folder, {St, Log0}) ->
+    case ra_log:take(From, 5, Log0) of
+        {[], Log} ->
+            {St, Log};
+        {Entries, Log}  ->
             St1 = lists:foldl(Folder, St, Entries),
-            fold_log_from(From+5, Folder, St1, Log)
+            fold_log_from(From+5, Folder, {St1, Log})
     end.
 
 wrap_machine_fun(Fun) ->

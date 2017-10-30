@@ -2,6 +2,7 @@
 
 -export([start_link/2,
          write/5,
+         force_roll_over/1,
          init/3,
          mem_tbl_read/2,
          system_continue/3,
@@ -28,7 +29,7 @@
 -record(state, {file_num = 0 :: non_neg_integer(),
                 fd :: maybe(file:io_device()),
                 filename :: maybe(file:filename()),
-                file_modes :: [file:mode()],
+                file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
                 max_wal_size_bytes = unlimited :: non_neg_integer(), % TODO: better default
@@ -42,14 +43,19 @@
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
                       segment_writer => atom(),
-                      additional_wal_file_modes => [file:mode()]
+                      additional_wal_file_modes => [term()]
                      }.
 
 
--spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
-    ok.
+-spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) -> ok.
 write(From, Wal, Idx, Term, Entry) ->
     Wal ! {log, From, sized_binary(From), Idx, Term, Entry},
+    ok.
+
+% force a wal file to roll over to a new file
+% mostly useful for testing
+force_roll_over(Wal) ->
+    Wal ! rollover,
     ok.
 
 sized_binary(Bin) when is_binary(Bin) ->
@@ -233,7 +239,9 @@ handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
             append_data(State, Id, Idx, Term, Entry, DataSize, Data);
         false ->
             append_data(State0, Id, Idx, Term, Entry, DataSize, Data)
-    end.
+    end;
+handle_msg(rollover, State) ->
+    roll_over(State).
 
 append_data(#state{fd = Fd, batch = Batch,
                    wal_file_size = FileSize} = State,
@@ -246,12 +254,15 @@ append_data(#state{fd = Fd, batch = Batch,
 update_mem_table(Id, Idx, Term, Entry) ->
     % TODO: cache current tables to avoid ets lookup?
     case ets:lookup(ra_log_open_mem_tables, Id) of
-        [{_Id, _First, _Last, Tid}] ->
+        [{_Id, First, _Last, Tid}] ->
             % TODO: check Last + 1 == Idx or handle missing?
             _ = ets:insert(Tid, {Idx, Term, Entry}),
             % update Last idx for current tbl
             % this is how followers "truncate" previously seen entries
-            _ = ets:update_element(ra_log_open_mem_tables, Id, {3, Idx});
+            % take the min of the First item in case we are overwriting before
+            % the previous first seen entry
+            _ = ets:update_element(ra_log_open_mem_tables, Id,
+                                   [{2, min(First, Idx)}, {3, Idx}]);
         [] ->
             % open new ets table
             Tid = open_mem_table(Id, Idx),
@@ -273,7 +284,13 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
     % flushed to persistent tables asynchronously
-    [_ = ets:insert(ra_log_closed_mem_tables, T) || T <- MemTables],
+    % Also give away ets ownership to the ra node as it will be responsible
+    % for deleting it
+    % TODO: alternatively we could have a separate ETS cleanup process
+    [begin
+         _ = ets:insert(ra_log_closed_mem_tables, T),
+         ets:give_away(Tid, whereis(Id), undefined)
+     end || {Id, _, _, Tid} = T <- MemTables],
     % reset open mem tables table
     true = ets:delete_all_objects(ra_log_open_mem_tables),
 

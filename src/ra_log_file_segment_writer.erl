@@ -13,7 +13,7 @@
          terminate/2,
          code_change/3]).
 
--record(state, {data_dir :: filename:filename(),
+-record(state, {data_dir :: file:filename(),
                 segment_conf = #{} :: #{atom() => term()}, % TODO refine type
                 active_segments = #{} :: #{atom() => ra_log_file_segment:state()}}).
 
@@ -55,6 +55,7 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
+    ?DBG("segment writer: mem_tables ~p", [Tables]),
     State = lists:foldl(fun do_segment/2, State0, Tables),
     % delete wal file once done
     % TODO: test scenario when node crashes after segments but before
@@ -94,6 +95,8 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
     % integers
     {Segment, Closed0} =
         lists:foldl(fun (Idx, {Seg0, Segs}) ->
+                         % TODO: the question here is whether we should allow
+                         % missing indexes or not?
                          [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
                           Data = term_to_binary(Data0),
                           case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
@@ -118,9 +121,9 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                     {Start, End, ra_log_file_segment:filename(S)}
                 end || S <- lists:reverse([Segment | Closed0])],
 
-    ?DBG("SEgs ~p", [Segments]),
+    % ?DBG("SEgs ~p", [Segments]),
 
-    RaNodeId ! {ra_log_event, {new_segments, Tid, Segments}},
+    RaNodeId ! {ra_log_event, {segments, Tid, Segments}},
 
     State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
 

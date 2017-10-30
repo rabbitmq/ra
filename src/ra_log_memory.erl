@@ -4,7 +4,6 @@
          close/1,
          append/3,
          take/3,
-         last/1,
          last_index_term/1,
          handle_event/2,
          last_written/1,
@@ -68,9 +67,9 @@ append({Idx, Term, Data}, overwrite, #state{last_index = _LastIdx,
 
 
 -spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->
-    [log_entry()].
-take(Start, Num, #state{last_index = LastIdx, entries = Log}) ->
-    sparse_take(Start, Log, Num, LastIdx, []).
+    {[log_entry()], ra_log_memory_state()}.
+take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
+    {sparse_take(Start, Log, Num, LastIdx, []), State}.
 
 % this allows for missing entries in the log
 sparse_take(Idx, _Log, Num, Max, Res)
@@ -85,10 +84,6 @@ sparse_take(Idx, Log, Num, Max, Res) ->
             sparse_take(Idx+1, Log, Num, Max, Res)
     end.
 
-
--spec last(ra_log_memory_state()) -> maybe(log_entry()).
-last(#state{last_index = LastIdx} = LogState) ->
-    fetch(LastIdx, LogState).
 
 -spec last_index_term(ra_log_memory_state()) -> maybe(ra_idxterm()).
 last_index_term(#state{last_index = LastIdx,
@@ -115,13 +110,13 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_memory_state()) ->
     ra_log_memory_state().
-handle_event({written, {Idx, Term} = IdxTerm}, State) ->
-    case fetch_term(Idx, State) of
-        Term ->
+handle_event({written, {Idx, Term} = IdxTerm}, State0) ->
+    case fetch_term(Idx, State0) of
+        {Term, State} ->
             State#state{last_written = IdxTerm};
         _ ->
             % if the term doesn't match we just ignore it
-            State
+            State0
     end.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
@@ -129,21 +124,21 @@ next_index(#state{last_index = LastIdx}) ->
     LastIdx + 1.
 
 -spec fetch(ra_index(), ra_log_memory_state()) ->
-    maybe(log_entry()).
-fetch(Idx, #state{entries = Log}) ->
+    {maybe(log_entry()), ra_log_memory_state()}.
+fetch(Idx, #state{entries = Log} = State) ->
     case Log of
         #{Idx := {T, D}} ->
-            {Idx, T, D};
-        _ -> undefined
+            {{Idx, T, D}, State};
+        _ -> {undefined, State}
     end.
 
 -spec fetch_term(ra_index(), ra_log_memory_state()) ->
-    maybe(ra_term()).
-fetch_term(Idx, #state{entries = Log}) ->
+    {maybe(ra_term()), ra_log_memory_state()}.
+fetch_term(Idx, #state{entries = Log} = State) ->
     case Log of
         #{Idx := {T, _}} ->
-            T;
-        _ -> undefined
+            {T, State};
+        _ -> {undefined, State}
     end.
 
 flush(_Idx, Log) -> Log.

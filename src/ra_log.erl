@@ -8,9 +8,7 @@
          append_sync/3,
          fetch/2,
          fetch_term/2,
-         flush/2,
          take/3,
-         last/1,
          last_index_term/1,
          handle_event/2,
          last_written/1,
@@ -30,13 +28,17 @@
 -type ra_log() :: {Module :: module(), ra_log_state()}.
 -type ra_meta_key() :: atom().
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
--type ra_log_event() :: {written, ra_idxterm()}.
+-type ra_segment_ref() :: {From :: ra_index(), To :: ra_index(),
+                           File :: file:filename()}.
+-type ra_log_event() :: {written, ra_idxterm()} |
+                        {segments, ets:tid(), [ra_segment_ref()]}.
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,
               ra_log/0,
               ra_meta_key/0,
               ra_log_snapshot/0,
+              ra_segment_ref/0,
               ra_log_event/0
              ]).
 
@@ -53,24 +55,21 @@
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
-    [log_entry()].
+    {[log_entry()], ra_log_state()}.
 
 -callback next_index(State :: ra_log_state()) ->
     ra_index().
 
 -callback fetch(Inx :: ra_index(), State :: ra_log_state()) ->
-    maybe(log_entry()).
+    {maybe(log_entry()), ra_log_state()}.
 
 -callback fetch_term(Inx :: ra_index(), State :: ra_log_state()) ->
-    maybe(ra_term()).
+    {maybe(ra_term()), ra_log_state()}.
 
 -callback handle_event(Evt :: ra_log_event(),
                        Log :: ra_log_state()) -> ra_log_state().
 
 -callback last_written(Log :: ra_log_state()) -> ra_idxterm().
-
--callback last(State :: ra_log_state()) ->
-    maybe(log_entry()).
 
 -callback last_index_term(State :: ra_log_state()) ->
     maybe(ra_idxterm()).
@@ -93,8 +92,6 @@
 -callback sync_meta(State :: ra_log_state()) ->
     ok.
 
-
-
 %%
 %% API
 %%
@@ -107,17 +104,17 @@ init(Mod, Args) ->
 close({Mod, Log}) ->
     Mod:close(Log).
 
--spec fetch(Idx::ra_index(), Log::ra_log()) -> maybe(log_entry()).
-fetch(Idx, {Mod, Log}) ->
-    Mod:fetch(Idx, Log).
+-spec fetch(Idx::ra_index(), Log::ra_log()) ->
+    {maybe(log_entry()), ra_log_state()}.
+fetch(Idx, {Mod, Log0}) ->
+    {Result, Log} = Mod:fetch(Idx, Log0),
+    {Result, {Mod, Log}}.
 
--spec fetch_term(Idx::ra_index(), Log::ra_log()) -> maybe(ra_term()).
-fetch_term(Idx, {Mod, Log}) ->
-    Mod:fetch_term(Idx, Log).
-
--spec flush(Idx :: ra_index(), Log :: ra_log()) -> ra_log().
-flush(Idx, {Mod, Log}) ->
-    {Mod, Mod:flush(Idx, Log)}.
+-spec fetch_term(Idx::ra_index(), Log::ra_log()) ->
+    {maybe(ra_term()), ra_log_state()}.
+fetch_term(Idx, {Mod, Log0}) ->
+    {Result, Log} = Mod:fetch_term(Idx, Log0),
+    {Result, {Mod, Log}}.
 
 -spec append(Entry :: log_entry(),
              Overwrite :: overwrite | no_overwrite,
@@ -150,16 +147,11 @@ append_sync({Idx, Term, _} = Entry, Overwrite, Log0) ->
             throw(Err)
     end.
 
-
-
--spec take(Start::ra_index(), Num::non_neg_integer(),
-           State::ra_log()) -> [log_entry()].
-take(Start, Num, {Mod, Log}) ->
-    Mod:take(Start, Num, Log).
-
--spec last(State::ra_log()) -> maybe(log_entry()).
-last({Mod, Log}) ->
-    Mod:last(Log).
+-spec take(Start :: ra_index(), Num :: non_neg_integer(), State :: ra_log()) ->
+    {[log_entry()], ra_log_state()}.
+take(Start, Num, {Mod, Log0}) ->
+    {Result, Log} = Mod:take(Start, Num, Log0),
+    {Result, {Mod, Log}}.
 
 -spec last_index_term(State::ra_log()) -> maybe(ra_idxterm()).
 last_index_term({Mod, Log}) ->
@@ -167,8 +159,9 @@ last_index_term({Mod, Log}) ->
 
 -spec handle_event(Evt :: ra_log_event(), Log :: ra_log_state()) ->
     ra_log_state().
-handle_event(Evt, {Mod, Log}) ->
-    {Mod, Mod:handle_event(Evt, Log)}.
+handle_event(Evt, {Mod, Log0}) ->
+    Log = Mod:handle_event(Evt, Log0),
+    {Mod, Log}.
 
 -spec last_written(Log :: ra_log_state()) -> ra_idxterm().
 last_written({Mod, Log}) ->
@@ -227,9 +220,10 @@ write_meta(Key, Value, Log) ->
 sync_meta({Mod, Log}) ->
     Mod:sync_meta(Log).
 
--spec exists(ra_idxterm(), ra_log()) -> boolean().
-exists({Idx, Term}, Log) ->
-    case ra_log:fetch_term(Idx, Log) of
-        Term -> true;
-        _ -> false
+-spec exists(ra_idxterm(), ra_log()) ->
+    {boolean(), ra_log()}.
+exists({Idx, Term}, Log0) ->
+    case ra_log:fetch_term(Idx, Log0) of
+        {Term, Log} -> {true, Log};
+        {_, Log} -> {false, Log}
     end.
