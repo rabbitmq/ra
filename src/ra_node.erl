@@ -1033,7 +1033,7 @@ fold_log_from(From, Folder, {St, Log0}) ->
             {St, Log};
         {Entries, Log}  ->
             St1 = lists:foldl(Folder, St, Entries),
-            fold_log_from(From+5, Folder, {St1, Log})
+            fold_log_from(From + 5, Folder, {St1, Log})
     end.
 
 wrap_machine_fun(Fun) ->

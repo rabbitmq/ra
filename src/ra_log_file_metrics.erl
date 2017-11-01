@@ -1,4 +1,4 @@
--module(ra_log_file_reader).
+-module(ra_log_file_metrics).
 -behaviour(gen_server).
 
 -export([start_link/0]).
@@ -12,6 +12,9 @@
 
 -record(state, {}).
 
+%%% ra_log_file_metrics - mostly here to own the ra_log_file_metrics
+%%% ETS table.
+
 %%%===================================================================
 %%% API functions
 %%%===================================================================
@@ -24,6 +27,9 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
+    _ = ets:new(ra_log_file_metrics, [named_table, set, public,
+                                      {write_concurrency, true},
+                                      {read_concurrency, true}]),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->

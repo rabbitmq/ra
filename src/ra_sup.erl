@@ -28,5 +28,7 @@ init([]) ->
                       segment_conf => #{max_count => SegmentMaxEntries}},
     SegWriter = #{id => ra_log_file_segment_writer,
                   start => {ra_log_file_segment_writer, start_link, [SegWriterConf]}},
-    Procs = [Wal, SegWriter, Heartbeat],
+    RaLogFileMetrics = #{id => ra_log_file_metrics,
+                  start => {ra_log_file_metrics, start_link, []}},
+    Procs = [Wal, SegWriter, Heartbeat, RaLogFileMetrics],
 	{ok, {SupFlags, Procs}}.

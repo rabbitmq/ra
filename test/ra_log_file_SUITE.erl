@@ -17,7 +17,9 @@ all_tests() ->
     [
      handle_overwrite,
      receive_segment,
-     read_validation
+     read_one,
+     validate_sequential_reads,
+     validate_reads_for_overlapped_writes
     ].
 
 groups() ->
@@ -103,7 +105,23 @@ receive_segment(Config) ->
     ra_log_file:close(FinalLog),
     ok.
 
-read_validation(Config) ->
+read_one(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log1 = append_n(0, 1, 1, Log0),
+    % ensure the written event is delivered
+    Log2 = deliver_all_log_events(Log1, 200),
+    {[_], Log} = ra_log_file:take(0, 5, Log2),
+    % read out of range
+    {[], Log} = ra_log_file:take(5, 5, Log2),
+    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    ?assert(M1 + M2 + M3 + M4 =:= 1),
+    ra_log_file:close(Log),
+    ok.
+
+
+validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
@@ -116,37 +134,65 @@ read_validation(Config) ->
     {ColdTaken, {ColdReds, FinLog}} =
         timer:tc(fun () ->
                          {_, Reds0} = process_info(self(), reductions),
-                         L = validate_read(1, 1000, 1, Log),
+                         L = validate_read(1, 1001, 1, Log),
                          {_, Reds} = process_info(self(), reductions),
                          {Reds - Reds0, L}
                  end),
-    ct:pal("validate_read COLD took ~pms Reductions: ~p~n",
-           [ColdTaken/1000, ColdReds]),
-    % ?assert(ColdReds < 102650),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
+    ?assert(M1 + M2 + M3 + M4 =:= 1000),
+
+    ct:pal("validate_sequential_reads COLD took ~pms Reductions: ~p~nMetrics: ~p",
+           [ColdTaken/1000, ColdReds, Metrics]),
+    % we'd like to know if we regress beyond this
+    % some of the reductions are spent validating the reads
+    ?assert(ColdReds < 100000),
     {WarmTaken, {WarmReds, FinLog2}} =
         timer:tc(fun () ->
                          {_, R0} = process_info(self(), reductions),
-                         L = validate_read(1, 1000, 1, FinLog),
+                         L = validate_read(1, 1001, 1, FinLog),
                          {_, R} = process_info(self(), reductions),
                          {R - R0, L}
                  end),
-    ct:pal("validate_read WARM took ~pms Reductions: ~p~n",
+    ct:pal("validate_sequential_reads WARM took ~pms Reductions: ~p~n",
            [WarmTaken/1000, WarmReds]),
-    % ?assert(WarmReds < 72244),
+    % we'd like to know if we regress beyond this
+    ?assert(WarmReds < 75000),
     ra_log_file:close(FinLog2),
     ok.
 
+validate_reads_for_overlapped_writes(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    % write a segment and roll 1 - 300 - term 1
+    Log1 = append_and_roll(1, 300, 1, Log0),
+    % write 300 - 400 in term 1 - no roll
+    Log2 = append_n(300, 400, 1, Log1),
+    % write 200 - 350 in term 2 and roll
+    Log3 = append_and_roll(200, 350, 2, Log2),
+    % write 350 - 500 in term 2
+    Log4 = append_and_roll(350, 500, 2, Log3),
+    Log5 = append_n(500, 551, 2, Log4),
+    Log6 = deliver_all_log_events(Log5, 200),
+
+    Log7 = validate_read(1, 200, 1, Log6),
+    Log8 = validate_read(200, 551, 2, Log7),
+
+    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    ?assert(M1 + M2 + M3 + M4 =:= 550),
+    ra_log_file:close(Log8),
+    ok.
 
 validate_read(To, To, _Term, Log0) ->
     Log0;
 validate_read(From, To, Term, Log0) ->
-    {_Entries, Log} = ra_log_file:take(From, 5, Log0),
+    End = min(From + 5, To),
+    {Entries, Log} = ra_log_file:take(From, End - From, Log0),
     % validate entries are correctly read
-    % ct:pal("validating ~p ~p", [From, To]),
-    % Expected = [ {I, Term, <<I:64/integer>>} ||
-    %              I <- lists:seq(From, From + 4) ],
-    % Expected = Entries,
-    validate_read(min(From + 5, To), To, Term, Log).
+    Expected = [ {I, Term, <<I:64/integer>>} ||
+                 I <- lists:seq(From, End - 1) ],
+    Expected = Entries,
+    validate_read(End, To, Term, Log).
 
 
 append_and_roll(From, To, Term, Log0) ->
@@ -171,7 +217,6 @@ append_n(From, To, Term, Log0) ->
 deliver_all_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
-            % ct:pal("ra_log_event ~p", [Evt]),
             Log = ra_log_file:handle_event(Evt, Log0),
             deliver_all_log_events(Log, 100)
     after Timeout ->

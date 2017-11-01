@@ -308,7 +308,8 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
          M = erlang:unique_integer([monotonic, positive]),
          _ = ets:insert(ra_log_closed_mem_tables,
                         erlang:insert_element(2, T, M)),
-         ets:give_away(Tid, whereis(Id), undefined)
+         % TODO: better handle give_away errors
+         catch ets:give_away(Tid, whereis(Id), undefined)
      end || {Id, _, _, Tid} = T <- MemTables],
     % reset open mem tables table
     true = ets:delete_all_objects(ra_log_open_mem_tables),

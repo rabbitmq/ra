@@ -83,7 +83,6 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
          #state{data_dir = DataDir,
                 segment_conf = SegConf,
                 active_segments = ActiveSegments} = State) ->
-    % ?DBG("do_segment: range: ~p-~p ETS: ~p", [StartIdx, EndIdx, ets:tab2list(Tid)]),
     Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
     Segment0 = case ActiveSegments of
                   #{RaNodeId := S} -> S;
@@ -122,7 +121,8 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
 
     % ?DBG("SEgs ~p", [Segments]),
 
-    RaNodeId ! {ra_log_event, {segments, Tid, Segments}},
+    % TODO: better handle and log errors
+    catch (RaNodeId ! {ra_log_event, {segments, Tid, Segments}}),
 
     State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
 

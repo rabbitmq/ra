@@ -21,7 +21,10 @@
 
 -include("ra.hrl").
 
-% -type tid() :: reference() | atom().
+-define(METRICS_CACHE_POS, 2).
+-define(METRICS_OPEN_MEM_TBL_POS, 3).
+-define(METRICS_CLOSED_MEM_TBL_POS, 4).
+-define(METRICS_SEGMENT_POS, 5).
 
 -record(state,
         {first_index = -1 :: ra_index(),
@@ -50,6 +53,9 @@ init(#{directory := Dir, id := Id}) ->
     State0 = #state{directory = Dir, id = Id,
                     first_index = FirstIndex,
                     last_index = LastIndex, kv = Kv},
+
+    % initialise metrics for this node
+    true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
@@ -82,68 +88,83 @@ append(Entry, no_overwrite, State = #state{last_index = LastIdx})
       when element(1, Entry) > LastIdx ->
     {queued, write(State, Entry)}.
 
-
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
-take(Start, Num, #state{id = Id, first_index = F, last_index = L} = State)
-  when Start >= F andalso Start + Num - 1 =< L ->
+take(Start, Num, #state{id = Id, first_index = F,
+                                 last_index = LastIdx} = State)
+  when Start >= F andalso Start =< LastIdx ->
     % 0. Check that the request isn't outside of first_index and last_index
     % 1. Check the local cache for any unflushed entries, carry reminders
     % 2. Check ra_log_open_mem_tables
     % 3. Check ra_log_closed_mem_tables in turn
     % 4. Check on disk segments in turn
     case cache_take(Start, Num, State) of
-        {Entries, undefined} ->
-            ?DBG("cache hit!", []),
+        {Entries, MetricOps0, undefined} ->
+            ok = update_metrics(Id, MetricOps0),
             {Entries, State};
-        {Entries0, Rem0} ->
-            case open_mem_tbl_take(Id, Rem0, Entries0) of
-                {Entries1, undefined} ->
-                    ?DBG("mem table hit!", []),
+        {Entries0, MetricOps0, Rem0} ->
+            case open_mem_tbl_take(Id, Rem0, MetricOps0, Entries0) of
+                {Entries1, MetricOps, undefined} ->
+                    ok = update_metrics(Id, MetricOps),
                     {Entries1, State};
-                {Entries1, Rem1} ->
-                    case closed_mem_tbl_take(Id, Rem1, Entries1) of
-                        {Entries2, undefined} ->
+                {Entries1, MetricOps1, Rem1} ->
+                    case closed_mem_tbl_take(Id, Rem1, MetricOps1, Entries1) of
+                        {Entries2, MetricOps, undefined} ->
+                            ok = update_metrics(Id, MetricOps),
                             {Entries2, State};
-                        {Entries2, Rem2} ->
+                        {Entries2, MetricOps2, {S, E} = Rem2} ->
                             case segment_take(State, Rem2, Entries2) of
                                 {Open, undefined, Entries} ->
+                                    MetricOp = {?METRICS_SEGMENT_POS, E - S + 1},
+                                    ok = update_metrics(Id, [MetricOp | MetricOps2]),
                                     {Entries, State#state{open_segments = Open}}
                             end
                     end
             end
-    end.
+    end;
+take(_Start, _Num, State) ->
+    {[], State}.
 
-open_mem_tbl_take(Id, {Start0, End}, Acc0) ->
+update_metrics(Id, Ops) ->
+    _ = ets:update_counter(ra_log_file_metrics, Id, Ops),
+    ok.
+
+open_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
     case ets:lookup(ra_log_open_mem_tables, Id) of
         [{_, TStart, TEnd, Tid}] ->
-            mem_tbl_take({Start0, End}, TStart, TEnd, Tid, Acc0);
+            {Entries, Count, Rem} = mem_tbl_take({Start0, End}, TStart, TEnd,
+                                                 Tid, 0, Acc0),
+            {Entries, [{?METRICS_OPEN_MEM_TBL_POS, Count} | MetricOps], Rem};
         [] ->
-            {[], {Start0, End}}
+            {[], MetricOps, {Start0, End}}
     end.
 
-closed_mem_tbl_take(Id, {Start0, End}, Acc0) ->
+closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
     case ets:lookup(ra_log_closed_mem_tables, Id) of
         [] ->
-            {[], {Start0, End}};
+            {[], MetricOps, {Start0, End}};
         Tables0 ->
             Tables = lists:sort(fun (A, B) ->
                                         element(4, A) > element(4, B)
                                 end, Tables0),
-            lists:foldl(fun({_, TblSt, TblEnd, _, Tid}, {Ac, Range}) ->
-                                mem_tbl_take(Range, TblSt, TblEnd, Tid, Ac)
-                        end, {Acc0, {Start0, End}}, Tables)
+            {Entries, Count, Rem} =
+            lists:foldl(fun({_, TblSt, TblEnd, _, Tid}, {Ac, Count, Range}) ->
+                                mem_tbl_take(Range, TblSt, TblEnd, Tid, Count, Ac)
+                        end, {Acc0, 0, {Start0, End}}, Tables),
+            {Entries, [{?METRICS_CLOSED_MEM_TBL_POS, Count} | MetricOps], Rem}
+
     end.
 
-mem_tbl_take(undefined, _TblStart, _TblEnd, _Tid, Acc0) ->
-    {Acc0, undefined};
-mem_tbl_take({_Start0, End} = Range, TblStart, _TblEnd, _Tid, Acc0)
+mem_tbl_take(undefined, _TblStart, _TblEnd, _Tid, Count, Acc0) ->
+    {Acc0, Count, undefined};
+mem_tbl_take({_Start0, End} = Range, TblStart, _TblEnd, _Tid, Count, Acc0)
   when TblStart > End ->
     % optimisation to bypass request that has no overlap
-    {Acc0, Range};
-mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Acc0)
+    {Acc0, Count, Range};
+mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Count, Acc0)
   when TblEnd >= End ->
     Start = max(TblStart, Start0),
+    % TODO: replace fold with recursive function
     Entries = lists:foldl(fun (Idx, Acc) ->
                                   [Entry] = ets:lookup(Tid, Idx),
                                   [Entry | Acc]
@@ -155,7 +176,7 @@ mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Acc0)
                     false ->
                         {Start0, Start-1}
                 end,
-    {Entries, Remainder}.
+    {Entries, Count + (End - Start + 1), Remainder}.
 
 segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
              Range, Entries0) ->
@@ -176,6 +197,8 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                         Num = End - Start + 1,
                         New = [ra_lib:update_element(3, E, fun binary_to_term/1)
                                || E <- ra_log_file_segment:read(Seg, Start, Num)],
+                        % TODO: should we validate Num was read?
+                        Num = length(New),
                         Rem = case Start of
                                   Start0 -> undefined;
                                   _ ->
@@ -184,19 +207,20 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                         {Open#{Fn => Seg}, Rem, New ++ Entries}
                   end, {OpenSegs, Range, Entries0}, SegRefs).
 
-cache_take(Start, Num, #state{cache = Cache}) ->
-    Highest = Start + Num - 1,
+cache_take(Start, Num, #state{cache = Cache, last_index = LastIdx}) ->
+    Highest = min(LastIdx, Start + Num - 1),
     % cache needs to be queried in reverse to ensure
     % we can bail out when an item is not found
     case cache_take0(Highest, Start, Cache, []) of
         [] ->
-            {[], {Start, Highest}};
+            {[], [], {Start, Highest}};
         [Last | _] = Entries when element(1, Last) =:= Start ->
             % there is no remainder - everything was in the cache
-            {Entries, undefined};
+            {Entries, [{?METRICS_CACHE_POS, Highest - Start + 1}], undefined};
         [Last | _] = Entries ->
-            LastIdx = element(1, Last),
-            {Entries, {Start, LastIdx - 1}}
+            LastEntryIdx = element(1, Last),
+            {Entries, [{?METRICS_CACHE_POS, LastIdx - Start + 1}],
+             {Start, LastEntryIdx - 1}}
     end.
 
 cache_take0(Next, Last, _Cache, Acc)
@@ -425,14 +449,14 @@ lists_find(Pred, [H | Tail]) ->
 
 cache_take0_test() ->
     Cache = #{1 => {a}, 2 => {b}, 3 => {c}},
-    State = #state{cache = Cache},
+    State = #state{cache = Cache, last_index = 3, first_index = 1},
     % no remainder
-    {[{2, b}], undefined} = cache_take(2, 1, State),
-    {[{2, b}, {3, c}], undefined} = cache_take(2, 2, State),
-    {[{1, a}, {2, b}, {3, c}], undefined} = cache_take(1, 3, State),
+    {[{2, b}], _, undefined} = cache_take(2, 1, State),
+    {[{2, b}, {3, c}], _,  undefined} = cache_take(2, 2, State),
+    {[{1, a}, {2, b}, {3, c}], _, undefined} = cache_take(1, 3, State),
     % small remainder
-    {[{3, c}], {1, 2}} = cache_take(1, 3, State#state{cache = #{3 => {c}}}),
-    {[], {1, 3}} = cache_take(1, 3, State#state{cache = #{4 => {d}}}),
+    {[{3, c}], _, {1, 2}} = cache_take(1, 3, State#state{cache = #{3 => {c}}}),
+    {[], _, {1, 3}} = cache_take(1, 3, State#state{cache = #{4 => {d}}}),
     ok.
 
 open_mem_tbl_take_test() ->
@@ -445,11 +469,11 @@ open_mem_tbl_take_test() ->
     % seed the mem table
     [ets:insert(Tid, E) || E <- Entries],
 
-    {Entries, undefined} = open_mem_tbl_take(test_id, {3, 7}, []),
+    {Entries, _, undefined} = open_mem_tbl_take(test_id, {3, 7}, [], []),
     EntriesPlus8 = Entries ++ [{8, 2, "8"}],
-    {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [{8, 2, "8"}]),
-    {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, {6, 6}, []),
-    {[], {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, []),
+    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [], [{8, 2, "8"}]),
+    {[{6, 2, "6"}], _, undefined} = open_mem_tbl_take(test_id, {6, 6}, [], []),
+    {[], _, {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, [], []),
 
     ets:delete(Tid),
     ets:delete(ra_log_open_mem_tables),
@@ -470,9 +494,9 @@ closed_mem_tbl_take_test() ->
     [ets:insert(Tid1, E) || E <- Entries1],
     [ets:insert(Tid2, E) || E <- Entries2],
 
-    {Entries1, undefined} = closed_mem_tbl_take(test_id, {5, 7}, []),
-    {Entries2, undefined} = closed_mem_tbl_take(test_id, {8, 10}, []),
-    {[{9, 2, "9"}], undefined} = closed_mem_tbl_take(test_id, {9, 9}, []),
+    {Entries1, _, undefined} = closed_mem_tbl_take(test_id, {5, 7}, [], []),
+    {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, [], []),
+    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
     % EntriesPlus8 = Entries ++ [{8, 2, "8"}],
     % {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, 1, 7, [{8, 2, "8"}]),
     % {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, 6, 6, []),
