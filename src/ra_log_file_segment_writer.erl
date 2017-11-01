@@ -55,7 +55,6 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
-    ?DBG("segment writer: mem_tables ~p", [Tables]),
     State = lists:foldl(fun do_segment/2, State0, Tables),
     % delete wal file once done
     % TODO: test scenario when node crashes after segments but before
@@ -91,8 +90,8 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                   _ -> open_file(Dir, SegConf)
               end,
 
-    % TODO: replace with recursive function to avoid creating the list of
-    % integers
+    % TODO: replace with recursive function to avoid creating a potentially
+    % vary large list of integers
     {Segment, Closed0} =
         lists:foldl(fun (Idx, {Seg0, Segs}) ->
                          % TODO: the question here is whether we should allow
@@ -119,7 +118,7 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
     Segments = [begin
                     {Start, End} = ra_log_file_segment:range(S),
                     {Start, End, ra_log_file_segment:filename(S)}
-                end || S <- lists:reverse([Segment | Closed0])],
+                end || S <- [Segment | Closed0]],
 
     % ?DBG("SEgs ~p", [Segments]),
 

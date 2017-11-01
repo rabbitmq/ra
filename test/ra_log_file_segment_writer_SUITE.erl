@@ -127,7 +127,7 @@ accept_mem_tables_rollover(Config) ->
     {MemTables, WalFile} = fake_mem_table(Dir, Entries),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {ra_log_event, {segments, _Tid, [{1, 8, _Seg1}, {9, 10, _Seg2}]}} ->
+        {ra_log_event, {segments, _Tid, [{9, 10, _Seg2}, {1, 8, _Seg1}]}} ->
             ok
     after 3000 ->
               throw(ra_log_event_timeout)

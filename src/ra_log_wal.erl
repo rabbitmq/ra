@@ -76,9 +76,23 @@ closed_mem_tbl_read(Id, Idx) ->
     case ets:lookup(ra_log_closed_mem_tables, Id) of
         [] ->
             undefined;
-        Tids ->
-            tbl_lookup(Tids, Idx)
+        Tids0 ->
+            Tids = lists:sort(fun(A, B) -> B > A end, Tids0),
+            closed_tbl_lookup(Tids, Idx)
     end.
+
+closed_tbl_lookup([], _Idx) ->
+    undefined;
+closed_tbl_lookup([{_, _, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
+    % TODO: it is possible the ETS table has been deleted at this
+    % point so should catch the error
+    case ets:lookup(Tid, Idx) of
+        [] ->
+            closed_tbl_lookup(Tail, Idx);
+        [Entry] -> Entry
+    end;
+closed_tbl_lookup([_ | Tail], Idx) ->
+    closed_tbl_lookup(Tail, Idx).
 
 tbl_lookup([], _Idx) ->
     undefined;
@@ -288,7 +302,12 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
     % for deleting it
     % TODO: alternatively we could have a separate ETS cleanup process
     [begin
-         _ = ets:insert(ra_log_closed_mem_tables, T),
+         % TODO: in order to ensure that reads are done in the correct causal order
+         % we need to append a monotonically increasing value for readers to sort
+         % by
+         M = erlang:unique_integer([monotonic, positive]),
+         _ = ets:insert(ra_log_closed_mem_tables,
+                        erlang:insert_element(2, T, M)),
          ets:give_away(Tid, whereis(Id), undefined)
      end || {Id, _, _, Tid} = T <- MemTables],
     % reset open mem tables table

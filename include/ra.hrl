@@ -91,6 +91,7 @@
          last_index :: ra_index(),
          last_term :: ra_term()}).
 
+% -define(DBG(_Fmt, _Args), ok).
 -define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
 
 -define(DEFAULT_TIMEOUT, 5000).

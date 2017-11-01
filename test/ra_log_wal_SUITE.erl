@@ -107,7 +107,7 @@ roll_over(Config) ->
             % the current tid is not the same as the rolled over one
             ?assert(Tid =/= CurrentTid),
             % ensure closed mem tables contain the previous mem_table
-            [{Self, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, Self)
+            [{Self, _, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, Self)
     after 2000 ->
               throw(new_mem_tables_timeout)
     end,

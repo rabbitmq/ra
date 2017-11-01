@@ -16,7 +16,8 @@ all() ->
 all_tests() ->
     [
      handle_overwrite,
-     receive_segment
+     receive_segment,
+     read_validation
     ].
 
 groups() ->
@@ -27,6 +28,7 @@ groups() ->
 init_per_suite(Config) ->
     _ = application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
+    ok = application:set_env(ra, segment_max_entries, 128),
     application:ensure_all_started(ra),
     Config.
 
@@ -78,7 +80,7 @@ receive_segment(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     % write a few entries
-    Entries = [ {I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
+    Entries = [{I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
 
     Log1 = lists:foldl(fun(E, Acc0) ->
                                {queued, Acc} =
@@ -97,10 +99,71 @@ receive_segment(Config) ->
     [] = ets:tab2list(ra_log_open_mem_tables),
     [] = ets:tab2list(ra_log_closed_mem_tables),
     % validate reads
-    {ReadEntries, FinalLog} = ra_log_file:take(1, 3, Log3),
-    Entries = [{I, T, binary_to_term(D)} || {I, T, D} <- ReadEntries],
+    {Entries, FinalLog} = ra_log_file:take(1, 3, Log3),
     ra_log_file:close(FinalLog),
     ok.
+
+read_validation(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    % write a few entries
+    Log1 = append_and_roll(1, 100, 1, Log0),
+    Log2 = append_and_roll(100, 200, 1, Log1),
+    Log3 = append_and_roll(200, 400, 1, Log2),
+    Log4 = append_and_roll(400, 500, 1, Log3),
+    Log = append_and_roll(500, 1001, 1, Log4),
+    {ColdTaken, {ColdReds, FinLog}} =
+        timer:tc(fun () ->
+                         {_, Reds0} = process_info(self(), reductions),
+                         L = validate_read(1, 1000, 1, Log),
+                         {_, Reds} = process_info(self(), reductions),
+                         {Reds - Reds0, L}
+                 end),
+    ct:pal("validate_read COLD took ~pms Reductions: ~p~n",
+           [ColdTaken/1000, ColdReds]),
+    % ?assert(ColdReds < 102650),
+    {WarmTaken, {WarmReds, FinLog2}} =
+        timer:tc(fun () ->
+                         {_, R0} = process_info(self(), reductions),
+                         L = validate_read(1, 1000, 1, FinLog),
+                         {_, R} = process_info(self(), reductions),
+                         {R - R0, L}
+                 end),
+    ct:pal("validate_read WARM took ~pms Reductions: ~p~n",
+           [WarmTaken/1000, WarmReds]),
+    % ?assert(WarmReds < 72244),
+    ra_log_file:close(FinLog2),
+    ok.
+
+
+validate_read(To, To, _Term, Log0) ->
+    Log0;
+validate_read(From, To, Term, Log0) ->
+    {_Entries, Log} = ra_log_file:take(From, 5, Log0),
+    % validate entries are correctly read
+    % ct:pal("validating ~p ~p", [From, To]),
+    % Expected = [ {I, Term, <<I:64/integer>>} ||
+    %              I <- lists:seq(From, From + 4) ],
+    % Expected = Entries,
+    validate_read(min(From + 5, To), To, Term, Log).
+
+
+append_and_roll(From, To, Term, Log0) ->
+    Log1 = append_n(From, To, Term, Log0),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    deliver_all_log_events(Log1, 200).
+
+% not inclusivw
+append_n(To, To, _Term, Log) ->
+    Log;
+append_n(From, To, Term, Log0) ->
+    _Bin = crypto:strong_rand_bytes(1024),
+    {queued, Log} = ra_log_file:append({From, Term,
+                                        <<From:64/integer>>},
+                                       overwrite, Log0),
+    append_n(From+1, To, Term, Log).
+
 
 
 %% Utility functions
@@ -110,7 +173,7 @@ deliver_all_log_events(Log0, Timeout) ->
         {ra_log_event, Evt} ->
             % ct:pal("ra_log_event ~p", [Evt]),
             Log = ra_log_file:handle_event(Evt, Log0),
-            deliver_all_log_events(Log, Timeout)
+            deliver_all_log_events(Log, 100)
     after Timeout ->
               Log0
     end.

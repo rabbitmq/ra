@@ -1,5 +1,7 @@
 -module(ra_log_file).
 -behaviour(ra_log).
+-compile([inline_list_funcs]).
+
 -export([init/1,
          close/1,
          append/3,
@@ -83,17 +85,132 @@ append(Entry, no_overwrite, State = #state{last_index = LastIdx})
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
-take(Start, Num, #state{} = State) ->
-    % TODO: refactor
-    lists:foldl(fun (Idx, {Acc0, St0}) ->
-                        {Res, St} = fetch(Idx, St0),
-                        {maybe_append(Res, Acc0), St}
-                end, {[], State}, lists:seq(Start + Num - 1, Start, -1)).
+take(Start, Num, #state{id = Id, first_index = F, last_index = L} = State)
+  when Start >= F andalso Start + Num - 1 =< L ->
+    % 0. Check that the request isn't outside of first_index and last_index
+    % 1. Check the local cache for any unflushed entries, carry reminders
+    % 2. Check ra_log_open_mem_tables
+    % 3. Check ra_log_closed_mem_tables in turn
+    % 4. Check on disk segments in turn
+    case cache_take(Start, Num, State) of
+        {Entries, undefined} ->
+            ?DBG("cache hit!", []),
+            {Entries, State};
+        {Entries0, Rem0} ->
+            case open_mem_tbl_take(Id, Rem0, Entries0) of
+                {Entries1, undefined} ->
+                    ?DBG("mem table hit!", []),
+                    {Entries1, State};
+                {Entries1, Rem1} ->
+                    case closed_mem_tbl_take(Id, Rem1, Entries1) of
+                        {Entries2, undefined} ->
+                            {Entries2, State};
+                        {Entries2, Rem2} ->
+                            case segment_take(State, Rem2, Entries2) of
+                                {Open, undefined, Entries} ->
+                                    {Entries, State#state{open_segments = Open}}
+                            end
+                    end
+            end
+    end.
 
-maybe_append(undefined, L) ->
-    L;
-maybe_append(I, L) ->
-    [I | L].
+open_mem_tbl_take(Id, {Start0, End}, Acc0) ->
+    case ets:lookup(ra_log_open_mem_tables, Id) of
+        [{_, TStart, TEnd, Tid}] ->
+            mem_tbl_take({Start0, End}, TStart, TEnd, Tid, Acc0);
+        [] ->
+            {[], {Start0, End}}
+    end.
+
+closed_mem_tbl_take(Id, {Start0, End}, Acc0) ->
+    case ets:lookup(ra_log_closed_mem_tables, Id) of
+        [] ->
+            {[], {Start0, End}};
+        Tables0 ->
+            Tables = lists:sort(fun (A, B) ->
+                                        element(4, A) > element(4, B)
+                                end, Tables0),
+            lists:foldl(fun({_, TblSt, TblEnd, _, Tid}, {Ac, Range}) ->
+                                mem_tbl_take(Range, TblSt, TblEnd, Tid, Ac)
+                        end, {Acc0, {Start0, End}}, Tables)
+    end.
+
+mem_tbl_take(undefined, _TblStart, _TblEnd, _Tid, Acc0) ->
+    {Acc0, undefined};
+mem_tbl_take({_Start0, End} = Range, TblStart, _TblEnd, _Tid, Acc0)
+  when TblStart > End ->
+    % optimisation to bypass request that has no overlap
+    {Acc0, Range};
+mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Acc0)
+  when TblEnd >= End ->
+    Start = max(TblStart, Start0),
+    Entries = lists:foldl(fun (Idx, Acc) ->
+                                  [Entry] = ets:lookup(Tid, Idx),
+                                  [Entry | Acc]
+                          end, Acc0, lists:seq(End, Start, -1)),
+    Remainder = case Start =:= Start0 of
+                    true ->
+                        % the range was fully covered by the mem table
+                        undefined;
+                    false ->
+                        {Start0, Start-1}
+                end,
+    {Entries, Remainder}.
+
+segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
+             Range, Entries0) ->
+    lists:foldl(fun(_, {_, undefined, _} = Acc) ->
+                    Acc;
+                   ({From, _, _}, {_, {_Start0, End}, _} = Acc)
+                        when From > End ->
+                        Acc;
+                   ({From, To, Fn}, {Open, {Start0, End}, Entries})
+                     when To >= End ->
+                        Seg = case Open of
+                                  #{Fn := S} -> S;
+                                  _ ->
+                                      {ok, S} = ra_log_file_segment:open(Fn, #{mode => read}),
+                                      S
+                              end,
+                        Start = max(Start0, From),
+                        Num = End - Start + 1,
+                        New = [ra_lib:update_element(3, E, fun binary_to_term/1)
+                               || E <- ra_log_file_segment:read(Seg, Start, Num)],
+                        Rem = case Start of
+                                  Start0 -> undefined;
+                                  _ ->
+                                      {Start0, Start-1}
+                              end,
+                        {Open#{Fn => Seg}, Rem, New ++ Entries}
+                  end, {OpenSegs, Range, Entries0}, SegRefs).
+
+cache_take(Start, Num, #state{cache = Cache}) ->
+    Highest = Start + Num - 1,
+    % cache needs to be queried in reverse to ensure
+    % we can bail out when an item is not found
+    case cache_take0(Highest, Start, Cache, []) of
+        [] ->
+            {[], {Start, Highest}};
+        [Last | _] = Entries when element(1, Last) =:= Start ->
+            % there is no remainder - everything was in the cache
+            {Entries, undefined};
+        [Last | _] = Entries ->
+            LastIdx = element(1, Last),
+            {Entries, {Start, LastIdx - 1}}
+    end.
+
+cache_take0(Next, Last, _Cache, Acc)
+  when Next < Last ->
+    Acc;
+cache_take0(Next, Last, Cache, Acc) ->
+    case Cache of
+        #{Next := Entry} ->
+            cache_take0(Next-1, Last, Cache,
+                        [erlang:insert_element(1, Entry, Next) | Acc]);
+        _ ->
+            Acc
+    end.
+
 
 -spec last_index_term(ra_log_file_state()) -> maybe(ra_idxterm()).
 last_index_term(#state{last_index = LastIdx} = State0) ->
@@ -135,9 +252,9 @@ handle_event({segments, Tid, NewSegs},
     % mem_table cleanup
     % TODO: measure - if this proves expensive it could be done in a separate processes
     % First remove the closed mem table reference
-    ClsdTbl = lists_find(fun ({_, _, _, T}) -> T =:= Tid end,
+    ClsdTbl = lists_find(fun ({_, _, _, _, T}) -> T =:= Tid end,
                          ets:lookup(ra_log_closed_mem_tables, Id)),
-    false = ClsdTbl =:= undefined, % assert table was found undefined
+    false = ClsdTbl =:= undefined, % assert table was found
     true = ets:delete_object(ra_log_closed_mem_tables, ClsdTbl),
     % Then delete the actual ETS table
     true = ets:delete(Tid),
@@ -164,10 +281,12 @@ fetch(Idx, #state{id = Id, cache = Cache} = State0) ->
                         undefined ->
                             {undefined, State0};
                         {Seg, State} ->
-                            % unless the segment is corrup the entry should
+                            % unless the segment is corrupt the entry should
                             % be in there
                             [Entry] = ra_log_file_segment:read(Seg, Idx, 1),
-                            {Entry, State}
+                            % need to deserialize here
+                            {ra_lib:update_element(3, Entry, fun binary_to_term/1),
+                                                   State}
                     end;
                 Entry ->
                     {Entry, State0}
@@ -299,3 +418,65 @@ lists_find(Pred, [H | Tail]) ->
             lists_find(Pred, Tail)
     end.
 
+%%%% TESTS
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+cache_take0_test() ->
+    Cache = #{1 => {a}, 2 => {b}, 3 => {c}},
+    State = #state{cache = Cache},
+    % no remainder
+    {[{2, b}], undefined} = cache_take(2, 1, State),
+    {[{2, b}, {3, c}], undefined} = cache_take(2, 2, State),
+    {[{1, a}, {2, b}, {3, c}], undefined} = cache_take(1, 3, State),
+    % small remainder
+    {[{3, c}], {1, 2}} = cache_take(1, 3, State#state{cache = #{3 => {c}}}),
+    {[], {1, 3}} = cache_take(1, 3, State#state{cache = #{4 => {d}}}),
+    ok.
+
+open_mem_tbl_take_test() ->
+    _ = ets:new(ra_log_open_mem_tables, [named_table]),
+    Tid = ets:new(test_id, []),
+    true = ets:insert(ra_log_open_mem_tables, {test_id, 3, 7, Tid}),
+    Entries = [{3, 2, "3"}, {4, 2, "4"},
+               {5, 2, "5"}, {6, 2, "6"},
+               {7, 2, "7"}],
+    % seed the mem table
+    [ets:insert(Tid, E) || E <- Entries],
+
+    {Entries, undefined} = open_mem_tbl_take(test_id, {3, 7}, []),
+    EntriesPlus8 = Entries ++ [{8, 2, "8"}],
+    {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [{8, 2, "8"}]),
+    {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, {6, 6}, []),
+    {[], {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, []),
+
+    ets:delete(Tid),
+    ets:delete(ra_log_open_mem_tables),
+
+    ok.
+
+closed_mem_tbl_take_test() ->
+    _ = ets:new(ra_log_closed_mem_tables, [named_table, bag]),
+    Tid1 = ets:new(test_id, []),
+    Tid2 = ets:new(test_id, []),
+    M1 = erlang:unique_integer([monotonic, positive]),
+    M2 = erlang:unique_integer([monotonic, positive]),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, 5, 7, M1, Tid1}),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, 8, 10, M2, Tid2}),
+    Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
+    Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
+    % seed the mem tables
+    [ets:insert(Tid1, E) || E <- Entries1],
+    [ets:insert(Tid2, E) || E <- Entries2],
+
+    {Entries1, undefined} = closed_mem_tbl_take(test_id, {5, 7}, []),
+    {Entries2, undefined} = closed_mem_tbl_take(test_id, {8, 10}, []),
+    {[{9, 2, "9"}], undefined} = closed_mem_tbl_take(test_id, {9, 9}, []),
+    % EntriesPlus8 = Entries ++ [{8, 2, "8"}],
+    % {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, 1, 7, [{8, 2, "8"}]),
+    % {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, 6, 6, []),
+    % {[], {1, 2}} = open_mem_tbl_take(test_id, 1, 2, []),
+
+    ok.
+-endif.

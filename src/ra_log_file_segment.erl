@@ -65,6 +65,7 @@ open(Filename, Options) ->
                    read ->
                        file:open(AbsFilename, [read, raw, read_ahead, binary])
                end,
+    % Base = filename:basename(Filename),
     case FileExists of
         true ->
             % it is a new file
@@ -73,6 +74,7 @@ open(Filename, Options) ->
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, MaxCount),
+            % ?DBG("Segment ~p recovered index range ~p Max Count ~p", [Base, Range, MaxCount]),
             {ok, #state{version = 1,
                         max_count = MaxCount,
                         filename = Filename,
@@ -88,6 +90,7 @@ open(Filename, Options) ->
         false ->
             MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+            % ?DBG("opening segment ~p Max Count ~p", [Base, MaxCount]),
             ok = write_header(MaxCount, Fd),
             {ok, #state{version = 1,
                         max_count = MaxCount,
@@ -137,22 +140,26 @@ sync(#state{fd = Fd}) ->
 read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
     % TODO: should we better indicate when records aren't found?
     % This depends on the semantics we want from a segment
-    {Locs, IdxTermCrcs} =
-        lists:foldl(fun (Idx, {Ls, ITs} = Acc) ->
-                            case Index of
-                                #{Idx := {Term, Offset, Length, Crc}} ->
-                                    {[{Offset, Length} | Ls],
-                                     [{Idx, Term, Crc} | ITs]};
-                                _ ->
-                                    Acc
-                            end
-                    end, {[], []}, lists:seq(Idx0 + Num - 1, Idx0, -1)),
+    {Locs, Metas} = read_locs(Idx0 + Num -1, Idx0, Index, {[], []}),
     {ok, Datas} = file:pread(Fd, Locs),
+    combine(Metas, Datas, []).
 
-    lists:zipwith(fun(TermIdx = {_, _, Crc}, Data) ->
-                          Crc = erlang:crc32(Data), % checksum assertion
-                          erlang:setelement(3, TermIdx, Data)
-                  end,  IdxTermCrcs, Datas).
+combine([], [], Acc) ->
+    lists:reverse(Acc);
+combine([{_, _, _Crc} = Meta | MetaTail],
+        [Data | DataTail], Acc) ->
+    combine(MetaTail, DataTail, [setelement(3, Meta, Data) | Acc]).
+
+read_locs(Idx, FinalIdx, _Index, Acc) when Idx < FinalIdx ->
+    Acc;
+read_locs(Idx, FinalIdx, Index, {Locs, Meta} = Acc) ->
+    case Index of
+        #{Idx := {Term, Offset, Length, Crc}} ->
+            read_locs(Idx-1, FinalIdx, Index,
+                      {[{Offset, Length} | Locs], [{Idx, Term, Crc} | Meta]});
+        _ ->
+            Acc
+    end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).
 range(#state{range = Range}) ->
