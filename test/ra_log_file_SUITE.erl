@@ -19,7 +19,8 @@ all_tests() ->
      receive_segment,
      read_one,
      validate_sequential_reads,
-     validate_reads_for_overlapped_writes
+     validate_reads_for_overlapped_writes,
+     recovery
     ].
 
 groups() ->
@@ -181,6 +182,32 @@ validate_reads_for_overlapped_writes(Config) ->
     [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log_file:close(Log8),
+    ok.
+
+
+recovery(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 1, Log0),
+    {9, 1} = ra_log_file:last_index_term(Log1),
+    Log2 = append_and_roll(5, 15, 2, Log1),
+    {14, 2} = ra_log_file:last_index_term(Log2),
+    Log3 = append_n(15, 21, 3, Log2),
+    {20, 3} = ra_log_file:last_index_term(Log3),
+    Log4 = deliver_all_log_events(Log3, 200),
+    {20, 3} = ra_log_file:last_index_term(Log4),
+    ra_log_file:close(Log4),
+    application:stop(ra),
+    application:ensure_all_started(ra),
+    Log5 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {20, 3} = ra_log_file:last_index_term(Log5),
+    Log6 = validate_read(1, 5, 1, Log5),
+    Log7 = validate_read(5, 15, 2, Log6),
+    Log8 = validate_read(15, 21, 3, Log7),
+    ra_log_file:close(Log8),
+
     ok.
 
 validate_read(To, To, _Term, Log0) ->

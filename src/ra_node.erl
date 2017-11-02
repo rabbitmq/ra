@@ -485,7 +485,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
-    {follower, State, [{cast, LeaderId, {Id, Reply}}]};
+    {follower_catchup, State, [{cast, LeaderId, {Id, Reply}}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{id := Id, current_term := Term,
                           voted_for := VotedFor})

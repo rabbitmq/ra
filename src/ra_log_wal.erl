@@ -165,10 +165,18 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
     _ = file:make_dir(Dir),
-    % TODO: we don't actually recover anything ATM so delete anything that was
-    % previously there for now
-    [ _ = file:delete(F)
-      || F <- filelib:wildcard(filename:join(Dir, "*.wal"))],
+    %  recover each mem table and notify segment writer
+    %  this may result in duplicated segments but that is better than
+    %  losing any data
+    WalFiles = filelib:wildcard(filename:join(Dir, "*.wal")),
+    ?DBG("WAL: recovering ~p", [WalFiles]),
+    [begin
+         % TOOD: avoid reading the whole file at once
+         {ok, Data} = file:read_file(F),
+         ok = recover_records(Data),
+         ok = close_open_mem_tables(F, TblWriter)
+     end || F <- lists:sort(WalFiles)],
+    ?DBG("mem tables ~p", ets:tab2list(ra_log_open_mem_tables)),
     Modes = [raw, append, binary] ++ AdditionalModes,
     roll_over(#state{fd = undefined,
                      dir = Dir,
@@ -192,8 +200,9 @@ loop_wait(State0, Parent, Debug0) ->
             loop_batched(State, Parent, Debug)
     end.
 
-loop_batched(State0 = #state{max_batch_size = Written,
-                             batch = #batch{writes = Written}}, Parent, Debug0) ->
+loop_batched(#state{max_batch_size = Written,
+                    batch = #batch{writes = Written}} = State0,
+             Parent, Debug0) ->
     % complete batch after seeing max_batch_size writes
     {State, Debug} = complete_batch(State0, Debug0),
     % grow max batch size
@@ -217,7 +226,10 @@ loop_batched(State0, Parent, Debug0) ->
               loop_wait(State#state{max_batch_size = NewBatchSize}, Parent, Debug)
     end.
 
-cleanup(_State) ->
+cleanup(#state{fd = undefined}) ->
+    ok;
+cleanup(#state{fd = Fd}) ->
+    _ = file:sync(Fd),
     ok.
 
 handle_debug_in(Debug, Msg) ->
@@ -227,15 +239,11 @@ handle_debug_in(Debug, Msg) ->
 handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
            #state{max_wal_size_bytes = MaxWalSize,
                   wal_file_size = FileSize} = State0) ->
-    % log on disk format:
-    % <<IdLen:16/integer, Id/binary,
-    % Idx:64/integer, Term:64/integer, Length:32/integer, Data/binary>>
     % TODO: needing the "Id" in the shared wal is pretty wasteful
     % can we create someting fixed length to use instead?
-    %% TODO: cache binary Id representation?
     EntryData = to_binary(Entry),
     EntryDataLen = byte_size(EntryData),
-    % TODO adler32 checksum check for EntryData
+    % TODO optional adler32 checksum check for EntryData
     Data = <<IdDataLen:16/integer, % 2
              IdData/binary,
              Idx:64/integer,
@@ -269,7 +277,8 @@ update_mem_table(Id, Idx, Term, Entry) ->
     % TODO: cache current tables to avoid ets lookup?
     case ets:lookup(ra_log_open_mem_tables, Id) of
         [{_Id, First, _Last, Tid}] ->
-            % TODO: check Last + 1 == Idx or handle missing?
+            % TODO: should we perform any validation against missing entries
+            % here or just rely on the ra_log implementation to do this?
             _ = ets:insert(Tid, {Idx, Term, Entry}),
             % update Last idx for current tbl
             % this is how followers "truncate" previously seen entries
@@ -283,17 +292,21 @@ update_mem_table(Id, Idx, Term, Entry) ->
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
-                 file_modes = Modes, segment_writer = TblWriter} = State) ->
+roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
+                 file_modes = Modes, filename = Filename,
+                 segment_writer = TblWriter} = State) ->
     Num = Num0 + 1,
     ?DBG("wal: rolling over to ~p~n", [Num]),
     NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
     ra_lib:iter_maybe(Fd0, fun (F) -> ok = file:close(F) end),
     {ok, Fd} = file:open(NextFile, Modes),
 
-    % roll over to a new file
-    % close file and open new, update fd
-    % read all entries from ra_log_open_mem_tables
+    ok = close_open_mem_tables(Filename, TblWriter),
+
+    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
+                file_num = Num}.
+
+close_open_mem_tables(Filename, TblWriter) ->
     MemTables = ets:tab2list(ra_log_open_mem_tables),
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
@@ -317,9 +330,8 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
     % notify segment_writer of new unflushed memtables
     ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
                                                       Filename),
+    ok.
 
-    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
-                file_num = Num}.
 
 open_mem_table(Id, Idx) ->
     Tid = ets:new(Id, [set, protected, {read_concurrency, true}]),
@@ -366,10 +378,20 @@ incr_batch(#batch{writes = Writes,
     Batch#batch{writes = Writes + 1,
                 waiting = Waiting#{Id => IdxTerm}}.
 
+recover_records(<<IdDataLen:16/integer, IdData:IdDataLen/binary,
+                 Idx:64/integer, Term:64/integer,
+                 EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                 Rest/binary>>) ->
+    Id = binary_to_term(IdData),
+    true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData)),
+    recover_records(Rest);
+recover_records(<<>>) ->
+    ok.
+
 %% Here are the sys call back functions
 
 system_continue(Parent, Debug, State) ->
-    % TODO check if we've written to the curren batch or not
+    % TODO check if we've written to the current batch or not
     loop_batched(State, Parent, Debug).
 
 system_terminate(Reason, _Parent, _Debug, State) ->

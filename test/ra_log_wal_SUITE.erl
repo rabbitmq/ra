@@ -14,8 +14,8 @@ all_tests() ->
     [
      basic_log_writes,
      write_many,
-     roll_over
-     % recover
+     roll_over,
+     recover
     ].
 
 groups() ->
@@ -117,11 +117,53 @@ roll_over(Config) ->
     ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 5)),
     ok.
 
-recover(_Config) ->
+recover(Config) ->
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
-    exit(recover_test_not_impl).
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = <<42:256/unit:8>>,
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    ra_log_wal:force_roll_over(ra_log_wal),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 2, Data)
+     || Idx <- lists:seq(101, 200)],
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    % how can we better wait for recovery to finish?
+    timer:sleep(1000),
+
+    % there should be no open mem tables after recovery as we treat any found
+    % wal files as complete
+    [] = ets:lookup(ra_log_open_mem_tables, Self),
+    [{Self, _, 1, 100, OpnMTTid1}, {Self, _, 101, 200, OpnMTTid2}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+    100 = ets:info(OpnMTTid1, size),
+    100 = ets:info(OpnMTTid2, size),
+    % check that both mem_tables notifications are received by the segment writer
+    receive
+        {'$gen_cast', {mem_tables, [{Self, 1, 100, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+    receive
+        {'$gen_cast', {mem_tables, [{Self, 101, 200, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+
+    ok.
+
+empty_mailbox() ->
+    receive
+        _ ->
+            empty_mailbox()
+    after 100 ->
+              ok
+    end.
 
 await_written(Id, IdxTerm) ->
     receive
