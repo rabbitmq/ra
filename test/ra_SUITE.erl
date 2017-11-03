@@ -351,9 +351,9 @@ snapshot(Config) ->
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % waitfor(banana, apply_timeout),
-    ok = ra:start_node(N3, InitialNodes, fun ra_queue:simple_apply/3, []),
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
-    timer:sleep(1000),
+    ok = ra:start_node(N3, InitialNodes, fun ra_queue:simple_apply/3, []),
+    timer:sleep(2000),
     % at this point snapshot should have been taken
     {ok, {_, Res}, _} = ra:dirty_query(N1, fun ra_lib:id/1),
     {ok, {_, Res}, _} = ra:dirty_query(N2, fun ra_lib:id/1),

@@ -485,7 +485,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
-    {follower_catchup, State, [{cast, LeaderId, {Id, Reply}}]};
+    {follower, State, [{cast, LeaderId, {Id, Reply}}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{id := Id, current_term := Term,
                           voted_for := VotedFor})
@@ -527,7 +527,8 @@ handle_follower({_PeerId, #append_entries_reply{term = Term}},
 handle_follower(#install_snapshot_rpc{term = Term,
                                       last_index = LastIndex,
                                       last_term = LastTerm},
-                State = #{current_term := CurTerm}) when Term < CurTerm ->
+                State = #{id := Id, current_term := CurTerm}) when Term < CurTerm ->
+    ?DBG("~p: install_snapshot old term ~p in ~p", [Id, LastIndex, LastTerm]),
     % follower receives a snapshot from an old term
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,

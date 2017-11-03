@@ -248,7 +248,9 @@ snapshot(Config) ->
     Log3 = ra_log:write_snapshot(Snapshot, Log2),
     % ensure entries prior to snapshot are no longer there
     {undefined, Log4} = ra_log:fetch(LastIdx, Log3),
+    {undefined, _} = ra_log:fetch_term(LastIdx, Log3),
     {undefined, Log} = ra_log:fetch(LastIdx-1, Log4),
+    {undefined, _} = ra_log:fetch_term(LastIdx-1, Log4),
     % falls back to snapshot idxterm
     {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),

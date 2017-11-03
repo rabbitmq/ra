@@ -166,6 +166,7 @@ validate_reads_for_overlapped_writes(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     % write a segment and roll 1 - 300 - term 1
+    ct:pal("Before ~p", [ets:lookup(ra_log_file_metrics, Self)]),
     Log1 = append_and_roll(1, 300, 1, Log0),
     % write 300 - 400 in term 1 - no roll
     Log2 = append_n(300, 400, 1, Log1),
@@ -177,9 +178,11 @@ validate_reads_for_overlapped_writes(Config) ->
     Log6 = deliver_all_log_events(Log5, 200),
 
     Log7 = validate_read(1, 200, 1, Log6),
+    ct:pal("After ~p", [ets:lookup(ra_log_file_metrics, Self)]),
     Log8 = validate_read(200, 551, 2, Log7),
 
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
+    ct:pal("Metrics ~p", [Metrics]),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log_file:close(Log8),
     ok.
@@ -201,6 +204,8 @@ recovery(Config) ->
     ra_log_file:close(Log4),
     application:stop(ra),
     application:ensure_all_started(ra),
+    % % TODO how to avoid sleep
+    timer:sleep(2000),
     Log5 = ra_log_file:init(#{directory => Dir, id => Self}),
     {20, 3} = ra_log_file:last_index_term(Log5),
     Log6 = validate_read(1, 5, 1, Log5),

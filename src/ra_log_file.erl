@@ -45,26 +45,71 @@
 
 -spec init(ra_log:ra_log_init_args()) -> ra_log_file_state().
 init(#{directory := Dir, id := Id}) ->
+    % initialise metrics for this node
+    true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
+
     Dets = filename:join(Dir, "ra_log_kv.dets"),
     ok = filelib:ensure_dir(Dets),
     {ok, Kv} = dets:open_file(Dets, []),
-    % index recovery is done by the storage engine
-    % at some point we need to recover some kind of index of
-    % flushed segments
-    {FirstIndex, LastIndex} = last_index_from_mem_table(Id),
-    State0 = #state{directory = Dir, id = Id,
-                    first_index = FirstIndex,
-                    last_index = LastIndex,
-                    kv = Kv},
 
-    % initialise metrics for this node
-    true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
+    % recover current range and any references to segments
+    {{FirstIdx, LastIdx}, SegRefs} = case recover_range(Id, Dir) of
+                                         {undefined, SRs} -> {{-1, -1}, SRs};
+                                         R ->  R
+                                     end,
+    State000 = #state{directory = Dir, id = Id,
+                      first_index = FirstIdx,
+                      last_index = LastIdx,
+                      segment_refs = SegRefs,
+                      kv = Kv},
+
+    % recover the last term
+    {LastTerm0, State00} = case LastIdx of
+                              -1 ->
+                                   {0, State000};
+                              _ ->
+                                   fetch_term(LastIdx, State000)
+                           end,
+    LastTerm = ra_lib:default(LastTerm0, -1),
+    State0 = State00#state{last_term = LastTerm},
+
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_0_0_entry(State0),
     ?DBG("ra_log_file recovered last_index_term ~p~n", [last_index_term(State)]),
     State.
+
+recover_range(Id, Dir) ->
+    % 0 check open mem_tables (this assumes wal has finished recovering
+    % TODO: how to check wal recovery is completed
+    % 1 check closed mem_tables to extend
+    OpenRanges = case ets:lookup(ra_log_open_mem_tables, Id) of
+                     [] ->
+                         [];
+                     [{Id, First, Last, _}] ->
+                         [{First, Last}]
+                 end,
+    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(Id)],
+    SegRefs =
+    [begin
+         {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
+         {F, L} = ra_log_file_segment:range(Seg),
+         ok = ra_log_file_segment:close(Seg),
+         {F, L, S}
+     end || S <- lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))],
+    SegRanges = [{F, L} || {F, L, _} <- SegRefs],
+    Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
+    {pick_range(Ranges, undefined), SegRefs}.
+
+% picks the current range from a sorted (newest to oldest) list of ranges
+pick_range([], Res) ->
+    Res;
+pick_range([H | Tail], undefined) ->
+    pick_range(Tail, H);
+pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
+    pick_range(Tail, {min(Fst, CurFst), CurLst}).
+
 
 -spec close(ra_log_file_state()) -> ok.
 close(#state{kv = Kv}) ->
@@ -140,7 +185,8 @@ handle_event({written, {Idx, Term} = IdxTerm}, State0) ->
             % only containes the unflushed window of entries typically less than
             % 10ms worth of entries
             truncate_cache(Idx, State#state{last_written_index_term = IdxTerm});
-        _ ->
+        X ->
+            ?DBG("written event did not find term ~p found ~p", [{Idx, Term}, X]),
             State0
     end;
 handle_event({segments, Tid, NewSegs},
@@ -178,21 +224,39 @@ fetch(Idx, State0) ->
 
 -spec fetch_term(ra_index(), ra_log_file_state()) ->
     {maybe(ra_term()), ra_log_file_state()}.
-fetch_term(Idx, #state{cache = Cache} = State0) ->
+fetch_term(Idx, #state{last_index = LastIdx,
+                       first_index = FirstIdx} = State0)
+  when Idx < FirstIdx orelse Idx > LastIdx ->
+    {undefined, State0};
+fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
     % needs to check cache first
     case Cache of
         #{Idx := {Term, _}} ->
             {Term, State0};
         _ ->
-            % TODO: optimise this as we do not need to
-            % read the full body
-            case fetch(Idx, State0) of
-                {undefined, State} ->
-                    {undefined, State};
-                {{_, Term, _}, State} ->
-                    {Term, State}
+            case ets:lookup(ra_log_open_mem_tables, Id) of
+                [{_, From, To, Tid}] when Idx >= From andalso Idx =< To ->
+                    Term = ets:lookup_element(Tid, Idx, 2),
+                    {Term, State0};
+                _ ->
+                    case closed_mem_table_term_query(Idx, Id) of
+                        undefined ->
+                            segment_term_query(Idx, State0);
+                        Term ->
+                            {Term, State0}
+                    end
             end
     end.
+
+            % % TODO: optimise this as we do not need to
+            % % read the full body
+            % case fetch(Idx, State0) of
+            %     {undefined, State} ->
+            %         {undefined, State};
+            %     {{_, Term, _}, State} ->
+            %         {Term, State}
+            % end
+    % end.
 
 -spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_file_state()) ->
@@ -262,19 +326,41 @@ open_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
     end.
 
 closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
+    case closed_mem_tables(Id) of
         [] ->
             {[], MetricOps, {Start0, End}};
-        Tables0 ->
-            Tables = lists:sort(fun (A, B) ->
-                                        element(4, A) > element(4, B)
-                                end, Tables0),
+        Tables ->
             {Entries, Count, Rem} =
-            lists:foldl(fun({_, TblSt, TblEnd, _, Tid}, {Ac, Count, Range}) ->
+            lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
                                 mem_tbl_take(Range, TblSt, TblEnd, Tid, Count, Ac)
                         end, {Acc0, 0, {Start0, End}}, Tables),
             {Entries, [{?METRICS_CLOSED_MEM_TBL_POS, Count} | MetricOps], Rem}
+    end.
 
+closed_mem_table_term_query(Idx, Id) ->
+    case closed_mem_tables(Id) of
+        [] ->
+            undefined;
+        Tables ->
+            closed_mem_table_term_query0(Idx, Tables)
+    end.
+
+closed_mem_table_term_query0(_Idx, []) ->
+    undefined;
+closed_mem_table_term_query0(Idx, [{_, _, From, To, Tid} | _Tail])
+  when Idx >= From andalso Idx =< To ->
+    ets:lookup_element(Tid, Idx, 2);
+closed_mem_table_term_query0(Idx, [_ | Tail]) ->
+    closed_mem_table_term_query0(Idx, Tail).
+
+closed_mem_tables(Id) ->
+    case ets:lookup(ra_log_closed_mem_tables, Id) of
+        [] ->
+            [];
+        Tables ->
+            lists:sort(fun (A, B) ->
+                               element(4, A) > element(4, B)
+                       end, Tables)
     end.
 
 mem_tbl_take(undefined, _TblStart, _TblEnd, _Tid, Count, Acc0) ->
@@ -315,11 +401,13 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                                       {ok, S} = ra_log_file_segment:open(Fn, #{mode => read}),
                                       S
                               end,
+                        % actual start point cannot be prior to first segment
+                        % index
                         Start = max(Start0, From),
                         Num = End - Start + 1,
                         New = [ra_lib:update_element(3, E, fun binary_to_term/1)
                                || E <- ra_log_file_segment:read(Seg, Start, Num)],
-                        % TODO: should we validate Num was read?
+                        % TODO: should we really validate Num was read?
                         Num = length(New),
                         Rem = case Start of
                                   Start0 -> undefined;
@@ -328,6 +416,29 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                               end,
                         {Open#{Fn => Seg}, Rem, New ++ Entries}
                   end, {OpenSegs, Range, Entries0}, SegRefs).
+
+segment_term_query(Idx, #state{segment_refs = SegRefs,
+                               open_segments = OpenSegs} = State) ->
+    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs),
+    {Result, State#state{open_segments = Open}}.
+
+segment_term_query0(Idx, [{From, To, Filename} | _Tail], Open)
+  when Idx >= From andalso Idx =< To ->
+    case Open of
+        #{Filename := Seg} ->
+            Term = ra_log_file_segment:term_query(Seg, Idx),
+            {Term, Open};
+        _ ->
+            {ok, Seg} = ra_log_file_segment:open(Filename, #{mode => read}),
+            Term = ra_log_file_segment:term_query(Seg, Idx),
+            {Term, Open#{Filename => Seg}}
+    end;
+segment_term_query0(Idx, [_ | Tail], Open) ->
+    segment_term_query0(Idx, Tail, Open);
+segment_term_query0(_Idx, [], Open) ->
+    {undefined, Open}.
+
+
 
 cache_take(Start, Num, #state{cache = Cache, last_index = LastIdx}) ->
     Highest = min(LastIdx, Start + Num - 1),
@@ -366,16 +477,6 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->
     State.
-
-last_index_from_mem_table(Id) ->
-    case ets:lookup(ra_log_open_mem_tables, Id) of
-        [] ->
-            {-1, -1};
-        [{Id, First, Last, _}] ->
-            {First, Last}
-    end.
-    % First = ra_lib:default(lookup_element(ra_log_open_mem_tables, Id, 2), -1),
-    % {First, Last}.
 
 lists_find(_Pred, []) ->
     undefined;
@@ -430,8 +531,8 @@ closed_mem_tbl_take_test() ->
     Tid2 = ets:new(test_id, []),
     M1 = erlang:unique_integer([monotonic, positive]),
     M2 = erlang:unique_integer([monotonic, positive]),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, 5, 7, M1, Tid1}),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, 8, 10, M2, Tid2}),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, M1, 5, 7, Tid1}),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, M2, 8, 10, Tid2}),
     Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
     Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
     % seed the mem tables
@@ -445,6 +546,17 @@ closed_mem_tbl_take_test() ->
     % {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, 1, 7, [{8, 2, "8"}]),
     % {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, 6, 6, []),
     % {[], {1, 2}} = open_mem_tbl_take(test_id, 1, 2, []),
+    ok.
 
+
+pick_range_test() ->
+    Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
+    {1, 90} = pick_range(Ranges1, undefined),
+
+    Ranges2 = [{76, 110}, {50, 75}, {1, 49}],
+    {1, 110} = pick_range(Ranges2, undefined),
+
+    Ranges3 = [{25, 30}, {25, 35}, {1, 50}],
+    {1, 30} = pick_range(Ranges3, undefined),
     ok.
 -endif.

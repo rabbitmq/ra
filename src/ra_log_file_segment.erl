@@ -5,6 +5,7 @@
          append/4,
          sync/1,
          read/3,
+         term_query/2,
          close/1,
          range/1,
          max_count/1,
@@ -143,6 +144,16 @@ read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
     {Locs, Metas} = read_locs(Idx0 + Num -1, Idx0, Index, {[], []}),
     {ok, Datas} = file:pread(Fd, Locs),
     combine(Metas, Datas, []).
+
+-spec term_query(state(), Idx :: ra_index()) ->
+    maybe(ra_term()).
+term_query(#state{index = Index}, Idx) ->
+    case Index of
+        #{Idx := {Term, _, _, _}} ->
+            Term;
+        _ -> undefined
+    end.
+
 
 combine([], [], Acc) ->
     lists:reverse(Acc);

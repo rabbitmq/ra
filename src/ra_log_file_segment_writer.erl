@@ -69,7 +69,8 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, #state{active_segments = ActiveSegments}) ->
     % ensure any open segments are closed
-    [ok = ra_log_file_segment:close(Seg) || Seg <- maps:values(ActiveSegments)],
+    [ok = ra_log_file_segment:close(Seg)
+     || Seg <- maps:values(ActiveSegments)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

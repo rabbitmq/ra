@@ -176,7 +176,6 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
          ok = recover_records(Data),
          ok = close_open_mem_tables(F, TblWriter)
      end || F <- lists:sort(WalFiles)],
-    ?DBG("mem tables ~p", ets:tab2list(ra_log_open_mem_tables)),
     Modes = [raw, append, binary] ++ AdditionalModes,
     roll_over(#state{fd = undefined,
                      dir = Dir,

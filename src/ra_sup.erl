@@ -30,5 +30,5 @@ init([]) ->
                   start => {ra_log_file_segment_writer, start_link, [SegWriterConf]}},
     RaLogFileMetrics = #{id => ra_log_file_metrics,
                   start => {ra_log_file_metrics, start_link, []}},
-    Procs = [Wal, SegWriter, Heartbeat, RaLogFileMetrics],
+    Procs = [RaLogFileMetrics, SegWriter, Wal, Heartbeat],
 	{ok, {SupFlags, Procs}}.
