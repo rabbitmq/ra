@@ -8,6 +8,7 @@
          handle_leader/2,
          handle_candidate/2,
          handle_follower/2,
+         handle_follower_catchup/2,
          make_rpcs/1,
          record_snapshot_point/2,
          maybe_snapshot/2,
@@ -469,7 +470,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
-            {follower, State0#{leader_id => LeaderId},
+            {follower_catchup, State0#{leader_id => LeaderId},
              [{cast, LeaderId, {Id, Reply}}]}
     end;
 handle_follower({ra_log_event, {written, _} = Evt},
@@ -485,7 +486,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
-    {follower, State, [{cast, LeaderId, {Id, Reply}}]};
+    {follower_catchup, State, [{cast, LeaderId, {Id, Reply}}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{id := Id, current_term := Term,
                           voted_for := VotedFor})
@@ -564,6 +565,28 @@ handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
 
+-spec handle_follower_catchup(ra_msg(), ra_node_state()) ->
+    {ra_state(), ra_node_state(), ra_effects()}.
+handle_follower_catchup(#append_entries_rpc{term = Term,
+                                            prev_log_index = PLIdx,
+                                            prev_log_term = PLTerm} = Msg,
+                        State = #{current_term := CurTerm})
+  when Term >= CurTerm ->
+    case has_log_entry_or_snapshot(PLIdx, PLTerm, State) of
+        {true, _} ->
+            {follower, State, [{next_event, cast, Msg}]};
+        {false, _} ->
+            {follower_catchup, State, []}
+    end;
+handle_follower_catchup(#request_vote_rpc{} = Msg, State) ->
+    {follower, State, [{next_event, cast, Msg}]};
+handle_follower_catchup(election_timeout, State) ->
+    handle_election_timeout(State);
+handle_follower_catchup(follower_catchup_timeout, State) ->
+    {follower, State, []};
+handle_follower_catchup(Msg, State) ->
+    log_unhandled_msg(follower_catchup, Msg, State),
+    {follower_catchup, State, []}.
 
 evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
                                           log := Log}) ->

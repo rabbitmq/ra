@@ -3,6 +3,7 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
+-include("ra.hrl").
 
 -define(SEND_AND_AWAIT_CONSENSUS_TIMEOUT, 60000).
 
@@ -31,7 +32,8 @@ all_tests() ->
      ramp_up_and_ramp_down,
      start_and_join_then_leave_and_terminate,
      leader_steps_down_after_replicating_new_cluster,
-     stop_leader_and_wait_for_elections
+     stop_leader_and_wait_for_elections,
+     follower_catchup
     ].
 
 groups() ->
@@ -61,7 +63,8 @@ init_per_group(ra_log_memory, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   cluster_id => Name},
+                                   cluster_id => Name,
+                                   follower_catchup_timeout => 10000},
                           ra:start_node(Name, Conf)
                   end
           end,
@@ -79,7 +82,8 @@ init_per_group(ra_log_file, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   cluster_id => Name},
+                                   cluster_id => Name,
+                                   follower_catchup_timeout => 10000},
                           ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
                   end
@@ -94,7 +98,8 @@ init_per_group(ra_reduce_network_usage, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
-                                   stop_follower_election => true},
+                                   stop_follower_election => true,
+                                   follower_catchup_timeout => 10000},
                           ra:start_node(Name, Conf)
                   end
           end,
@@ -400,6 +405,65 @@ queue_example(Config) ->
     after 500 -> ok
     end,
     terminate_cluster(Cluster).
+
+contains(Match, Entries) ->
+    lists:any(fun({_, _, {_, _, Value, _}} = Ignore) when Value == Match ->
+                      true;
+                 (_ = Any) ->
+                      false
+              end, Entries).
+
+follower_catchup(Config) ->
+    meck:new(ra_proxy, [passthrough]),
+    meck:expect(ra_proxy, proxy,
+                fun(F, S, [{_, #append_entries_rpc{entries = Entries}} | _] = T) ->
+                        case contains(500, Entries) of
+                            true ->
+                                ok;
+                            false ->
+                                meck:passthrough([F, S, T])
+                        end;
+                   (F, S, T) ->
+                        meck:passthrough([F, S, T])
+                end),
+    StartNode = ?config(start_node_fun, Config),
+    % suite unique node names
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    % start the first node and wait a bit
+    ok = StartNode (N1, [{N2, node()}], fun erlang:'+'/2, 0),
+    % start second node
+    ok = StartNode(N2, [{N1, node()}], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    % a consensus command tells us there is a functioning cluster
+    {ok, _, _Leader} = ra:send_and_await_consensus({N1, node()}, 5,
+                                                   ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+    timer:sleep(1000),
+    % issue command
+    {ok, IdxTerm, Leader0} = ra:send_and_notify({N1, node()}, 500),
+    [Follower] = [N1, N2] -- [element(1, Leader0)],
+    receive
+        {consensus, IdxTerm} -> ok
+    after 2000 ->
+            case get_gen_statem_status({Follower, node()}) of
+                follower_catchup -> ok;
+                FollowerStatus0 -> exit({unexpected_follower_status, FollowerStatus0})
+            end
+    end,
+    meck:unload(),
+    receive
+        {consensus, IdxTerm} -> ok
+    after 15000 ->
+            case get_gen_statem_status({Follower, node()}) of
+                follower -> ok;
+                FollowerStatus1 -> exit({unexpected_follower_status, FollowerStatus1})
+            end
+    end,
+    terminate_cluster([N1, N2]).
+
+get_gen_statem_status(Ref) ->
+    {_, _, _, Items} = sys:get_status(Ref),
+    proplists:get_value(raft_state, lists:last(Items)).
 
 % implements a simple queue machine
 queue_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
