@@ -403,7 +403,7 @@ write_debug(Dev, Event, Name) ->
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
-                 max_wal_size_bytes => unlimited, % TODO: better default
+                 max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
                  additional_wal_file_modes => []},
                Conf).
 

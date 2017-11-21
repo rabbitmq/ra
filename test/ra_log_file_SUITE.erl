@@ -238,7 +238,7 @@ update_release_cursor(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    % beyond 128 limit - should create two segmetns
+    % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
     % assert there are two segments at this point

@@ -18,6 +18,7 @@ init([]) ->
                   modules => [ra_heartbeat_monitor]},
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     {ok, DataDir} = application:get_env(data_dir),
+    error_logger:info_msg("RA: data dir ~p", [DataDir]),
     Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
     WalConf = #{dir => DataDir,
                 additional_wal_file_modes => Modes},

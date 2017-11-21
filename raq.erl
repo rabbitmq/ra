@@ -11,7 +11,8 @@
          pop/1,
          check/1,
          auto/1,
-         recv/1
+         recv/1,
+         go/1
         ]).
 
 
@@ -19,7 +20,9 @@
 %%% raq api
 %%%
 
-i(Vol) ->
+i(Vol0) ->
+    application:load(ra),
+    Vol = filename:join("/Volumes", Vol0),
     ok = application:set_env(ra, data_dir, Vol),
     application:ensure_all_started(ra),
     case ets:info(ra_fifo_metrics) of
@@ -65,6 +68,22 @@ pub_many(Node, Num) ->
                      [pub(Node) || _ <- lists:seq(2, Num)],
                      pub_wait(Node)
              end).
+
+go(Node) ->
+    auto(Node),
+    go0(Node).
+
+go0(Node) ->
+    TS = os:system_time(millisecond),
+    Data = crypto:strong_rand_bytes(1024 * 128),
+    ra:send({raq, Node}, {enqueue, {TS, Data}}),
+    receive
+        {msg, MsgId, _} ->
+            setl(Node, MsgId),
+            go0(Node)
+    after 5000 ->
+              throw(timeout_waiting_for_receive)
+    end.
 
 pop(Node) ->
     ra:send({raq, Node}, {checkout, {once, 1}, self()}),

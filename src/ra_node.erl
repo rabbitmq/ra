@@ -285,6 +285,9 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     % TODO: should we send rpcs in case commit_index was incremented?
     % {State, Rpcs} = make_pipelined_rpcs(State1),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
+handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {leader, State#{log => ra_log:handle_event(Evt, Log0)}, []};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -478,6 +481,9 @@ handle_follower({ra_log_event, {written, _} = Evt},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
     {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
+handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 State = #{id := Id, current_term := CurTerm}) ->
     Reply = append_entries_reply(CurTerm, false, State),
