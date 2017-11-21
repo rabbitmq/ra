@@ -15,6 +15,8 @@
          next_index/1,
          write_snapshot/2,
          read_snapshot/1,
+         snapshot_index_term/1,
+         update_release_cursor/4,
          read_meta/2,
          write_meta/3,
          sync_meta/1
@@ -37,6 +39,7 @@
          open_segments = #{} :: #{file:filename() => ra_log_file_segment:state()},
          directory :: list(),
          kv :: reference(),
+         snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}}
         }).
 
@@ -57,14 +60,31 @@ init(#{directory := Dir, id := Id}) ->
                                          {undefined, SRs} -> {{-1, -1}, SRs};
                                          R ->  R
                                      end,
+    % recove las snapshot file
+    SnapshotState  =
+        case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
+            [File | _] ->
+                {ok, Bin} = file:read_file(File),
+                {SI, ST, _, _} = binary_to_term(Bin),
+                {SI, ST, File};
+            [] ->
+                undefined
+        end,
+    {SnapIdx, SnapTerm} = case SnapshotState of
+                              undefined -> {-1, -1};
+                              {I, T, _} -> {I, T}
+                          end,
     State000 = #state{directory = Dir, id = Id,
-                      first_index = FirstIdx,
+                      first_index = max(SnapIdx+1, FirstIdx),
                       last_index = LastIdx,
                       segment_refs = SegRefs,
+                      snapshot_state = SnapshotState,
                       kv = Kv},
 
     % recover the last term
     {LastTerm0, State00} = case LastIdx of
+                               SnapIdx ->
+                                   {SnapTerm, State000};
                               -1 ->
                                    {0, State000};
                               _ ->
@@ -203,7 +223,35 @@ handle_event({segments, Tid, NewSegs},
     true = ets:delete_object(ra_log_closed_mem_tables, ClsdTbl),
     % Then delete the actual ETS table
     true = ets:delete(Tid),
-    State0#state{segment_refs = NewSegs ++ SegmentRefs}.
+    State0#state{segment_refs = NewSegs ++ SegmentRefs};
+handle_event({snapshot_written, {Idx, Term}, File},
+             #state{id = Id,
+                    open_segments = OpenSegs0,
+                    segment_refs = SegRefs0} = State0) ->
+    % delete any segments outside of first_index
+    {SegRefs, OpenSegs} =
+        % all segments created prior to the first reclaimable should be
+        % reclaimed even if they have a more up to date end point
+        case lists:partition(fun({_From, To, _}) when To > Idx -> true;
+                             (_) -> false end, SegRefs0) of
+            {_, []} ->
+                {SegRefs0, OpenSegs0};
+            {Active, Obsolete0} ->
+                ?DBG("Obsolete0 ~p", [Obsolete0]),
+                Obsolete = [F || {_, _, F} <- Obsolete0],
+                ok = ra_log_file_segment_writer:delete_segments(Id, Idx,
+                                                                Obsolete),
+                % close all relevant active segments
+                 [ok = ra_log_file_segment:close(S) ||
+                  S <- maps:values(maps:with(Obsolete, OpenSegs0))],
+                {Active, maps:without(Obsolete, OpenSegs0)}
+        end,
+
+    truncate_cache(Idx,
+                   State0#state{first_index = Idx + 1,
+                                segment_refs = SegRefs,
+                                open_segments = OpenSegs,
+                                snapshot_state = {Idx, Term, File}}).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -229,7 +277,6 @@ fetch_term(Idx, #state{last_index = LastIdx,
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
 fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
-    % needs to check cache first
     case Cache of
         #{Idx := {Term, _}} ->
             {Term, State0};
@@ -248,35 +295,53 @@ fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
             end
     end.
 
-            % % TODO: optimise this as we do not need to
-            % % read the full body
-            % case fetch(Idx, State0) of
-            %     {undefined, State} ->
-            %         {undefined, State};
-            %     {{_, Term, _}, State} ->
-            %         {Term, State}
-            % end
-    % end.
-
 -spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_file_state()) ->
     ra_log_file_state().
-write_snapshot({Idx, _, _, _} = Snapshot, State = #state{directory = Dir}) ->
-    File = filename:join(Dir, "ra.snapshot"),
-    file:write_file(File, term_to_binary(Snapshot)),
-    % update first index to the index following the latest snapshot
-    truncate_cache(Idx, State#state{first_index = Idx+1}).
+write_snapshot(Snapshot, #state{directory = Dir} = State) ->
+    ok = ra_log_file_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
+    State.
 
 -spec read_snapshot(State :: ra_log_file_state()) ->
     maybe(ra_log:ra_log_snapshot()).
-read_snapshot(#state{directory = Dir}) ->
-    File = filename:join(Dir, "ra.snapshot"),
+read_snapshot(#state{snapshot_state = undefined}) ->
+    undefined;
+read_snapshot(#state{snapshot_state = {_, _, File}}) ->
     case file:read_file(File) of
         {ok, Bin} ->
             binary_to_term(Bin);
         {error, enoent} ->
             undefined
     end.
+
+-spec snapshot_index_term(State :: ra_log_file_state()) ->
+    maybe(ra_idxterm()).
+snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
+    {Idx, Term};
+snapshot_index_term(_State) ->
+    undefined.
+
+-spec update_release_cursor(Idx :: ra_index(),
+                            Cluster :: ra_cluster(),
+                            MachineState :: term(),
+                            State :: ra_log_file_state()) ->
+    ra_log_file_state().
+update_release_cursor(Idx, Cluster, MachineState,
+                      #state{segment_refs = SegRefs} = State0) ->
+    % TODO: check if snaphot is in progress,
+    % TODO: we probably need to distinguish between closed segments
+    % and the current in-progress segment.
+    case lists:any(fun({_From, To, _}) when To < Idx -> true;
+                      (_) -> false end, SegRefs) of
+        true ->
+            % segments can be cleared up - nice
+            SnapIdx = Idx - 1,
+            {Term, State} = fetch_term(SnapIdx, State0),
+            write_snapshot({SnapIdx, Term, Cluster, MachineState}, State);
+        false ->
+            State0
+    end.
+
 
 -spec read_meta(Key :: ra_log:ra_meta_key(),
                 State :: ra_log_file_state()) -> maybe(term()).
@@ -542,10 +607,6 @@ closed_mem_tbl_take_test() ->
     {Entries1, _, undefined} = closed_mem_tbl_take(test_id, {5, 7}, [], []),
     {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, [], []),
     {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
-    % EntriesPlus8 = Entries ++ [{8, 2, "8"}],
-    % {EntriesPlus8, {1, 2}} = open_mem_tbl_take(test_id, 1, 7, [{8, 2, "8"}]),
-    % {[{6, 2, "6"}], undefined} = open_mem_tbl_take(test_id, 6, 6, []),
-    % {[], {1, 2}} = open_mem_tbl_take(test_id, 1, 2, []),
     ok.
 
 

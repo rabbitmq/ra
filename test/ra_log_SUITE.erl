@@ -24,8 +24,7 @@ all_tests() ->
      append_integrity_error,
      take,
      last,
-     meta,
-     snapshot
+     meta
     ].
 
 groups() ->
@@ -34,7 +33,8 @@ groups() ->
      {ra_log_file, [], [
                         init_close_init,
                         append_recover_then_overwrite,
-                        append_overwrite_then_recover
+                        append_overwrite_then_recover,
+                        snapshot
                         | all_tests()]}
     ].
 
@@ -237,6 +237,7 @@ meta(Config) ->
     ok.
 
 snapshot(Config) ->
+    % tests explicit externally triggered snaphostting
     Log0 = ?config(ra_log, Config),
     % no snapshot yet
     undefined = ra_log:read_snapshot(Log0),
@@ -246,14 +247,28 @@ snapshot(Config) ->
     Cluster = #{node1 => #{}},
     Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
     Log3 = ra_log:write_snapshot(Snapshot, Log2),
+    Log4 = receive
+               {ra_log_event, Evt} ->
+                   ra_log:handle_event(Evt, Log3)
+           after 2000 ->
+                 throw(ra_log_event_timeout)
+           end,
+
     % ensure entries prior to snapshot are no longer there
-    {undefined, Log4} = ra_log:fetch(LastIdx, Log3),
-    {undefined, _} = ra_log:fetch_term(LastIdx, Log3),
-    {undefined, Log} = ra_log:fetch(LastIdx-1, Log4),
-    {undefined, _} = ra_log:fetch_term(LastIdx-1, Log4),
+    {undefined, Log5} = ra_log:fetch(LastIdx, Log4),
+    {undefined, _} = ra_log:fetch_term(LastIdx, Log5),
+    {undefined, Log} = ra_log:fetch(LastIdx-1, Log5),
+    {undefined, _} = ra_log:fetch_term(LastIdx-1, Log5),
     % falls back to snapshot idxterm
     {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),
+    % initialise another log
+    Dir = filename:join(?config(priv_dir, Config), snapshot),
+    LogB = ra_log:init(ra_log_file, #{directory => Dir,
+                                      id => snapshot}),
+    {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
+    {undefined, _} = ra_log:fetch_term(LastIdx, LogB),
+    Snapshot = ra_log:read_snapshot(LogB),
     ok.
 
 

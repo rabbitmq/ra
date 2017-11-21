@@ -46,6 +46,7 @@ suite() -> [{timetrap, {seconds, 30}}].
 init_per_suite(Config) ->
     _ = application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
+    ok = application:set_env(ra, segment_max_entries, 128),
     application:ensure_all_started(ra),
     Config.
 
@@ -346,8 +347,9 @@ snapshot(Config) ->
     ok = StartNode(N1, InitialNodes, fun ra_queue:simple_apply/3, []),
     ok = StartNode(N2, InitialNodes, fun ra_queue:simple_apply/3, []),
     % N1 = {N1, node()}, N2 = {N2, node()}, N3 = {N3, node()},
+    DecSink = spawn(fun () -> receive marker_pattern -> ok end end),
     {ok, {_, Term}, Leader} = ra:send(N1, {enq, banana}),
-    {ok, {_, Term}, Leader} = ra:send(Leader, {deq, self()}),
+    {ok, {_, Term}, Leader} = ra:send(Leader, {deq, DecSink}),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % waitfor(banana, apply_timeout),

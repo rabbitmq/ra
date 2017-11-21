@@ -14,6 +14,7 @@
 -define(MIN_MAX_BATCH_SIZE, 20).
 -define(MAX_MAX_BATCH_SIZE, 1000).
 -define(METRICS_WINDOW_SIZE, 100).
+-define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
 
 % a token to notify the writer of the last request written
 % typically this would be a ra_index()
@@ -32,7 +33,7 @@
                 file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                max_wal_size_bytes = unlimited :: non_neg_integer(), % TODO: better default
+                max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
                 segment_writer = ra_log_file_segment_writer :: atom(),
                 batch = #batch{} :: #batch{},
                 metrics_cursor = 0 :: non_neg_integer(),

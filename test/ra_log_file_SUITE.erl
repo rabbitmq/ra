@@ -20,7 +20,9 @@ all_tests() ->
      read_one,
      validate_sequential_reads,
      validate_reads_for_overlapped_writes,
-     recovery
+     recovery,
+     snapshot_recovery,
+     update_release_cursor
     ].
 
 groups() ->
@@ -212,6 +214,48 @@ recovery(Config) ->
     Log7 = validate_read(5, 15, 2, Log6),
     Log8 = validate_read(15, 21, 3, Log7),
     ra_log_file:close(Log8),
+
+    ok.
+
+snapshot_recovery(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 2, Log0),
+    Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
+    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+    ra_log_file:close(Log2),
+    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    Snapshot = ra_log_file:read_snapshot(Log),
+    {9, 2} = ra_log_file:last_index_term(Log),
+    {[], _} = ra_log_file:take(1, 9, Log),
+    ok.
+
+
+update_release_cursor(Config) ->
+    % ra_log_file should initiate shapshot if segments can be released
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    % beyond 128 limit - should create two segmetns
+    Log1 = append_and_roll(1, 150, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % assert there are two segments at this point
+    [_, _] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    % leave one entry in the current segment
+    Log3 = ra_log_file:update_release_cursor(150, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log2),
+    Log4 = deliver_all_log_events(Log3, 500),
+    % no segments
+    [] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    % append a few more items
+    Log5 = append_and_roll(150, 155, 2, Log4),
+    Log6 = deliver_all_log_events(Log5, 500),
+    ra_lib:dump('Log6', Log6),
+    % assert there is only one segment - the current
+    % snapshot has been confirmed.
+    [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
 
     ok.
 

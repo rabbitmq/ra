@@ -92,7 +92,6 @@ init(_Config) ->
     meck:expect(ra_log, init, fun (_, _) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
-      snapshot_index_term := {3, 5},
       machine_state := "hi1+2+3",
       cluster := Cluster,
       voted_for := some_node} = ra_node:init(InitConf),
@@ -493,7 +492,7 @@ append_entries_reply_no_success(_Config) ->
                              leader_commit = 1,
                              entries = [{2, 3, usr(<<"hi2">>)},
                                         {3, 5, usr(<<"hi3">>)}]},
-    ExpectedEffects = [{send_rpcs, false, [{n3, AE}, {n2, AE}]}],
+    ExpectedEffects = [{send_rpcs, true, [{n3, AE}, {n2, AE}]}],
     % new peers state is updated
     {leader, #{cluster := #{n2 := #{next_index := 2, match_index := 1}},
                commit_index := 1,
@@ -860,10 +859,6 @@ command(_Config) ->
         ra_node:handle_leader({command, Cmd}, State),
     ok.
 
-sync(_Config) ->
-    % TODO leader receives a sync message
-    ok.
-
 quorum(_Config) ->
     State = (base_state(5))#{current_term => 6, votes => 1},
     Reply = #request_vote_result{term = 6, vote_granted = true},
@@ -906,8 +901,7 @@ follower_installs_snapshot(_Config) ->
                  last_applied := Idx,
                  cluster := Config,
                  machine_state := [],
-                 leader_id := n1,
-                 snapshot_index_term := {Idx, LastTerm}},
+                 leader_id := n1},
      [{reply, #install_snapshot_result{}}]}
     = ra_node:handle_follower(ISRpc, FState),
     ok.
@@ -963,7 +957,6 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 log => Log,
                 machine_state => [{4,apple}],
                 pending_cluster_changes => [],
-                snapshot_index_term => {0,0},
                 snapshot_points => #{}},
     AER = #append_entries_reply{success = false,
                                 term = Term,
@@ -1015,7 +1008,6 @@ leader_receives_install_snapshot_result(_Config) ->
                %    []}}},
                machine_state => [{4,apple}],
                pending_cluster_changes => [],
-               snapshot_index_term => {2,1},
                snapshot_points =>
                #{4 =>
                  {1,
@@ -1215,11 +1207,8 @@ run_effect(NodeId, Nodes0) ->
             lists:foldl(fun ({Id, AppendEntry}, Acc) ->
                                 rpc_interact(Id, NodeId, AppendEntry, Acc)
                         end, Nodes, Entries);
-        {{snapshot_point, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
-            NodeState = ra_node:record_snapshot_point(Idx, NodeState0),
-            Nodes#{NodeId => {RaState, NodeState, Effects}};
         {{release_cursor, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
-            NodeState = ra_node:maybe_snapshot(Idx, NodeState0),
+            NodeState = ra_node:update_release_cursor(Idx, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
         {{reply, #append_entries_reply{} = Reply}, Nodes} ->
             Leader = maps:filter(fun (_, {leader, _, _}) -> true;
@@ -1344,12 +1333,10 @@ interact(Id, {candidate, State, Effects}, Interaction, Nodes) ->
         Nodes#{Id => {NewRaState, NewState,
                       Effects ++ drop_all_aers_but_last(NewEffects)}};
 interact(Id, {leader, State, Effects}, Interaction, Nodes) ->
-        {NewRaState, NewState0, NewEffects0} =
+        {NewRaState, NewState, NewEffects} =
             ra_node:handle_leader(Interaction, State),
-        {_NewRaState, NewState, NewEffects} =
-            ra_node:handle_leader(sync, NewState0),
         Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ NewEffects0 ++ NewEffects)}}.
+                      drop_all_aers_but_last(Effects ++ NewEffects)}}.
 
 
 list(L) when is_list(L) -> L;
@@ -1395,9 +1382,7 @@ base_state(NumNodes) ->
       machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
       log => Log,
-      log_module => ra_log_memory,
-      snapshot_index_term => {0, 0},
-      sync_strategy => always}.
+      log_module => ra_log_memory}.
 
 usr_cmd(Data) ->
     {command, usr(Data)}.

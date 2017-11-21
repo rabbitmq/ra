@@ -10,15 +10,12 @@
          range/1,
          max_count/1,
          filename/1]).
-% , append/4, read/3, from_ets/2, close/1]).
 
 -include("ra.hrl").
 
 -define(VERSION, 1).
-
 -define(HEADER_SIZE, (16 div 8) + (16 div 8)). % {
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
-
 -define(INDEX_RECORD_SIZE, ((2 * 64 + 3 * 32) div 8)).
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
@@ -105,7 +102,7 @@ open(Filename, Options) ->
     end.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
-    {ok, state()} | {error, segment_full}.
+    {ok, state()} | {error, full}.
 append(#state{fd = Fd, index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
