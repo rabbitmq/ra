@@ -40,6 +40,7 @@
          directory :: list(),
          kv :: reference(),
          snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
+         snapshot_in_progress = false :: boolean(),
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}}
         }).
 
@@ -223,7 +224,10 @@ handle_event({segments, Tid, NewSegs},
     true = ets:delete_object(ra_log_closed_mem_tables, ClsdTbl),
     % Then delete the actual ETS table
     true = ets:delete(Tid),
-    State0#state{segment_refs = NewSegs ++ SegmentRefs};
+    State0#state{segment_refs = NewSegs ++ SegmentRefs,
+                 % re-enable snapshots based on release cursor updates
+                 % in case snapshot_written was lost
+                 snapshot_in_progress = false};
 handle_event({snapshot_written, {Idx, Term}, File},
              #state{id = Id,
                     open_segments = OpenSegs0,
@@ -237,8 +241,9 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {_, []} ->
                 {SegRefs0, OpenSegs0};
             {Active, Obsolete0} ->
-                ?DBG("Obsolete0 ~p", [Obsolete0]),
-                Obsolete = [F || {_, _, F} <- Obsolete0],
+                % there could be many updates per segment file
+                Obsolete = lists:usort([F || {_, _, F} <- Obsolete0]),
+                ?DBG("~p: Snapshot Idx ~b Obsolete segments ~p", [Id, Idx, Obsolete]),
                 ok = ra_log_file_segment_writer:delete_segments(Id, Idx,
                                                                 Obsolete),
                 % close all relevant active segments
@@ -251,6 +256,7 @@ handle_event({snapshot_written, {Idx, Term}, File},
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
                                 open_segments = OpenSegs,
+                                snapshot_in_progress = false,
                                 snapshot_state = {Idx, Term, File}}).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
@@ -326,18 +332,22 @@ snapshot_index_term(_State) ->
                             MachineState :: term(),
                             State :: ra_log_file_state()) ->
     ra_log_file_state().
+update_release_cursor(_Idx, _Cluster, _MachineState,
+                      #state{snapshot_in_progress = true} = State) ->
+    % if a snapshot is in progress don't even evaluate
+    % new segments will always set snapshot_in_progress = false
+    % to ensure liveliness in case a snapshot_written message is lost.
+    State;
 update_release_cursor(Idx, Cluster, MachineState,
                       #state{segment_refs = SegRefs} = State0) ->
-    % TODO: check if snaphot is in progress,
-    % TODO: we probably need to distinguish between closed segments
-    % and the current in-progress segment.
     case lists:any(fun({_From, To, _}) when To < Idx -> true;
                       (_) -> false end, SegRefs) of
         true ->
             % segments can be cleared up - nice
             SnapIdx = Idx - 1,
             {Term, State} = fetch_term(SnapIdx, State0),
-            write_snapshot({SnapIdx, Term, Cluster, MachineState}, State);
+            write_snapshot({SnapIdx, Term, Cluster, MachineState},
+                           State#state{snapshot_in_progress = true});
         false ->
             State0
     end.

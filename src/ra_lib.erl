@@ -15,7 +15,8 @@
          ra_node_id_to_local_name/1,
          update_element/3,
          zpad_filename/3,
-         zpad_filename_incr/1
+         zpad_filename_incr/1,
+         zpad_extract_num/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -90,6 +91,11 @@ zpad_filename_incr(Fn) ->
         _ ->
             undefined
     end.
+
+zpad_extract_num(Fn) ->
+    {match, [_, NumStr, _]} = re:run(Fn, "(.*)([0-9]{8})(.*)",
+                                     [{capture, all_but_first, list}]),
+    list_to_integer(NumStr).
 
 
 -ifdef(TEST).

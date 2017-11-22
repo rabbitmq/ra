@@ -161,7 +161,8 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
     State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
 
 find_segment_files(Dir) ->
-    lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))).
+    lists:reverse(
+      lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))).
 
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_file_segment:filename(CurSeg),

@@ -180,10 +180,16 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     Modes = [raw, append, binary] ++ AdditionalModes,
     roll_over(#state{fd = undefined,
                      dir = Dir,
+                     file_num = extract_file_num(WalFiles),
                      file_modes = Modes,
                      max_wal_size_bytes = MaxWalSize,
                      segment_writer = TblWriter
                     }).
+
+extract_file_num([]) ->
+    0;
+extract_file_num([F | _]) ->
+    ra_lib:zpad_extract_num(filename:basename(F)).
 
 loop_wait(State0, Parent, Debug0) ->
     receive
@@ -279,6 +285,11 @@ update_mem_table(Id, Idx, Term, Entry) ->
         [{_Id, First, _Last, Tid}] ->
             % TODO: should we perform any validation against missing entries
             % here or just rely on the ra_log implementation to do this?
+            % We could treat a gap as a truncation request e.g.
+            % node writes, 1,2,3, goes offline for a while then receives
+            % a snapshot with index 7 - it then writes 8 which creates a gap
+            % in the mem_table. if we treat a missing index as an implicit
+            % request to truncate the range the segment writer then won't fail
             _ = ets:insert(Tid, {Idx, Term, Entry}),
             % update Last idx for current tbl
             % this is how followers "truncate" previously seen entries
@@ -379,9 +390,9 @@ incr_batch(#batch{writes = Writes,
                 waiting = Waiting#{Id => IdxTerm}}.
 
 recover_records(<<IdDataLen:16/integer, IdData:IdDataLen/binary,
-                 Idx:64/integer, Term:64/integer,
-                 EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
-                 Rest/binary>>) ->
+                  Idx:64/integer, Term:64/integer,
+                  EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                  Rest/binary>>) ->
     Id = binary_to_term(IdData),
     true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData)),
     recover_records(Rest);
