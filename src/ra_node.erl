@@ -399,16 +399,6 @@ handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
 
-dropexisting({Log0, []}) ->
-    {Log0, []};
-dropexisting({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
-    case ra_log:exists({Idx, Trm}, Log0) of
-        {true, Log} ->
-            dropexisting({Log, Tail});
-        {false, Log} ->
-            {Log, Entries}
-    end.
-
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
@@ -659,25 +649,6 @@ update_release_cursor(Index, State = #{log := Log0,
     % simply pass on release cursor index to log
     Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
     State#{log => Log}.
-
-% takes a snapshot if a snapshot point for the given index has been
-% recorded.
-% maybe_snapshot(Index, State = #{id := Id, log := Log0,
-%                                 initial_machine_state := MachineState}) ->
-%     case Points0 of
-%         #{Index := {Term, Cluster}} ->
-%             ?DBG("~p: writing snapshot at index ~p~n", [Id, Index]),
-%             Snapshot = {Index, Term, Cluster, MachineState},
-%             Log = ra_log:write_snapshot(Snapshot, Log0),
-%             % TODO: remove all points below index
-%             Points = maps:without([Index], Points0),
-%             State#{log => Log,
-%                    snapshot_index_term => {Index, Term},
-%                    snapshot_points => Points};
-%         _ ->
-%             ?DBG("~p: snapshot point not found at index ~p~n", [Id, Index]),
-%             State
-%     end.
 
 -spec terminate(ra_node_state()) -> ok.
 terminate(#{log := Log}) ->
@@ -1006,20 +977,6 @@ agreed_commit(Indexes) ->
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?DBG("~p ~p received unhandled msg: ~p~n", [Id, RaState, Msg]).
 
-% first_or_atom(T) when is_tuple(T) ->
-%     element(1, T);
-% first_or_atom(A) when is_atom(A) ->
-%     A;
-% first_or_atom(X) ->
-%     X.
-
-% update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
-%     case Cluster of
-%         #{Id := Node} ->
-%             State#{cluster := Cluster#{Id := Node#{match_index => Idx}}};
-%         _ -> State
-%     end.
-
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, 5, Log0) of
         {[], Log} ->
@@ -1036,6 +993,16 @@ wrap_machine_fun(Fun) ->
             % of the entry
             fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
         {arity, 3} -> Fun
+    end.
+
+dropexisting({Log0, []}) ->
+    {Log0, []};
+dropexisting({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
+    case ra_log:exists({Idx, Trm}, Log0) of
+        {true, Log} ->
+            dropexisting({Log, Tail});
+        {false, Log} ->
+            {Log, Entries}
     end.
 
 %%% ===================

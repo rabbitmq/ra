@@ -16,14 +16,10 @@
 -define(METRICS_WINDOW_SIZE, 100).
 -define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
 
-% a token to notify the writer of the last request written
-% typically this would be a ra_index()
--type token() :: term().
-
 -type writer_id() :: atom(). % currently has to be a locally registered name
 
 -record(batch, {writes = 0 :: non_neg_integer(),
-                waiting = #{} :: #{writer_id() => token()},
+                waiting = #{} :: #{writer_id() => ra_index()},
                 start_time :: maybe(integer())
                }).
 
@@ -36,6 +32,17 @@
                 max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
                 segment_writer = ra_log_file_segment_writer :: atom(),
                 batch = #batch{} :: #batch{},
+                % writers that have attempted to write an non-truncating
+                % out of seq % entry.
+                % No further writes are allowed until the missing
+                % index has been received.
+                % out_of_seq are kept after a roll over or until
+                % a truncating write is received.
+                % no attempt is made to recover this information after a crash
+                % beyond the available WAL files
+                % all writers seen withing the lifetime of a WAL file
+                % and the last index seen
+                writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 wal_file_size = 0 :: non_neg_integer()
                }).
@@ -244,43 +251,69 @@ handle_debug_in(Debug, Msg) ->
 
 handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
            #state{max_wal_size_bytes = MaxWalSize,
-                  wal_file_size = FileSize} = State0) ->
-    % TODO: needing the "Id" in the shared wal is pretty wasteful
-    % can we create someting fixed length to use instead?
-    EntryData = to_binary(Entry),
-    EntryDataLen = byte_size(EntryData),
-    % TODO optional adler32 checksum check for EntryData
-    Data = <<IdDataLen:16/integer, % 2
-             IdData/binary,
-             Idx:64/integer,
-             Term:64/integer,
-             EntryDataLen:32/integer,
-             EntryData/binary>>,
+                  wal_file_size = FileSize,
+                  writers = Writers} = State0) ->
 
-    % fixed overhead = 22 bytes
-    DataSize = IdDataLen + 22 + EntryDataLen,
-    % if the next write is going to exceed the configured max wal size
-    % we roll over to a new wal.
-    case FileSize + DataSize > MaxWalSize of
-        true ->
-            State = roll_over(State0),
-            append_data(State, Id, Idx, Term, Entry, DataSize, Data);
-        false ->
-            append_data(State0, Id, Idx, Term, Entry, DataSize, Data)
+    % TODO: is there a penalty to this? If so break out into a function instead
+    Append = fun () ->
+                     % TODO: needing the "Id" in the shared wal is pretty wasteful
+                     % can we create someting fixed length to use instead?
+                     EntryData = to_binary(Entry),
+                     EntryDataLen = byte_size(EntryData),
+                     % TODO optional adler32 checksum check for EntryData
+                     Data = <<IdDataLen:16/integer, % 2
+                              IdData/binary,
+                              Idx:64/integer,
+                              Term:64/integer,
+                              EntryDataLen:32/integer,
+                              EntryData/binary>>,
+
+                     % fixed overhead = 22 bytes
+                     DataSize = IdDataLen + 22 + EntryDataLen,
+                     % if the next write is going to exceed the configured max wal size
+                     % we roll over to a new wal.
+                     case FileSize + DataSize > MaxWalSize of
+                         true ->
+                             State = roll_over(State0),
+                             append_data(State, Id, Idx, Term, Entry, DataSize, Data);
+                         false ->
+                             append_data(State0, Id, Idx, Term, Entry, DataSize, Data)
+                     end
+             end,
+
+    case maps:find(Id, Writers) of
+        error ->
+            Append();
+        {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
+            Append();
+        {ok, {out_of_seq, _}} ->
+            % writer is out of seq simply ignore drop the write
+            % TODO: capture metric for dropped writes
+            State0;
+        {ok, {in_seq, PrevIdx}} ->
+            % writer was in seq but has sent an out of seq entry
+            % notify writer
+            ?DBG("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
+                 [Id, PrevIdx, Idx]),
+            Id ! {ra_log_event, {resend_write, PrevIdx + 1}},
+            State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}}
     end;
 handle_msg(rollover, State) ->
     roll_over(State).
 
 append_data(#state{fd = Fd, batch = Batch,
+                   writers = Writers,
                    wal_file_size = FileSize} = State,
             Id, Idx, Term, Entry, DataSize, Data) ->
     ok = file:write(Fd, Data),
     true = update_mem_table(Id, Idx, Term, Entry),
     State#state{batch = incr_batch(Batch, Id, {Idx, Term}),
+                writers = Writers#{Id => {in_seq, Idx}},
                 wal_file_size = FileSize + DataSize}.
 
 update_mem_table(Id, Idx, Term, Entry) ->
     % TODO: cache current tables to avoid ets lookup?
+    % TODO: if Idx =< First we could truncate the entire table
     case ets:lookup(ra_log_open_mem_tables, Id) of
         [{_Id, First, _Last, Tid}] ->
             % TODO: should we perform any validation against missing entries
@@ -395,6 +428,7 @@ recover_records(<<IdDataLen:16/integer, IdData:IdDataLen/binary,
                   Rest/binary>>) ->
     Id = binary_to_term(IdData),
     true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData)),
+    % TODO: recover writers info, i.e. last index seen
     recover_records(Rest);
 recover_records(<<>>) ->
     ok.

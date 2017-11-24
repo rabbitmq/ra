@@ -187,11 +187,12 @@ append_integrity_error(Config) ->
     % unless overwrite flag is set
     Log0 = ?config(ra_log, Config),
     Term = 1,
+    Next = ra_log:next_index(Log0),
     % this is ok even though entries are missing
-    Log1 = ra_log:append_sync({99, Term, "entry99"}, no_overwrite, Log0),
+    Log1 = ra_log:append_sync({Next, Term, "NextIndex"}, no_overwrite, Log0),
     % going backwards should fail with integrity error unless
     % we are overwriting
-    Entry = {98, Term, "entry98"},
+    Entry = {Next-1, Term, "NextIndex-1"},
     {error, integrity_error} = ra_log:append(Entry, no_overwrite, Log1),
     _Log = ra_log:append_sync(Entry, overwrite, Log1),
     ok.
