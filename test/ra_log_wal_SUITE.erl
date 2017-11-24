@@ -14,9 +14,11 @@ all_tests() ->
     [
      basic_log_writes,
      write_many,
+     truncate_write,
+     out_of_seq_writes,
      roll_over,
      recover,
-     out_of_seq_writes
+     recover_truncated_write
     ].
 
 groups() ->
@@ -25,7 +27,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
-    application:ensure_all_started(sasl),
+    % application:ensure_all_started(sasl),
     application:ensure_all_started(lg),
     Config.
 
@@ -82,6 +84,28 @@ write_many(Config) ->
     ct:pal("Metrics: ~p~n", [Metrics]),
     ok.
 
+truncate_write(Config) ->
+    % a truncate write should update the range to not include previous indexes
+    % a trucated write does not need to follow the sequence
+    Dir = ?config(wal_dir, Config),
+    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    % Modes = [],
+    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
+                                         additional_wal_file_modes => Modes}, []),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = crypto:strong_rand_bytes(1024),
+    % write 1-3
+    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+     || I <- lists:seq(1, 3)],
+    await_written(Self, {3, 1}),
+    % then write 7 as may happen after snapshot installation
+    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 7, 1, Data),
+    ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
+    await_written(Self, {8, 1}),
+    [{Self, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, Self),
+    [_] = ets:lookup(Tid, 7),
+    [_] = ets:lookup(Tid, 8),
+    ok.
 
 out_of_seq_writes(Config) ->
     % INVARIANT: the WAL expects writes for a particular ra node to be done
@@ -174,6 +198,26 @@ roll_over(Config) ->
     % TODO: validate we can read first and last written
     ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 1)),
     ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 5)),
+    ok.
+
+recover_truncated_write(Config) ->
+    % open wal and write a few entreis
+    % close wal + delete mem_tables
+    % re-open wal and validate mem_tables are re-created
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = <<42:256/unit:8>>,
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 3)],
+    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    % how can we better wait for recovery to finish?
+    timer:sleep(1000),
+    [{Self, _, 9, 9, _}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
     ok.
 
 recover(Config) ->
