@@ -2,6 +2,7 @@
 
 -export([start_link/2,
          write/5,
+         truncate_write/5,
          force_roll_over/1,
          init/3,
          mem_tbl_read/2,
@@ -14,15 +15,12 @@
 -define(MIN_MAX_BATCH_SIZE, 20).
 -define(MAX_MAX_BATCH_SIZE, 1000).
 -define(METRICS_WINDOW_SIZE, 100).
-
-% a token to notify the writer of the last request written
-% typically this would be a ra_index()
--type token() :: term().
+-define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
 
 -type writer_id() :: atom(). % currently has to be a locally registered name
 
 -record(batch, {writes = 0 :: non_neg_integer(),
-                waiting = #{} :: #{writer_id() => token()},
+                waiting = #{} :: #{writer_id() => ra_index()},
                 start_time :: maybe(integer())
                }).
 
@@ -32,9 +30,21 @@
                 file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                max_wal_size_bytes = unlimited :: non_neg_integer(), % TODO: better default
+                max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
                 segment_writer = ra_log_file_segment_writer :: atom(),
                 batch = #batch{} :: #batch{},
+                % writers that have attempted to write an non-truncating
+                % out of seq % entry.
+                % No further writes are allowed until the missing
+                % index has been received.
+                % out_of_seq are kept after a roll over or until
+                % a truncating write is received.
+                % no attempt is made to recover this information after a crash
+                % beyond the available WAL files
+                % all writers seen withing the lifetime of a WAL file
+                % and the last index seen
+                writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
+                writer_name_cache = {0, #{}} :: {NextIntId :: non_neg_integer(), #{atom() => binary()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 wal_file_size = 0 :: non_neg_integer()
                }).
@@ -49,7 +59,16 @@
 
 -spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) -> ok.
 write(From, Wal, Idx, Term, Entry) ->
-    Wal ! {log, From, sized_binary(From), Idx, Term, Entry},
+    % in a future where we might have a pool of WALs they may not always
+    % be named, and wal could be a pid(). If so this will result in a lost
+    % write message rather than a name lookup failure (badarg).
+    Wal ! {append, From, Idx, Term, Entry},
+    ok.
+
+-spec truncate_write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
+    ok.
+truncate_write(From, Wal, Idx, Term, Entry) ->
+    Wal ! {truncate, From, Idx, Term, Entry},
     ok.
 
 % force a wal file to roll over to a new file
@@ -57,12 +76,6 @@ write(From, Wal, Idx, Term, Entry) ->
 force_roll_over(Wal) ->
     Wal ! rollover,
     ok.
-
-sized_binary(Bin) when is_binary(Bin) ->
-    {byte_size(Bin), Bin};
-sized_binary(Term) ->
-    Bin = to_binary(Term),
-    {byte_size(Bin), Bin}.
 
 mem_tbl_read(Id, Idx) ->
     case ets:lookup(ra_log_open_mem_tables, Id) of
@@ -165,17 +178,30 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
     _ = file:make_dir(Dir),
-    % TODO: we don't actually recover anything ATM so delete anything that was
-    % previously there for now
-    [ _ = file:delete(F)
-      || F <- filelib:wildcard(filename:join(Dir, "*.wal"))],
+    %  recover each mem table and notify segment writer
+    %  this may result in duplicated segments but that is better than
+    %  losing any data
+    WalFiles = filelib:wildcard(filename:join(Dir, "*.wal")),
+    ?DBG("WAL: recovering ~p", [WalFiles]),
+    [begin
+         % TOOD: avoid reading the whole file at once
+         {ok, Data} = file:read_file(F),
+         ok = recover_records(Data, #{}),
+         ok = close_open_mem_tables(F, TblWriter)
+     end || F <- lists:sort(WalFiles)],
     Modes = [raw, append, binary] ++ AdditionalModes,
     roll_over(#state{fd = undefined,
                      dir = Dir,
+                     file_num = extract_file_num(WalFiles),
                      file_modes = Modes,
                      max_wal_size_bytes = MaxWalSize,
                      segment_writer = TblWriter
                     }).
+
+extract_file_num([]) ->
+    0;
+extract_file_num([F | _]) ->
+    ra_lib:zpad_extract_num(filename:basename(F)).
 
 loop_wait(State0, Parent, Debug0) ->
     receive
@@ -192,8 +218,9 @@ loop_wait(State0, Parent, Debug0) ->
             loop_batched(State, Parent, Debug)
     end.
 
-loop_batched(State0 = #state{max_batch_size = Written,
-                             batch = #batch{writes = Written}}, Parent, Debug0) ->
+loop_batched(#state{max_batch_size = Written,
+                    batch = #batch{writes = Written}} = State0,
+             Parent, Debug0) ->
     % complete batch after seeing max_batch_size writes
     {State, Debug} = complete_batch(State0, Debug0),
     % grow max batch size
@@ -217,83 +244,133 @@ loop_batched(State0, Parent, Debug0) ->
               loop_wait(State#state{max_batch_size = NewBatchSize}, Parent, Debug)
     end.
 
-cleanup(_State) ->
+cleanup(#state{fd = undefined}) ->
+    ok;
+cleanup(#state{fd = Fd}) ->
+    _ = file:sync(Fd),
     ok.
 
 handle_debug_in(Debug, Msg) ->
     sys:handle_debug(Debug, fun write_debug/3,
                      ?MODULE, {in, Msg}).
 
-handle_msg({log, Id, {IdDataLen, IdData}, Idx, Term, Entry},
+serialize_header(Id, Trunc, #state{writer_name_cache = {Next, Cache}} = State) ->
+    T = case Trunc of true -> 1; false -> 0 end,
+    case Cache of
+        #{Id := BinId} ->
+            {<<T:1/integer, BinId/bitstring>>, State};
+        _ ->
+            % TODO: check overflows of Next
+            % cache the last 15 bits of the header
+            BinId = <<1:1/integer, Next:14/integer>>,
+            IdData = to_binary(Id),
+            IdDataLen = byte_size(IdData),
+            MarkerId = <<T:1/integer, 0:1/integer, Next:14/integer,
+                         IdDataLen:16/integer, IdData/binary>>,
+            {MarkerId,
+             State#state{writer_name_cache =
+                         {Next+1, Cache#{Id => BinId}}}}
+    end.
+
+write_data(Id, Idx, Term, Entry, Trunc,
            #state{max_wal_size_bytes = MaxWalSize,
-                  wal_file_size = FileSize} = State0) ->
-    % log on disk format:
-    % <<IdLen:16/integer, Id/binary,
-    % Idx:64/integer, Term:64/integer, Length:32/integer, Data/binary>>
-    % TODO: needing the "Id" in the shared wal is pretty wasteful
-    % can we create someting fixed length to use instead?
-    %% TODO: cache binary Id representation?
+                  wal_file_size = FileSize} = State00) ->
     EntryData = to_binary(Entry),
     EntryDataLen = byte_size(EntryData),
-    % TODO adler32 checksum check for EntryData
-    Data = <<IdDataLen:16/integer, % 2
-             IdData/binary,
+    {HeaderData, State0} = serialize_header(Id, Trunc, State00),
+    % TODO optional adler32 checksum check for EntryData
+    Data = <<HeaderData/binary,
              Idx:64/integer,
              Term:64/integer,
              EntryDataLen:32/integer,
              EntryData/binary>>,
 
-    % fixed overhead = 22 bytes
-    DataSize = IdDataLen + 22 + EntryDataLen,
+    % fixed overhead = 20 bytes 2 * 64bit ints + 1 32 bit int
+    DataSize = byte_size(HeaderData) + 20 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
         true ->
             State = roll_over(State0),
-            append_data(State, Id, Idx, Term, Entry, DataSize, Data);
+            append_data(State, Id, Idx, Term, Entry, DataSize, Data, Trunc);
         false ->
-            append_data(State0, Id, Idx, Term, Entry, DataSize, Data)
+            append_data(State0, Id, Idx, Term, Entry, DataSize, Data, Trunc)
+    end.
+
+handle_msg({append, Id, Idx, Term, Entry},
+           #state{writers = Writers} = State0) ->
+    case maps:find(Id, Writers) of
+        error ->
+            write_data(Id, Idx, Term, Entry, false, State0);
+        {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
+            write_data(Id, Idx, Term, Entry, false, State0);
+        {ok, {out_of_seq, _}} ->
+            % writer is out of seq simply ignore drop the write
+            % TODO: capture metric for dropped writes
+            State0;
+        {ok, {in_seq, PrevIdx}} ->
+            % writer was in seq but has sent an out of seq entry
+            % notify writer
+            ?DBG("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
+                 [Id, PrevIdx, Idx]),
+            Id ! {ra_log_event, {resend_write, PrevIdx + 1}},
+            State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}}
     end;
+handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
+    write_data(Id, Idx, Term, Entry, true, State0);
 handle_msg(rollover, State) ->
     roll_over(State).
 
 append_data(#state{fd = Fd, batch = Batch,
+                   writers = Writers,
                    wal_file_size = FileSize} = State,
-            Id, Idx, Term, Entry, DataSize, Data) ->
+            Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
     ok = file:write(Fd, Data),
-    true = update_mem_table(Id, Idx, Term, Entry),
+    true = update_mem_table(Id, Idx, Term, Entry, Truncate),
     State#state{batch = incr_batch(Batch, Id, {Idx, Term}),
+                writers = Writers#{Id => {in_seq, Idx}},
                 wal_file_size = FileSize + DataSize}.
 
-update_mem_table(Id, Idx, Term, Entry) ->
+update_mem_table(Id, Idx, Term, Entry, Truncate) ->
     % TODO: cache current tables to avoid ets lookup?
+    % TODO: if Idx =< First we could truncate the entire table
     case ets:lookup(ra_log_open_mem_tables, Id) of
-        [{_Id, First, _Last, Tid}] ->
-            % TODO: check Last + 1 == Idx or handle missing?
+        [{_Id, From0, _To, Tid}] ->
             _ = ets:insert(Tid, {Idx, Term, Entry}),
+            From = case Truncate of
+                       true ->
+                           Idx;
+                       false ->
+                           % take the min of the First item in case we are
+                           % overwriting before the previously first seen entry
+                           min(From0, Idx)
+                   end,
             % update Last idx for current tbl
-            % this is how followers "truncate" previously seen entries
-            % take the min of the First item in case we are overwriting before
-            % the previous first seen entry
+            % this is how followers overwrite previously seen entries
             _ = ets:update_element(ra_log_open_mem_tables, Id,
-                                   [{2, min(First, Idx)}, {3, Idx}]);
+                                   [{2, From}, {3, Idx}]);
         [] ->
             % open new ets table
             Tid = open_mem_table(Id, Idx),
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
-                 file_modes = Modes, segment_writer = TblWriter} = State) ->
+roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
+                 file_modes = Modes, filename = Filename,
+                 segment_writer = TblWriter} = State) ->
     Num = Num0 + 1,
     ?DBG("wal: rolling over to ~p~n", [Num]),
     NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
     ra_lib:iter_maybe(Fd0, fun (F) -> ok = file:close(F) end),
     {ok, Fd} = file:open(NextFile, Modes),
 
-    % roll over to a new file
-    % close file and open new, update fd
-    % read all entries from ra_log_open_mem_tables
+    ok = close_open_mem_tables(Filename, TblWriter),
+
+    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
+                writer_name_cache = {0, #{}},
+                file_num = Num}.
+
+close_open_mem_tables(Filename, TblWriter) ->
     MemTables = ets:tab2list(ra_log_open_mem_tables),
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
@@ -317,9 +394,8 @@ roll_over(#state{fd = Fd0, filename = Filename, file_num = Num0, dir = Dir,
     % notify segment_writer of new unflushed memtables
     ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
                                                       Filename),
+    ok.
 
-    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
-                file_num = Num}.
 
 open_mem_table(Id, Idx) ->
     Tid = ets:new(Id, [set, protected, {read_concurrency, true}]),
@@ -366,10 +442,34 @@ incr_batch(#batch{writes = Writes,
     Batch#batch{writes = Writes + 1,
                 waiting = Waiting#{Id => IdxTerm}}.
 
+recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
+                  IdDataLen:16/integer, IdData:IdDataLen/binary,
+                  Idx:64/integer, Term:64/integer,
+                  EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                  Rest/binary>>, Cache) ->
+    % first writer appearance in WAL
+    Id = binary_to_term(IdData),
+    true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData),
+                            Trunc =:= 1),
+    % TODO: recover writers info, i.e. last index seen
+    recover_records(Rest,
+                    Cache#{IdRef => {Id, <<1:1/integer, IdRef:14/integer>>}});
+recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
+                  Idx:64/integer, Term:64/integer,
+                  EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                  Rest/binary>>, Cache) ->
+    #{IdRef := {Id, _}} = Cache,
+    true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData),
+                            Trunc =:= 1),
+    % TODO: recover writers info, i.e. last index seen
+    recover_records(Rest, Cache);
+recover_records(<<>>, _Cache) ->
+    ok.
+
 %% Here are the sys call back functions
 
 system_continue(Parent, Debug, State) ->
-    % TODO check if we've written to the curren batch or not
+    % TODO check if we've written to the current batch or not
     loop_batched(State, Parent, Debug).
 
 system_terminate(Reason, _Parent, _Debug, State) ->
@@ -381,7 +481,7 @@ write_debug(Dev, Event, Name) ->
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
-                 max_wal_size_bytes => unlimited, % TODO: better default
+                 max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
                  additional_wal_file_modes => []},
                Conf).
 

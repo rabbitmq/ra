@@ -10,8 +10,7 @@
          handle_follower/2,
          handle_follower_catchup/2,
          make_rpcs/1,
-         record_snapshot_point/2,
-         maybe_snapshot/2,
+         update_release_cursor/2,
          terminate/1
         ]).
 
@@ -21,9 +20,7 @@
     {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
     % current machine state
-    {release_cursor, ra_index()} |
-    % instruct ra to record a snapshot point at the current index
-    {snapshot_point, ra_index()}.
+    {release_cursor, ra_index()}.
 
 -type ra_machine_command() :: {down, pid()} | term().
 
@@ -52,8 +49,6 @@
       machine_apply_fun => ra_machine_apply_fun(),
       machine_state => term(),
       initial_machine_state => term(),
-      snapshot_index_term => ra_idxterm(),
-      snapshot_points => #{ra_index() => {ra_term(), ra_cluster()}},
       broadcast_time => non_neg_integer() % milliseconds
       }.
 
@@ -128,6 +123,8 @@ init(#{id := Id,
               % TODO: there may be scenarios when a single node starts up but hasn't
               % yet re-applied it's noop command that we may receive other join
               % commands that can't be applied.
+              % TODO: what if we have snapshotted and there is no `noop` command
+              % to be applied in the curren term?
               cluster_change_permitted => false,
               cluster_index_term => {0, 0},
               pending_cluster_changes => [],
@@ -139,9 +136,7 @@ init(#{id := Id,
               machine_apply_fun => wrap_machine_fun(MachineApplyFun),
               machine_state => MacState,
               % for snapshots
-              initial_machine_state => InitialMachineState,
-              snapshot_index_term => SnapshotIndexTerm,
-              snapshot_points => #{}},
+              initial_machine_state => InitialMachineState},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -152,6 +147,7 @@ init(#{id := Id,
                          (_, Acc) ->
                               Acc
                       end, {{SnapshotIndexTerm, Cluster0}, Log1}),
+    % TODO: do we need to set previous cluster here?
     State#{cluster => Cluster,
            cluster_index_term => ClusterIndexTerm,
            log => Log}.
@@ -210,7 +206,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
-                                             last_term = LastTerm}},
+                                             last_term = LastTerm}} = _Reply ,
               State0 = #{id := Id, cluster := Nodes, log := Log0}) ->
     #{PeerId := Peer0 = #{match_index := MI,
                           next_index := NI}} = Nodes,
@@ -218,6 +214,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     % match_index and update next_index directly
     {Peer, Log} = case ra_log:fetch_term(LastIdx, Log0) of
                       {LastTerm, L} when LastIdx >= MI -> % entry exists we can forward
+                          ?DBG("~p: setting last index for ~p ~p", [Id, PeerId, LastIdx]),
                           {Peer0#{match_index => LastIdx,
                                   % TODO: should we take max of NI and NextIndex?
                                   next_index => NextIdx}, L};
@@ -242,7 +239,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                   end,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
     {State, Rpcs} = make_rpcs(State1),
-    {leader, State, [{send_rpcs, false, Rpcs}]};
+    {leader, State, [{send_rpcs, true, Rpcs}]};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
@@ -289,6 +286,9 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     % TODO: should we send rpcs in case commit_index was incremented?
     % {State, Rpcs} = make_pipelined_rpcs(State1),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
+handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {leader, State#{log => ra_log:handle_event(Evt, Log0)}, []};
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -400,16 +400,6 @@ handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
 
-dropexisting({Log0, []}) ->
-    {Log0, []};
-dropexisting({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
-    case ra_log:exists({Idx, Trm}, Log0) of
-        {true, Log} ->
-            dropexisting({Log, Tail});
-        {false, Log} ->
-            {Log, Entries}
-    end.
-
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
@@ -423,7 +413,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
         {true, State0} ->
             % filter entries already seen
-            {Log, Entries} = dropexisting({Log0, Entries0}),
+            {Log, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
                 [] ->
                     % update commit index to be the min of the last
@@ -481,6 +471,9 @@ handle_follower({ra_log_event, {written, _} = Evt},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
     {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
+handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 State = #{id := Id, current_term := CurTerm}) ->
     Reply = append_entries_reply(CurTerm, false, State),
@@ -528,7 +521,8 @@ handle_follower({_PeerId, #append_entries_reply{term = Term}},
 handle_follower(#install_snapshot_rpc{term = Term,
                                       last_index = LastIndex,
                                       last_term = LastTerm},
-                State = #{current_term := CurTerm}) when Term < CurTerm ->
+                State = #{id := Id, current_term := CurTerm}) when Term < CurTerm ->
+    ?DBG("~p: install_snapshot old term ~p in ~p", [Id, LastIndex, LastTerm]),
     % follower receives a snapshot from an old term
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
@@ -552,8 +546,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                     last_applied => LastIndex,
                     cluster => Cluster,
                     machine_state => Data,
-                    leader_id => LeaderId,
-                    snapshot_index_term => {LastIndex, LastTerm}},
+                    leader_id => LeaderId},
 
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
@@ -600,12 +593,12 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
         apply_to(EffectiveCommitIndex, State0),
     % filter the effects that should be applied on a follower
     Effects1 = lists:filter(fun ({release_cursor, _}) -> true;
-                               ({snapshot_point, _}) -> true;
-                               ({monitor, process, _}) -> true;
-                               ({demonitor, _}) -> true;
-                               ({incr_metrics, _, _}) -> true;
-                               (_) -> false
-                           end, Effects0),
+                                ({snapshot_point, _}) -> true;
+                                ({monitor, process, _}) -> true;
+                                ({demonitor, _}) -> true;
+                                ({incr_metrics, _, _}) -> true;
+                                (_) -> false
+                            end, Effects0),
     Effects = [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects1],
     {State, Effects}.
 
@@ -623,94 +616,61 @@ make_rpcs(State) ->
                       {S, [Entry | Entries]}
               end, {State, []}, peers(State)).
 
-append_entries_or_snapshot(PeerId, Next,
-                           #{id := Id, log := Log0, current_term := Term,
-                             commit_index := CommitIndex,
-                             snapshot_index_term := {SIdx, STerm}} = State) ->
+append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
+                                           current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
-        {PrevTerm, Log1} when PrevTerm =/= undefined ->
+        {PrevTerm, Log} when PrevTerm =/= undefined ->
             % The log backend implementation will be responsible for
             % keeping a cache of recently accessed entries.
-            {Entries, Log} = ra_log:take(Next, 5, Log1),
-            LastIndex = case Entries of
-                            [] -> PrevIdx;
-                            _ ->
-                                {LastIdx, _, _} = lists:last(Entries),
-                                LastIdx
-                        end,
-            {LastIndex,
-             {PeerId, #append_entries_rpc{entries = Entries,
-                                          term = Term,
-                                          leader_id = Id,
-                                          prev_log_index = PrevIdx,
-                                          prev_log_term = PrevTerm,
-                                          leader_commit = CommitIndex}},
-            State#{log => Log}};
-        {undefined, Log1} when PrevIdx =:= SIdx ->
-            % Previous index is the same as snapshot index
-            {Entries, Log} = ra_log:take(Next, 5, Log1),
-            LastIndex = case Entries of
-                            [] -> PrevIdx;
-                            _ ->
-                                {LastIdx, _, _} = lists:last(Entries),
-                                LastIdx
-                        end,
-            {LastIndex,
-             {PeerId, #append_entries_rpc{entries = Entries,
-                                          term = Term,
-                                          leader_id = Id,
-                                          prev_log_index = SIdx,
-                                          prev_log_term = STerm,
-                                          leader_commit = CommitIndex}},
-            State#{log => Log}};
+            make_aer_chunk(PeerId, PrevIdx, PrevTerm, 5, State#{log => Log});
         {undefined, Log} ->
-            % TODO: The assumption here is that a missing entry means we need
-            % to send a snapshot. This may not be the case in a sparse log and would
-            % require changes if using incremental cleaning in combination with
-            % snapshotting.
-            {LastIndex, LastTerm, Config, MacState} = ra_log:read_snapshot(Log),
-            %% TODO: if last index/term is same as Next-1 we should send
-            %% append entries not snapshot
-            {LastIndex, {PeerId, #install_snapshot_rpc{term = Term,
-                                                       leader_id = Id,
-                                                       last_index = LastIndex,
-                                                       last_term = LastTerm,
-                                                       last_config = Config,
-                                                       data = MacState}},
-            State#{log => Log}}
-
+            % The assumption here is that a missing entry means we need
+            % to send a snapshot.
+            case ra_log:snapshot_index_term(Log) of
+                {PrevIdx, PrevTerm} ->
+                    %     % Previous index is the same as snapshot index
+                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, 5, State#{log => Log});
+                _ ->
+                    {LastIndex, LastTerm, Config, MacState} = ra_log:read_snapshot(Log),
+                    {LastIndex, {PeerId, #install_snapshot_rpc{term = Term,
+                                                               leader_id = Id,
+                                                               last_index = LastIndex,
+                                                               last_term = LastTerm,
+                                                               last_config = Config,
+                                                               data = MacState}},
+                     State#{log => Log}}
+            end
     end.
+
+make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
+               #{log := Log0, current_term := Term, id := Id,
+                 commit_index := CommitIndex} = State) ->
+    Next = PrevIdx  + 1,
+    {Entries, Log} = ra_log:take(Next, Num, Log0),
+    LastIndex = case Entries of
+                    [] -> PrevIdx;
+                    _ ->
+                        {LastIdx, _, _} = lists:last(Entries),
+                        LastIdx
+                end,
+    {LastIndex,
+     {PeerId, #append_entries_rpc{entries = Entries,
+                                  term = Term,
+                                  leader_id = Id,
+                                  prev_log_index = PrevIdx,
+                                  prev_log_term = PrevTerm,
+                                  leader_commit = CommitIndex}},
+     State#{log => Log}}.
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
-record_snapshot_point(Index, State = #{id := Id,
-                                       current_term := Term,
-                                       cluster := Cluster,
-                                       snapshot_points := Points0}) ->
-    ?DBG("~p: recording snapshot point at index ~p~n", [Id, Index]),
-    State#{snapshot_points => Points0#{Index => {Term, Cluster}}}.
-
-% takes a snapshot if a snapshot point for the given index has been
-% recorded.
-maybe_snapshot(Index, State = #{id := Id,
-                                log := Log0,
-                                snapshot_points := Points0,
-                                initial_machine_state := MachineState}) ->
-    case Points0 of
-        #{Index := {Term, Cluster}} ->
-            ?DBG("~p: writing snapshot at index ~p~n", [Id, Index]),
-            Snapshot = {Index, Term, Cluster, MachineState},
-            Log = ra_log:write_snapshot(Snapshot, Log0),
-            % TODO: remove all points below index
-            Points = maps:without([Index], Points0),
-            State#{log => Log,
-                   snapshot_index_term => {Index, Term},
-                   snapshot_points => Points};
-        _ ->
-            ?DBG("~p: snapshot point not found at index ~p~n", [Id, Index]),
-            State
-    end.
+update_release_cursor(Index, State = #{log := Log0,
+                                       initial_machine_state := MacState,
+                                       cluster := Cluster}) ->
+    % simply pass on release cursor index to log
+    Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
+    State#{log => Log}.
 
 -spec terminate(ra_node_state()) -> ok.
 terminate(#{log := Log}) ->
@@ -768,12 +728,12 @@ update_term(Term, State = #{current_term := CurTerm})
 update_term(_, State) ->
     State.
 
-last_idx_term(#{log := Log} = State) ->
+last_idx_term(#{log := Log}) ->
     case ra_log:last_index_term(Log) of
         {Idx, Term} ->
             {Idx, Term};
         undefined ->
-            maps:get(snapshot_index_term, State)
+            ra_log:snapshot_index_term(Log)
     end.
 
 is_candidate_log_up_to_date(_Idx, Term, {_LastIdx, LastTerm})
@@ -785,15 +745,18 @@ is_candidate_log_up_to_date(Idx, Term, {LastIdx, Term})
 is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
     false.
 
-has_log_entry_or_snapshot(Idx, Term,
-                          #{log := Log0,
-                            snapshot_index_term := {SIdx, STerm}} = State) ->
+has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
     case ra_log:fetch_term(Idx, Log0) of
         {Term, Log} ->
             {true, State#{log => Log}};
         {_, Log} ->
-            {SIdx =:= Idx andalso STerm =:= Term,
-             State#{log => Log}}
+            case ra_log:snapshot_index_term(Log) of
+                {SIdx, STerm} ->
+                    {SIdx =:= Idx andalso STerm =:= Term,
+                     State#{log => Log}};
+                undefined ->
+                    {false, State}
+            end
     end.
 
 fetch_term(Idx, #{log := Log}) ->
@@ -1036,20 +999,6 @@ agreed_commit(Indexes) ->
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?DBG("~p ~p received unhandled msg: ~p~n", [Id, RaState, Msg]).
 
-% first_or_atom(T) when is_tuple(T) ->
-%     element(1, T);
-% first_or_atom(A) when is_atom(A) ->
-%     A;
-% first_or_atom(X) ->
-%     X.
-
-% update_match_index(Id, Idx, State = #{cluster := Cluster}) ->
-%     case Cluster of
-%         #{Id := Node} ->
-%             State#{cluster := Cluster#{Id := Node#{match_index => Idx}}};
-%         _ -> State
-%     end.
-
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, 5, Log0) of
         {[], Log} ->
@@ -1066,6 +1015,16 @@ wrap_machine_fun(Fun) ->
             % of the entry
             fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
         {arity, 3} -> Fun
+    end.
+
+drop_existing({Log0, []}) ->
+    {Log0, []};
+drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
+    case ra_log:exists({Idx, Trm}, Log0) of
+        {true, Log} ->
+            drop_existing({Log, Tail});
+        {false, Log} ->
+            {Log, Entries}
     end.
 
 %%% ===================

@@ -15,6 +15,8 @@
          next_index/1,
          read_snapshot/1,
          write_snapshot/2,
+         snapshot_index_term/1,
+         update_release_cursor/4,
          read_meta/2,
          read_meta/3,
          write_meta/3,
@@ -31,7 +33,9 @@
 -type ra_segment_ref() :: {From :: ra_index(), To :: ra_index(),
                            File :: file:filename()}.
 -type ra_log_event() :: {written, ra_idxterm()} |
-                        {segments, ets:tid(), [ra_segment_ref()]}.
+                        {segments, ets:tid(), [ra_segment_ref()]} |
+                        {resend_write, ra_index()} |
+                        {snapshot_written, ra_idxterm(), file:filename()}.
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,
@@ -84,6 +88,16 @@
 
 -callback read_meta(Key :: ra_meta_key(), State :: ra_log_state()) ->
     maybe(term()).
+
+-callback snapshot_index_term(State :: ra_log_state()) ->
+    maybe(ra_idxterm()).
+
+-callback update_release_cursor(Idx :: ra_index(),
+                                Cluster :: ra_cluster(),
+                                InitialMachineState :: term(),
+                                State :: ra_log_state()) ->
+    ra_log_state().
+
 
 -callback write_meta(Key :: ra_meta_key(), Value :: term(),
                      State :: ra_log_state()) ->
@@ -179,6 +193,20 @@ write_snapshot(Snapshot, {Mod, Log0}) ->
 -spec read_snapshot(State::ra_log()) -> maybe(ra_log_snapshot()).
 read_snapshot({Mod, Log0}) ->
     Mod:read_snapshot(Log0).
+
+-spec snapshot_index_term(State::ra_log()) ->
+    maybe(ra_idxterm()).
+snapshot_index_term({Mod, Log0}) ->
+    Mod:snapshot_index_term(Log0).
+
+-spec update_release_cursor(Idx :: ra_index(),
+                            Cluster :: ra_cluster(),
+                            MachineState :: term(),
+                            State :: ra_log_state()) ->
+    ra_log_state().
+update_release_cursor(Idx, Cluster, MachineState, {Mod, Log0}) ->
+    Log = Mod:update_release_cursor(Idx, Cluster, MachineState, Log0),
+    {Mod, Log}.
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log()) ->
     maybe(term()).

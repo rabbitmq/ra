@@ -469,11 +469,7 @@ handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
     {State, Actions};
 handle_effect({release_cursor, Index}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
-    NodeState = ra_node:maybe_snapshot(Index, NodeState0),
-    {State#state{node_state = NodeState}, Actions};
-handle_effect({snapshot_point, Index}, _EvtType,
-              #state{node_state = NodeState0} = State, Actions) ->
-    NodeState = ra_node:record_snapshot_point(Index, NodeState0),
+    NodeState = ra_node:update_release_cursor(Index, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect({monitor, process, Pid}, _EvtType,
               #state{monitors = Monitors} = State, Actions) ->

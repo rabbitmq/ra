@@ -14,8 +14,11 @@ all_tests() ->
     [
      basic_log_writes,
      write_many,
-     roll_over
-     % recover
+     truncate_write,
+     out_of_seq_writes,
+     roll_over,
+     recover,
+     recover_truncated_write
     ].
 
 groups() ->
@@ -73,12 +76,92 @@ write_many(Config) ->
                   await_written(Self, {NumWrites, 1})
           end),
 
-    ct:pal("~b writes took ~p milliseconds~nFile modes: ~p~n",
+    ct:pal("~b 1024 byte writes took ~p milliseconds~nFile modes: ~p~n",
            [NumWrites, Taken / 1000, Modes]),
     % stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
+    ok.
+
+truncate_write(Config) ->
+    % a truncate write should update the range to not include previous indexes
+    % a trucated write does not need to follow the sequence
+    Dir = ?config(wal_dir, Config),
+    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    % Modes = [],
+    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
+                                         additional_wal_file_modes => Modes}, []),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = crypto:strong_rand_bytes(1024),
+    % write 1-3
+    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+     || I <- lists:seq(1, 3)],
+    await_written(Self, {3, 1}),
+    % then write 7 as may happen after snapshot installation
+    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 7, 1, Data),
+    ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
+    await_written(Self, {8, 1}),
+    [{Self, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, Self),
+    [_] = ets:lookup(Tid, 7),
+    [_] = ets:lookup(Tid, 8),
+    ok.
+
+out_of_seq_writes(Config) ->
+    % INVARIANT: the WAL expects writes for a particular ra node to be done
+    % using a contiguous range of integer keys (indexes). If a gap is detected
+    % it will notify the write of the missing index and the writer can resend
+    % writes from that point
+    % the wal will discard all subsequent writes until it receives the missing one
+    Dir = ?config(wal_dir, Config),
+    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    % Modes = [],
+    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
+                                         additional_wal_file_modes => Modes}, []),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = crypto:strong_rand_bytes(1024),
+    % write 1-3
+    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+     || I <- lists:seq(1, 3)],
+    await_written(Self, {3, 1}),
+    % then write 5
+    ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
+    % ensure an out of sync notification is received
+    receive
+        {ra_log_event, {resend_write, 4}} -> ok
+    after 500 ->
+              throw(reset_write_timeout)
+    end,
+    % try writing 6
+    ok = ra_log_wal:write(Self, ra_log_wal, 6, 1, Data),
+
+    % then write 4 and 5
+    ok = ra_log_wal:write(Self, ra_log_wal, 4, 1, Data),
+    ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
+    await_written(Self, {5, 1}),
+
+    % perform another out of sync write
+    ok = ra_log_wal:write(Self, ra_log_wal, 7, 1, Data),
+    receive
+        {ra_log_event, {resend_write, 6}} -> ok
+    after 500 ->
+              throw(written_timeout)
+    end,
+    % force a roll over
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    % try writing another
+    ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
+    % ensure a written event is _NOT_ received
+    % when a roll-over happens after out of sync write
+    receive
+        {ra_log_event, {written, {8, 1}}} ->
+            throw(unexpected_written_event)
+    after 500 -> ok
+    end,
+    % write the missing one
+    ok = ra_log_wal:write(Self, ra_log_wal, 6, 1, Data),
+    await_written(Self, {6, 1}),
+
     ok.
 
 roll_over(Config) ->
@@ -117,11 +200,73 @@ roll_over(Config) ->
     ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 5)),
     ok.
 
-recover(_Config) ->
+recover_truncated_write(Config) ->
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
-    exit(recover_test_not_impl).
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = <<42:256/unit:8>>,
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 3)],
+    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    % how can we better wait for recovery to finish?
+    timer:sleep(1000),
+    [{Self, _, 9, 9, _}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+    ok.
+
+recover(Config) ->
+    % open wal and write a few entreis
+    % close wal + delete mem_tables
+    % re-open wal and validate mem_tables are re-created
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = <<42:256/unit:8>>,
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    ra_log_wal:force_roll_over(ra_log_wal),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 2, Data)
+     || Idx <- lists:seq(101, 200)],
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    % how can we better wait for recovery to finish?
+    timer:sleep(1000),
+
+    % there should be no open mem tables after recovery as we treat any found
+    % wal files as complete
+    [] = ets:lookup(ra_log_open_mem_tables, Self),
+    [{Self, _, 1, 100, OpnMTTid1}, {Self, _, 101, 200, OpnMTTid2}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+    100 = ets:info(OpnMTTid1, size),
+    100 = ets:info(OpnMTTid2, size),
+    % check that both mem_tables notifications are received by the segment writer
+    receive
+        {'$gen_cast', {mem_tables, [{Self, 1, 100, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+    receive
+        {'$gen_cast', {mem_tables, [{Self, 101, 200, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+
+    ok.
+
+empty_mailbox() ->
+    receive
+        _ ->
+            empty_mailbox()
+    after 100 ->
+              ok
+    end.
 
 await_written(Id, IdxTerm) ->
     receive

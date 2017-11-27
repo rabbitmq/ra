@@ -3,7 +3,9 @@
 
 -export([start_link/1,
          accept_mem_tables/2,
-         accept_mem_tables/3
+         accept_mem_tables/3,
+         delete_segments/3,
+         delete_segments/4
         ]).
 
 -export([init/1,
@@ -41,6 +43,18 @@ accept_mem_tables(_SegmentWriter, [], undefined) ->
 accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
+-spec delete_segments(pid() | atom(), ra_index(), [file:filename()]) -> ok.
+delete_segments(Who, SnapIdx, SegmentFiles) ->
+    delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
+
+-spec delete_segments(pid() | atom(), pid() | atom(),
+                      ra_index(), [file:filename()]) ->
+    ok.
+delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
+    % delete all closed segment files
+    [ok = file:delete(F) || F <- SegmentFiles],
+    gen_server:cast(SegWriter, {delete_segment, Who , SnapIdx, MaybeActive}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -62,14 +76,34 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % can we make segment writer idempotent somehow
     _ = file:delete(WalFile),
 
-    {noreply, State}.
+    {noreply, State};
+handle_cast({delete_segment, Who, Idx, SegmentFile},
+            #state{active_segments = ActiveSegments} = State0) ->
+    case ActiveSegments of
+        #{Who := Seg} ->
+            case ra_log_file_segment:range(Seg) of
+                {_From, To} when To =< Idx ->
+                    % segment can be deleted
+                    ok = ra_log_file_segment:close(Seg),
+                    ok = file:delete(SegmentFile),
+                    {noreply,
+                     State0#state{active_segments = maps:remove(Who, ActiveSegments)}};
+                _ ->
+                    {noreply, State0}
+            end;
+        _ ->
+            {noreply, State0}
+    end.
+
+
 
 handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{active_segments = ActiveSegments}) ->
     % ensure any open segments are closed
-    [ok = ra_log_file_segment:close(Seg) || Seg <- maps:values(ActiveSegments)],
+    [ok = ra_log_file_segment:close(Seg)
+     || Seg <- maps:values(ActiveSegments)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -80,9 +114,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 do_segment({RaNodeId, StartIdx, EndIdx, Tid},
-         #state{data_dir = DataDir,
-                segment_conf = SegConf,
-                active_segments = ActiveSegments} = State) ->
+           #state{data_dir = DataDir,
+                  segment_conf = SegConf,
+                  active_segments = ActiveSegments} = State) ->
     Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
     Segment0 = case ActiveSegments of
                   #{RaNodeId := S} -> S;
@@ -127,7 +161,8 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
     State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
 
 find_segment_files(Dir) ->
-    lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))).
+    lists:reverse(
+      lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))).
 
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_file_segment:filename(CurSeg),

@@ -13,6 +13,8 @@
          next_index/1,
          write_snapshot/2,
          read_snapshot/1,
+         snapshot_index_term/1,
+         update_release_cursor/4,
          read_meta/2,
          write_meta/3,
          sync_meta/1,
@@ -161,6 +163,19 @@ read_snapshot(#state{snapshot = Snapshot}) ->
     maybe(term()).
 read_meta(Key, #state{meta = Meta}) ->
     maps:get(Key, Meta, undefined).
+
+-spec snapshot_index_term(State :: ra_log_memory_state()) ->
+    ra_idxterm().
+snapshot_index_term(#state{snapshot = {Idx, Term, _, _}}) ->
+    {Idx, Term};
+snapshot_index_term(#state{snapshot = undefined}) ->
+    undefined.
+
+-spec update_release_cursor(ra_index(), ra_cluster(), term(),
+                            ra_log_memory_state()) ->
+    ra_log_memory_state().
+update_release_cursor(_Idx, _Cluster, _MacState, State) ->
+    State.
 
 -spec write_meta(Key :: ra_log:ra_meta_key(), Value :: term(),
                  State :: ra_log_memory_state()) ->

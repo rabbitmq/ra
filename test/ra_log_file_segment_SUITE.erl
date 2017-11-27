@@ -20,7 +20,8 @@ all_tests() ->
      write_close_open_write,
      full_file,
      try_read_missing,
-     overwrite
+     overwrite,
+     term_query
     ].
 
 groups() ->
@@ -136,6 +137,19 @@ overwrite(Config) ->
     [{2, 2, Data}] = ra_log_file_segment:read(SegR, 2, 1),
     ok.
 
+term_query(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "term_query.seg"),
+    {ok, Seg0} = ra_log_file_segment:open(Fn),
+    {ok, Seg1} = ra_log_file_segment:append(Seg0, 5, 2, <<"a">>),
+    {ok, Seg2} = ra_log_file_segment:append(Seg1, 6, 3, <<"b">>),
+    _ = ra_log_file_segment:close(Seg2),
+    {ok, Seg} = ra_log_file_segment:open(Fn, #{mode => read}),
+    2 = ra_log_file_segment:term_query(Seg, 5),
+    3 = ra_log_file_segment:term_query(Seg, 6),
+    undefined = ra_log_file_segment:term_query(Seg2, 7),
+    _ = ra_log_file_segment:close(Seg2),
+    ok.
 
 %%% Internal
 %%% p

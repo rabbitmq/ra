@@ -5,7 +5,7 @@
         ]).
 
 simple_apply(Idx, {enq, Msg}, State) ->
-    {effects, State ++ [{Idx, Msg}], [{snapshot_point, Idx}]};
+    {effects, State ++ [{Idx, Msg}], []};
 simple_apply(_Idx, {deq, ToPid}, [{EncIdx, Msg} | State]) ->
     {effects, State, [{send_msg, ToPid, Msg}, {release_cursor, EncIdx}]};
 simple_apply(_Idx, deq, [{EncIdx, _Msg} | State]) ->

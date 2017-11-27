@@ -19,7 +19,13 @@ all_tests() ->
      receive_segment,
      read_one,
      validate_sequential_reads,
-     validate_reads_for_overlapped_writes
+     validate_reads_for_overlapped_writes,
+     recovery,
+     resend_write,
+     % detect_lost_written_range,
+     snapshot_recovery,
+     snapshot_installation,
+     update_release_cursor
     ].
 
 groups() ->
@@ -165,6 +171,7 @@ validate_reads_for_overlapped_writes(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     % write a segment and roll 1 - 300 - term 1
+    ct:pal("Before ~p", [ets:lookup(ra_log_file_metrics, Self)]),
     Log1 = append_and_roll(1, 300, 1, Log0),
     % write 300 - 400 in term 1 - no roll
     Log2 = append_n(300, 400, 1, Log1),
@@ -176,11 +183,171 @@ validate_reads_for_overlapped_writes(Config) ->
     Log6 = deliver_all_log_events(Log5, 200),
 
     Log7 = validate_read(1, 200, 1, Log6),
+    ct:pal("After ~p", [ets:lookup(ra_log_file_metrics, Self)]),
     Log8 = validate_read(200, 551, 2, Log7),
 
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
+    ct:pal("Metrics ~p", [Metrics]),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log_file:close(Log8),
+    ok.
+
+
+recovery(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 1, Log0),
+    {9, 1} = ra_log_file:last_index_term(Log1),
+    Log2 = append_and_roll(5, 15, 2, Log1),
+    {14, 2} = ra_log_file:last_index_term(Log2),
+    Log3 = append_n(15, 21, 3, Log2),
+    {20, 3} = ra_log_file:last_index_term(Log3),
+    Log4 = deliver_all_log_events(Log3, 200),
+    {20, 3} = ra_log_file:last_index_term(Log4),
+    ra_log_file:close(Log4),
+    application:stop(ra),
+    application:ensure_all_started(ra),
+    % % TODO how to avoid sleep
+    timer:sleep(2000),
+    Log5 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {20, 3} = ra_log_file:last_index_term(Log5),
+    Log6 = validate_read(1, 5, 1, Log5),
+    Log7 = validate_read(5, 15, 2, Log6),
+    Log8 = validate_read(15, 21, 3, Log7),
+    ra_log_file:close(Log8),
+
+    ok.
+
+resend_write(Config) ->
+    % simulate lost messages requiring the ra node to resend in flight
+    % writes
+    meck:new(ra_log_wal, [passthrough]),
+    meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) -> ok;
+                                       (A, B, C, D, E) ->
+                                           meck:passthrough([A, B, C, D, E])
+                                   end),
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % fake missing entry
+    Log2b = append_n(10, 11, 2, Log2),
+    Log3 = append_n(11, 13, 2, Log2b),
+    Log4 = receive
+               {ra_log_event, {resend_write, 10} = Evt} ->
+                   ra_log_file:handle_event(Evt, Log3)
+           after 500 ->
+                     throw(resend_write_timeout)
+           end,
+    {queued, Log5} = ra_log_file:append({13, 2, banana}, no_overwrite, Log4),
+    Log6 = deliver_all_log_events(Log5, 500),
+    {[_, _, _, _, _], _} = ra_log_file:take(9, 5, Log6),
+
+    meck:unload(ra_log_wal),
+    ok.
+
+detect_lost_written_range(Config) ->
+    % ra_log_file writes some messages
+    % WAL rolls over and WAL file is deleted
+    % WAL crashes
+    % ra_log_file writes some more message (that are lost)
+    % WAL recovers
+    % ra_log_file continues writing
+    % ra_log_file receives a {written, Start, End}  log event and detects that
+    % messages with a lower id than 'Start' were enver confirmed.
+    % ra_log_file resends all lost and new writes to create a contiguous range
+    % of writes
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self,
+                              wal => ra_log_wal}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % simulate wal outage
+    proc_lib:stop(ra_log_wal),
+
+    % write some messages
+    Log3 = append_n(10, 15, 2, Log2),
+    % ok = application:stop(ra),
+    % ok = application:start(ra),
+    timer:sleep(1000),
+    Log4 = append_n(15, 20, 2, Log3),
+    Log5 = deliver_all_log_events(Log4, 1000),
+    % validate no writes were lost and can be recovered
+    {Entries, _} = ra_log_file:take(0, 20, Log5),
+    ra_log_file:close(Log5),
+    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
+    ct:pal("entries ~p ~n ~p", [Entries, Log5]),
+    ?assert(length(Entries) =:= 20),
+    ?assert(length(RecoveredEntries) =:= 20),
+    Entries = RecoveredEntries,
+    ok.
+
+snapshot_recovery(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 2, Log0),
+    Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
+    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+    Log3 = deliver_all_log_events(Log2, 500),
+    ra_log_file:close(Log3),
+    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    Snapshot = ra_log_file:read_snapshot(Log),
+    {9, 2} = ra_log_file:last_index_term(Log),
+    {[], _} = ra_log_file:take(1, 9, Log),
+    ok.
+
+snapshot_installation(Config) ->
+    % write a few entries
+    % simulate outage/ message loss
+    % write snapshot for entry not seen
+    % then write entries
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_n(1, 10, 2, Log0),
+    Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
+    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+
+    Log3 = append_n(16, 20, 2, Log2),
+    Log = deliver_all_log_events(Log3, 500),
+    {19, 2} = ra_log_file:last_index_term(Log),
+    {[], _} = ra_log_file:take(1, 9, Log),
+    ok.
+
+update_release_cursor(Config) ->
+    % ra_log_file should initiate shapshot if segments can be released
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    % beyond 128 limit - should create two segments
+    Log1 = append_and_roll(1, 150, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % assert there are two segments at this point
+    [_, _] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    % leave one entry in the current segment
+    Log3 = ra_log_file:update_release_cursor(150, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log2),
+    Log4 = deliver_all_log_events(Log3, 500),
+    % no segments
+    [] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    % append a few more items
+    Log5 = append_and_roll(150, 155, 2, Log4),
+    Log6 = deliver_all_log_events(Log5, 500),
+    ra_lib:dump('Log6', Log6),
+    % assert there is only one segment - the current
+    % snapshot has been confirmed.
+    [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
+
     ok.
 
 validate_read(To, To, _Term, Log0) ->

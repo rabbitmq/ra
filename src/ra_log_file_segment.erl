@@ -5,19 +5,17 @@
          append/4,
          sync/1,
          read/3,
+         term_query/2,
          close/1,
          range/1,
          max_count/1,
          filename/1]).
-% , append/4, read/3, from_ets/2, close/1]).
 
 -include("ra.hrl").
 
 -define(VERSION, 1).
-
 -define(HEADER_SIZE, (16 div 8) + (16 div 8)). % {
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
-
 -define(INDEX_RECORD_SIZE, ((2 * 64 + 3 * 32) div 8)).
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
@@ -104,7 +102,7 @@ open(Filename, Options) ->
     end.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
-    {ok, state()} | {error, segment_full}.
+    {ok, state()} | {error, full}.
 append(#state{fd = Fd, index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
@@ -143,6 +141,16 @@ read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
     {Locs, Metas} = read_locs(Idx0 + Num -1, Idx0, Index, {[], []}),
     {ok, Datas} = file:pread(Fd, Locs),
     combine(Metas, Datas, []).
+
+-spec term_query(state(), Idx :: ra_index()) ->
+    maybe(ra_term()).
+term_query(#state{index = Index}, Idx) ->
+    case Index of
+        #{Idx := {Term, _, _, _}} ->
+            Term;
+        _ -> undefined
+    end.
+
 
 combine([], [], Acc) ->
     lists:reverse(Acc);
