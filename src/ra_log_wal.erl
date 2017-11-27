@@ -59,6 +59,9 @@
 
 -spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) -> ok.
 write(From, Wal, Idx, Term, Entry) ->
+    % in a future where we might have a pool of WALs they may not always
+    % be named, and wal could be a pid(). If so this will result in a lost
+    % write message rather than a name lookup failure (badarg).
     Wal ! {append, From, Idx, Term, Entry},
     ok.
 
@@ -67,6 +70,7 @@ write(From, Wal, Idx, Term, Entry) ->
 truncate_write(From, Wal, Idx, Term, Entry) ->
     Wal ! {truncate, From, Idx, Term, Entry},
     ok.
+
 % force a wal file to roll over to a new file
 % mostly useful for testing
 force_roll_over(Wal) ->

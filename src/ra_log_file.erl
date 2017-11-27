@@ -43,16 +43,18 @@
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
-         cache = #{} :: #{ra_index() => {ra_term(), log_entry()}}
+         cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
+         wal :: atom() % registered name
         }).
 
 -type ra_log_file_state() :: #state{}.
 
 
 -spec init(ra_log:ra_log_init_args()) -> ra_log_file_state().
-init(#{directory := Dir, id := Id}) ->
+init(#{directory := Dir, id := Id} = Conf) ->
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
+    Wal = maps:get(wal, Conf, ra_log_wal),
 
     Dets = filename:join(Dir, "ra_log_kv.dets"),
     ok = filelib:ensure_dir(Dets),
@@ -83,7 +85,8 @@ init(#{directory := Dir, id := Id}) ->
                       last_index = max(SnapIdx, LastIdx),
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
-                      kv = Kv},
+                      kv = Kv,
+                      wal = Wal},
 
     % recover the last term
     {LastTerm0, State00} = case State000#state.last_index of
@@ -389,16 +392,18 @@ sync_meta(#state{kv = Kv}) ->
 %%% Local functions
 
 write(State = #state{id = Id, cache = Cache,
-                     snapshot_index_in_progress = SnapIdx},
+                     snapshot_index_in_progress = SnapIdx,
+                     wal = Wal},
       {Idx, Term, Data}) when Idx =:= SnapIdx + 1 ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
     % and that prior entries should be considered stale
-    ok = ra_log_wal:truncate_write(Id, ra_log_wal, Idx, Term, Data),
+    ok = ra_log_wal:truncate_write(Id, Wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
                 cache = Cache#{Idx => {Term, Data}}};
-write(State = #state{id = Id, cache = Cache}, {Idx, Term, Data}) ->
-    ok = ra_log_wal:write(Id, ra_log_wal, Idx, Term, Data),
+write(State = #state{id = Id, cache = Cache, wal = Wal},
+      {Idx, Term, Data}) ->
+    ok = ra_log_wal:write(Id, Wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
                 cache = Cache#{Idx => {Term, Data}}}.
 

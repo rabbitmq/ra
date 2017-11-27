@@ -22,6 +22,7 @@ all_tests() ->
      validate_reads_for_overlapped_writes,
      recovery,
      resend_write,
+     % detect_lost_written_range,
      snapshot_recovery,
      snapshot_installation,
      update_release_cursor
@@ -247,6 +248,45 @@ resend_write(Config) ->
     {[_, _, _, _, _], _} = ra_log_file:take(9, 5, Log6),
 
     meck:unload(ra_log_wal),
+    ok.
+
+detect_lost_written_range(Config) ->
+    % ra_log_file writes some messages
+    % WAL rolls over and WAL file is deleted
+    % WAL crashes
+    % ra_log_file writes some more message (that are lost)
+    % WAL recovers
+    % ra_log_file continues writing
+    % ra_log_file receives a {written, Start, End}  log event and detects that
+    % messages with a lower id than 'Start' were enver confirmed.
+    % ra_log_file resends all lost and new writes to create a contiguous range
+    % of writes
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self,
+                              wal => ra_log_wal}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_and_roll(1, 10, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % simulate wal outage
+    proc_lib:stop(ra_log_wal),
+
+    % write some messages
+    Log3 = append_n(10, 15, 2, Log2),
+    % ok = application:stop(ra),
+    % ok = application:start(ra),
+    timer:sleep(1000),
+    Log4 = append_n(15, 20, 2, Log3),
+    Log5 = deliver_all_log_events(Log4, 1000),
+    % validate no writes were lost and can be recovered
+    {Entries, _} = ra_log_file:take(0, 20, Log5),
+    ra_log_file:close(Log5),
+    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
+    ct:pal("entries ~p ~n ~p", [Entries, Log5]),
+    ?assert(length(Entries) =:= 20),
+    ?assert(length(RecoveredEntries) =:= 20),
+    Entries = RecoveredEntries,
     ok.
 
 snapshot_recovery(Config) ->
