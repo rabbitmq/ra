@@ -21,7 +21,9 @@ all_tests() ->
      validate_sequential_reads,
      validate_reads_for_overlapped_writes,
      recovery,
+     resend_write,
      snapshot_recovery,
+     snapshot_installation,
      update_release_cursor
     ].
 
@@ -217,6 +219,36 @@ recovery(Config) ->
 
     ok.
 
+resend_write(Config) ->
+    % simulate lost messages requiring the ra node to resend in flight
+    % writes
+    meck:new(ra_log_wal, [passthrough]),
+    meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) -> ok;
+                                       (A, B, C, D, E) ->
+                                           meck:passthrough([A, B, C, D, E])
+                                   end),
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    % fake missing entry
+    Log2b = append_n(10, 11, 2, Log2),
+    Log3 = append_n(11, 13, 2, Log2b),
+    Log4 = receive
+               {ra_log_event, {resend_write, 10} = Evt} ->
+                   ra_log_file:handle_event(Evt, Log3)
+           after 500 ->
+                     throw(resend_write_timeout)
+           end,
+    {queued, Log5} = ra_log_file:append({13, 2, banana}, no_overwrite, Log4),
+    Log6 = deliver_all_log_events(Log5, 500),
+    {[_, _, _, _, _], _} = ra_log_file:take(9, 5, Log6),
+
+    meck:unload(ra_log_wal),
+    ok.
+
 snapshot_recovery(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
@@ -225,13 +257,32 @@ snapshot_recovery(Config) ->
     Log1 = append_and_roll(1, 10, 2, Log0),
     Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
     Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
-    ra_log_file:close(Log2),
+    Log3 = deliver_all_log_events(Log2, 500),
+    ra_log_file:close(Log3),
     Log = ra_log_file:init(#{directory => Dir, id => Self}),
     Snapshot = ra_log_file:read_snapshot(Log),
     {9, 2} = ra_log_file:last_index_term(Log),
     {[], _} = ra_log_file:take(1, 9, Log),
     ok.
 
+snapshot_installation(Config) ->
+    % write a few entries
+    % simulate outage/ message loss
+    % write snapshot for entry not seen
+    % then write entries
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    {0, 0} = ra_log_file:last_index_term(Log0),
+    Log1 = append_n(1, 10, 2, Log0),
+    Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
+    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+
+    Log3 = append_n(16, 20, 2, Log2),
+    Log = deliver_all_log_events(Log3, 500),
+    {19, 2} = ra_log_file:last_index_term(Log),
+    {[], _} = ra_log_file:take(1, 9, Log),
+    ok.
 
 update_release_cursor(Config) ->
     % ra_log_file should initiate shapshot if segments can be released

@@ -40,7 +40,9 @@
          directory :: list(),
          kv :: reference(),
          snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
-         snapshot_in_progress = false :: boolean(),
+         % if this is set a snapshot write is in progress for the
+         % index specified
+         snapshot_index_in_progress :: maybe(ra_index()),
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}}
         }).
 
@@ -71,25 +73,26 @@ init(#{directory := Dir, id := Id}) ->
             [] ->
                 undefined
         end,
+    ?DBG("log file init SnapshotStatet ~p ~p ~p", [SnapshotState, FirstIdx, LastIdx]),
     {SnapIdx, SnapTerm} = case SnapshotState of
                               undefined -> {-1, -1};
                               {I, T, _} -> {I, T}
                           end,
     State000 = #state{directory = Dir, id = Id,
-                      first_index = max(SnapIdx+1, FirstIdx),
-                      last_index = LastIdx,
+                      first_index = max(SnapIdx, FirstIdx),
+                      last_index = max(SnapIdx, LastIdx),
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
                       kv = Kv},
 
     % recover the last term
-    {LastTerm0, State00} = case LastIdx of
+    {LastTerm0, State00} = case State000#state.last_index of
                                SnapIdx ->
                                    {SnapTerm, State000};
-                              -1 ->
+                               -1 ->
                                    {0, State000};
-                              _ ->
-                                   fetch_term(LastIdx, State000)
+                               LI ->
+                                   fetch_term(LI, State000)
                            end,
     LastTerm = ra_lib:default(LastTerm0, -1),
     State0 = State00#state{last_term = LastTerm},
@@ -227,10 +230,9 @@ handle_event({segments, Tid, NewSegs},
     State0#state{segment_refs = NewSegs ++ SegmentRefs,
                  % re-enable snapshots based on release cursor updates
                  % in case snapshot_written was lost
-                 snapshot_in_progress = false};
+                 snapshot_index_in_progress = undefined};
 handle_event({snapshot_written, {Idx, Term}, File},
-             #state{id = Id,
-                    open_segments = OpenSegs0,
+             #state{id = Id, open_segments = OpenSegs0,
                     segment_refs = SegRefs0} = State0) ->
     % delete any segments outside of first_index
     {SegRefs, OpenSegs} =
@@ -251,13 +253,23 @@ handle_event({snapshot_written, {Idx, Term}, File},
                   S <- maps:values(maps:with(Obsolete, OpenSegs0))],
                 {Active, maps:without(Obsolete, OpenSegs0)}
         end,
-
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
                                 open_segments = OpenSegs,
-                                snapshot_in_progress = false,
-                                snapshot_state = {Idx, Term, File}}).
+                                snapshot_index_in_progress = undefined,
+                                snapshot_state = {Idx, Term, File}});
+handle_event({resend_write, Idx}, #state{cache = Cache0,
+                                         last_index = LastIdx} = State0) ->
+    % resend missing entries from cache.
+    % The assumption is they are available in the cache
+    Cache = maps:filter(fun (K, _) when K >= Idx -> true;
+                            (_, _) -> false
+                        end, Cache0),
+    lists:foldl(fun (I, Acc) ->
+                        X = maps:get(I, Cache),
+                        write(Acc, erlang:insert_element(1, X, I))
+                end, State0, lists:seq(Idx, LastIdx)).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -306,7 +318,7 @@ fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
     ra_log_file_state().
 write_snapshot(Snapshot, #state{directory = Dir} = State) ->
     ok = ra_log_file_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
-    State.
+    State#state{snapshot_index_in_progress = element(1, Snapshot)}.
 
 -spec read_snapshot(State :: ra_log_file_state()) ->
     maybe(ra_log:ra_log_snapshot()).
@@ -333,9 +345,10 @@ snapshot_index_term(_State) ->
                             State :: ra_log_file_state()) ->
     ra_log_file_state().
 update_release_cursor(_Idx, _Cluster, _MachineState,
-                      #state{snapshot_in_progress = true} = State) ->
+                      #state{snapshot_index_in_progress = SIIP } = State)
+  when is_integer(SIIP) ->
     % if a snapshot is in progress don't even evaluate
-    % new segments will always set snapshot_in_progress = false
+    % new segments will always set snapshot_index_in_progress = undefined
     % to ensure liveliness in case a snapshot_written message is lost.
     State;
 update_release_cursor(Idx, Cluster, MachineState,
@@ -347,7 +360,7 @@ update_release_cursor(Idx, Cluster, MachineState,
             SnapIdx = Idx - 1,
             {Term, State} = fetch_term(SnapIdx, State0),
             write_snapshot({SnapIdx, Term, Cluster, MachineState},
-                           State#state{snapshot_in_progress = true});
+                           State#state{snapshot_index_in_progress = SnapIdx});
         false ->
             State0
     end.
@@ -375,8 +388,16 @@ sync_meta(#state{kv = Kv}) ->
 
 %%% Local functions
 
-write(State = #state{id = Id, cache = Cache},
-      {Idx, Term, Data}) ->
+write(State = #state{id = Id, cache = Cache,
+                     snapshot_index_in_progress = SnapIdx},
+      {Idx, Term, Data}) when Idx =:= SnapIdx + 1 ->
+    % this is the next write after a snapshot was taken or received
+    % we need to indicate to the WAL that this may be a non-contiguous write
+    % and that prior entries should be considered stale
+    ok = ra_log_wal:truncate_write(Id, ra_log_wal, Idx, Term, Data),
+    State#state{last_index = Idx, last_term = Term,
+                cache = Cache#{Idx => {Term, Data}}};
+write(State = #state{id = Id, cache = Cache}, {Idx, Term, Data}) ->
     ok = ra_log_wal:write(Id, ra_log_wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
                 cache = Cache#{Idx => {Term, Data}}}.

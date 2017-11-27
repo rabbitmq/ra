@@ -412,7 +412,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
         {true, State0} ->
             % filter entries already seen
-            {Log, Entries} = dropexisting({Log0, Entries0}),
+            {Log, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
                 [] ->
                     % update commit index to be the min of the last
@@ -995,12 +995,12 @@ wrap_machine_fun(Fun) ->
         {arity, 3} -> Fun
     end.
 
-dropexisting({Log0, []}) ->
+drop_existing({Log0, []}) ->
     {Log0, []};
-dropexisting({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
+drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
     case ra_log:exists({Idx, Trm}, Log0) of
         {true, Log} ->
-            dropexisting({Log, Tail});
+            drop_existing({Log, Tail});
         {false, Log} ->
             {Log, Entries}
     end.

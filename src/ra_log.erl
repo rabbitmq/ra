@@ -33,7 +33,9 @@
 -type ra_segment_ref() :: {From :: ra_index(), To :: ra_index(),
                            File :: file:filename()}.
 -type ra_log_event() :: {written, ra_idxterm()} |
-                        {segments, ets:tid(), [ra_segment_ref()]}.
+                        {segments, ets:tid(), [ra_segment_ref()]} |
+                        {resend_write, ra_index()} |
+                        {snapshot_written, ra_idxterm(), file:filename()}.
 
 -export_type([ra_log_init_args/0,
               ra_log_state/0,

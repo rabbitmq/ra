@@ -268,7 +268,7 @@ snapshot(Config) ->
     LogB = ra_log:init(ra_log_file, #{directory => Dir,
                                       id => snapshot}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
-    {undefined, _} = ra_log:fetch_term(LastIdx, LogB),
+    {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),
     Snapshot = ra_log:read_snapshot(LogB),
     ok.
 
