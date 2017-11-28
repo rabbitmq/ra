@@ -2,7 +2,8 @@
 -behaviour(ra_log).
 -export([init/1,
          close/1,
-         append/3,
+         append/2,
+         write/2,
          take/3,
          last_index_term/1,
          handle_event/2,
@@ -44,28 +45,45 @@ close(_State) ->
     % not much to do here
     ok.
 
--spec append(Entry::log_entry(),
-             Overwrite :: overwrite | no_overwrite,
-             State::ra_log_memory_state()) ->
+-spec append(Entry::log_entry(), State::ra_log_memory_state()) ->
     {written, ra_log_memory_state()} |
     {error, integrity_error}.
-append({Idx, Term, Data}, no_overwrite, #state{last_index = LastIdx,
-                                               entries = Log} = State)
-      when Idx > LastIdx ->
+append({Idx, Term, Data}, #state{last_index = LastIdx,
+                                 entries = Log} = State)
+  when Idx > LastIdx ->
     {written, State#state{last_index = Idx,
                           entries = Log#{Idx => {Term, Data}}}};
-append(_Entry, no_overwrite, _State) ->
-    {error, integrity_error};
-append({Idx, Term, Data}, overwrite, #state{last_index = LastIdx,
-                                               entries = Log0} = State)
-  when LastIdx > Idx ->
-    Log = maps:without(lists:seq(Idx+1, LastIdx), Log0),
-    {written, State#state{last_index = Idx,
-                          entries = Log#{Idx => {Term, Data}}}};
-append({Idx, Term, Data}, overwrite, #state{last_index = _LastIdx,
-                                            entries = Log} = State) ->
-    {written, State#state{last_index = Idx,
-                          entries = Log#{Idx => {Term, Data}}}}.
+append(_Entry, _State) ->
+    {error, integrity_error}.
+
+-spec write(Entries :: [log_entry()], State::ra_log_memory_state()) ->
+    {written, ra_log_memory_state()} |
+    {error, integrity_error}.
+write([{FirstIdx, _, _} | _] = Entries,
+      #state{last_index = LastIdx, entries = Log0} = State)
+  when FirstIdx =< LastIdx + 1 ->
+    % overwrite
+    Log1 = case FirstIdx < LastIdx of
+               true ->
+                   maps:without(lists:seq(FirstIdx+1, LastIdx), Log0);
+               false ->
+                   Log0
+           end,
+    {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
+                                           {Acc#{Idx => {Term, Data}}, Idx}
+                                   end, {Log1, FirstIdx}, Entries),
+    {written, State#state{last_index = LastInIdx,
+                          entries = Log}};
+write([{FirstIdx, _, _} | _] = Entries,
+      #state{snapshot = Snapshot, entries = Log0} = State)
+ when element(1, Snapshot) + 1 =:= FirstIdx ->
+    {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
+                                           {Acc#{Idx => {Term, Data}}, Idx}
+                                   end, {Log0, FirstIdx}, Entries),
+    {written, State#state{last_index = LastInIdx,
+                          entries = Log}};
+write(_Entries, _State) ->
+    {error, integrity_error}.
 
 
 -spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->

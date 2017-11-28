@@ -5,7 +5,8 @@
 
 -export([init/1,
          close/1,
-         append/3,
+         append/2,
+         write/2,
          take/3,
          last_index_term/1,
          handle_event/2,
@@ -145,18 +146,41 @@ close(#state{kv = Kv}) ->
     ok.
 
 -spec append(Entry :: log_entry(),
-             overwrite | no_overwrite,
              State :: ra_log_file_state()) ->
     {queued, ra_log_file_state()} |
     {error, integrity_error}.
-append(Entry, no_overwrite, #state{last_index = LastIdx})
-      when element(1, Entry) =< LastIdx ->
-    {error, integrity_error};
-append(Entry, overwrite, State) ->
-    {queued, write(State, Entry)};
-append(Entry, no_overwrite, State = #state{last_index = LastIdx})
-      when element(1, Entry) > LastIdx ->
-    {queued, write(State, Entry)}.
+append(Entry, #state{last_index = LastIdx} = State)
+      when element(1, Entry) =:= LastIdx + 1 ->
+    {queued, wal_write(State, Entry)};
+append(_Entry, _State) ->
+    {error, integrity_error}.
+
+
+-spec write(Entries :: [log_entry()],
+            State :: ra_log_file_state()) ->
+    {queued, ra_log_file_state()} |
+    {error, integrity_error | wal_unavailable}.
+write([{FstIdx, _, _} | _] = Entries,
+      State0 = #state{last_index = LastIdx})
+      when FstIdx =< LastIdx + 1 ->
+    % TODO: wal should provide batch api
+    State = lists:foldl(fun (Entry, S) ->
+                                wal_write(S, Entry)
+                        end, State0, Entries),
+    {queued, State};
+write([{FstIdx, _, _} = First | Entries],
+      State00 = #state{snapshot_index_in_progress = SnapIdx})
+      when FstIdx =:= SnapIdx + 1 ->
+    % the next write after a snapshot has started should be a "truncating" write
+    % to the WAL
+    State0 = wal_truncate_write(State00, First),
+    % write the rest normally
+    State = lists:foldl(fun (Entry, S) ->
+                                wal_write(S, Entry)
+                        end, State0, Entries),
+    {queued, State};
+write(_Entry, _State) ->
+    {error, integrity_error}.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
@@ -271,7 +295,7 @@ handle_event({resend_write, Idx}, #state{cache = Cache0,
                         end, Cache0),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
-                        write(Acc, erlang:insert_element(1, X, I))
+                        wal_write(Acc, erlang:insert_element(1, X, I))
                 end, State0, lists:seq(Idx, LastIdx)).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
@@ -391,17 +415,17 @@ sync_meta(#state{kv = Kv}) ->
 
 %%% Local functions
 
-write(State = #state{id = Id, cache = Cache,
-                     snapshot_index_in_progress = SnapIdx,
-                     wal = Wal},
-      {Idx, Term, Data}) when Idx =:= SnapIdx + 1 ->
+wal_truncate_write(State = #state{id = Id, cache = Cache,
+                                  wal = Wal},
+                   {Idx, Term, Data}) ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
     % and that prior entries should be considered stale
     ok = ra_log_wal:truncate_write(Id, Wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
-                cache = Cache#{Idx => {Term, Data}}};
-write(State = #state{id = Id, cache = Cache, wal = Wal},
+                cache = Cache#{Idx => {Term, Data}}}.
+
+wal_write(State = #state{id = Id, cache = Cache, wal = Wal},
       {Idx, Term, Data}) ->
     ok = ra_log_wal:write(Id, Wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
@@ -571,7 +595,7 @@ cache_take0(Next, Last, Cache, Acc) ->
 
 
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
-    {queued, State} = append({0, 0, undefined}, no_overwrite, State0),
+    {queued, State} = append({0, 0, undefined}, State0),
     receive
         {ra_log_event, {written, {0, 0}}} -> ok
     end,

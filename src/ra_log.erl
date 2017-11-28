@@ -4,8 +4,10 @@
 
 -export([init/2,
          close/1,
-         append/3,
-         append_sync/3,
+         append/2,
+         write/2,
+         append_sync/2,
+         write_sync/2,
          fetch/2,
          fetch_term/2,
          take/3,
@@ -51,11 +53,16 @@
 -callback close(State :: ra_log_state()) -> ok.
 
 -callback append(Entry :: log_entry(),
-                 overwrite | no_overwrite,
                  State :: ra_log_state()) ->
     {queued, ra_log_state()} |
     {written, ra_log_state()} |
-    {error, integrity_error}.
+    {error, integrity_error | wal_unavailable}.
+
+-callback write(Entries :: [log_entry()],
+                State :: ra_log_state()) ->
+    {queued, ra_log_state()} |
+    {written, ra_log_state()} |
+    {error, integrity_error | wal_unavailable}.
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
@@ -130,22 +137,50 @@ fetch_term(Idx, {Mod, Log0}) ->
     {Result, Log} = Mod:fetch_term(Idx, Log0),
     {Result, {Mod, Log}}.
 
--spec append(Entry :: log_entry(),
-             Overwrite :: overwrite | no_overwrite,
-             State::ra_log()) ->
+-spec append(Entry :: log_entry(), State::ra_log()) ->
     {queued, ra_log()} |
     {written, ra_log()} |
-    {error, integrity_error}.
-append(Entry, Overwrite, {Mod, Log0}) ->
-    case Mod:append(Entry, Overwrite, Log0) of
+    {error, integrity_error | wal_unavailable}.
+append(Entry, {Mod, Log0}) ->
+    case Mod:append(Entry, Log0) of
         {error, _} = Err ->
             Err;
         {Status, Log} ->
             {Status, {Mod, Log}}
     end.
 
-append_sync({Idx, Term, _} = Entry, Overwrite, Log0) ->
-    case ra_log:append(Entry, Overwrite, Log0) of
+-spec write(Entries :: [log_entry()], State::ra_log()) ->
+    {queued, ra_log()} |
+    {written, ra_log()} |
+    {error, integrity_error | wal_unavailable}.
+write(Entries, {Mod, Log0}) ->
+    case Mod:write(Entries, Log0) of
+        {error, _} = Err ->
+            Err;
+        {Status, Log} ->
+            {Status, {Mod, Log}}
+    end.
+
+append_sync({Idx, Term, _} = Entry, Log0) ->
+    case ra_log:append(Entry, Log0) of
+        {written, Log} ->
+            ra_log:handle_event({written, {Idx, Term}}, Log);
+        {queued, Log} ->
+            receive
+                % TODO: we could now end up re-ordering written notifications
+                % so need to handle that later
+                {ra_log_event, {written, IdxTerm}} ->
+                    ra_log:handle_event({written, IdxTerm}, Log)
+            after 5000 ->
+                      throw(ra_log_append_timeout)
+            end;
+        {error, _} = Err ->
+            throw(Err)
+    end.
+
+write_sync(Entries, Log0) ->
+    {Idx, Term, _} = lists:last(Entries),
+    case ra_log:write(Entries, Log0) of
         {written, Log} ->
             ra_log:handle_event({written, {Idx, Term}}, Log);
         {queued, Log} ->

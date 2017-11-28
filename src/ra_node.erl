@@ -80,7 +80,8 @@
                             broadcast_time => non_neg_integer(), % milliseconds
                             election_timeout_multiplier => non_neg_integer(),
                             cluster_id => atom(),
-                            stop_follower_election => boolean()}.
+                            stop_follower_election => boolean(),
+                            follower_catchup_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
@@ -413,13 +414,13 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
         {true, State0} ->
             % filter entries already seen
-            {Log, Entries} = drop_existing({Log0, Entries0}),
+            {Log1, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
                 [] ->
                     % update commit index to be the min of the last
                     % entry seen (but not necessarily written)
                     % and the leader commit
-                    {Idx, _} = ra_log:last_index_term(Log),
+                    {Idx, _} = ra_log:last_index_term(Log1),
                     State1 = State0#{commit_index => min(Idx, LeaderCommit),
                                      leader_id => LeaderId},
                     % evaluate commit index as we may have received an updated
@@ -430,17 +431,18 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                      [{cast, LeaderId, {Id, Reply}} | Effects]};
                 [{FirstIdx, FirstTerm, _} | _] ->
 
-                    {Status, {LastIdx, _LastTerm}, State1}
+                    {LastIdx, State1}
                         = lists:foldl(fun append_log_follower/2,
-                                      {queued, {FirstIdx, FirstTerm}, State0},
+                                      {FirstIdx, State0},
                                       Entries),
-
+                    {Status, Log} = ra_log:write(Entries, Log1),
+                    State2 = State1#{log => Log},
                     Effects = case Status of
                                   written ->
                                       % schedule a written next_event
                                       % we can use last idx here as the log store
                                       % is now fullly up to date.
-                                      LastIdxTerm = last_idx_term(State1),
+                                      LastIdxTerm = last_idx_term(State2),
                                       [{next_event,
                                         {ra_log_event, {written, LastIdxTerm}}}];
                                   queued -> []
@@ -453,7 +455,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     % processed
                     % TODO: is it really safe to use an unsynced (but seen) last
                     % entry index as the current commit_index?
-                    {follower, State1#{commit_index := min(LeaderCommit, LastIdx),
+                    {follower, State2#{commit_index => min(LeaderCommit, LastIdx),
                                        leader_id => LeaderId}, Effects}
             end;
         {false, State0} ->
@@ -563,12 +565,12 @@ handle_follower(Msg, State) ->
 handle_follower_catchup(#append_entries_rpc{term = Term,
                                             prev_log_index = PLIdx,
                                             prev_log_term = PLTerm} = Msg,
-                        State = #{current_term := CurTerm})
+                        State0 = #{current_term := CurTerm})
   when Term >= CurTerm ->
-    case has_log_entry_or_snapshot(PLIdx, PLTerm, State) of
-        {true, _} ->
+    case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
+        {true, State} ->
             {follower, State, [{next_event, cast, Msg}]};
-        {false, _} ->
+        {false, State} ->
             {follower_catchup, State, []}
     end;
 handle_follower_catchup(#request_vote_rpc{} = Msg, State) ->
@@ -887,7 +889,7 @@ append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
-    case ra_log:append({NextIdx, Term, Cmd}, no_overwrite, Log0) of
+    case ra_log:append({NextIdx, Term, Cmd}, Log0) of
         {queued, Log} ->
             {queued, NextIdx, Term, State#{log => Log}};
         {written, Log} ->
@@ -897,9 +899,7 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     end.
 
 append_log_follower({Idx, Term, Cmd} = Entry,
-                    {Status, _,
-                     State = #{log := Log0,
-                               cluster_index_term := {Idx, CITTerm}}})
+                    {_, State = #{cluster_index_term := {Idx, CITTerm}}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster
@@ -907,31 +907,20 @@ append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
-            Log = ra_log:append_sync(Entry, overwrite, Log0),
-            {written, {Idx, Term}, State#{log => Log, cluster => Cluster,
-                                          cluster_index_term => {Idx, Term}}};
+            {Idx, State#{cluster => Cluster,
+                         cluster_index_term => {Idx, Term}}};
         _ ->
             % revert back to previous cluster
             {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
-            append_log_follower(Entry, {Status, Idx, State1})
+            append_log_follower(Entry, {Idx, State1})
     end;
-append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}} = Entry,
-                    {_Status, _, State = #{log := Log0}}) ->
-    % TODO: we may want to delay sync until after
-    % all entries have been appended.
-    Log = ra_log:append_sync(Entry, overwrite, Log0),
-    {written, {Idx, Term},
-     State#{log => Log, cluster => Cluster, cluster_index_term => {Idx, Term}}};
-append_log_follower(Entry = {Idx, Term, _},
-                    {_Status, _, State = #{log := Log0}}) ->
-    case ra_log:append(Entry, overwrite, Log0) of
-        {error, _} = Err ->
-            exit(Err);
-        {Status, Log} ->
-            {Status, {Idx, Term}, State#{log => Log}}
-    end.
+append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
+                    {_, State}) ->
+    {{Idx, Term}, State#{cluster => Cluster, cluster_index_term => {Idx, Term}}};
+append_log_follower({Idx, _, _}, {_, State}) ->
+    {Idx, State}.
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
@@ -944,7 +933,7 @@ append_cluster_change(Cluster, From, ReplyMode,
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
     % TODO: can we even do this async?
-    Log = ra_log:append_sync({NextIdx, Term, Command}, no_overwrite, Log0),
+    Log = ra_log:append_sync({NextIdx, Term, Command}, Log0),
     {written, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,

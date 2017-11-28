@@ -5,7 +5,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include("ra.hrl").
 
--define(SEND_AND_AWAIT_CONSENSUS_TIMEOUT, 60000).
+-define(SEND_AND_AWAIT_CONSENSUS_TIMEOUT, 6000).
 
 all() ->
     [
@@ -26,7 +26,7 @@ all_tests() ->
      dirty_query,
      members,
      consistent_query,
-     snapshot,
+     node_catches_up,
      add_node,
      queue_example,
      ramp_up_and_ramp_down,
@@ -100,7 +100,7 @@ init_per_group(ra_reduce_network_usage, Config) ->
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
                                    stop_follower_election => true,
-                                   follower_catchup_timeout => 10000},
+                                   follower_catchup_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end
           end,
@@ -340,7 +340,7 @@ add_node(Config) ->
     {ok, {{_, Term}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
-snapshot(Config) ->
+node_catches_up(Config) ->
     N1 = nn(Config, 1),
     N2 = nn(Config, 2),
     N3 = nn(Config, 3),
@@ -351,17 +351,16 @@ snapshot(Config) ->
     % start two nodes
     ok = StartNode(N1, InitialNodes, fun ra_queue:simple_apply/3, []),
     ok = StartNode(N2, InitialNodes, fun ra_queue:simple_apply/3, []),
-    % N1 = {N1, node()}, N2 = {N2, node()}, N3 = {N3, node()},
     DecSink = spawn(fun () -> receive marker_pattern -> ok end end),
     {ok, {_, Term}, Leader} = ra:send(N1, {enq, banana}),
     {ok, {_, Term}, Leader} = ra:send(Leader, {deq, DecSink}),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
-    % waitfor(banana, apply_timeout),
+
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
     ok = ra:start_node(N3, InitialNodes, fun ra_queue:simple_apply/3, []),
     timer:sleep(2000),
-    % at this point snapshot should have been taken
+    % at this point the node should be caught up
     {ok, {_, Res}, _} = ra:dirty_query(N1, fun ra_lib:id/1),
     {ok, {_, Res}, _} = ra:dirty_query(N2, fun ra_lib:id/1),
     {ok, {_, Res}, _} = ra:dirty_query(N3, fun ra_lib:id/1),
@@ -441,11 +440,14 @@ follower_catchup(Config) ->
     {ok, _, _Leader} = ra:send_and_await_consensus({N1, node()}, 5,
                                                    ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     timer:sleep(1000),
-    % issue command
-    {ok, IdxTerm, Leader0} = ra:send_and_notify({N1, node()}, 500),
+    % issue command - this will be lost
+    {ok, _, Leader0} = ra:send_and_notify({N1, node()}, 500),
+    % issue next command
+    {ok, IdxTerm, Leader0} = ra:send_and_notify({N1, node()}, 501),
     [Follower] = [N1, N2] -- [element(1, Leader0)],
     receive
-        {consensus, IdxTerm} -> ok
+        {consensus, IdxTerm} ->
+            exit(unexpected_consensus)
     after 2000 ->
             case get_gen_statem_status({Follower, node()}) of
                 follower_catchup -> ok;
@@ -454,12 +456,14 @@ follower_catchup(Config) ->
     end,
     meck:unload(),
     receive
-        {consensus, IdxTerm} -> ok
-    after 15000 ->
+        {consensus, IdxTerm} ->
             case get_gen_statem_status({Follower, node()}) of
                 follower -> ok;
                 FollowerStatus1 -> exit({unexpected_follower_status, FollowerStatus1})
-            end
+            end,
+            ok
+    after 10000 ->
+              exit(consensus_not_achieved)
     end,
     terminate_cluster([N1, N2]).
 

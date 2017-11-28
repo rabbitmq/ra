@@ -60,17 +60,16 @@ handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    {queued, Log1} = ra_log_file:append({1, 1, "value"}, overwrite, Log0),
-    {queued, Log2} = ra_log_file:append({2, 1, "value"}, overwrite, Log1),
+    {queued, Log1} = ra_log_file:write([{1, 1, "value"}, {2, 1, "value"}], Log0),
     receive
         {ra_log_event, {written, {2, 1}}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
-    {queued, Log3} = ra_log_file:append({1, 2, "value"}, overwrite, Log2),
+    {queued, Log3} = ra_log_file:write([{1, 2, "value"}], Log1),
     % ensure immediate truncation
     {1, 2} = ra_log_file:last_index_term(Log3),
-    {queued, Log4} = ra_log_file:append({2, 2, "value"}, overwrite, Log3),
+    {queued, Log4} = ra_log_file:write([{2, 2, "value"}], Log3),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
     Log = ra_log_file:handle_event({written, {2, 1}}, Log4),
@@ -92,7 +91,7 @@ receive_segment(Config) ->
 
     Log1 = lists:foldl(fun(E, Acc0) ->
                                {queued, Acc} =
-                                   ra_log_file:append(E, no_overwrite, Acc0),
+                                   ra_log_file:append(E, Acc0),
                                Acc
                        end, Log0, Entries),
     Log2 = deliver_all_log_events(Log1, 500),
@@ -115,13 +114,15 @@ read_one(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    Log1 = append_n(0, 1, 1, Log0),
+    Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
-    {[_], Log} = ra_log_file:take(0, 5, Log2),
+    {[_], Log} = ra_log_file:take(1, 5, Log2),
     % read out of range
     {[], Log} = ra_log_file:take(5, 5, Log2),
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4} = M] = ets:lookup(ra_log_file_metrics, Self),
+    ct:pal("M ~p", [M]),
+    % read two entries
     ?assert(M1 + M2 + M3 + M4 =:= 1),
     ra_log_file:close(Log),
     ok.
@@ -170,20 +171,18 @@ validate_reads_for_overlapped_writes(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    % write a segment and roll 1 - 300 - term 1
-    ct:pal("Before ~p", [ets:lookup(ra_log_file_metrics, Self)]),
-    Log1 = append_and_roll(1, 300, 1, Log0),
-    % write 300 - 400 in term 1 - no roll
-    Log2 = append_n(300, 400, 1, Log1),
+    % write a segment and roll 1 - 299 - term 1
+    Log1 = write_and_roll(1, 300, 1, Log0),
+    % write 300 - 399 in term 1 - no roll
+    Log2 = write_n(300, 400, 1, Log1),
     % write 200 - 350 in term 2 and roll
-    Log3 = append_and_roll(200, 350, 2, Log2),
+    Log3 = write_and_roll(200, 350, 2, Log2),
     % write 350 - 500 in term 2
-    Log4 = append_and_roll(350, 500, 2, Log3),
-    Log5 = append_n(500, 551, 2, Log4),
+    Log4 = write_and_roll(350, 500, 2, Log3),
+    Log5 = write_n(500, 551, 2, Log4),
     Log6 = deliver_all_log_events(Log5, 200),
 
     Log7 = validate_read(1, 200, 1, Log6),
-    ct:pal("After ~p", [ets:lookup(ra_log_file_metrics, Self)]),
     Log8 = validate_read(200, 551, 2, Log7),
 
     [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
@@ -198,11 +197,11 @@ recovery(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
-    Log1 = append_and_roll(1, 10, 1, Log0),
+    Log1 = write_and_roll(1, 10, 1, Log0),
     {9, 1} = ra_log_file:last_index_term(Log1),
-    Log2 = append_and_roll(5, 15, 2, Log1),
+    Log2 = write_and_roll(5, 15, 2, Log1),
     {14, 2} = ra_log_file:last_index_term(Log2),
-    Log3 = append_n(15, 21, 3, Log2),
+    Log3 = write_n(15, 21, 3, Log2),
     {20, 3} = ra_log_file:last_index_term(Log3),
     Log4 = deliver_all_log_events(Log3, 200),
     {20, 3} = ra_log_file:last_index_term(Log4),
@@ -243,7 +242,7 @@ resend_write(Config) ->
            after 500 ->
                      throw(resend_write_timeout)
            end,
-    {queued, Log5} = ra_log_file:append({13, 2, banana}, no_overwrite, Log4),
+    {queued, Log5} = ra_log_file:append({13, 2, banana}, Log4),
     Log6 = deliver_all_log_events(Log5, 500),
     {[_, _, _, _, _], _} = ra_log_file:take(9, 5, Log6),
 
@@ -314,14 +313,17 @@ snapshot_installation(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
-    Log1 = append_n(1, 10, 2, Log0),
+    Log1 = write_n(1, 10, 2, Log0),
     Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
     Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
 
-    Log3 = append_n(16, 20, 2, Log2),
+    % after a snapshot we need a "truncating write" that ignores missing
+    % indexes
+    Log3 = write_n(16, 20, 2, Log2),
     Log = deliver_all_log_events(Log3, 500),
     {19, 2} = ra_log_file:last_index_term(Log),
     {[], _} = ra_log_file:take(1, 9, Log),
+    {[_, _], _} = ra_log_file:take(16, 2, Log),
     ok.
 
 update_release_cursor(Config) ->
@@ -367,17 +369,24 @@ append_and_roll(From, To, Term, Log0) ->
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     deliver_all_log_events(Log1, 200).
 
+write_and_roll(From, To, Term, Log0) ->
+    Log1 = write_n(From, To, Term, Log0),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    deliver_all_log_events(Log1, 200).
+
 % not inclusivw
 append_n(To, To, _Term, Log) ->
     Log;
 append_n(From, To, Term, Log0) ->
-    _Bin = crypto:strong_rand_bytes(1024),
     {queued, Log} = ra_log_file:append({From, Term,
-                                        <<From:64/integer>>},
-                                       overwrite, Log0),
+                                        <<From:64/integer>>}, Log0),
     append_n(From+1, To, Term, Log).
 
-
+write_n(From, To, Term, Log0) ->
+    Entries = [{X, Term, <<X:64/integer>>} ||
+               X <- lists:seq(From, To - 1)],
+    {queued, Log} = ra_log_file:write(Entries, Log0),
+    Log.
 
 %% Utility functions
 

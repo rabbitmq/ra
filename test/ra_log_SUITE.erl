@@ -19,8 +19,9 @@ all_tests() ->
      fetch_when_empty,
      fetch_not_found,
      append_then_fetch,
+     write_then_fetch,
      append_then_fetch_no_wait,
-     append_then_overwrite,
+     write_then_overwrite,
      append_integrity_error,
      take,
      last,
@@ -32,8 +33,8 @@ groups() ->
      {ra_log_memory, [], all_tests()},
      {ra_log_file, [], [
                         init_close_init,
-                        append_recover_then_overwrite,
-                        append_overwrite_then_recover,
+                        write_recover_then_overwrite,
+                        write_overwrite_then_recover,
                         snapshot
                         | all_tests()]}
     ].
@@ -85,9 +86,22 @@ append_then_fetch(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log1 = ra_log:append_sync(Entry, no_overwrite, Log0),
+    Log1 = ra_log:append_sync(Entry, Log0),
     {{Idx, Term, "entry"}, Log} = ra_log:fetch(Idx, Log1),
     {Idx, Term} = ra_log:last_written(Log),
+    {Term, _} = ra_log:fetch_term(Idx, Log),
+    ok.
+
+write_then_fetch(Config) ->
+    Log0 = ?config(ra_log, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    LastIdx = Idx + 1,
+    Entries = [{Idx, Term, "entry"}, {Idx+1, Term, "entry2"}],
+    Log1 = ra_log:write_sync(Entries, Log0),
+    {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
+    {{LastIdx, Term, "entry2"}, Log} = ra_log:fetch(Idx+1, Log2),
+    {LastIdx, Term} = ra_log:last_written(Log),
     {Term, _} = ra_log:fetch_term(Idx, Log),
     ok.
 
@@ -96,7 +110,7 @@ append_then_fetch_no_wait(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log1 = case ra_log:append(Entry, no_overwrite, Log0) of
+    Log1 = case ra_log:append(Entry, Log0) of
                {written, L} -> L;
                {queued, L} ->
                    % check last written hasn't been incremented
@@ -121,31 +135,31 @@ append_then_fetch_no_wait(Config) ->
     ok.
 
 
-append_then_overwrite(Config) ->
+write_then_overwrite(Config) ->
     Log0 = ?config(ra_log, Config),
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log2 = ra_log:append_sync(Entry2, overwrite, Log1),
+    Log2 = ra_log:write_sync([Entry2], Log1),
     {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log2),
     ExpectedNextIndex = Idx + 1,
     % ensure last index is updated after overwrite
     ExpectedNextIndex = ra_log:next_index(Log),
     ok.
 
-append_recover_then_overwrite(Config) ->
+write_recover_then_overwrite(Config) ->
     Log0 = ?config(ra_log, Config),
     InitFun = ?config(init_fun, Config),
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Log1 = write_two(Idx, Term, Log0),
     ok = ra_log:close(Log1),
-    Log2 = InitFun(append_recover_then_overwrite),
+    Log2 = InitFun(write_recover_then_overwrite),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log3 = ra_log:append_sync(Entry2, overwrite, Log2),
+    Log3 = ra_log:write_sync([Entry2], Log2),
     {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log3),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
@@ -154,7 +168,7 @@ append_recover_then_overwrite(Config) ->
     {undefined, _} = ra_log:fetch(Idx+1, Log),
     ok.
 
-append_overwrite_then_recover(Config) ->
+write_overwrite_then_recover(Config) ->
     Log0 = ?config(ra_log, Config),
     InitFun = ?config(init_fun, Config),
     Term = 1,
@@ -162,11 +176,11 @@ append_overwrite_then_recover(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log2 = ra_log:append_sync(Entry2, overwrite, Log1),
+    Log2 = ra_log:write_sync([Entry2], Log1),
     % close log
     ok = ra_log:close(Log2),
     % recover
-    Log3 = InitFun(append_overwrite_then_recover),
+    Log3 = InitFun(write_overwrite_then_recover),
     {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log3),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
@@ -175,12 +189,17 @@ append_overwrite_then_recover(Config) ->
     {undefined, _} = ra_log:fetch(Idx+1, Log),
     ok.
 
+append_two(Idx, Term, Log0) ->
+    Entry0 = {Idx, Term, "entry0"},
+    Log1 = ra_log:append_sync(Entry0, Log0),
+    Entry1 = {ra_log:next_index(Log1), Term, "entry1"},
+    Log2 = ra_log:append_sync(Entry1, Log1),
+    Log2.
+
 write_two(Idx, Term, Log0) ->
     Entry0 = {Idx, Term, "entry0"},
-    Log1 = ra_log:append_sync(Entry0, no_overwrite, Log0),
-    Entry1 = {ra_log:next_index(Log1), Term, "entry1"},
-    Log2 = ra_log:append_sync(Entry1, no_overwrite, Log1),
-    Log2.
+    Entry1 = {Idx+1, Term, "entry1"},
+    ra_log:write_sync([Entry0, Entry1], Log0).
 
 append_integrity_error(Config) ->
     % allow "missing entries" but do not allow overwrites
@@ -189,12 +208,12 @@ append_integrity_error(Config) ->
     Term = 1,
     Next = ra_log:next_index(Log0),
     % this is ok even though entries are missing
-    Log1 = ra_log:append_sync({Next, Term, "NextIndex"}, no_overwrite, Log0),
+    Log1 = ra_log:append_sync({Next, Term, "NextIndex"}, Log0),
     % going backwards should fail with integrity error unless
     % we are overwriting
     Entry = {Next-1, Term, "NextIndex-1"},
-    {error, integrity_error} = ra_log:append(Entry, no_overwrite, Log1),
-    _Log = ra_log:append_sync(Entry, overwrite, Log1),
+    {error, integrity_error} = ra_log:append(Entry, Log1),
+    _Log = ra_log:write_sync([Entry], Log1),
     ok.
 
 -define(IDX(T), {T, _, _}).
@@ -206,7 +225,7 @@ take(Config) ->
     LastIdx = Idx + 9,
     Log1 = lists:foldl(fun (I, L0) ->
                                Entry = {I, Term, "entry" ++ integer_to_list(I)},
-                               ra_log:append_sync(Entry, no_overwrite, L0)
+                               ra_log:append_sync(Entry, L0)
                        end, Log0, lists:seq(Idx, LastIdx)),
     % wont work for memory
     {[?IDX(1)], Log2} = ra_log:take(1, 1, Log1),
@@ -226,7 +245,7 @@ last(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log = ra_log:append_sync(Entry, no_overwrite, Log0),
+    Log = ra_log:append_sync(Entry, Log0),
     {Idx, Term} = ra_log:last_index_term(Log),
     ok.
 
@@ -296,4 +315,4 @@ init_close_init(Config) ->
 append_in(Term, Data, Log0) ->
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, Data},
-    ra_log:append_sync(Entry, no_overwrite, Log0).
+    ra_log:append_sync(Entry, Log0).

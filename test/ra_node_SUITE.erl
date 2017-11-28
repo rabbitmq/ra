@@ -419,7 +419,6 @@ follower_handles_append_entries_rpc(_Config) ->
     ok.
 
 follower_catchup(_Config) ->
-    Self = self(),
     State = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = n1,
@@ -440,11 +439,17 @@ follower_catchup(_Config) ->
         = ra_node:handle_follower_catchup(EmptyAE#append_entries_rpc{term = 4,
                                                                      prev_log_index = 3}, State),
 
-    {follower_catchup, State, []} = ra_node:handle_follower_catchup(#install_snapshot_rpc{}, State),
-    {follower_catchup, State, []} = ra_node:handle_follower_catchup({ra_log_event, {written, bla}},
+    ISRpc = #install_snapshot_rpc{term = 99, leader_id = n1,
+                                  last_index = 99, last_term = 99,
+                                  last_config = #{}, data = []},
+    {follower_catchup, State, []} =
+        ra_node:handle_follower_catchup(ISRpc, State),
+    {follower_catchup, State, []} =
+        ra_node:handle_follower_catchup({ra_log_event, {written, bla}},
                                                                     State),
 
-    Msg = #request_vote_rpc{},
+    Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
+                            last_log_term = 5},
     {follower, State, [{next_event, cast, Msg}]} = ra_node:handle_follower_catchup(Msg, State),
     {follower, State, []} = ra_node:handle_follower_catchup(follower_catchup_timeout, State),
 
@@ -961,17 +966,17 @@ snapshotted_follower_received_append_entries(_Config) ->
                              },
     {follower, _FState, [{cast, n1, {n3, #append_entries_reply{success = true}}},
                          _Metrics]} =
-    begin
-        {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AER, FState1),
-        ra_node:handle_follower(Next, Int)
-    end,
+        begin
+            {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AER, FState1),
+            ra_node:handle_follower(Next, Int)
+        end,
     ok.
 
 leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     Term = 2,
     N2NextIndex = 3,
     Log = lists:foldl(fun(E, L) ->
-                              ra_log:append_sync(E, no_overwrite, L)
+                              ra_log:append_sync(E, L)
                       end, {ra_log_memory, ra_log_memory:init(#{})},
                       [{1, 1, noop},
                        {2, 2, {'$usr',pid, {enq,apple}, after_log_append}},
@@ -1007,7 +1012,7 @@ leader_receives_install_snapshot_result(_Config) ->
     % should update peer next_index
     Term = 1,
     Log0 = lists:foldl(fun(E, L) ->
-                              ra_log:append_sync(E, no_overwrite, L)
+                              ra_log:append_sync(E, L)
                       end, {ra_log_memory, ra_log_memory:init(#{})},
                       [{1, 1, noop},
                        {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
@@ -1393,7 +1398,7 @@ empty_state(NumNodes, Id) ->
 
 base_state(NumNodes) ->
     Log = lists:foldl(fun(E, L) ->
-                              ra_log:append_sync(E, no_overwrite, L)
+                              ra_log:append_sync(E, L)
                       end, {ra_log_memory, ra_log_memory:init(#{})},
                       [{1, 1, usr(<<"hi1">>)},
                        {2, 3, usr(<<"hi2">>)},
