@@ -41,7 +41,8 @@ all() ->
      follower_aer_2,
      follower_aer_3,
      follower_aer_4,
-     follower_catchup
+     follower_catchup_condition,
+     wal_down_condition
     ].
 
 groups() ->
@@ -418,7 +419,7 @@ follower_handles_append_entries_rpc(_Config) ->
       end,
     ok.
 
-follower_catchup(_Config) ->
+follower_catchup_condition(_Config) ->
     State0 = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = n1,
@@ -472,6 +473,31 @@ follower_catchup(_Config) ->
     {candidate, _, _} = ra_node:handle_await_condition(election_timeout, State).
 
 
+wal_down_condition(_Config) ->
+    State0 = (base_state(3))#{commit_index => 1},
+    EmptyAE = #append_entries_rpc{term = 5,
+                                  leader_id = n1,
+                                  prev_log_index = 3,
+                                  prev_log_term = 5,
+                                  leader_commit = 3},
+
+    meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, write, fun (_Es, _L) -> {error, wal_down} end),
+    meck:expect(ra_log, can_write, fun (_L) -> false end),
+
+    % ra log fails
+    {await_condition, State = #{condition := _}, []}
+    = ra_node:handle_follower(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State0),
+
+    % stay in await condition as ra_log_wal is not available
+    {await_condition, State = #{condition := _}, []}
+    = ra_node:handle_await_condition(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State),
+
+    meck:expect(ra_log, can_write, fun (_L) -> true end),
+    % exit condition
+    {follower, _State, [_]}
+    = ra_node:handle_await_condition(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State),
+    ok.
 
 candidate_handles_append_entries_rpc(_Config) ->
     State = (base_state(3))#{commit_index => 1},

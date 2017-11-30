@@ -430,35 +430,37 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     % commit index for previously written entries
                     {State, Effects} = evaluate_commit_index_follower(State1),
                     Reply = append_entries_reply(Term, true, State),
-                    {follower, State,
-                     [{cast, LeaderId, {Id, Reply}} | Effects]};
+                    {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
                 [{FirstIdx, _FirstTerm, _} | _] ->
 
                     {LastIdx, State1} = lists:foldl(fun append_log_follower/2,
                                                     {FirstIdx, State0},
                                                     Entries),
-                    {Status, Log} = ra_log:write(Entries, Log1),
-                    State2 = State1#{log => Log},
-                    Effects = case Status of
-                                  written ->
-                                      % schedule a written next_event
-                                      % we can use last idx here as the log store
-                                      % is now fullly up to date.
-                                      LastIdxTerm = last_idx_term(State2),
-                                      [{next_event,
-                                        {ra_log_event, {written, LastIdxTerm}}}];
-                                  queued -> []
-                              end,
-                    % ?DBG("~p: follower received ~p append_entries in ~p.~nEffects ~p",
-                    %      [Id, {PLIdx, PLTerm, length(Entries)}, Term, Effects]),
                     % Increment only commit_index here as we are not applying anything
                     % at this point.
                     % last_applied will be incremented when the written event is
                     % processed
-                    % TODO: is it really safe to use an unsynced (but seen) last
-                    % entry index as the current commit_index?
-                    {follower, State2#{commit_index => min(LeaderCommit, LastIdx),
-                                       leader_id => LeaderId}, Effects}
+                    State2 = State1#{commit_index => min(LeaderCommit, LastIdx),
+                                     leader_id => LeaderId},
+                    % ?DBG("~p: follower received ~p append_entries in ~p.~nEffects ~p",
+                    %      [Id, {PLIdx, PLTerm, length(Entries)}, Term, Effects]),
+                    case ra_log:write(Entries, Log1) of
+                        {written, Log} ->
+                            % schedule a written next_event
+                            % we can use last idx here as the log store
+                            % is now fullly up to date.
+                            State = State2#{log => Log},
+                            LastIdxTerm = last_idx_term(State),
+                            {follower, State,
+                             [{next_event, {ra_log_event, {written, LastIdxTerm}}}]};
+                        {queued, Log} ->
+                            {follower, State1#{log => Log}, []};
+                        {error, wal_down} ->
+                            {await_condition,
+                             State2#{condition => fun wal_down_condition/2}, []};
+                        {error, _} = Err ->
+                            exit(Err)
+                    end
             end;
         {missing, State0} ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
@@ -610,6 +612,9 @@ follower_catchup_cond(#install_snapshot_rpc{term = Term,
     PLIdx >= ra_log:next_index(Log);
 follower_catchup_cond(_Msg, _State) ->
     false.
+
+wal_down_condition(_Msg, #{log := Log}) ->
+    ra_log:can_write(Log).
 
 evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
                                           log := Log}) ->
@@ -924,9 +929,7 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
         {queued, Log} ->
             {queued, NextIdx, Term, State#{log => Log}};
         {written, Log} ->
-            {written, NextIdx, Term, State#{log => Log}};
-        {error, _} = Err ->
-            throw(Err) % TODO: what else?
+            {written, NextIdx, Term, State#{log => Log}}
     end.
 
 append_log_follower({Idx, Term, Cmd} = Entry,

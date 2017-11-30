@@ -24,6 +24,7 @@
          write_meta/3,
          write_meta/4,
          sync_meta/1,
+         can_write/1,
          exists/2
         ]).
 
@@ -112,6 +113,9 @@
 -callback sync_meta(State :: ra_log_state()) ->
     ok.
 
+-callback can_write(State :: ra_log_state()) ->
+    boolean().
+
 %%
 %% API
 %%
@@ -138,8 +142,7 @@ fetch_term(Idx, {Mod, Log0}) ->
 
 -spec append(Entry :: log_entry(), State::ra_log()) ->
     {queued, ra_log()} |
-    {written, ra_log()} |
-    {error, integrity_error | wal_unavailable}.
+    {written, ra_log()}.
 append(Entry, {Mod, Log0}) ->
     {Status, Log} =  Mod:append(Entry, Log0),
     {Status, {Mod, Log}}.
@@ -147,7 +150,7 @@ append(Entry, {Mod, Log0}) ->
 -spec write(Entries :: [log_entry()], State::ra_log()) ->
     {queued, ra_log()} |
     {written, ra_log()} |
-    {error, integrity_error | wal_unavailable}.
+    {error, integrity_error | wal_down}.
 write(Entries, {Mod, Log0}) ->
     case Mod:write(Entries, Log0) of
         {error, _} = Err ->
@@ -168,9 +171,7 @@ append_sync({Idx, Term, _} = Entry, Log0) ->
                     ra_log:handle_event({written, IdxTerm}, Log)
             after 5000 ->
                       throw(ra_log_append_timeout)
-            end;
-        {error, _} = Err ->
-            throw(Err)
+            end
     end.
 
 write_sync(Entries, Log0) ->
@@ -188,7 +189,7 @@ write_sync(Entries, Log0) ->
                       throw(ra_log_append_timeout)
             end;
         {error, _} = Err ->
-            throw(Err)
+            Err
     end.
 
 -spec take(Start :: ra_index(), Num :: non_neg_integer(), State :: ra_log()) ->
@@ -277,6 +278,10 @@ write_meta(Key, Value, Log) ->
 -spec sync_meta(State :: ra_log()) -> ok.
 sync_meta({Mod, Log}) ->
     Mod:sync_meta(Log).
+
+-spec can_write(State :: ra_log()) -> boolean().
+can_write({Mod, Log}) ->
+    Mod:can_write(Log).
 
 -spec exists(ra_idxterm(), ra_log()) ->
     {boolean(), ra_log()}.

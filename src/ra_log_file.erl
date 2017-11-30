@@ -20,7 +20,8 @@
          update_release_cursor/4,
          read_meta/2,
          write_meta/3,
-         sync_meta/1
+         sync_meta/1,
+         can_write/1
         ]).
 
 -include("ra.hrl").
@@ -415,6 +416,9 @@ write_meta(Key, Value, State = #state{kv = Kv}) ->
 sync_meta(#state{kv = Kv}) ->
     ok = dets:sync(Kv),
     ok.
+
+can_write(#state{wal = Wal}) ->
+    undefined =/= whereis(Wal).
 
 %%% Local functions
 

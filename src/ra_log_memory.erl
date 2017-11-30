@@ -19,6 +19,7 @@
          read_meta/2,
          write_meta/3,
          sync_meta/1,
+         can_write/1,
          to_list/1
         ]).
 
@@ -202,6 +203,9 @@ write_meta(Key, Value, #state{meta = Meta} = State) ->
 
 sync_meta(_Log) ->
     ok.
+
+can_write(_Log) ->
+    true.
 
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].

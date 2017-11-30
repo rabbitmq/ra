@@ -261,7 +261,9 @@ wal_down_append_throws(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
 
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    ?assert(ra_log_file:can_write(Log0)),
     ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ?assert(not ra_log_file:can_write(Log0)),
     ?assertExit(wal_down, ra_log_file:append({1,1,hi}, Log0)),
     ok.
 
