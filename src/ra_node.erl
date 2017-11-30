@@ -8,7 +8,7 @@
          handle_leader/2,
          handle_candidate/2,
          handle_follower/2,
-         handle_follower_catchup/2,
+         handle_await_condition/2,
          make_rpcs/1,
          update_release_cursor/2,
          terminate/1
@@ -28,6 +28,8 @@
 -type ra_machine_apply_fun() ::
         fun((ra_index(), Command :: ra_machine_command(), term()) -> ra_machine_apply_fun_return()) |
         fun((term(), term()) -> ra_machine_apply_fun_return()).
+
+-type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
 
 -type ra_node_state() ::
     #{id => ra_node_id(),
@@ -49,7 +51,8 @@
       machine_apply_fun => ra_machine_apply_fun(),
       machine_state => term(),
       initial_machine_state => term(),
-      broadcast_time => non_neg_integer() % milliseconds
+      broadcast_time => non_neg_integer(), % milliseconds
+      condition => ra_await_condition_fun()
       }.
 
 -type ra_state() :: leader | follower | candidate.
@@ -81,7 +84,7 @@
                             election_timeout_multiplier => non_neg_integer(),
                             cluster_id => atom(),
                             stop_follower_election => boolean(),
-                            follower_catchup_timeout => non_neg_integer()}.
+                            await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
@@ -412,7 +415,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
   when Term >= CurTerm ->
     State00 = update_term(Term, State000),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
-        {true, State0} ->
+        {entry_ok, State0} ->
             % filter entries already seen
             {Log1, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
@@ -429,12 +432,11 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     Reply = append_entries_reply(Term, true, State),
                     {follower, State,
                      [{cast, LeaderId, {Id, Reply}} | Effects]};
-                [{FirstIdx, FirstTerm, _} | _] ->
+                [{FirstIdx, _FirstTerm, _} | _] ->
 
-                    {LastIdx, State1}
-                        = lists:foldl(fun append_log_follower/2,
-                                      {FirstIdx, State0},
-                                      Entries),
+                    {LastIdx, State1} = lists:foldl(fun append_log_follower/2,
+                                                    {FirstIdx, State0},
+                                                    Entries),
                     {Status, Log} = ra_log:write(Entries, Log1),
                     State2 = State1#{log => Log},
                     Effects = case Status of
@@ -458,13 +460,27 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     {follower, State2#{commit_index => min(LeaderCommit, LastIdx),
                                        leader_id => LeaderId}, Effects}
             end;
-        {false, State0} ->
+        {missing, State0} ->
             ?DBG("~p: follower did not have entry at ~b in ~b~n",
                  [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
-            {follower_catchup, State0#{leader_id => LeaderId},
+            {await_condition, State0#{leader_id => LeaderId,
+                                      condition => fun follower_catchup_cond/2},
+             [{cast, LeaderId, {Id, Reply}}]};
+        {term_mismatch, State0} ->
+            ?DBG("~p: term mismatch/1 follower had entry at ~b but not with term ~b~n",
+                 [Id, PLIdx, PLTerm]),
+            Reply = append_entries_reply(Term, false, State0),
+            {follower, State0#{leader_id => LeaderId},
              [{cast, LeaderId, {Id, Reply}}]}
     end;
+handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
+                State = #{id := Id, current_term := CurTerm}) ->
+    % the term is lower than current term
+    Reply = append_entries_reply(CurTerm, false, State),
+    ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
+         [Id, Term, CurTerm]),
+    {follower, State, [{cast, LeaderId, {Id, Reply}}]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State00 = #{current_term := Term, id := Id,
                             log := Log0, leader_id := LeaderId}) ->
@@ -476,12 +492,6 @@ handle_follower({ra_log_event, {written, _} = Evt},
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
-handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
-                State = #{id := Id, current_term := CurTerm}) ->
-    Reply = append_entries_reply(CurTerm, false, State),
-    ?DBG("~p: follower request_vote_rpc in ~b but current term ~b",
-         [Id, Term, CurTerm]),
-    {follower_catchup, State, [{cast, LeaderId, {Id, Reply}}]};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 State = #{id := Id, current_term := Term,
                           voted_for := VotedFor})
@@ -560,28 +570,46 @@ handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
 
--spec handle_follower_catchup(ra_msg(), ra_node_state()) ->
+-spec handle_await_condition(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
-handle_follower_catchup(#append_entries_rpc{term = Term,
-                                            prev_log_index = PLIdx,
-                                            prev_log_term = PLTerm} = Msg,
-                        State0 = #{current_term := CurTerm})
+handle_await_condition(#request_vote_rpc{} = Msg, State) ->
+    {follower, State, [{next_event, cast, Msg}]};
+handle_await_condition(election_timeout, State) ->
+    handle_election_timeout(State);
+handle_await_condition(await_condition_timeout, State) ->
+    {follower, State, []};
+handle_await_condition(Msg,#{condition := Cond} = State) ->
+    case Cond(Msg, State) of
+        true ->
+            {follower, State, [{next_event, cast, Msg}]};
+        false ->
+            % log_unhandled_msg(await_condition, Msg, State),
+            {await_condition, State, []}
+    end.
+
+% Internal
+
+follower_catchup_cond(#append_entries_rpc{term = Term,
+                                          prev_log_index = PLIdx,
+                                          prev_log_term = PLTerm},
+                      State0 = #{current_term := CurTerm})
   when Term >= CurTerm ->
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
-        {true, State} ->
-            {follower, State, [{next_event, cast, Msg}]};
-        {false, State} ->
-            {follower_catchup, State, []}
+        {entry_ok, _State} ->
+            true;
+        {_, _State} ->
+            false
     end;
-handle_follower_catchup(#request_vote_rpc{} = Msg, State) ->
-    {follower, State, [{next_event, cast, Msg}]};
-handle_follower_catchup(election_timeout, State) ->
-    handle_election_timeout(State);
-handle_follower_catchup(follower_catchup_timeout, State) ->
-    {follower, State, []};
-handle_follower_catchup(Msg, State) ->
-    log_unhandled_msg(follower_catchup, Msg, State),
-    {follower_catchup, State, []}.
+follower_catchup_cond(#install_snapshot_rpc{term = Term,
+                                            last_index = PLIdx},
+                      #{current_term := CurTerm,
+                        log := Log})
+  when Term >= CurTerm ->
+    % term is ok - check if the snapshot index is greater than the last
+    % index seen
+    PLIdx >= ra_log:next_index(Log);
+follower_catchup_cond(_Msg, _State) ->
+    false.
 
 evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
                                           log := Log}) ->
@@ -750,15 +778,18 @@ is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
 has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
     case ra_log:fetch_term(Idx, Log0) of
         {Term, Log} ->
-            {true, State#{log => Log}};
-        {_, Log} ->
+            {entry_ok, State#{log => Log}};
+        {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
-                {SIdx, STerm} ->
-                    {SIdx =:= Idx andalso STerm =:= Term,
-                     State#{log => Log}};
-                undefined ->
-                    {false, State}
-            end
+                {Idx, Term} ->
+                    {entry_ok, State#{log => Log}};
+                {Idx, _OtherTerm} ->
+                    {term_mismatch, State#{log => Log}};
+                _ ->
+                    {missing, State#{log => Log}}
+            end;
+        {_OtherTerm, Log} ->
+            {term_mismatch, State#{log => Log}}
     end.
 
 fetch_term(Idx, #{log := Log}) ->

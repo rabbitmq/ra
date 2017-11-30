@@ -55,14 +55,13 @@
 -callback append(Entry :: log_entry(),
                  State :: ra_log_state()) ->
     {queued, ra_log_state()} |
-    {written, ra_log_state()} |
-    {error, integrity_error | wal_unavailable}.
+    {written, ra_log_state()}.
 
 -callback write(Entries :: [log_entry()],
                 State :: ra_log_state()) ->
     {queued, ra_log_state()} |
     {written, ra_log_state()} |
-    {error, integrity_error | wal_unavailable}.
+    {error, integrity_error | wal_down}.
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
@@ -142,12 +141,8 @@ fetch_term(Idx, {Mod, Log0}) ->
     {written, ra_log()} |
     {error, integrity_error | wal_unavailable}.
 append(Entry, {Mod, Log0}) ->
-    case Mod:append(Entry, Log0) of
-        {error, _} = Err ->
-            Err;
-        {Status, Log} ->
-            {Status, {Mod, Log}}
-    end.
+    {Status, Log} =  Mod:append(Entry, Log0),
+    {Status, {Mod, Log}}.
 
 -spec write(Entries :: [log_entry()], State::ra_log()) ->
     {queued, ra_log()} |

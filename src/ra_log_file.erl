@@ -145,29 +145,32 @@ close(#state{kv = Kv}) ->
     _ = dets:close(Kv),
     ok.
 
--spec append(Entry :: log_entry(),
-             State :: ra_log_file_state()) ->
-    {queued, ra_log_file_state()} |
-    {error, integrity_error}.
-append(Entry, #state{last_index = LastIdx} = State)
+-spec append(Entry :: log_entry(), State :: ra_log_file_state()) ->
+    {queued, ra_log_file_state()} | no_return().
+append(Entry, #state{last_index = LastIdx} = State0)
       when element(1, Entry) =:= LastIdx + 1 ->
-    {queued, wal_write(State, Entry)};
+    {queued, wal_write(State0, Entry)};
 append(_Entry, _State) ->
-    {error, integrity_error}.
+    exit(integrity_error).
 
 
 -spec write(Entries :: [log_entry()],
             State :: ra_log_file_state()) ->
     {queued, ra_log_file_state()} |
-    {error, integrity_error | wal_unavailable}.
+    {error, integrity_error | wal_down}.
 write([{FstIdx, _, _} | _] = Entries,
       State0 = #state{last_index = LastIdx})
       when FstIdx =< LastIdx + 1 ->
     % TODO: wal should provide batch api
-    State = lists:foldl(fun (Entry, S) ->
-                                wal_write(S, Entry)
-                        end, State0, Entries),
-    {queued, State};
+    try
+        State = lists:foldl(fun (Entry, S) ->
+                                    wal_write(S, Entry)
+                            end, State0, Entries),
+        {queued, State}
+    catch
+        exit:wal_down ->
+            {error, wal_down}
+    end;
 write([{FstIdx, _, _} = First | Entries],
       State00 = #state{snapshot_index_in_progress = SnapIdx})
       when FstIdx =:= SnapIdx + 1 ->
@@ -426,10 +429,14 @@ wal_truncate_write(State = #state{id = Id, cache = Cache,
                 cache = Cache#{Idx => {Term, Data}}}.
 
 wal_write(State = #state{id = Id, cache = Cache, wal = Wal},
-      {Idx, Term, Data}) ->
-    ok = ra_log_wal:write(Id, Wal, Idx, Term, Data),
-    State#state{last_index = Idx, last_term = Term,
-                cache = Cache#{Idx => {Term, Data}}}.
+          {Idx, Term, Data}) ->
+    case ra_log_wal:write(Id, Wal, Idx, Term, Data) of
+        ok ->
+            State#state{last_index = Idx, last_term = Term,
+                        cache = Cache#{Idx => {Term, Data}}};
+        {error, wal_down} ->
+            exit(wal_down)
+    end.
 
 truncate_cache(Idx, State = #state{cache = Cache0}) ->
     Cache = maps:filter(fun (K, _) when K > Idx -> true;

@@ -65,7 +65,7 @@ init_per_group(ra_log_memory, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
-                                   follower_catchup_timeout => 10000},
+                                   await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end
           end,
@@ -84,7 +84,7 @@ init_per_group(ra_log_file, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
-                                   follower_catchup_timeout => 10000},
+                                   await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
                   end
@@ -100,7 +100,7 @@ init_per_group(ra_reduce_network_usage, Config) ->
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
                                    stop_follower_election => true,
-                                   follower_catchup_timeout => 5000},
+                                   await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end
           end,
@@ -408,9 +408,9 @@ queue_example(Config) ->
     terminate_cluster(Cluster).
 
 contains(Match, Entries) ->
-    lists:any(fun({_, _, {_, _, Value, _}} = Ignore) when Value == Match ->
+    lists:any(fun({_, _, {_, _, Value, _}}) when Value == Match ->
                       true;
-                 (_ = Any) ->
+                 (_) ->
                       false
               end, Entries).
 
@@ -450,7 +450,7 @@ follower_catchup(Config) ->
             exit(unexpected_consensus)
     after 2000 ->
             case get_gen_statem_status({Follower, node()}) of
-                follower_catchup -> ok;
+                await_condition -> ok;
                 FollowerStatus0 -> exit({unexpected_follower_status, FollowerStatus0})
             end
     end,
@@ -462,7 +462,7 @@ follower_catchup(Config) ->
                 FollowerStatus1 -> exit({unexpected_follower_status, FollowerStatus1})
             end,
             ok
-    after 10000 ->
+    after 6000 ->
               exit(consensus_not_achieved)
     end,
     terminate_cluster([N1, N2]).

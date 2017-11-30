@@ -7,7 +7,7 @@
 %% State functions
 -export([leader/3,
          follower/3,
-         follower_catchup/3,
+         await_condition/3,
          candidate/3]).
 
 %% gen_statem callbacks
@@ -64,7 +64,7 @@
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 stop_follower_election :: boolean(),
                 leader_monitor :: reference() | undefined,
-                follower_catchup_timeout :: non_neg_integer()}).
+                await_condition_timeout :: non_neg_integer()}).
 
 %%%===================================================================
 %%% API
@@ -137,7 +137,7 @@ init([Config]) ->
                                                      ?DEFAULT_STOP_FOLLOWER_ELECTION),
                    broadcast_time = BroadcastTime,
                    election_timeout_multiplier = Mult,
-                   follower_catchup_timeout = maps:get(follower_catchup_timeout, Config,
+                   await_condition_timeout = maps:get(await_condition_timeout, Config,
                                                        ?DEFAULT_FOLLOWER_CATCHUP_TIMEOUT)
                   },
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
@@ -199,9 +199,9 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
             {leader, NodeState, Effects} =
                 ra_node:handle_leader({command, {'$usr', Pid, {down, Pid}, after_log_append}},
                                       NodeState0),
-            {State, Actions0} = handle_effects(Effects, call,
-                                              State0#state{node_state = NodeState,
-                                                           monitors = Monitors}),
+                {State, Actions0} = handle_effects(Effects, call,
+                                                   State0#state{node_state = NodeState,
+                                                                monitors = Monitors}),
             % remove replies
             % TODO: make this nicer
             Actions = lists:filter(fun({reply, _}) -> false;
@@ -291,7 +291,7 @@ follower(info, {node_down, _}, State) ->
     {keep_state, State};
 follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
                                          leader_monitor = MRef,
-                                         follower_catchup_timeout = FollowerCatchupTimeout}) ->
+                                         await_condition_timeout = FollowerCatchupTimeout}) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -304,44 +304,44 @@ follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
-        {follower_catchup, State1, Effects} ->
+        {await_condition, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
-            {next_state, follower_catchup, NewState,
-             [{state_timeout, FollowerCatchupTimeout, follower_catchup_timeout}]}
+            {next_state, await_condition, NewState,
+             [{state_timeout, FollowerCatchupTimeout, await_condition_timeout} | Actions]}
     end.
 
-follower_catchup({call, From}, {leader_call, _Cmd},
+await_condition({call, From}, {leader_call, _Cmd},
          State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
     % ?DBG("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
-follower_catchup({call, From}, {leader_call, Msg},
+await_condition({call, From}, {leader_call, Msg},
          State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
     ?DBG("~p follower leader call - leader not known. Dropping ~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
-follower_catchup({call, From}, {dirty_query, QueryFun},
+await_condition({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
-follower_catchup(_Type, trigger_election, State) ->
+await_condition(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
-follower_catchup(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
+await_condition(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
     ?DBG("Leader monitor down, triggering election", []),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
-follower_catchup(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
+await_condition(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
     ?DBG("Leader ~p down, triggering election", [LeaderNode]),
     {keep_state, State, [election_timeout_action(follower, State)]};
-follower_catchup(info, {node_down, _}, State) ->
+await_condition(info, {node_down, _}, State) ->
     {keep_state, State};
-follower_catchup(EventType, Msg, State0 = #state{node_state = #{id := Id},
-                                                 leader_monitor = MRef}) ->
-    case handle_follower_catchup(Msg, State0) of
+await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
+                                                leader_monitor = MRef}) ->
+    case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
             {next_state, follower, NewState,
-             [{state_timeout, infinity, follower_catchup_timeout} |
+             [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -349,7 +349,7 @@ follower_catchup(EventType, Msg, State0 = #state{node_state = #{id := Id},
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
-        {follower_catchup, State1, []} ->
+        {await_condition, State1, []} ->
             {keep_state, State1, []}
     end.
 
@@ -399,8 +399,8 @@ handle_follower(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, NodeState, Effects} = ra_node:handle_follower(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
 
-handle_follower_catchup(Msg, #state{node_state = NodeState0} = State) ->
-    {NextState, NodeState, Effects} = ra_node:handle_follower_catchup(Msg, NodeState0),
+handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
+    {NextState, NodeState, Effects} = ra_node:handle_await_condition(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
 
 current_term(#state{node_state = #{current_term := T}}) -> T.

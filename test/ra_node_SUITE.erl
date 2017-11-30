@@ -271,7 +271,7 @@ follower_aer_3(_Config) ->
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 2,
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
-    {follower_catchup, State3 = #{leader_id := n1, current_term := 1,
+    {await_condition, State3 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 1},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             success = false,
@@ -366,14 +366,14 @@ follower_handles_append_entries_rpc(_Config) ->
           = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
 
     % reply false if term < current_term (5.1)
-    {follower_catchup, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    {follower, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 4}, State),
 
     % reply false if log doesn't contain a term matching entry at prev_log_index
-    {follower_catchup, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{prev_log_index = 4},
                                   State),
-    {follower_catchup, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    {follower, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{prev_log_term = 4},
                                   State),
 
@@ -419,41 +419,58 @@ follower_handles_append_entries_rpc(_Config) ->
     ok.
 
 follower_catchup(_Config) ->
-    State = (base_state(3))#{commit_index => 1},
+    State0 = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = n1,
                                   prev_log_index = 3,
                                   prev_log_term = 5,
                                   leader_commit = 3},
 
+    % from follower to await condition
+    {await_condition, State = #{condition := _}, [_AppendEntryReply]}
+    = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 5,
+                                                         prev_log_index = 4}, State0),
+
+    % append entry with a lower leader term should not enter await condition
+    % even if prev_log_index is higher than last index
+    {follower, _, [_]}
+    = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 4,
+                                                         prev_log_index = 4}, State),
+
+    % append entry when prev log index exists but the term is different should
+    % not enter await condition
+    {follower, _, [_]}
+    = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6,
+                                                         prev_log_term = 4,
+                                                         prev_log_index = 3}, State),
+
+    % append entry when term is ok but there is a gap should remain in await condition
+    % we do not want to send a reply here
+    {await_condition, _, []}
+        = ra_node:handle_await_condition(EmptyAE#append_entries_rpc{term = 5,
+                                                                    prev_log_index = 4}, State),
 
     % success case - it transitions back to follower state
-    {follower, State, [{next_event, cast, EmptyAE}]} =
-        ra_node:handle_follower_catchup(EmptyAE, State),
+    {follower, _, [{next_event, cast, EmptyAE}]} =
+        ra_node:handle_await_condition(EmptyAE, State),
 
-    % reply false if prev_log_index > current log_index
-    {follower_catchup, State, []}
-        = ra_node:handle_follower_catchup(EmptyAE#append_entries_rpc{term = 5,
-                                                                     prev_log_index = 4}, State),
-    {follower_catchup, State, []}
-        = ra_node:handle_follower_catchup(EmptyAE#append_entries_rpc{term = 4,
-                                                                     prev_log_index = 3}, State),
 
     ISRpc = #install_snapshot_rpc{term = 99, leader_id = n1,
                                   last_index = 99, last_term = 99,
                                   last_config = #{}, data = []},
-    {follower_catchup, State, []} =
-        ra_node:handle_follower_catchup(ISRpc, State),
-    {follower_catchup, State, []} =
-        ra_node:handle_follower_catchup({ra_log_event, {written, bla}},
-                                                                    State),
+    {follower, State, [_NextEvent]} =
+        ra_node:handle_await_condition(ISRpc, State),
+
+    {await_condition, State, []} =
+        ra_node:handle_await_condition({ra_log_event, {written, bla}}, State),
 
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
-    {follower, State, [{next_event, cast, Msg}]} = ra_node:handle_follower_catchup(Msg, State),
-    {follower, State, []} = ra_node:handle_follower_catchup(follower_catchup_timeout, State),
+    {follower, State, [{next_event, cast, Msg}]} = ra_node:handle_await_condition(Msg, State),
+    {follower, State, []} = ra_node:handle_await_condition(await_condition_timeout, State),
 
-    {candidate, _, _} = ra_node:handle_follower_catchup(election_timeout, State).
+    {candidate, _, _} = ra_node:handle_await_condition(election_timeout, State).
+
 
 
 candidate_handles_append_entries_rpc(_Config) ->

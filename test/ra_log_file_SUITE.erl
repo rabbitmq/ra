@@ -22,6 +22,9 @@ all_tests() ->
      validate_reads_for_overlapped_writes,
      recovery,
      resend_write,
+     wal_down_append_throws,
+     wal_down_write_returns_error_wal_down,
+
      % detect_lost_written_range,
      snapshot_recovery,
      snapshot_installation,
@@ -55,6 +58,10 @@ init_per_testcase(TestCase, Config) ->
     Dir = filename:join(PrivDir, TestCase),
     register(TestCase, self()),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
+
+end_per_testcase(_, _Config) ->
+    _ = supervisor:restart_child(ra_sup, ra_log_wal),
+    ok.
 
 handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -247,6 +254,23 @@ resend_write(Config) ->
     {[_, _, _, _, _], _} = ra_log_file:take(9, 5, Log6),
 
     meck:unload(ra_log_wal),
+    ok.
+
+wal_down_append_throws(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ?assertExit(wal_down, ra_log_file:append({1,1,hi}, Log0)),
+    ok.
+
+wal_down_write_returns_error_wal_down(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
 
 detect_lost_written_range(Config) ->

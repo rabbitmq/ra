@@ -13,6 +13,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     write_to_unavailable_wal_returns_error,
      write_many,
      truncate_write,
      out_of_seq_writes,
@@ -53,6 +54,12 @@ basic_log_writes(Config) ->
     {12, 1, "value"} = ra_log_wal:mem_tbl_read(Self, 12),
     undefined = ra_log_wal:mem_tbl_read(Self, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    ok.
+
+write_to_unavailable_wal_returns_error(_Config) ->
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    {error, wal_down} = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
+    {error, wal_down} = ra_log_wal:truncate_write(Self, ra_log_wal, 12, 1, "value"),
     ok.
 
 write_many(Config) ->

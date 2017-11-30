@@ -46,15 +46,14 @@ close(_State) ->
     ok.
 
 -spec append(Entry::log_entry(), State::ra_log_memory_state()) ->
-    {written, ra_log_memory_state()} |
-    {error, integrity_error}.
+    {written, ra_log_memory_state()} | no_return().
 append({Idx, Term, Data}, #state{last_index = LastIdx,
                                  entries = Log} = State)
   when Idx > LastIdx ->
     {written, State#state{last_index = Idx,
                           entries = Log#{Idx => {Term, Data}}}};
 append(_Entry, _State) ->
-    {error, integrity_error}.
+    exit(integrity_error).
 
 -spec write(Entries :: [log_entry()], State::ra_log_memory_state()) ->
     {written, ra_log_memory_state()} |

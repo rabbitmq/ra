@@ -57,19 +57,15 @@
                      }.
 
 
--spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) -> ok.
+-spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
+    ok | {error, wal_down}.
 write(From, Wal, Idx, Term, Entry) ->
-    % in a future where we might have a pool of WALs they may not always
-    % be named, and wal could be a pid(). If so this will result in a lost
-    % write message rather than a name lookup failure (badarg).
-    Wal ! {append, From, Idx, Term, Entry},
-    ok.
+    send_write(Wal, {append, From, Idx, Term, Entry}).
 
 -spec truncate_write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
-    ok.
+    ok | {error, wal_down}.
 truncate_write(From, Wal, Idx, Term, Entry) ->
-    Wal ! {truncate, From, Idx, Term, Entry},
-    ok.
+    send_write(Wal, {truncate, From, Idx, Term, Entry}).
 
 % force a wal file to roll over to a new file
 % mostly useful for testing
@@ -85,40 +81,6 @@ mem_tbl_read(Id, Idx) ->
             closed_mem_tbl_read(Id, Idx)
     end.
 
-closed_mem_tbl_read(Id, Idx) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
-        [] ->
-            undefined;
-        Tids0 ->
-            Tids = lists:sort(fun(A, B) -> B > A end, Tids0),
-            closed_tbl_lookup(Tids, Idx)
-    end.
-
-closed_tbl_lookup([], _Idx) ->
-    undefined;
-closed_tbl_lookup([{_, _, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
-    % TODO: it is possible the ETS table has been deleted at this
-    % point so should catch the error
-    case ets:lookup(Tid, Idx) of
-        [] ->
-            closed_tbl_lookup(Tail, Idx);
-        [Entry] -> Entry
-    end;
-closed_tbl_lookup([_ | Tail], Idx) ->
-    closed_tbl_lookup(Tail, Idx).
-
-tbl_lookup([], _Idx) ->
-    undefined;
-tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
-    % TODO: it is possible the ETS table has been deleted at this
-    % point so should catch the error
-    case ets:lookup(Tid, Idx) of
-        [] ->
-            tbl_lookup(Tail, Idx);
-        [Entry] -> Entry
-    end;
-tbl_lookup([_ | Tail], Idx) ->
-    tbl_lookup(Tail, Idx).
 
 
 %% Memtables meta data
@@ -171,6 +133,9 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
     State = recover_wal(Dir, Conf),
     Debug = sys:debug_options(Options),
     loop_wait(State, Parent, Debug).
+
+
+%% Internal
 
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
@@ -466,6 +431,60 @@ recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
 recover_records(<<>>, _Cache) ->
     ok.
 
+send_write(Wal, Msg) ->
+    try
+        Wal ! Msg,
+        ok
+    catch
+        error:badarg ->
+            % wal name lookup failed
+            {error, wal_down}
+    end.
+
+closed_mem_tbl_read(Id, Idx) ->
+    case ets:lookup(ra_log_closed_mem_tables, Id) of
+        [] ->
+            undefined;
+        Tids0 ->
+            Tids = lists:sort(fun(A, B) -> B > A end, Tids0),
+            closed_tbl_lookup(Tids, Idx)
+    end.
+
+closed_tbl_lookup([], _Idx) ->
+    undefined;
+closed_tbl_lookup([{_, _, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
+    % TODO: it is possible the ETS table has been deleted at this
+    % point so should catch the error
+    case ets:lookup(Tid, Idx) of
+        [] ->
+            closed_tbl_lookup(Tail, Idx);
+        [Entry] -> Entry
+    end;
+closed_tbl_lookup([_ | Tail], Idx) ->
+    closed_tbl_lookup(Tail, Idx).
+
+tbl_lookup([], _Idx) ->
+    undefined;
+tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
+    % TODO: it is possible the ETS table has been deleted at this
+    % point so should catch the error
+    case ets:lookup(Tid, Idx) of
+        [] ->
+            tbl_lookup(Tail, Idx);
+        [Entry] -> Entry
+    end;
+tbl_lookup([_ | Tail], Idx) ->
+    tbl_lookup(Tail, Idx).
+
+merge_conf_defaults(Conf) ->
+    maps:merge(#{segment_writer => ra_log_file_segment_writer,
+                 max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
+                 additional_wal_file_modes => []},
+               Conf).
+
+to_binary(Term) ->
+    term_to_binary(Term).
+
 %% Here are the sys call back functions
 
 system_continue(Parent, Debug, State) ->
@@ -479,11 +498,3 @@ system_terminate(Reason, _Parent, _Debug, State) ->
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
 
-merge_conf_defaults(Conf) ->
-    maps:merge(#{segment_writer => ra_log_file_segment_writer,
-                 max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
-                 additional_wal_file_modes => []},
-               Conf).
-
-to_binary(Term) ->
-    term_to_binary(Term).
