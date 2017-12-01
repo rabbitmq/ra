@@ -35,7 +35,9 @@
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
 -type ra_segment_ref() :: {From :: ra_index(), To :: ra_index(),
                            File :: file:filename()}.
--type ra_log_event() :: {written, ra_idxterm()} |
+-type ra_log_event() :: {written, {From :: ra_index(),
+                                   To :: ra_index(),
+                                   ToTerm :: ra_term()}} |
                         {segments, ets:tid(), [ra_segment_ref()]} |
                         {resend_write, ra_index()} |
                         {snapshot_written, ra_idxterm(), file:filename()}.
@@ -162,13 +164,13 @@ write(Entries, {Mod, Log0}) ->
 append_sync({Idx, Term, _} = Entry, Log0) ->
     case ra_log:append(Entry, Log0) of
         {written, Log} ->
-            ra_log:handle_event({written, {Idx, Term}}, Log);
+            ra_log:handle_event({written, {Idx, Idx, Term}}, Log);
         {queued, Log} ->
             receive
                 % TODO: we could now end up re-ordering written notifications
                 % so need to handle that later
-                {ra_log_event, {written, IdxTerm}} ->
-                    ra_log:handle_event({written, IdxTerm}, Log)
+                {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
+                    ra_log:handle_event(Evt, Log)
             after 5000 ->
                       throw(ra_log_append_timeout)
             end
@@ -178,13 +180,13 @@ write_sync(Entries, Log0) ->
     {Idx, Term, _} = lists:last(Entries),
     case ra_log:write(Entries, Log0) of
         {written, Log} ->
-            ra_log:handle_event({written, {Idx, Term}}, Log);
+            ra_log:handle_event({written, {Idx, Idx, Term}}, Log);
         {queued, Log} ->
             receive
                 % TODO: we could now end up re-ordering written notifications
                 % so need to handle that later
-                {ra_log_event, {written, IdxTerm}} ->
-                    ra_log:handle_event({written, IdxTerm}, Log)
+                {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
+                    ra_log:handle_event(Evt, Log)
             after 5000 ->
                       throw(ra_log_append_timeout)
             end;

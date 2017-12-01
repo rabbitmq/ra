@@ -25,10 +25,11 @@ all_tests() ->
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
 
-     % detect_lost_written_range,
+     detect_lost_written_range,
      snapshot_recovery,
      snapshot_installation,
-     update_release_cursor
+     update_release_cursor,
+     transient_writer_is_handled
     ].
 
 groups() ->
@@ -57,10 +58,11 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     register(TestCase, self()),
+    application:stop(ra),
+    application:start(ra),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
 end_per_testcase(_, _Config) ->
-    _ = supervisor:restart_child(ra_sup, ra_log_wal),
     ok.
 
 handle_overwrite(Config) ->
@@ -69,7 +71,7 @@ handle_overwrite(Config) ->
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     {queued, Log1} = ra_log_file:write([{1, 1, "value"}, {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, {2, 1}}} -> ok
+        {ra_log_event, {written, {1, 2, 1}}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
@@ -79,11 +81,11 @@ handle_overwrite(Config) ->
     {queued, Log4} = ra_log_file:write([{2, 2, "value"}], Log3),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    Log = ra_log_file:handle_event({written, {2, 1}}, Log4),
+    Log = ra_log_file:handle_event({written, {1, 2, 1}}, Log4),
     % ensure last written has not been incremented
     {0, 0} = ra_log_file:last_written(Log),
     {2, 2} = ra_log_file:last_written(
-                ra_log_file:handle_event({written, {2, 2}}, Log)),
+                ra_log_file:handle_event({written, {1, 2, 2}}, Log)),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 1000),
     ra_log_file:close(Log),
@@ -276,39 +278,39 @@ wal_down_write_returns_error_wal_down(Config) ->
     ok.
 
 detect_lost_written_range(Config) ->
-    % ra_log_file writes some messages
-    % WAL rolls over and WAL file is deleted
-    % WAL crashes
-    % ra_log_file writes some more message (that are lost)
-    % WAL recovers
-    % ra_log_file continues writing
-    % ra_log_file receives a {written, Start, End}  log event and detects that
-    % messages with a lower id than 'Start' were enver confirmed.
-    % ra_log_file resends all lost and new writes to create a contiguous range
-    % of writes
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
+    meck:new(ra_log_wal, [passthrough]),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self,
                               wal => ra_log_wal}),
     {0, 0} = ra_log_file:last_index_term(Log0),
+    % write some entries
     Log1 = append_and_roll(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
+    % WAL rolls over and WAL file is deleted
     % simulate wal outage
-    proc_lib:stop(ra_log_wal),
+    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) -> ok end),
 
-    % write some messages
+    % append some messages that will be lost
     Log3 = append_n(10, 15, 2, Log2),
-    % ok = application:stop(ra),
-    % ok = application:start(ra),
-    timer:sleep(1000),
+
+    % restart WAL to ensure lose the transient state keeping track of
+    % each writer's last written index
+    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    {ok, _} = supervisor:restart_child(ra_sup, ra_log_wal),
+
+    % WAL recovers
+    meck:unload(ra_log_wal),
+
+    % append some more stuff
     Log4 = append_n(15, 20, 2, Log3),
-    Log5 = deliver_all_log_events(Log4, 1000),
+    Log5 = deliver_all_log_events(Log4, 2000),
+
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log_file:take(0, 20, Log5),
     ra_log_file:close(Log5),
     Log = ra_log_file:init(#{directory => Dir, id => Self}),
     {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
-    ct:pal("entries ~p ~n ~p", [Entries, Log5]),
     ?assert(length(Entries) =:= 20),
     ?assert(length(RecoveredEntries) =:= 20),
     Entries = RecoveredEntries,
@@ -376,6 +378,22 @@ update_release_cursor(Config) ->
     % snapshot has been confirmed.
     [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
 
+    ok.
+
+transient_writer_is_handled(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, _Self} = erlang:process_info(self(), registered_name),
+    _Pid = spawn(fun () ->
+                         erlang:register(sub_proc, self()),
+                         Log0 = ra_log_file:init(#{directory => Dir, id => sub_proc}),
+                         Log1 = append_n(1, 10, 2, Log0),
+                         % ignore events
+                         Log2 = deliver_all_log_events(Log1, 500),
+                         ra_log_file:close(Log2)
+                end),
+    application:stop(ra),
+    application:start(ra),
+    timer:sleep(2000),
     ok.
 
 validate_read(To, To, _Term, Log0) ->

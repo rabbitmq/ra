@@ -130,10 +130,10 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_memory_state()) ->
     ra_log_memory_state().
-handle_event({written, {Idx, Term} = IdxTerm}, State0) ->
+handle_event({written, {_From, Idx, Term}}, State0) ->
     case fetch_term(Idx, State0) of
         {Term, State} ->
-            State#state{last_written = IdxTerm};
+            State#state{last_written = {Idx, Term}};
         _ ->
             % if the term doesn't match we just ignore it
             State0

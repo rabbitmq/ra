@@ -161,7 +161,7 @@ out_of_seq_writes(Config) ->
     % ensure a written event is _NOT_ received
     % when a roll-over happens after out of sync write
     receive
-        {ra_log_event, {written, {8, 1}}} ->
+        {ra_log_event, {written, {8, 8, 1}}} ->
             throw(unexpected_written_event)
     after 500 -> ok
     end,
@@ -185,7 +185,7 @@ roll_over(Config) ->
          ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
-    receive {ra_log_event, {written, {NumWrites, 1}}} -> ok
+    receive {ra_log_event, {written, {1, NumWrites, 1}}} -> ok
     after 5000 -> throw(written_timeout)
     end,
 
@@ -275,9 +275,9 @@ empty_mailbox() ->
               ok
     end.
 
-await_written(Id, IdxTerm) ->
+await_written(Id, {Idx, Term}) ->
     receive
-        {ra_log_event, {written, {Idx, _} = IdxTerm}} ->
+        {ra_log_event, {written, {_From, Idx, Term}}} ->
             ra_log_wal:mem_tbl_read(Id, Idx)
     after 5000 ->
               throw(written_timeout)
