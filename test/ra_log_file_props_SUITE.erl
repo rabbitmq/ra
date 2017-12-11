@@ -10,8 +10,6 @@ all() ->
      {group, tests}
     ].
 
-%% TODO Test different terms
-
 all_tests() ->
     [
      write,
@@ -26,6 +24,7 @@ all_tests() ->
      take,
      take_out_of_range,
      fetch,
+     fetch_out_of_range,
      last_index_term,
      fetch_term,
      fetch_out_of_range_term,
@@ -376,7 +375,6 @@ fetch(Config) ->
     TestCase = ?config(test_case, Config),
     run_proper(fun fetch_prop/2, [Dir, TestCase], 100).
 
-%% TODO test out of range fetch!
 fetch_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries(1),
@@ -392,20 +390,45 @@ fetch_prop(Dir, TestCase) ->
                         Entry == Got)
           end)).
 
+fetch_out_of_range(Config) ->
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    run_proper(fun fetch_out_of_range_prop/2, [Dir, TestCase], 100).
+
+fetch_out_of_range_prop(Dir, TestCase) ->
+    ?FORALL(
+       Entries, log_entries(1),
+       ?FORALL(
+          {Start, _Num}, out_of_range(Entries),
+          begin
+              {queued, Log0} = ra_log_file:write(
+                                Entries,
+                                ra_log_file:init(#{directory => Dir, id => TestCase})),
+              {Reply, Log} = ra_log_file:fetch(Start, Log0),
+              reset(Log),
+              ?WHENFAIL(io:format("Got: ~p Expected: undefined~n", [Reply]),
+                        Reply == undefined)
+          end)).
+
 last_index_term(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
     run_proper(fun last_index_term_prop/2, [Dir, TestCase], 100).
 
-%% TODO what happens with index 0??
 last_index_term_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries(0),
        begin
            {queued, Log} = ra_log_file:write(
-                              Entries,
-                              ra_log_file:init(#{directory => Dir, id => TestCase})),
-           {LastIdx, LastTerm, _} = lists:last(Entries),
+                             Entries,
+                             ra_log_file:init(#{directory => Dir, id => TestCase})),
+           {LastIdx, LastTerm} = case Entries of
+                                     [] ->
+                                         {0, 0};
+                                     _ ->
+                                         {LI, LT, _} = lists:last(Entries),
+                                         {LI, LT}
+                                 end,
            {Idx, Term} = ra_log_file:last_index_term(Log),
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [{Idx, Term}, {LastIdx, LastTerm}]),
@@ -518,13 +541,6 @@ last_written(Config) ->
     run_proper(fun last_written_prop/2, [Dir, TestCase], 100).
 
 last_written_prop(Dir, TestCase) ->
-    %% TODO the last_written idxterm is not the last event received, not the last one that
-    %% really truncated the cache. If we receive out of order `written` messages, the next
-    %% thing can happen:
-    %% Received {10, 1}, it is in the cache and it gets truncated. last_written_index_term is {10,1}
-    %% Next {5, 1}. It's not in the cache any more but is in one of the mem tables, so fetch_term
-    %% returns the term and last_written_index_term becomes {5, 1}
-    %% It might not be on the mem tables anymore, and then it is still {10, 1}
     ?FORALL(
        Entries, log_entries(1),
        ?FORALL(
@@ -536,8 +552,6 @@ last_written_prop(Dir, TestCase) ->
               Log = lists:foldl(fun({Idx, Term, _}, Acc) ->
                                         ra_log_file:handle_event({written, {Idx, Term}}, Acc)
                                 end, Log0, Subset),
-              %% TODO what happens if we receive the 'written' out of order? It seems to keep
-              %% the last one, that not higher. Ummmm.....
               Got = ra_log_file:last_written(Log),
               Expected = last_idx_term(Subset),
               reset(Log),
