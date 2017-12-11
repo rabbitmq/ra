@@ -60,29 +60,26 @@ init_per_testcase(TestCase, Config) ->
 %% Generators
 %%------------------
 
-log_entries(N) ->
+log_entries_gen(N) ->
     ?LET(Length, choose(N, 100),
-         ?LET(Terms, term_sequence(Length),
+         ?LET(Terms, term_sequence_gen(Length),
               [{Idx, Term, <<Idx:64/integer>>}
                || {Idx, Term} <- lists:zip(lists:seq(1, Length),
                                            Terms)])).
 
-term_sequence(N) ->
+term_sequence_gen(N) ->
     ?LET(List, vector(N, non_neg_integer()),
          lists:sort(List)).
 
-next(N) ->
-    integer(N, inf).
-
-log_entry_but_one() ->
+log_entry_but_one_gen() ->
     ?LET(Idx, ?SUCHTHAT(Int, integer(), Int =/= 1),
          {Idx, 1, <<Idx:64/integer>>}).
 
-log_entry_but_one_zero() ->
+log_entry_but_one_zero_gen() ->
     ?LET(Idx, ?SUCHTHAT(Int, integer(), (Int =/= 1) and (Int =/= 0)),
          {Idx, 1, <<Idx:64/integer>>}).
 
-slice(Entries) ->
+slice_gen(Entries) ->
     %% Head might be an empty list
     ?LET(N, choose(1, max_length(Entries)),
          begin
@@ -90,7 +87,7 @@ slice(Entries) ->
              {Head, NEntry, Tail}
          end).
 
-sorted_subset(Entries) ->
+sorted_subset_gen(Entries) ->
     ?LET(Subset, list(elements(Entries)), lists:sort(Subset)).
 
 max_length(Entries) when length(Entries) > 1 ->
@@ -98,36 +95,36 @@ max_length(Entries) when length(Entries) > 1 ->
 max_length(_) ->
     1.
 
-range(Entries) ->
+range_gen(Entries) ->
     %% Range can finish anywhere after total number of entries
-    ?LET(Start, between(1, length(Entries)),
-         ?LET(Num, greater_than(1),
+    ?LET(Start, between_gen(1, length(Entries)),
+         ?LET(Num, greater_than_gen(1),
               {Start, Num})).
 
-out_of_range_begin() ->
+out_of_range_begin_gen() ->
     %% The range starts before the initial index
-    ?LET(Start, less_than(0),
-         ?LET(Num, greater_than(0),
+    ?LET(Start, less_than_gen(0),
+         ?LET(Num, greater_than_gen(0),
               {Start, Num})).
 
-out_of_range_end(Entries) ->
+out_of_range_end_gen(Entries) ->
     %% The range starts after the last index
-    ?LET(Start, greater_than(length(Entries)),
+    ?LET(Start, greater_than_gen(length(Entries)),
          ?LET(Num, non_neg_integer(),
               {Start, Num})).
 
-between(N, M) ->
+between_gen(N, M) ->
     choose(N, M).
 
-greater_than(N) ->
+greater_than_gen(N) ->
     integer(N + 1, inf).
 
-less_than(N) ->
+less_than_gen(N) ->
     integer(inf, N - 1).
 
-out_of_range(Entries) ->
-    oneof([out_of_range_begin(),
-           out_of_range_end(Entries)]).
+out_of_range_gen(Entries) ->
+    oneof([out_of_range_begin_gen(),
+           out_of_range_end_gen(Entries)]).
 
 %%------------------
 %% Properties
@@ -143,7 +140,7 @@ write(Config) ->
 
 write_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        begin
            {queued, Log0} = ra_log_file:write(
                              Entries,
@@ -168,9 +165,9 @@ write_missing_entry(Config) ->
 
 write_missing_entry_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(3),
+       Entries, log_entries_gen(3),
        ?FORALL(
-          {Head, _Entry, Tail}, slice(Entries),
+          {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               Log = ra_log_file:init(#{directory => Dir, id => TestCase}),
               Reply = ra_log_file:write(Head ++ Tail, Log),
@@ -186,9 +183,9 @@ write_overwrite_entry(Config) ->
 
 write_overwrite_entry_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(3),
+       Entries, log_entries_gen(3),
        ?FORALL(
-          {Head, {Idx, Term, _Value} = _Entry, _Tail}, slice(Entries),
+          {Head, {Idx, Term, _Value} = _Entry, _Tail}, slice_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
@@ -211,9 +208,9 @@ multi_write_missing_entry(Config) ->
 
 multi_write_missing_entry_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(3),
+       Entries, log_entries_gen(3),
        ?FORALL(
-          {Head, _Entry, Tail}, slice(Entries),
+          {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Head,
@@ -231,9 +228,9 @@ append_missing_entry(Config) ->
 
 append_missing_entry_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(3),
+       Entries, log_entries_gen(3),
        ?FORALL(
-          {Head, _Entry, Tail}, slice(Entries),
+          {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               Log0 = append_all(Head,
                                ra_log_file:init(#{directory => Dir, id => TestCase})),
@@ -260,7 +257,7 @@ write_index_starts_zero(Config) ->
 
 write_index_starts_zero_prop(Dir, TestCase) ->
     ?FORALL(
-       Entry, log_entry_but_one_zero(),
+       Entry, log_entry_but_one_zero_gen(),
        begin
            Log = ra_log_file:init(#{directory => Dir, id => TestCase}),
            Reply = ra_log_file:write([Entry], Log),
@@ -280,7 +277,7 @@ append(Config) ->
 
 append_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        begin
            Log0 = append_all(
                    Entries,
@@ -299,9 +296,9 @@ append_overwrite_entry(Config) ->
 
 append_overwrite_entry_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(3),
+       Entries, log_entries_gen(3),
        ?FORALL(
-          {_Head, {Idx, Term, _Value} = _Entry, _Tail}, slice(Entries),
+          {_Head, {Idx, Term, _Value} = _Entry, _Tail}, slice_gen(Entries),
           begin
               {queued, Log} = ra_log_file:write(
                                 Entries,
@@ -325,7 +322,7 @@ append_index_starts_one(Config) ->
 
 append_index_starts_one_prop(Dir, TestCase) ->
     ?FORALL(
-       Entry, log_entry_but_one(),
+       Entry, log_entry_but_one_gen(),
        begin
            Log = ra_log_file:init(#{directory => Dir, id => TestCase}),
            Failed = try
@@ -346,9 +343,9 @@ take(Config) ->
 
 take_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {Start, Num}, range(Entries),
+          {Start, Num}, range_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,
@@ -368,9 +365,9 @@ take_out_of_range(Config) ->
 
 take_out_of_range_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {Start, Num}, out_of_range(Entries),
+          {Start, Num}, out_of_range_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
@@ -388,9 +385,9 @@ fetch(Config) ->
 
 fetch_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {_Head, {Idx, _Term, _Value} = Entry, _Tail}, slice(Entries),
+          {_Head, {Idx, _Term, _Value} = Entry, _Tail}, slice_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
@@ -408,9 +405,9 @@ fetch_out_of_range(Config) ->
 
 fetch_out_of_range_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {Start, _Num}, out_of_range(Entries),
+          {Start, _Num}, out_of_range_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
@@ -428,7 +425,7 @@ last_index_term(Config) ->
 
 last_index_term_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(0),
+       Entries, log_entries_gen(0),
        begin
            {queued, Log} = ra_log_file:write(
                              Entries,
@@ -453,9 +450,9 @@ fetch_term(Config) ->
 
 fetch_term_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {_Head, {Idx, ExpectedTerm, _}, _Tail}, slice(Entries),
+          {_Head, {Idx, ExpectedTerm, _}, _Tail}, slice_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
@@ -473,9 +470,9 @@ fetch_out_of_range_term(Config) ->
 
 fetch_out_of_range_term_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          {Start, _}, out_of_range(Entries),
+          {Start, _}, out_of_range_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,
@@ -493,7 +490,7 @@ next_index_term(Config) ->
 
 next_index_term_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        begin
            {queued, Log} = ra_log_file:write(
                               Entries,
@@ -553,9 +550,9 @@ last_written(Config) ->
 
 last_written_prop(Dir, TestCase) ->
     ?FORALL(
-       Entries, log_entries(1),
+       Entries, log_entries_gen(1),
        ?FORALL(
-          Subset, sorted_subset(Entries),
+          Subset, sorted_subset_gen(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,
