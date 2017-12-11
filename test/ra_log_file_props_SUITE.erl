@@ -31,7 +31,8 @@ all_tests() ->
      next_index_term,
      read_write_meta,
      sync_meta,
-     last_written
+     last_written,
+     last_written_forward
     ].
 
 groups() ->
@@ -70,6 +71,13 @@ log_entries_gen(N) ->
 term_sequence_gen(N) ->
     ?LET(List, vector(N, non_neg_integer()),
          lists:sort(List)).
+
+wait_sequence_gen(N) ->
+    ?LET(List, vector(N, frequency([{5, 0}, {3, choose(1, 50)},
+                                    {1, choose(100, 500)}])), List).
+
+consume_gen(N) ->
+    ?LET(List, vector(N, boolean()), List).
 
 log_entry_but_one_gen() ->
     ?LET(Idx, ?SUCHTHAT(Int, integer(), Int =/= 1),
@@ -567,6 +575,54 @@ last_written_prop(Dir, TestCase) ->
                                   [Got, Expected, Entries, Subset]),
                         Got == Expected)
           end)).
+
+last_written_forward(Config) ->
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    run_proper(fun last_written_forward_prop/2, [Dir, TestCase], 25).
+
+last_written_forward_prop(Dir, TestCase) ->
+    ?FORALL(
+       Entries, log_entries_gen(1),
+       ?FORALL(
+          {Waits, Consumes}, {wait_sequence_gen(length(Entries)), consume_gen(length(Entries))},
+          begin
+              flush(),
+              Actions = lists:zip3(Entries, Waits, Consumes),
+              Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
+              {Log, Last} = lists:foldl(fun({Entry, Wait, Consume} = E, {Acc0, Last0}) ->
+                                                {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                                timer:sleep(Wait),
+                                                case Consume of
+                                                    true ->
+                                                        consume_events(Acc, Last0);
+                                                    false ->
+                                                        {Acc, Last0}
+                                                end
+                                end, {Log0, {0, 0}}, Actions),
+              Got = ra_log_file:last_written(Log),
+              reset(Log),
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p~n",
+                                  [Got, Last, Actions]),
+                        Got ==  Last)
+          end)).
+
+flush() ->
+    receive
+        {ra_log_event, _} ->
+            flush()
+    after 100 ->
+            ok
+    end.
+
+consume_events(Log0, Last) ->
+    receive
+        {ra_log_event, {written, MostRecent} = Evt} ->
+            Log = ra_log_file:handle_event(Evt, Log0),
+            consume_events(Log, MostRecent)
+    after 0 ->
+            {Log0, Last}
+    end.
 
 last_idx_term([]) ->
     {0,0};
