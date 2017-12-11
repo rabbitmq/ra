@@ -56,13 +56,9 @@ init_per_testcase(TestCase, Config) ->
     register(TestCase, self()),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
-write(Config) ->
-    %% There is no way to create a log file from a list of entries without the write
-    %% API. We have to prove first that writting a consecutive log file succeeds,
-    %% so we can use it as a base for our tests
-    Dir = ?config(wal_dir, Config),
-    TestCase = ?config(test_case, Config),
-    run_proper(fun write_prop/2, [Dir, TestCase], 100).
+%%------------------
+%% Generators
+%%------------------
 
 log_entries(N) ->
     ?LET(Length, choose(N, 100),
@@ -93,6 +89,9 @@ slice(Entries) ->
              {Head, [NEntry | Tail]} = lists:split(N - 1, Entries),
              {Head, NEntry, Tail}
          end).
+
+sorted_subset(Entries) ->
+    ?LET(Subset, list(elements(Entries)), lists:sort(Subset)).
 
 max_length(Entries) when length(Entries) > 1 ->
     length(Entries) - 1;
@@ -129,6 +128,18 @@ less_than(N) ->
 out_of_range(Entries) ->
     oneof([out_of_range_begin(),
            out_of_range_end(Entries)]).
+
+%%------------------
+%% Properties
+%%------------------
+
+write(Config) ->
+    %% There is no way to create a log file from a list of entries without the write
+    %% API. We have to prove first that writting a consecutive log file succeeds,
+    %% so we can use it as a base for our tests
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    run_proper(fun write_prop/2, [Dir, TestCase], 100).
 
 write_prop(Dir, TestCase) ->
     ?FORALL(
@@ -544,7 +555,7 @@ last_written_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries(1),
        ?FORALL(
-          Subset, list(elements(Entries)),
+          Subset, sorted_subset(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,

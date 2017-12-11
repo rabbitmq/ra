@@ -252,10 +252,6 @@ last_written(#state{last_written_index_term = LWTI}) ->
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
-handle_event({written, {Idx, Term} = IdxTerm},
-             #state{last_written_index_term = {LastIdx, LastTerm}} = State0)
-  when Idx < LastIdx, Term =< LastTerm ->
-    State0;
 handle_event({written, {Idx, Term} = IdxTerm}, State0) ->
     case fetch_term(Idx, State0) of
         {Term, State} ->
