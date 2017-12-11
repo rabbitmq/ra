@@ -546,21 +546,11 @@ last_written_prop(Dir, TestCase) ->
                         Got == Expected)
           end)).
 
-%% last_idx_term([]) ->
-%%     {0,0};
-%% last_idx_term(List) ->
-%%     {Idx, Term, _} = lists:last(List),
-%%     {Idx, Term}.
-
+last_idx_term([]) ->
+    {0,0};
 last_idx_term(List) ->
-    last_idx_term(List, {0, 0}).
-
-last_idx_term([], IdxTerm) ->
-    IdxTerm;
-last_idx_term([{Idx, Term, _} | List], {LastIdx, _}) when Idx > LastIdx ->
-    last_idx_term(List, {Idx, Term});
-last_idx_term([_ | List], IdxTerm) ->
-    last_idx_term(List, IdxTerm).
+    {Idx, Term, _} = lists:last(lists:sort(List)),
+    {Idx, Term}.
 
 %% TODO refactor
 run_proper(Fun, Args, NumTests) ->
