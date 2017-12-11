@@ -63,7 +63,7 @@ init(#{directory := Dir, id := Id} = Conf) ->
     {ok, Kv} = dets:open_file(Dets, []),
 
     % recover current range and any references to segments
-    {{FirstIdx, LastIdx}, SegRefs} = case recover_range(Id, Dir) of
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(Id, Dir) of
                                          {undefined, SRs} -> {{-1, -1}, SRs};
                                          R ->  R
                                      end,
@@ -77,21 +77,22 @@ init(#{directory := Dir, id := Id} = Conf) ->
             [] ->
                 undefined
         end,
-    ?DBG("log file init SnapshotStatet ~p ~p ~p", [SnapshotState, FirstIdx, LastIdx]),
+    ?DBG("log file init SnapshotState ~p ~p ~p", [SnapshotState, FirstIdx, LastIdx0]),
     {SnapIdx, SnapTerm} = case SnapshotState of
                               undefined -> {-1, -1};
                               {I, T, _} -> {I, T}
                           end,
     State000 = #state{directory = Dir, id = Id,
                       first_index = max(SnapIdx, FirstIdx),
-                      last_index = max(SnapIdx, LastIdx),
+                      last_index = max(SnapIdx, LastIdx0),
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
                       kv = Kv,
                       wal = Wal},
 
+    LastIdx = State000#state.last_index,
     % recover the last term
-    {LastTerm0, State00} = case State000#state.last_index of
+    {LastTerm0, State00} = case LastIdx of
                                SnapIdx ->
                                    {SnapTerm, State000};
                                -1 ->
@@ -100,7 +101,8 @@ init(#{directory := Dir, id := Id} = Conf) ->
                                    fetch_term(LI, State000)
                            end,
     LastTerm = ra_lib:default(LastTerm0, -1),
-    State0 = State00#state{last_term = LastTerm},
+    State0 = State00#state{last_term = LastTerm,
+                           last_written_index_term = {LastIdx, LastTerm}},
 
 
     % initialized with a default 0 index 0 term dummy value
@@ -142,6 +144,7 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 
 -spec close(ra_log_file_state()) -> ok.
 close(#state{kv = Kv}) ->
+    % TODO: close all open segments
     % deliberately ignoring return value
     _ = dets:close(Kv),
     ok.
@@ -252,17 +255,27 @@ last_written(#state{last_written_index_term = LWTI}) ->
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
-handle_event({written, {Idx, Term} = IdxTerm}, State0) ->
-    case fetch_term(Idx, State0) of
+handle_event({written, {FromIdx, ToIdx, Term}},
+             #state{last_written_index_term = {LastWrittenIdx, _}} = State0)
+  when FromIdx =< LastWrittenIdx + 1 ->
+    case fetch_term(ToIdx, State0) of
         {Term, State} ->
             % TODO: this case truncation shouldn't be too expensive as the cache
             % only containes the unflushed window of entries typically less than
             % 10ms worth of entries
-            truncate_cache(Idx, State#state{last_written_index_term = IdxTerm});
+            truncate_cache(ToIdx,
+                           State#state{last_written_index_term = {ToIdx, Term}});
         X ->
-            ?DBG("written event did not find term ~p found ~p", [{Idx, Term}, X]),
+            ?DBG("written event did not find term ~p found ~p", [{ToIdx, Term}, X]),
             State0
     end;
+handle_event({written, {FromIdx, _ToIdx, _Term}},
+             #state{id = Id,
+                    last_written_index_term = {LastWrittenIdx, _}} = State0)
+  when FromIdx > LastWrittenIdx + 1 ->
+    % leaving a gap is not ok - resend from cache
+    ?DBG("~p: ra_log_file: gap detected!", [Id, FromIdx]),
+    resend_from(LastWrittenIdx + 1, State0);
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
@@ -309,17 +322,10 @@ handle_event({snapshot_written, {Idx, Term}, File},
                                 open_segments = OpenSegs,
                                 snapshot_index_in_progress = undefined,
                                 snapshot_state = {Idx, Term, File}});
-handle_event({resend_write, Idx}, #state{cache = Cache0,
-                                         last_index = LastIdx} = State0) ->
+handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
-    Cache = maps:filter(fun (K, _) when K >= Idx -> true;
-                            (_, _) -> false
-                        end, Cache0),
-    lists:foldl(fun (I, Acc) ->
-                        X = maps:get(I, Cache),
-                        wal_write(Acc, erlang:insert_element(1, X, I))
-                end, State0, lists:seq(Idx, LastIdx)).
+    resend_from(Idx, State).
 
 -spec next_index(ra_log_file_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -477,13 +483,13 @@ open_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
                                                  Tid, 0, Acc0),
             {Entries, [{?METRICS_OPEN_MEM_TBL_POS, Count} | MetricOps], Rem};
         [] ->
-            {[], MetricOps, {Start0, End}}
+            {Acc0, MetricOps, {Start0, End}}
     end.
 
 closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
     case closed_mem_tables(Id) of
         [] ->
-            {[], MetricOps, {Start0, End}};
+            {Acc0, MetricOps, {Start0, End}};
         Tables ->
             {Entries, Count, Rem} =
             lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
@@ -627,7 +633,7 @@ cache_take0(Next, Last, Cache, Acc) ->
 maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     {queued, State} = append({0, 0, undefined}, State0),
     receive
-        {ra_log_event, {written, {0, 0}}} -> ok
+        {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
     State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->
@@ -641,6 +647,15 @@ lists_find(Pred, [H | Tail]) ->
         false ->
             lists_find(Pred, Tail)
     end.
+
+resend_from(Idx, #state{id = Id,
+                        last_index = LastIdx,
+                        cache = Cache} = State) ->
+    ?DBG("~p: ra_log_file: resending from ~b", [Id, Idx]),
+    lists:foldl(fun (I, Acc) ->
+                        X = maps:get(I, Cache),
+                        wal_write(Acc, erlang:insert_element(1, X, I))
+                end, State, lists:seq(Idx, LastIdx)).
 
 %%%% TESTS
 

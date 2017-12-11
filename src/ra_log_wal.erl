@@ -20,7 +20,8 @@
 -type writer_id() :: atom(). % currently has to be a locally registered name
 
 -record(batch, {writes = 0 :: non_neg_integer(),
-                waiting = #{} :: #{writer_id() => ra_index()},
+                waiting = #{} :: #{writer_id() =>
+                                   {From :: ra_index(), To :: ra_index()}},
                 start_time :: maybe(integer())
                }).
 
@@ -351,6 +352,7 @@ close_open_mem_tables(Filename, TblWriter) ->
          _ = ets:insert(ra_log_closed_mem_tables,
                         erlang:insert_element(2, T, M)),
          % TODO: better handle give_away errors
+         % could result in a leak
          catch ets:give_away(Tid, whereis(Id), undefined)
      end || {Id, _, _, Tid} = T <- MemTables],
     % reset open mem tables table
@@ -384,10 +386,9 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     State = State0#state{metrics_cursor = NextCursor},
     % error_logger:info_msg("completing batch ~p~n", [Waiting]),
 
-    % TODO emit metrics of time taken to sync and write batch size
     % notify processes that have synced map(Pid, Token)
-    Debug = maps:fold(fun (Id, IdxTerm, Dbg) ->
-                              Msg = {ra_log_event, {written, IdxTerm}},
+    Debug = maps:fold(fun (Id, WrittenInfo, Dbg) ->
+                              Msg = {ra_log_event, {written, WrittenInfo}},
                               try Id ! Msg  of
                                   _ -> ok
                               catch
@@ -403,9 +404,12 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     {State, Debug}.
 
 incr_batch(#batch{writes = Writes,
-                  waiting = Waiting} = Batch, Id, IdxTerm) ->
+                  waiting = Waiting0} = Batch, Id, {Idx, Term}) ->
+    Waiting = maps:update_with(Id, fun ({From, _, _}) ->
+                                           {From, Idx, Term}
+                                   end, {Idx, Idx, Term}, Waiting0),
     Batch#batch{writes = Writes + 1,
-                waiting = Waiting#{Id => IdxTerm}}.
+                waiting = Waiting}.
 
 recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   IdDataLen:16/integer, IdData:IdDataLen/binary,

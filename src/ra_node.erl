@@ -258,7 +258,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                     written ->
                         % fake written event
                         {State0,
-                         [{next_event, {ra_log_event, {written, {Idx, Term}}}}]};
+                         [{next_event, {ra_log_event, {written, {Idx, Idx, Term}}}}]};
                         % we have synced - forward leader match_index
                         % evaluate_quorum(State0);
                     queued ->
@@ -450,9 +450,10 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                             % we can use last idx here as the log store
                             % is now fullly up to date.
                             State = State2#{log => Log},
-                            LastIdxTerm = last_idx_term(State),
+                            {LIdx, LTerm} = last_idx_term(State),
                             {follower, State,
-                             [{next_event, {ra_log_event, {written, LastIdxTerm}}}]};
+                             [{next_event, {ra_log_event,
+                                            {written, {LIdx, LIdx, LTerm}}}}]};
                         {queued, Log} ->
                             {follower, State1#{log => Log}, []};
                         {error, wal_down} ->

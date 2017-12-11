@@ -126,23 +126,25 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
     % TODO: replace with recursive function to avoid creating a potentially
     % vary large list of integers
     {Segment, Closed0} =
-        lists:foldl(fun (Idx, {Seg0, Segs}) ->
-                         % TODO: the question here is whether we should allow
-                         % missing indexes or not?
-                         [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
-                          Data = term_to_binary(Data0),
-                          case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
-                              {ok, Seg} ->
-                                  {Seg, Segs};
-                              {error, full} ->
-                                  % close and open a new segment
-                                  ok = ra_log_file_segment:sync(Seg0),
-                                  ok = ra_log_file_segment:close(Seg0),
-                                  Seg1 = open_successor_segment(Seg0, SegConf),
-                                  {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
-                                  {Seg, [Seg0 | Segs]}
-                          end
-                  end, {Segment0, []}, lists:seq(StartIdx, EndIdx)),
+    lists:foldl(fun (Idx, {Seg0, Segs}) ->
+                        % TODO: the question here is whether we should allow
+                        % missing indexes or not?
+                        % TODO: how to handle cases when the Tid is no longer around
+                        % due to the writer process having exited?
+                        [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
+                        Data = term_to_binary(Data0),
+                        case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
+                            {ok, Seg} ->
+                                {Seg, Segs};
+                            {error, full} ->
+                                % close and open a new segment
+                                ok = ra_log_file_segment:sync(Seg0),
+                                ok = ra_log_file_segment:close(Seg0),
+                                Seg1 = open_successor_segment(Seg0, SegConf),
+                                {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
+                                {Seg, [Seg0 | Segs]}
+                        end
+                end, {Segment0, []}, lists:seq(StartIdx, EndIdx)),
     % fsync
     ok = ra_log_file_segment:sync(Segment),
 
