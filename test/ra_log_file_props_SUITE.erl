@@ -203,7 +203,7 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries(3),
        ?FORALL(
-          {Head, {Idx, Term, _Value} = _Entry, Tail}, slice(Entries),
+          {Head, _Entry, Tail}, slice(Entries),
           begin
               {queued, Log0} = ra_log_file:write(
                                 Head,
@@ -223,7 +223,7 @@ append_missing_entry_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries(3),
        ?FORALL(
-          {Head, {Idx, Term, _Value} = _Entry, Tail}, slice(Entries),
+          {Head, _Entry, Tail}, slice(Entries),
           begin
               Log0 = append_all(Head,
                                ra_log_file:init(#{directory => Dir, id => TestCase})),
@@ -291,7 +291,7 @@ append_overwrite_entry_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries(3),
        ?FORALL(
-          {Head, {Idx, Term, _Value} = _Entry, _Tail}, slice(Entries),
+          {_Head, {Idx, Term, _Value} = _Entry, _Tail}, slice(Entries),
           begin
               {queued, Log} = ra_log_file:write(
                                 Entries,
@@ -464,7 +464,7 @@ next_index_term_prop(Dir, TestCase) ->
            {queued, Log} = ra_log_file:write(
                               Entries,
                               ra_log_file:init(#{directory => Dir, id => TestCase})),
-           {LastIdx, LastTerm, _} = lists:last(Entries),
+           {LastIdx, _LastTerm, _} = lists:last(Entries),
            Idx = ra_log_file:next_index_term(Log),
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Idx, LastIdx + 1]),
@@ -487,7 +487,7 @@ read_write_meta_prop(Dir, TestCase) ->
            Result = [{K, V, ra_log_file:read_meta(K, Log)} || {K, V} <- Meta],
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p~n", [Result]),
-                     lists:all(fun({K, V, Value}) ->
+                     lists:all(fun({_K, V, Value}) ->
                                        V == Value
                                end, Result))
        end).
