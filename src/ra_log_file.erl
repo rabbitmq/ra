@@ -159,31 +159,50 @@ append(_Entry, _State) ->
             State :: ra_log_file_state()) ->
     {queued, ra_log_file_state()} |
     {error, integrity_error | wal_down}.
-write([{FstIdx, _, _} | _] = Entries,
-      State0 = #state{last_index = LastIdx})
-      when FstIdx =< LastIdx + 1 ->
+write([{FstIdx, _, _} | Rest] = Entries,
+      State0 = #state{last_index = LastIdx}) when FstIdx =< LastIdx + 1,
+                                                  FstIdx >= 0 ->
     % TODO: wal should provide batch api
-    try
-        State = lists:foldl(fun (Entry, S) ->
-                                    wal_write(S, Entry)
-                            end, State0, Entries),
-        {queued, State}
-    catch
-        exit:wal_down ->
-            {error, wal_down}
+    case verify_entries(FstIdx, Rest) of
+        ok ->
+            try
+                State = lists:foldl(fun (Entry, S) ->
+                                            wal_write(S, Entry)
+                                    end, State0, Entries),
+                {queued, State}
+            catch
+                exit:wal_down ->
+                    {error, wal_down}
+            end;
+        Error ->
+            Error
     end;
 write([{FstIdx, _, _} = First | Entries],
       State00 = #state{snapshot_index_in_progress = SnapIdx})
       when FstIdx =:= SnapIdx + 1 ->
     % the next write after a snapshot has started should be a "truncating" write
     % to the WAL
-    State0 = wal_truncate_write(State00, First),
-    % write the rest normally
-    State = lists:foldl(fun (Entry, S) ->
-                                wal_write(S, Entry)
-                        end, State0, Entries),
+    case verify_entries(FstIdx, Entries) of
+        ok ->
+            State0 = wal_truncate_write(State00, First),
+                                                % write the rest normally
+            State = lists:foldl(fun (Entry, S) ->
+                                        wal_write(S, Entry)
+                                end, State0, Entries),
+            {queued, State};
+        Error ->
+            Error
+    end;
+write([], State) ->
     {queued, State};
 write(_Entry, _State) ->
+    {error, integrity_error}.
+
+verify_entries(_, []) ->
+    ok;
+verify_entries(Idx, [{NextIdx, _, _} | Tail]) when Idx + 1 == NextIdx ->
+    verify_entries(NextIdx, Tail);
+verify_entries(_, _) ->
     {error, integrity_error}.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
