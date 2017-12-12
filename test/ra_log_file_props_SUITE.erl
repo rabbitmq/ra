@@ -31,8 +31,7 @@ all_tests() ->
      next_index_term,
      read_write_meta,
      sync_meta,
-     last_written,
-     last_written_forward
+     last_written
     ].
 
 groups() ->
@@ -554,34 +553,9 @@ write_meta([{Key, Value} | Rest], Log0) ->
 last_written(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_prop/2, [Dir, TestCase], 100).
+    run_proper(fun last_written_prop/2, [Dir, TestCase], 25).
 
 last_written_prop(Dir, TestCase) ->
-    ?FORALL(
-       Entries, log_entries_gen(1),
-       ?FORALL(
-          Subset, sorted_subset_gen(Entries),
-          begin
-              {queued, Log0} = ra_log_file:write(
-                                 Entries,
-                                 ra_log_file:init(#{directory => Dir, id => TestCase})),
-              Log = lists:foldl(fun({Idx, Term, _}, Acc) ->
-                                        ra_log_file:handle_event({written, {Idx, Term}}, Acc)
-                                end, Log0, Subset),
-              Got = ra_log_file:last_written(Log),
-              Expected = last_idx_term(Subset),
-              reset(Log),
-              ?WHENFAIL(io:format("Got: ~p Expected: ~p~nEntries: ~p~nSubset: ~p~n",
-                                  [Got, Expected, Entries, Subset]),
-                        Got == Expected)
-          end)).
-
-last_written_forward(Config) ->
-    Dir = ?config(wal_dir, Config),
-    TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_forward_prop/2, [Dir, TestCase], 25).
-
-last_written_forward_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -590,7 +564,7 @@ last_written_forward_prop(Dir, TestCase) ->
               flush(),
               Actions = lists:zip3(Entries, Waits, Consumes),
               Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
-              {Log, Last} = lists:foldl(fun({Entry, Wait, Consume} = E, {Acc0, Last0}) ->
+              {Log, Last} = lists:foldl(fun({Entry, Wait, Consume}, {Acc0, Last0}) ->
                                                 {queued, Acc} = ra_log_file:write([Entry], Acc0),
                                                 timer:sleep(Wait),
                                                 case Consume of
@@ -617,9 +591,9 @@ flush() ->
 
 consume_events(Log0, Last) ->
     receive
-        {ra_log_event, {written, MostRecent} = Evt} ->
+        {ra_log_event, {written, {_, To, Term}} = Evt} ->
             Log = ra_log_file:handle_event(Evt, Log0),
-            consume_events(Log, MostRecent)
+            consume_events(Log, {To, Term})
     after 0 ->
             {Log0, Last}
     end.
@@ -642,7 +616,7 @@ run_proper(Fun, Args, NumTests) ->
 reset(Log) ->
     ra_log_file:write([{0, 0, empty}], Log),
     receive
-        {ra_log_event, {written, {0, 0}}} ->
+        {ra_log_event, {written, {_, 0, 0}}} ->
             ok
     end,
     ra_log_file:close(Log).
