@@ -38,6 +38,7 @@ end_per_group(tests, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
+    _ = ra_log_file_ets:start_link(),
     register(TestCase, self()),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
@@ -179,6 +180,7 @@ roll_over(Config) ->
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
                                          max_wal_size_bytes => 1024 * NumWrites,
                                          segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
@@ -215,12 +217,14 @@ recover_truncated_write(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
     ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
     [{Self, _, 9, 9, _}] =
@@ -235,6 +239,7 @@ recover(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -243,16 +248,20 @@ recover(Config) ->
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
 
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
     [] = ets:lookup(ra_log_open_mem_tables, Self),
-    [{Self, _, 1, 100, OpnMTTid1}, {Self, _, 101, 200, OpnMTTid2}] =
+    [ {Self, _, 1, 100, MTid1}, % this is the "old" table
+      % these are the recovered tables
+      {Self, _, 1, 100, MTid2}, {Self, _, 101, 200, MTid4} ] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
-    100 = ets:info(OpnMTTid1, size),
-    100 = ets:info(OpnMTTid2, size),
+    100 = ets:info(MTid1, size),
+    100 = ets:info(MTid2, size),
+    100 = ets:info(MTid4, size),
     % check that both mem_tables notifications are received by the segment writer
     receive
         {'$gen_cast', {mem_tables, [{Self, 1, 100, _}], _}} -> ok
@@ -266,6 +275,17 @@ recover(Config) ->
     end,
 
     ok.
+
+handle_seg_writer_await() ->
+    receive
+        {'$gen_call', From, await} ->
+            gen:reply(From, ok);
+        Msg ->
+            ct:pal("seg writer wait got ~p", [Msg]),
+            handle_seg_writer_await()
+    after 2000 ->
+              throw(seq_writer_await_timeout)
+    end.
 
 empty_mailbox() ->
     receive

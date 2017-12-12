@@ -119,17 +119,19 @@ start_link(Config, Options) ->
 init(#{dir := Dir} = Conf0, Parent, Options) ->
     Conf = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
-    % create mem table lookup table to be used to map ra cluster name
-    % to table identifiers to query.
-    _ = ets:new(ra_log_open_mem_tables,
-                [set, named_table, {read_concurrency, true}, protected]),
-    _ = ets:new(ra_log_closed_mem_tables,
-                [bag, named_table, {read_concurrency, true}, public]),
+    % test that off_heap is actuall beneficial
+    % given ra_log_wal is effectively a fan-in sink it is likely that it will
+    % at times receive large number of messages from a large number of
+    % writers
+    process_flag(message_queue_data, off_heap),
     _ = ets:new(ra_log_wal_metrics,
                 [set, named_table, {read_concurrency, true}, protected]),
     % seed metrics table with data
     [true = ets:insert(ra_log_wal_metrics, {I, undefined})
      || I <- lists:seq(0, ?METRICS_WINDOW_SIZE-1)],
+    % wait for the segment writer to process anything in flight
+    #{segment_writer := SegWriter} = Conf,
+    ok = ra_log_file_segment_writer:await(SegWriter),
 
     State = recover_wal(Dir, Conf),
     Debug = sys:debug_options(Options),
@@ -147,22 +149,44 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     %  recover each mem table and notify segment writer
     %  this may result in duplicated segments but that is better than
     %  losing any data
-    WalFiles = filelib:wildcard(filename:join(Dir, "*.wal")),
+    %  As we have waited for the segment writer to finish processing it is
+    %  assumed that any remaining wal files need to be re-processed.
+    WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
     ?DBG("WAL: recovering ~p", [WalFiles]),
+    % if we have open mem tables we need to retain these during recovery to
+    % ensure range doesn't suddenly shrink
+    % also if we have more than one wal file we can't suddenly process the older
+    % file into the open mem table as during processing readers of the tables
+    % will not get the latest available data.
+    % hence we need to recover without writing into ra_log_open_mem_tables
+    %
+    % TODO: first we should recover all the tables - then we should update
+    % the lookup tables
+    % create an ets table to hold recovery information
+    _ = ets:new(ra_log_recover_mem_tables,
+                [set, named_table, {read_concurrency, true}, private]),
     [begin
          % TOOD: avoid reading the whole file at once
          {ok, Data} = file:read_file(F),
          ok = recover_records(Data, #{}),
-         ok = close_open_mem_tables(F, TblWriter)
-     end || F <- lists:sort(WalFiles)],
+         ok = close_open_mem_tables(ra_log_recover_mem_tables, F, TblWriter)
+     end || F <- WalFiles],
     Modes = [raw, append, binary] ++ AdditionalModes,
-    roll_over(#state{fd = undefined,
+    State = roll_over(ra_log_recover_mem_tables,
+              #state{fd = undefined,
                      dir = Dir,
-                     file_num = extract_file_num(WalFiles),
+                     file_num = extract_file_num(lists:reverse(WalFiles)),
                      file_modes = Modes,
                      max_wal_size_bytes = MaxWalSize,
-                     segment_writer = TblWriter
-                    }).
+                     segment_writer = TblWriter}),
+    % we can now delete all open mem tables as should be covered by recovered
+    % closed tables
+    Open = ets:tab2list(ra_log_open_mem_tables),
+    true = ets:delete_all_objects(ra_log_open_mem_tables),
+    % delete all open ets tables
+    [true = ets:delete(Tid) || {_, _, _, Tid} <- Open],
+    true = ets:delete(ra_log_recover_mem_tables),
+    State.
 
 extract_file_num([]) ->
     0;
@@ -292,15 +316,16 @@ append_data(#state{fd = Fd, batch = Batch,
                    wal_file_size = FileSize} = State,
             Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
     ok = file:write(Fd, Data),
-    true = update_mem_table(Id, Idx, Term, Entry, Truncate),
+    true = update_mem_table(ra_log_open_mem_tables, Id, Idx, Term, Entry,
+                            Truncate),
     State#state{batch = incr_batch(Batch, Id, {Idx, Term}),
                 writers = Writers#{Id => {in_seq, Idx}},
                 wal_file_size = FileSize + DataSize}.
 
-update_mem_table(Id, Idx, Term, Entry, Truncate) ->
+update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
     % TODO: cache current tables to avoid ets lookup?
     % TODO: if Idx =< First we could truncate the entire table
-    case ets:lookup(ra_log_open_mem_tables, Id) of
+    case ets:lookup(OpnMemTbl, Id) of
         [{_Id, From0, _To, Tid}] ->
             _ = ets:insert(Tid, {Idx, Term, Entry}),
             From = case Truncate of
@@ -313,31 +338,36 @@ update_mem_table(Id, Idx, Term, Entry, Truncate) ->
                    end,
             % update Last idx for current tbl
             % this is how followers overwrite previously seen entries
-            _ = ets:update_element(ra_log_open_mem_tables, Id,
+            _ = ets:update_element(OpnMemTbl, Id,
                                    [{2, From}, {3, Idx}]);
         [] ->
             % open new ets table
-            Tid = open_mem_table(Id, Idx),
+            Tid = open_mem_table(Id),
+            true = ets:insert(OpnMemTbl, {Id, Idx, Idx, Tid}),
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(#state{fd = Fd0, file_num = Num0, dir = Dir,
-                 file_modes = Modes, filename = Filename,
-                 segment_writer = TblWriter} = State) ->
+roll_over(State) ->
+    roll_over(ra_log_open_mem_tables, State).
+
+
+roll_over(OpnMemTbls, #state{fd = Fd0, file_num = Num0, dir = Dir,
+                             file_modes = Modes, filename = Filename,
+                             segment_writer = TblWriter} = State) ->
     Num = Num0 + 1,
-    ?DBG("wal: rolling over to ~p~n", [Num]),
+    ?DBG("wal: rolling over to ~p ~p~n", [Num, State]),
     NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
     ra_lib:iter_maybe(Fd0, fun (F) -> ok = file:close(F) end),
     {ok, Fd} = file:open(NextFile, Modes),
 
-    ok = close_open_mem_tables(Filename, TblWriter),
+    ok = close_open_mem_tables(OpnMemTbls, Filename, TblWriter),
 
     State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
                 writer_name_cache = {0, #{}},
                 file_num = Num}.
 
-close_open_mem_tables(Filename, TblWriter) ->
-    MemTables = ets:tab2list(ra_log_open_mem_tables),
+close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
+    MemTables = ets:tab2list(OpnMemTbls),
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
     % flushed to persistent tables asynchronously
@@ -350,13 +380,10 @@ close_open_mem_tables(Filename, TblWriter) ->
          % by
          M = erlang:unique_integer([monotonic, positive]),
          _ = ets:insert(ra_log_closed_mem_tables,
-                        erlang:insert_element(2, T, M)),
-         % TODO: better handle give_away errors
-         % could result in a leak
-         catch ets:give_away(Tid, whereis(Id), undefined)
-     end || {Id, _, _, Tid} = T <- MemTables],
+                        erlang:insert_element(2, T, M))
+     end || T <- MemTables],
     % reset open mem tables table
-    true = ets:delete_all_objects(ra_log_open_mem_tables),
+    true = ets:delete_all_objects(OpnMemTbls),
 
     % notify segment_writer of new unflushed memtables
     ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
@@ -364,9 +391,10 @@ close_open_mem_tables(Filename, TblWriter) ->
     ok.
 
 
-open_mem_table(Id, Idx) ->
-    Tid = ets:new(Id, [set, protected, {read_concurrency, true}]),
-    true = ets:insert(ra_log_open_mem_tables, {Id, Idx, Idx, Tid}),
+open_mem_table(Id) ->
+    Tid = ets:new(Id, [set, {read_concurrency, true}, public]),
+    % immediately give away ownership to ets process
+    true = ra_log_file_ets:give_away(Tid),
     Tid.
 
 start_batch(State) ->
@@ -418,8 +446,8 @@ recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   Rest/binary>>, Cache) ->
     % first writer appearance in WAL
     Id = binary_to_term(IdData),
-    true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData),
-                            Trunc =:= 1),
+    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
+                            binary_to_term(EntryData), Trunc =:= 1),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest,
                     Cache#{IdRef => {Id, <<1:1/integer, IdRef:14/integer>>}});
@@ -428,8 +456,9 @@ recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
                   EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
     #{IdRef := {Id, _}} = Cache,
-    true = update_mem_table(Id, Idx, Term, binary_to_term(EntryData),
-                            Trunc =:= 1),
+
+    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
+                            binary_to_term(EntryData), Trunc =:= 1),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest, Cache);
 recover_records(<<>>, _Cache) ->
