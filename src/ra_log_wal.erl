@@ -57,6 +57,8 @@
                       additional_wal_file_modes => [term()]
                      }.
 
+-export_type([wal_conf/0]).
+
 
 -spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
@@ -172,13 +174,14 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
          ok = close_open_mem_tables(ra_log_recover_mem_tables, F, TblWriter)
      end || F <- WalFiles],
     Modes = [raw, append, binary] ++ AdditionalModes,
+    FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(ra_log_recover_mem_tables,
-              #state{fd = undefined,
-                     dir = Dir,
-                     file_num = extract_file_num(lists:reverse(WalFiles)),
-                     file_modes = Modes,
-                     max_wal_size_bytes = MaxWalSize,
-                     segment_writer = TblWriter}),
+                      #state{fd = undefined,
+                             dir = Dir,
+                             file_num = FileNum,
+                             file_modes = Modes,
+                             max_wal_size_bytes = MaxWalSize,
+                             segment_writer = TblWriter}),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
     Open = ets:tab2list(ra_log_open_mem_tables),

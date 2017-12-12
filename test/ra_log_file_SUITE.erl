@@ -291,7 +291,7 @@ wal_down_read_availability(Config) ->
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 200),
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {Entries, _} = ra_log_file:take(0, 10, Log2),
     ?assert(length(Entries) =:= 10),
     ok.
@@ -302,7 +302,7 @@ wal_down_append_throws(Config) ->
 
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     ?assert(ra_log_file:can_write(Log0)),
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     ?assert(not ra_log_file:can_write(Log0)),
     ?assertExit(wal_down, ra_log_file:append({1,1,hi}, Log0)),
     ok.
@@ -311,7 +311,7 @@ wal_down_write_returns_error_wal_down(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
 
@@ -334,8 +334,8 @@ detect_lost_written_range(Config) ->
 
     % restart WAL to ensure lose the transient state keeping track of
     % each writer's last written index
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
-    {ok, _} = supervisor:restart_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+    {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
 
     % WAL recovers
     meck:unload(ra_log_wal),
@@ -437,8 +437,8 @@ update_release_cursor_after_recovery(Config) ->
     % ok = ra_log_wal:force_roll_over(ra_log_wal),
 
     % recover WAL
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
-    {ok, _} = supervisor:restart_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+    {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
     timer:sleep(1000),
 
     % then deliver all log events
