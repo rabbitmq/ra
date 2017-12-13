@@ -598,12 +598,12 @@ last_written_with_wal_prop(Dir, TestCase) ->
                                       ra_log_wal:force_roll_over(ra_log_wal),
                                       Acc;
                                  (stop_wal, {Acc0, Last0, LastIdx, wal_up}) ->
-                                      supervisor:terminate_child(ra_sup, ra_log_wal),
+                                      ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
                                       {Acc0, Last0, LastIdx, wal_down};
                                  (stop_wal, {_, _, _, wal_down} = Acc) ->
                                       Acc;
                                  (start_wal, {Acc0, Last0, LastIdx, wal_down}) ->
-                                      supervisor:restart_child(ra_sup, ra_log_wal),
+                                      supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
                                       {Acc0, Last0, LastIdx, wal_up};
                                  (start_wal, {_, _, _, wal_up} = Acc) ->
                                       Acc;
@@ -689,7 +689,7 @@ run_proper(Fun, Args, NumTests) ->
 					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
 
 reset(Log) ->
-    supervisor:restart_child(ra_sup, ra_log_wal),
+    supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
     ra_log_file:write([{0, 0, empty}], Log),
     receive
         {ra_log_event, {written, {_, 0, 0}}} ->
