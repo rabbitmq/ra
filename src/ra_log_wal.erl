@@ -26,15 +26,22 @@
                 start_time :: maybe(integer())
                }).
 
+-type writer_name_cache() :: {NextIntId :: non_neg_integer(),
+                              #{writer_id() => binary()}}.
+
+-record(wal, {fd :: maybe(file:io_device()),
+              filename :: maybe(file:filename()),
+              writer_name_cache = {0, #{}} :: writer_name_cache(),
+              wal_file_size = 0 :: non_neg_integer()}).
+
 -record(state, {file_num = 0 :: non_neg_integer(),
-                fd :: maybe(file:io_device()),
-                filename :: maybe(file:filename()),
+                wal :: #wal{} | undefined,
+                batch = #batch{} :: #batch{},
                 file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
                 max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
                 segment_writer = ra_log_file_segment_writer :: atom(),
-                batch = #batch{} :: #batch{},
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
                 % No further writes are allowed until the missing
@@ -46,17 +53,14 @@
                 % all writers seen withing the lifetime of a WAL file
                 % and the last index seen
                 writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
-                writer_name_cache = {0, #{}} :: {NextIntId :: non_neg_integer(), #{atom() => binary()}},
-                metrics_cursor = 0 :: non_neg_integer(),
-                wal_file_size = 0 :: non_neg_integer()
+                metrics_cursor = 0 :: non_neg_integer()
                }).
 
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
                       segment_writer => atom(),
-                      additional_wal_file_modes => [term()]
-                     }.
+                      additional_wal_file_modes => [term()]}.
 
 -export_type([wal_conf/0]).
 
@@ -78,6 +82,7 @@ force_roll_over(Wal) ->
     ok.
 
 %% ra_log_wal
+%%
 %% Writes Raft entries to shared persistent storage for multiple "writers"
 %% Fsyncs in batches, typically the write requests received in the mailbox during
 %% the previous fsync operation. Notifies all writers after each fsync batch.
@@ -168,8 +173,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     Modes = [raw, append, binary] ++ AdditionalModes,
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(ra_log_recover_mem_tables,
-                      #state{fd = undefined,
-                             dir = Dir,
+                      #state{dir = Dir,
                              file_num = FileNum,
                              file_modes = Modes,
                              max_wal_size_bytes = MaxWalSize,
@@ -193,7 +197,7 @@ loop_wait(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0),
+            cleanup(State0#state.wal),
             exit(Reason);
         Msg ->
             Debug = handle_debug_in(Debug0, Msg),
@@ -204,7 +208,7 @@ loop_wait(State0, Parent, Debug0) ->
     end.
 
 loop_batched(#state{max_batch_size = Written,
-                    batch = #batch{writes = Written}} = State0,
+                    batch  = #batch{writes = Written}} = State0,
              Parent, Debug0) ->
     % complete batch after seeing max_batch_size writes
     {State, Debug} = complete_batch(State0, Debug0),
@@ -216,7 +220,7 @@ loop_batched(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0),
+            cleanup(State0#state.wal),
             exit(Reason);
         Msg ->
             Debug = handle_debug_in(Debug0, Msg),
@@ -226,12 +230,13 @@ loop_batched(State0, Parent, Debug0) ->
               {State, Debug} = complete_batch(State0, Debug0),
               NewBatchSize = max(?MIN_MAX_BATCH_SIZE,
                                  State0#state.max_batch_size / 2),
-              loop_wait(State#state{max_batch_size = NewBatchSize}, Parent, Debug)
+              loop_wait(State#state{max_batch_size = NewBatchSize},
+                        Parent, Debug)
     end.
 
-cleanup(#state{fd = undefined}) ->
+cleanup(#wal{fd = undefined}) ->
     ok;
-cleanup(#state{fd = Fd}) ->
+cleanup(#wal{fd = Fd}) ->
     _ = file:sync(Fd),
     ok.
 
@@ -239,11 +244,11 @@ handle_debug_in(Debug, Msg) ->
     sys:handle_debug(Debug, fun write_debug/3,
                      ?MODULE, {in, Msg}).
 
-serialize_header(Id, Trunc, #state{writer_name_cache = {Next, Cache}} = State) ->
+serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
     T = case Trunc of true -> 1; false -> 0 end,
     case Cache of
         #{Id := BinId} ->
-            {<<T:1/integer, BinId/bitstring>>, State};
+            {<<T:1/integer, BinId/bitstring>>, WriterCache};
         _ ->
             % TODO: check overflows of Next
             % cache the last 15 bits of the header
@@ -252,17 +257,17 @@ serialize_header(Id, Trunc, #state{writer_name_cache = {Next, Cache}} = State) -
             IdDataLen = byte_size(IdData),
             MarkerId = <<T:1/integer, 0:1/integer, Next:14/integer,
                          IdDataLen:16/integer, IdData/binary>>,
-            {MarkerId,
-             State#state{writer_name_cache =
-                         {Next+1, Cache#{Id => BinId}}}}
+            {MarkerId, {Next+1, Cache#{Id => BinId}}}
     end.
 
 write_data(Id, Idx, Term, Entry, Trunc,
            #state{max_wal_size_bytes = MaxWalSize,
-                  wal_file_size = FileSize} = State00) ->
+                  wal = #wal{wal_file_size = FileSize,
+                             writer_name_cache = Cache0} = Wal} = State00) ->
     EntryData = to_binary(Entry),
     EntryDataLen = byte_size(EntryData),
-    {HeaderData, State0} = serialize_header(Id, Trunc, State00),
+    {HeaderData, Cache} = serialize_header(Id, Trunc, Cache0),
+    State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
     % TODO optional adler32 checksum check for EntryData
     Data = <<HeaderData/binary,
              Idx:64/integer,
@@ -306,16 +311,17 @@ handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
 handle_msg(rollover, State) ->
     roll_over(State).
 
-append_data(#state{fd = Fd, batch = Batch,
-                   writers = Writers,
-                   wal_file_size = FileSize} = State,
+append_data(#state{wal = #wal{fd = Fd,
+                              wal_file_size = FileSize} = Wal,
+                   batch = Batch,
+                   writers = Writers} = State,
             Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
     ok = file:write(Fd, Data),
     true = update_mem_table(ra_log_open_mem_tables, Id, Idx, Term, Entry,
                             Truncate),
-    State#state{batch = incr_batch(Batch, Id, {Idx, Term}),
-                writers = Writers#{Id => {in_seq, Idx}},
-                wal_file_size = FileSize + DataSize}.
+    State#state{wal = Wal#wal{wal_file_size = FileSize + DataSize},
+                batch = incr_batch(Batch, Id, {Idx, Term}),
+                writers = Writers#{Id => {in_seq, Idx}} }.
 
 update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
     % TODO: cache current tables to avoid ets lookup?
@@ -351,20 +357,27 @@ roll_over(State) ->
     roll_over(ra_log_open_mem_tables, State).
 
 
-roll_over(OpnMemTbls, #state{fd = Fd0, file_num = Num0, dir = Dir,
-                             file_modes = Modes, filename = Filename,
-                             segment_writer = TblWriter} = State) ->
+roll_over(OpnMemTbls, #state{wal = Wal0,
+                             dir = Dir,
+                             file_num = Num0,
+                             file_modes = Modes,
+                             segment_writer = SegWriter} = State) ->
     Num = Num0 + 1,
-    ?DBG("wal: rolling over to ~p ~p~n", [Num, State]),
+    ?DBG("wal: completing wal file next ~p~n", [Num]),
     NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
-    ra_lib:iter_maybe(Fd0, fun (F) -> ok = file:close(F) end),
     {ok, Fd} = file:open(NextFile, Modes),
+    case Wal0 of
+        undefined -> ok;
+        Wal ->
+            ok = close_file(Wal#wal.fd),
+            ok = close_open_mem_tables(OpnMemTbls, NextFile, SegWriter)
+    end,
+    State#state{wal = #wal{fd = Fd, filename = NextFile}, file_num = Num}.
 
-    ok = close_open_mem_tables(OpnMemTbls, Filename, TblWriter),
-
-    State#state{fd = Fd, filename = NextFile, wal_file_size = 0,
-                writer_name_cache = {0, #{}},
-                file_num = Num}.
+close_file(undefined) ->
+    ok;
+close_file( Fd) ->
+    file:close(Fd).
 
 close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     MemTables = ets:tab2list(OpnMemTbls),
@@ -400,19 +413,20 @@ open_mem_table(Id) ->
 start_batch(State) ->
     State#state{batch = #batch{start_time = os:system_time(millisecond)}}.
 
-complete_batch(#state{batch = #batch{waiting = Waiting,
+complete_batch(#state{wal = #wal{fd = Fd},
+                      batch = #batch{waiting = Waiting,
                                      writes = NumWrites,
                                      start_time = ST},
-                      fd = Fd, metrics_cursor = Cursor} = State0,
+                      metrics_cursor = Cursor} = State0,
                Debug0) ->
     TS = os:system_time(millisecond),
     ok = file:sync(Fd),
     SyncTS = os:system_time(millisecond),
+    % ?DBG("completing batch ~p~n", [Waiting]),
     _ = ets:update_element(ra_log_wal_metrics, Cursor,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
     State = State0#state{metrics_cursor = NextCursor},
-    % error_logger:info_msg("completing batch ~p~n", [Waiting]),
 
     % notify processes that have synced map(Pid, Token)
     Debug = maps:fold(fun (Id, WrittenInfo, Dbg) ->
@@ -429,6 +443,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                               sys:handle_debug(Dbg, fun write_debug/3,
                                                ?MODULE, Evt)
                       end, Debug0, Waiting),
+
     {State, Debug}.
 
 incr_batch(#batch{writes = Writes,
@@ -491,7 +506,7 @@ system_continue(Parent, Debug, State) ->
     loop_batched(State, Parent, Debug).
 
 system_terminate(Reason, _Parent, _Debug, State) ->
-    cleanup(State),
+    cleanup(State#state.wal),
     exit(Reason).
 
 write_debug(Dev, Event, Name) ->
