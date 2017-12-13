@@ -28,7 +28,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
-    % application:ensure_all_started(sasl),
+    application:ensure_all_started(sasl),
     application:ensure_all_started(lg),
     Config.
 
@@ -69,7 +69,8 @@ write_many(Config) ->
     Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
     % Modes = [],
     {ok, WalPid} = ra_log_wal:start_link(#{dir => Dir,
-                                           additional_wal_file_modes => Modes}, []),
+                                           additional_wal_file_modes => Modes,
+                                           compute_checksums => true}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
@@ -245,7 +246,8 @@ recover(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self,
+                                      compute_checksums => true}, []),
     handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
@@ -326,8 +328,7 @@ stop_profile(Config) ->
     Dir = ?config(priv_dir, Config),
     Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
     timer:sleep(2000),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}),
-    lg_callgrind:profile_many("lg_write_many.gz.*", "lg_write_many.out",#{running => false}),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
     ok.
 
 

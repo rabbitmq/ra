@@ -53,13 +53,15 @@
                 % all writers seen withing the lifetime of a WAL file
                 % and the last index seen
                 writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
-                metrics_cursor = 0 :: non_neg_integer()
+                metrics_cursor = 0 :: non_neg_integer(),
+                compute_checksums = false :: boolean()
                }).
 
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
                       segment_writer => atom(),
+                      compute_checksums => boolean(),
                       additional_wal_file_modes => [term()]}.
 
 -export_type([wal_conf/0]).
@@ -141,6 +143,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
+                   compute_checksums := ComputeChecksum,
                    additional_wal_file_modes := AdditionalModes}) ->
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
@@ -177,6 +180,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                              file_num = FileNum,
                              file_modes = Modes,
                              max_wal_size_bytes = MaxWalSize,
+                             compute_checksums = ComputeChecksum,
                              segment_writer = TblWriter}),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
@@ -248,43 +252,50 @@ serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
     T = case Trunc of true -> 1; false -> 0 end,
     case Cache of
         #{Id := BinId} ->
-            {<<T:1/integer, BinId/bitstring>>, WriterCache};
+            {<<T:1/integer, BinId/bitstring>>, 2, WriterCache};
         _ ->
             % TODO: check overflows of Next
-            % cache the last 15 bits of the header
+            % cache the last 15 bits of the header word
             BinId = <<1:1/integer, Next:14/integer>>,
             IdData = to_binary(Id),
             IdDataLen = byte_size(IdData),
             MarkerId = <<T:1/integer, 0:1/integer, Next:14/integer,
                          IdDataLen:16/integer, IdData/binary>>,
-            {MarkerId, {Next+1, Cache#{Id => BinId}}}
+            {MarkerId, byte_size(MarkerId), {Next+1, Cache#{Id => BinId}}}
     end.
 
-write_data(Id, Idx, Term, Entry, Trunc,
+write_data(Id, Idx, Term, Data0, Trunc,
            #state{max_wal_size_bytes = MaxWalSize,
+                  compute_checksums = ComputeChecksum,
                   wal = #wal{wal_file_size = FileSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
-    EntryData = to_binary(Entry),
+    EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
-    {HeaderData, Cache} = serialize_header(Id, Trunc, Cache0),
+    {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
     State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-    % TODO optional adler32 checksum check for EntryData
-    Data = <<HeaderData/binary,
-             Idx:64/integer,
-             Term:64/integer,
-             EntryDataLen:32/integer,
-             EntryData/binary>>,
+    % TODO make checksum optional
+    Entry = <<Idx:64/integer,
+              Term:64/integer,
+              EntryData/binary>>,
+    Checksum = case ComputeChecksum of
+                   true -> erlang:adler32(Entry);
+                   false -> 0
+               end,
+    Record = <<HeaderData/binary,
+               Checksum:32/integer,
+               EntryDataLen:32/integer,
+               Entry/binary>>,
 
-    % fixed overhead = 20 bytes 2 * 64bit ints + 1 32 bit int
-    DataSize = byte_size(HeaderData) + 20 + EntryDataLen,
+    % fixed overhead = 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
+    DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
         true ->
             State = roll_over(State0),
-            append_data(State, Id, Idx, Term, Entry, DataSize, Data, Trunc);
+            append_data(State, Id, Idx, Term, Data0, DataSize, Record, Trunc);
         false ->
-            append_data(State0, Id, Idx, Term, Entry, DataSize, Data, Trunc)
+            append_data(State0, Id, Idx, Term, Data0, DataSize, Record, Trunc)
     end.
 
 handle_msg({append, Id, Idx, Term, Entry},
@@ -456,10 +467,13 @@ incr_batch(#batch{writes = Writes,
 
 recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   IdDataLen:16/integer, IdData:IdDataLen/binary,
+                  Checksum:32/integer,
+                  EntryDataLen:32/integer,
                   Idx:64/integer, Term:64/integer,
-                  EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                  EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
     % first writer appearance in WAL
+    validate_checksum(Checksum, Idx, Term, EntryData),
     Id = binary_to_term(IdData),
     true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
                             binary_to_term(EntryData), Trunc =:= 1),
@@ -467,10 +481,14 @@ recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
     recover_records(Rest,
                     Cache#{IdRef => {Id, <<1:1/integer, IdRef:14/integer>>}});
 recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
+                  Checksum:32/integer,
+                  EntryDataLen:32/integer,
                   Idx:64/integer, Term:64/integer,
-                  EntryDataLen:32/integer, EntryData:EntryDataLen/binary,
+                  EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
     #{IdRef := {Id, _}} = Cache,
+
+    validate_checksum(Checksum, Idx, Term, EntryData),
 
     true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
                             binary_to_term(EntryData), Trunc =:= 1),
@@ -478,6 +496,20 @@ recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
     recover_records(Rest, Cache);
 recover_records(<<>>, _Cache) ->
     ok.
+
+validate_checksum(0, _Idx, _Term, _Data) ->
+    % checksum not used
+    ok;
+validate_checksum(Checksum, Idx, Term, Data) ->
+    % building a binary just for the checksum may feel a bit wasteful
+    % but this is only called during recovery which should be a rare event
+    case erlang:adler32(<<Idx:64/integer, Term:64/integer, Data/binary>>) of
+        Checksum ->
+            ok;
+        _ ->
+            % TODO: what else can be done if the data is currupt
+            exit(checksum_validation_failure)
+    end.
 
 send_write(Wal, Msg) ->
     try
@@ -493,6 +525,7 @@ send_write(Wal, Msg) ->
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
                  max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
+                 compute_checksums => false,
                  additional_wal_file_modes => []},
                Conf).
 
