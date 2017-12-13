@@ -585,7 +585,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
-              {Log, Last, _, _} =
+              {Log, Last, LastIdx, Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
                                       Acc;
@@ -618,10 +618,11 @@ last_written_with_wal_prop(Dir, TestCase) ->
                                       {Acc, Last0, Idx, St}
                               end, {Log0, {0, 0}, 0, wal_up}, All),
               Got = ra_log_file:last_written(Log),
-              reset(Log),
-              ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p~n",
-                                  [Got, Last, All]),
-                        Got ==  Last)
+              {Written, Log1} = ra_log_file:take(1, LastIdx, Log),
+              reset(Log1),
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
+                                  [Got, Last, Written, All]),
+                        (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
           end)).
 
 last_written(Config) ->
