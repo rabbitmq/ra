@@ -31,7 +31,8 @@ all_tests() ->
      next_index_term,
      read_write_meta,
      sync_meta,
-     last_written
+     last_written,
+     last_written_with_wal
     ].
 
 groups() ->
@@ -72,8 +73,10 @@ term_sequence_gen(N) ->
          lists:sort(List)).
 
 wait_sequence_gen(N) ->
-    ?LET(List, vector(N, frequency([{5, 0}, {3, choose(1, 50)},
-                                    {1, choose(100, 500)}])), List).
+    ?LET(List, vector(N, wait_gen()), List).
+
+wait_gen() ->
+    frequency([{5, 0}, {3, choose(1, 50)}, {1, choose(100, 500)}]).
 
 consume_gen(N) ->
     ?LET(List, vector(N, boolean()), List).
@@ -550,6 +553,77 @@ write_meta([{Key, Value} | Rest], Log0) ->
     {ok, Log} = ra_log_file:write_meta(Key, Value, Log0),
     write_meta(Rest, Log).
 
+last_written_with_wal(Config) ->
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    run_proper(fun last_written_with_wal_prop/2, [Dir, TestCase], 25).
+
+build_action_list(Entries, Actions) ->
+    lists:flatten(lists:map(fun(Index) ->
+                                    E = lists:nth(Index, Entries),
+                                    A = lists:foldl(fun({A0, I}, Acc) when I == Index ->
+                                                            [A0 | Acc];
+                                                       (_, Acc) ->
+                                                            Acc
+                                                    end, [], Actions),
+                                    [E | A]
+                            end, lists:seq(1, length(Entries)))).
+
+position(Entries) ->
+    choose(1, length(Entries)).
+
+last_written_with_wal_prop(Dir, TestCase) ->
+    ?FORALL(
+       Entries, log_entries_gen(1),
+       ?FORALL(
+          Actions, list(frequency([{5, {{wait, wait_gen()}, position(Entries)}},
+                                   {3, {consume, position(Entries)}},
+                                   {2, {roll_wal, position(Entries)}},
+                                   {2, {stop_wal, position(Entries)}},
+                                   {2, {start_wal, position(Entries)}}])),
+          begin
+              flush(),
+              All = build_action_list(Entries, Actions),
+              Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
+              {Log, Last, _, _} =
+                  lists:foldl(fun({wait, Wait}, Acc) ->
+                                      timer:sleep(Wait),
+                                      Acc;
+                                 (consume, {Acc0, Last0, LastIdx, St}) ->
+                                      {Acc1, Last1} = consume_events(Acc0, Last0),
+                                      {Acc1, Last1, LastIdx, St};
+                                 (roll_wal, {_, _, _, wal_down} = Acc) ->
+                                      Acc;
+                                 (roll_wal, Acc) ->
+                                      ra_log_wal:force_roll_over(ra_log_wal),
+                                      Acc;
+                                 (stop_wal, {Acc0, Last0, LastIdx, wal_up}) ->
+                                      supervisor:terminate_child(ra_sup, ra_log_wal),
+                                      {Acc0, Last0, LastIdx, wal_down};
+                                 (stop_wal, {_, _, _, wal_down} = Acc) ->
+                                      Acc;
+                                 (start_wal, {Acc0, Last0, LastIdx, wal_down}) ->
+                                      supervisor:restart_child(ra_sup, ra_log_wal),
+                                      {Acc0, Last0, LastIdx, wal_up};
+                                 (start_wal, {_, _, _, wal_up} = Acc) ->
+                                      Acc;
+                                 ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
+                                      {error, integrity_error} = ra_log_file:write([Entry], Acc0),
+                                      Acc;
+                                 ({Idx, _, _} = Entry, {Acc0, _, _, wal_down} = Acc) ->
+                                      {error, wal_down} = ra_log_file:write([Entry], Acc0),
+                                      Acc;
+                                 ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
+                                      {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                      {Acc, Last0, Idx, St}
+                              end, {Log0, {0, 0}, 0, wal_up}, All),
+              Got = ra_log_file:last_written(Log),
+              reset(Log),
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p~n",
+                                  [Got, Last, All]),
+                        Got ==  Last)
+          end)).
+
 last_written(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
@@ -614,6 +688,7 @@ run_proper(Fun, Args, NumTests) ->
 					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
 
 reset(Log) ->
+    supervisor:restart_child(ra_sup, ra_log_wal),
     ra_log_file:write([{0, 0, empty}], Log),
     receive
         {ra_log_event, {written, {_, 0, 0}}} ->
