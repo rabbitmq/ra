@@ -5,7 +5,6 @@
          truncate_write/5,
          force_roll_over/1,
          init/3,
-         mem_tbl_read/2,
          system_continue/3,
          system_terminate/4,
          write_debug/3]).
@@ -17,7 +16,9 @@
 -define(METRICS_WINDOW_SIZE, 100).
 -define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
 
--type writer_id() :: atom(). % currently has to be a locally registered name
+% a "writer" has to be a locally registered name to ensure it can be resolved
+% independently of it's pid()
+-type writer_id() :: atom().
 
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{writer_id() =>
@@ -76,34 +77,25 @@ force_roll_over(Wal) ->
     Wal ! rollover,
     ok.
 
-mem_tbl_read(Id, Idx) ->
-    case ets:lookup(ra_log_open_mem_tables, Id) of
-        [{_, Fst, _, _}] = Tids when Idx >= Fst ->
-            tbl_lookup(Tids, Idx);
-        _ ->
-            closed_mem_tbl_read(Id, Idx)
-    end.
-
-
-
-%% Memtables meta data
-%% {Queue, [tid()]} - the first tid is the currently active memtable for the
-%% queue. Ideally there should only be one or two but compaction lag
-%% may cause it to stash more.
-%% registration is implicit in a write (TODO: cleanup?)
+%% ra_log_wal
+%% Writes Raft entries to shared persistent storage for multiple "writers"
+%% Fsyncs in batches, typically the write requests received in the mailbox during
+%% the previous fsync operation. Notifies all writers after each fsync batch.
+%% Also have got a dynamically increasing max writes limit that grows in order
+%% to trade-off latency for throughput.
 %%
-%% Memtable per "queue" format:
-%% {ra_index(), {ra_term(), entry()}} | {first_idx, ra_index()} | {term, ra_term()
-%% | {voted_for, peer()}
-%% any integer key is a log entry - anything else is metadata
-%% kv data, the first key should always be present
-
-%% Mem Tables - ra_log_wal_meta_data
-%% There should only ever be one "open" table
-%% i.e. a table that is currently being written to
-%% Num is a monotonically incrementing id to be used to
-%% determine the order the tables were written to
-%% ETS with {tid(), Num :: non_neg_integer(), open | closed}
+%% Entries are written to the .wal file as well as a per-writer mem table (ETS).
+%% In order for writers to locate an entry by an index a lookup ETS table
+%% (ra_log_open_mem_tables) keeps the current range of indexes a mem_table as well
+%% as the mem_table tid(). This lookup table is updated on every write.
+%%
+%% Once the current .wal file is full a new one is closed. All the entries in
+%% ra_log_open_mem_tables are moved to ra_log_closed_mem_tables so that writers
+%% can still locate the tables whilst they are being flushed ot disk. The
+%% ra_log_file_segment_writer is notified of all the mem tables written to during
+%% the lifetime of the .wal file and will begin writing these to on-disk segment
+%% files. Once it has finished the current set of mem_tables it will delete the
+%% corresponding .wal file.
 
 -spec start_link(Config :: wal_conf(), Options :: list()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
@@ -293,9 +285,9 @@ write_data(Id, Idx, Term, Entry, Trunc,
 handle_msg({append, Id, Idx, Term, Entry},
            #state{writers = Writers} = State0) ->
     case maps:find(Id, Writers) of
-        error ->
-            write_data(Id, Idx, Term, Entry, false, State0);
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
+            write_data(Id, Idx, Term, Entry, false, State0);
+        error ->
             write_data(Id, Idx, Term, Entry, false, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
@@ -341,6 +333,11 @@ update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
                    end,
             % update Last idx for current tbl
             % this is how followers overwrite previously seen entries
+            % TODO: OPTIMISATION
+            % Writers don't need this updated for every entry. As they keep
+            % a local cache of unflushed entries it is sufficient to update
+            % ra_log_open_mem_tables before completing the batch.
+            % Instead the `From` and `To` could be kept in the batch.
             _ = ets:update_element(OpnMemTbl, Id,
                                    [{2, From}, {3, Idx}]);
         [] ->
@@ -477,40 +474,6 @@ send_write(Wal, Msg) ->
             {error, wal_down}
     end.
 
-closed_mem_tbl_read(Id, Idx) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
-        [] ->
-            undefined;
-        Tids0 ->
-            Tids = lists:sort(fun(A, B) -> B > A end, Tids0),
-            closed_tbl_lookup(Tids, Idx)
-    end.
-
-closed_tbl_lookup([], _Idx) ->
-    undefined;
-closed_tbl_lookup([{_, _, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
-    % TODO: it is possible the ETS table has been deleted at this
-    % point so should catch the error
-    case ets:lookup(Tid, Idx) of
-        [] ->
-            closed_tbl_lookup(Tail, Idx);
-        [Entry] -> Entry
-    end;
-closed_tbl_lookup([_ | Tail], Idx) ->
-    closed_tbl_lookup(Tail, Idx).
-
-tbl_lookup([], _Idx) ->
-    undefined;
-tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
-    % TODO: it is possible the ETS table has been deleted at this
-    % point so should catch the error
-    case ets:lookup(Tid, Idx) of
-        [] ->
-            tbl_lookup(Tail, Idx);
-        [Entry] -> Entry
-    end;
-tbl_lookup([_ | Tail], Idx) ->
-    tbl_lookup(Tail, Idx).
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
@@ -533,4 +496,3 @@ system_terminate(Reason, _Parent, _Debug, State) ->
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
-
