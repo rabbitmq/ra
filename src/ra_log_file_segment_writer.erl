@@ -5,7 +5,9 @@
          accept_mem_tables/2,
          accept_mem_tables/3,
          delete_segments/3,
-         delete_segments/4
+         delete_segments/4,
+         await/0,
+         await/1
         ]).
 
 -export([init/1,
@@ -43,17 +45,38 @@ accept_mem_tables(_SegmentWriter, [], undefined) ->
 accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
--spec delete_segments(pid() | atom(), ra_index(), [file:filename()]) -> ok.
+-spec delete_segments(pid() | atom(), ra_index(),
+                      [ra_log:ra_segment_ref()]) -> ok.
 delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
 -spec delete_segments(pid() | atom(), pid() | atom(),
-                      ra_index(), [file:filename()]) ->
+                      ra_index(), [ra_log:ra_segment_ref()]) ->
     ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
     % delete all closed segment files
-    [ok = file:delete(F) || F <- SegmentFiles],
+    % TODO: this is simplistic
+    [ok = file:delete(F) || {_, _, F} <- SegmentFiles],
     gen_server:cast(SegWriter, {delete_segment, Who , SnapIdx, MaybeActive}).
+
+% used to wait for the segment writer to finish processing anything in flight
+await() ->
+    await(?MODULE).
+
+await(SegWriter)  ->
+    IsAlive = fun IsAlive(undefined) -> false;
+                  IsAlive(P) when is_pid(P) ->
+                            is_process_alive(P);
+                  IsAlive(A) when is_atom(A) ->
+                            IsAlive(whereis(A))
+              end,
+    case IsAlive(SegWriter) of
+        true ->
+            gen_server:call(SegWriter, await, 30000);
+        false ->
+            % if it is down it isn't processing anything
+            ok
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -64,9 +87,8 @@ init([#{data_dir := DataDir} = Conf]) ->
     {ok, #state{data_dir = DataDir,
                 segment_conf = SegmentConf}}.
 
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call(await, _From, State) ->
+    {reply, ok, State}.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
@@ -77,21 +99,30 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     _ = file:delete(WalFile),
 
     {noreply, State};
-handle_cast({delete_segment, Who, Idx, SegmentFile},
+handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
             #state{active_segments = ActiveSegments} = State0) ->
     case ActiveSegments of
         #{Who := Seg} ->
-            case ra_log_file_segment:range(Seg) of
-                {_From, To} when To =< Idx ->
-                    % segment can be deleted
-                    ok = ra_log_file_segment:close(Seg),
-                    ok = file:delete(SegmentFile),
-                    {noreply,
-                     State0#state{active_segments = maps:remove(Who, ActiveSegments)}};
+            case ra_log_file_segment:filename(Seg) of
+                SegmentFile ->
+                    % the segment file is the correct one
+                    case ra_log_file_segment:range(Seg) of
+                        {_From, To} when To =< Idx ->
+                            % segment can be deleted
+                            ok = ra_log_file_segment:close(Seg),
+                            ok = file:delete(SegmentFile),
+                            {noreply,
+                             State0#state{active_segments = maps:remove(Who, ActiveSegments)}};
+                        _ ->
+                            {noreply, State0}
+                    end;
                 _ ->
+                    ok = file:delete(SegmentFile),
                     {noreply, State0}
             end;
         _ ->
+            % if it isn't active we can just delete it
+            ok = file:delete(SegmentFile),
             {noreply, State0}
     end.
 
@@ -154,8 +185,6 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                     {Start, End} = ra_log_file_segment:range(S),
                     {Start, End, ra_log_file_segment:filename(S)}
                 end || S <- [Segment | Closed0]],
-
-    % ?DBG("SEgs ~p", [Segments]),
 
     % TODO: better handle and log errors
     catch (RaNodeId ! {ra_log_event, {segments, Tid, Segments}}),

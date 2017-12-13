@@ -258,9 +258,12 @@ last_written(#state{last_written_index_term = LWTI}) ->
 handle_event({written, {FromIdx, ToIdx, Term}},
              #state{last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx =< LastWrittenIdx + 1 ->
+    % We need to ignore any written events for the same index but in a prior term
+    % if we do not we may end up confirming to a leader writes that have not yet
+    % been fully flushed
     case fetch_term(ToIdx, State0) of
         {Term, State} ->
-            % TODO: this case truncation shouldn't be too expensive as the cache
+            % this case truncation shouldn't be too expensive as the cache
             % only containes the unflushed window of entries typically less than
             % 10ms worth of entries
             truncate_cache(ToIdx,
@@ -274,7 +277,7 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
                     last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
-    ?DBG("~p: ra_log_file: gap detected!", [Id, FromIdx]),
+    ?DBG("~p: ra_log_file: gap detected at ~b!", [Id, FromIdx]),
     resend_from(LastWrittenIdx + 1, State0);
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
@@ -290,7 +293,9 @@ handle_event({segments, Tid, NewSegs},
     true = ets:delete_object(ra_log_closed_mem_tables, ClsdTbl),
     % Then delete the actual ETS table
     true = ets:delete(Tid),
-    State0#state{segment_refs = NewSegs ++ SegmentRefs,
+    % compact seg ref list so that only the latest range for a segment
+    % file has an entry
+    State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
                  % re-enable snapshots based on release cursor updates
                  % in case snapshot_written was lost
                  snapshot_index_in_progress = undefined};
@@ -302,18 +307,17 @@ handle_event({snapshot_written, {Idx, Term}, File},
         % all segments created prior to the first reclaimable should be
         % reclaimed even if they have a more up to date end point
         case lists:partition(fun({_From, To, _}) when To > Idx -> true;
-                             (_) -> false end, SegRefs0) of
+                                (_) -> false
+                             end, SegRefs0) of
             {_, []} ->
                 {SegRefs0, OpenSegs0};
-            {Active, Obsolete0} ->
-                % there could be many updates per segment file
-                Obsolete = lists:usort([F || {_, _, F} <- Obsolete0]),
-                ?DBG("~p: Snapshot Idx ~b Obsolete segments ~p", [Id, Idx, Obsolete]),
+            {Active, Obsolete} ->
+                % close all relevant active segments
+                [ok = ra_log_file_segment:close(S) ||
+                 S <- maps:values(maps:with(Obsolete, OpenSegs0))],
+                ?DBG("~p: snapshot_written at ~b. Obsolete segments ~p", [Id, Idx, Obsolete]),
                 ok = ra_log_file_segment_writer:delete_segments(Id, Idx,
                                                                 Obsolete),
-                % close all relevant active segments
-                 [ok = ra_log_file_segment:close(S) ||
-                  S <- maps:values(maps:with(Obsolete, OpenSegs0))],
                 {Active, maps:without(Obsolete, OpenSegs0)}
         end,
     truncate_cache(Idx,
@@ -657,10 +661,27 @@ resend_from(Idx, #state{id = Id,
                         wal_write(Acc, erlang:insert_element(1, X, I))
                 end, State, lists:seq(Idx, LastIdx)).
 
+compact_seg_refs(SegRefs) ->
+    lists:reverse(
+      lists:foldl(fun ({_, _, File} = S, Acc) ->
+                          case lists:any(fun({_, _, F}) when F =:= File -> true;
+                                            (_) -> false
+                                         end, Acc) of
+                              true -> Acc;
+                              false -> [S | Acc]
+                          end
+                  end, [], SegRefs)).
+
 %%%% TESTS
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+compact_seg_refs_test() ->
+    % {From, To, File}
+    Refs = [{10, 100, "2"}, {10, 75, "2"}, {10, 50, "2"}, {1, 9, "1"}],
+    [{10, 100, "2"}, {1, 9, "1"}] = compact_seg_refs(Refs),
+    ok.
 
 cache_take0_test() ->
     Cache = #{1 => {a}, 2 => {b}, 3 => {c}},
@@ -714,6 +735,34 @@ closed_mem_tbl_take_test() ->
     {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
     ok.
 
+
+closed_mem_tbl_take_during_recovery_test() ->
+    % this simulates a take read op during recovery where wal files are
+    % being re-read into closed mem_tables
+    ets:delete(ra_log_closed_mem_tables),
+    _ = ets:new(ra_log_closed_mem_tables, [named_table, bag]),
+    Tid1 = ets:new(test_id, []),
+    Tid2 = ets:new(test_id, []),
+    Tid3 = ets:new(test_id, []),
+    M1 = erlang:unique_integer([monotonic, positive]),
+    M2 = erlang:unique_integer([monotonic, positive]),
+    M3 = erlang:unique_integer([monotonic, positive]),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, M1, 5, 7, Tid1}),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, M2, 8, 10, Tid2}),
+    true = ets:insert(ra_log_closed_mem_tables, {test_id, M3, 5, 7, Tid3}),
+    Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
+    Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
+    % seed the mem tables
+    [ets:insert(Tid1, E) || E <- Entries1],
+    [ets:insert(Tid2, E) || E <- Entries2],
+    % this represents the case when only one of the two tables have been recovered
+    [ets:insert(Tid3, E) || E <- Entries1],
+
+    Expected = Entries1 ++ Entries2,
+
+    {Expected, _, undefined} = closed_mem_tbl_take(test_id, {5, 10}, [], []),
+    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
+    ok.
 
 pick_range_test() ->
     Ranges1 = [{76, 90}, {50, 75}, {1, 100}],

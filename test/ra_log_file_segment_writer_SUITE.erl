@@ -80,18 +80,18 @@ delete_segments(Config) ->
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {ra_log_event, {segments, Tid, [{1, 3, SegmentFile}]}} ->
+        {ra_log_event, {segments, Tid, [{1, 3, SegmentFile} = Segment]}} ->
             % test a lower index _does not_ delete the file
             ok = ra_log_file_segment_writer:delete_segments(TblWriterPid,
                                                             Self, 2,
-                                                            [SegmentFile]),
+                                                            [Segment]),
             timer:sleep(500),
             ?assert(filelib:is_file(SegmentFile)),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
             ok = ra_log_file_segment_writer:delete_segments(TblWriterPid,
                                                             Self, 3,
-                                                            [SegmentFile]),
+                                                            [Segment]),
             timer:sleep(500),
             % validate file is gone
             ?assert(false =:= filelib:is_file(SegmentFile)),

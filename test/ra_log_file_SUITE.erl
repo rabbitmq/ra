@@ -20,8 +20,11 @@ all_tests() ->
      read_one,
      validate_sequential_reads,
      validate_reads_for_overlapped_writes,
+     cache_overwrite_then_take,
+     last_written_overwrite,
      recovery,
      resend_write,
+     wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
 
@@ -29,6 +32,7 @@ all_tests() ->
      snapshot_recovery,
      snapshot_installation,
      update_release_cursor,
+     update_release_cursor_after_recovery,
      transient_writer_is_handled
     ].
 
@@ -195,11 +199,33 @@ validate_reads_for_overlapped_writes(Config) ->
     Log8 = validate_read(200, 551, 2, Log7),
 
     [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
-    ct:pal("Metrics ~p", [Metrics]),
+    ct:pal("Metrics: ~p", [Metrics]),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log_file:close(Log8),
     ok.
 
+cache_overwrite_then_take(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log1 = write_n(1, 5, 1, Log0),
+    Log2 = write_n(3, 4, 2, Log1),
+    % validate only 3 entries can be read even if requested range is greater
+    {[_, _, _], _} = ra_log_file:take(1, 5, Log2),
+    ok.
+
+last_written_overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log1 = write_n(1, 5, 1, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    {4, 1} = ra_log_file:last_written(Log2),
+    % write an event for a prior index
+    {queued, Log3} = ra_log_file:write([{3, 2, <<3:64/integer>>}], Log2),
+    Log4 = deliver_all_log_events(Log3, 200),
+    {3, 2} = ra_log_file:last_written(Log4),
+    ok.
 
 recovery(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -258,13 +284,25 @@ resend_write(Config) ->
     meck:unload(ra_log_wal),
     ok.
 
+wal_down_read_availability(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = deliver_all_log_events(Log1, 200),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+    {Entries, _} = ra_log_file:take(0, 10, Log2),
+    ?assert(length(Entries) =:= 10),
+    ok.
+
 wal_down_append_throws(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
 
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     ?assert(ra_log_file:can_write(Log0)),
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     ?assert(not ra_log_file:can_write(Log0)),
     ?assertExit(wal_down, ra_log_file:append({1,1,hi}, Log0)),
     ok.
@@ -273,7 +311,7 @@ wal_down_write_returns_error_wal_down(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
 
@@ -296,8 +334,8 @@ detect_lost_written_range(Config) ->
 
     % restart WAL to ensure lose the transient state keeping track of
     % each writer's last written index
-    ok = supervisor:terminate_child(ra_sup, ra_log_wal),
-    {ok, _} = supervisor:restart_child(ra_sup, ra_log_wal),
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+    {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
 
     % WAL recovers
     meck:unload(ra_log_wal),
@@ -372,12 +410,59 @@ update_release_cursor(Config) ->
     [] = filelib:wildcard(filename:join(Dir, "*.segment")),
     % append a few more items
     Log5 = append_and_roll(150, 155, 2, Log4),
-    Log6 = deliver_all_log_events(Log5, 500),
-    ra_lib:dump('Log6', Log6),
+    _Log6 = deliver_all_log_events(Log5, 500),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
     [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
 
+    ok.
+
+update_release_cursor_after_recovery(Config) ->
+    % ct:pal("All ets before: ~p", [ets:all()]),
+    % ra_log_file should initiate shapshot if segments can be released
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    % assert there are no segments at this point
+    [] = find_segments(Dir),
+
+    % record ets tables before test
+    EtsBefore = ets:all(),
+    % create a segment
+    Log1 = deliver_all_log_events(append_and_roll(1, 130, 2, Log0), 500),
+    % and another but don't notify ra_node
+    Log2 = append_n(130, 150, 2, Log1),
+    Log3 = deliver_all_log_events(Log2, 500),
+    empty_mailbox(),
+    % ok = ra_log_wal:force_roll_over(ra_log_wal),
+
+    % recover WAL
+    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+    {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
+    timer:sleep(1000),
+
+    % then deliver all log events
+
+    % assert there is one segment at this point
+    Log4 = append_and_roll(150, 155, 2, Log3),
+    % leave one entry in the current segment
+    Log5 = ra_log_file:update_release_cursor(150, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log4),
+    % Log6 = append_n(155, 160, 2, Log5),
+    Log = deliver_all_log_events(Log5, 500),
+
+    [] = ets:tab2list(ra_log_closed_mem_tables),
+    [] = ets:tab2list(ra_log_open_mem_tables),
+
+    % assert no ets tables were left behind
+    [] = ets:all() -- EtsBefore,
+
+    % validate reads are ok
+    {149, 2, _, initial_state} = ra_log_file:read_snapshot(Log),
+    validate_read(150, 155, 2, Log),
+
+    % validate there is only one segments left
+    [_] = find_segments(Dir),
     ok.
 
 transient_writer_is_handled(Config) ->
@@ -390,7 +475,7 @@ transient_writer_is_handled(Config) ->
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
                          ra_log_file:close(Log2)
-                end),
+                 end),
     application:stop(ra),
     application:start(ra),
     timer:sleep(2000),
@@ -450,3 +535,14 @@ validate_rolled_reads(_Config) ->
     % 4. validate all entries can be read
     % 5. check there is only one .wal file
     exit(not_implemented).
+
+find_segments(Dir) ->
+    filelib:wildcard(filename:join(Dir, "*.segment")).
+
+empty_mailbox() ->
+    receive
+        _ ->
+            empty_mailbox()
+    after 100 ->
+              ok
+    end.

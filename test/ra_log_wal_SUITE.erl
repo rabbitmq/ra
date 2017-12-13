@@ -38,6 +38,7 @@ end_per_group(tests, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
+    _ = ra_log_file_ets:start_link(),
     register(TestCase, self()),
     [{test_case, TestCase}, {wal_dir, Dir} | Config].
 
@@ -51,8 +52,8 @@ basic_log_writes(Config) ->
     ok = ra_log_wal:write(Self, ra_log_wal, 13, 1, "value2"),
     {13, 1, "value2"} = await_written(Self, {13, 1}),
     % previous log value is still there
-    {12, 1, "value"} = ra_log_wal:mem_tbl_read(Self, 12),
-    undefined = ra_log_wal:mem_tbl_read(Self, 14),
+    {12, 1, "value"} = mem_tbl_read(Self, 12),
+    undefined = mem_tbl_read(Self, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
     ok.
 
@@ -67,13 +68,14 @@ write_many(Config) ->
     Dir = ?config(wal_dir, Config),
     Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
     % Modes = [],
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
-                                         additional_wal_file_modes => Modes}, []),
+    {ok, WalPid} = ra_log_wal:start_link(#{dir => Dir,
+                                           additional_wal_file_modes => Modes}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ets, file, os]),
+    {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
     {Taken, _} =
         timer:tc(
           fun () ->
@@ -82,9 +84,15 @@ write_many(Config) ->
                    end || Idx <- lists:seq(1, NumWrites)],
                   await_written(Self, {NumWrites, 1})
           end),
+    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
-    ct:pal("~b 1024 byte writes took ~p milliseconds~nFile modes: ~p~n",
-           [NumWrites, Taken / 1000, Modes]),
+    Reds = RedsAfter - RedsBefore,
+    ct:pal("~b 1024 byte writes took ~p milliseconds~nFile modes: ~p~n"
+           "Reductions: ~b",
+           [NumWrites, Taken / 1000, Modes, Reds]),
+
+    % assert we aren't regressing on reductions used
+    ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
@@ -179,6 +187,7 @@ roll_over(Config) ->
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
                                          max_wal_size_bytes => 1024 * NumWrites,
                                          segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
@@ -203,8 +212,8 @@ roll_over(Config) ->
     end,
 
     % TODO: validate we can read first and last written
-    ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 1)),
-    ?assert(undefined =/= ra_log_wal:mem_tbl_read(Self, 5)),
+    ?assert(undefined =/= mem_tbl_read(Self, 1)),
+    ?assert(undefined =/= mem_tbl_read(Self, 5)),
     ok.
 
 recover_truncated_write(Config) ->
@@ -215,12 +224,14 @@ recover_truncated_write(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
     ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
     [{Self, _, 9, 9, _}] =
@@ -235,6 +246,7 @@ recover(Config) ->
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -243,16 +255,20 @@ recover(Config) ->
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
 
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
     [] = ets:lookup(ra_log_open_mem_tables, Self),
-    [{Self, _, 1, 100, OpnMTTid1}, {Self, _, 101, 200, OpnMTTid2}] =
+    [ {Self, _, 1, 100, MTid1}, % this is the "old" table
+      % these are the recovered tables
+      {Self, _, 1, 100, MTid2}, {Self, _, 101, 200, MTid4} ] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
-    100 = ets:info(OpnMTTid1, size),
-    100 = ets:info(OpnMTTid2, size),
+    100 = ets:info(MTid1, size),
+    100 = ets:info(MTid2, size),
+    100 = ets:info(MTid4, size),
     % check that both mem_tables notifications are received by the segment writer
     receive
         {'$gen_cast', {mem_tables, [{Self, 1, 100, _}], _}} -> ok
@@ -267,6 +283,17 @@ recover(Config) ->
 
     ok.
 
+handle_seg_writer_await() ->
+    receive
+        {'$gen_call', From, await} ->
+            gen:reply(From, ok);
+        Msg ->
+            ct:pal("seg writer wait got ~p", [Msg]),
+            handle_seg_writer_await()
+    after 2000 ->
+              throw(seq_writer_await_timeout)
+    end.
+
 empty_mailbox() ->
     receive
         _ ->
@@ -278,7 +305,7 @@ empty_mailbox() ->
 await_written(Id, {Idx, Term}) ->
     receive
         {ra_log_event, {written, {_From, Idx, Term}}} ->
-            ra_log_wal:mem_tbl_read(Id, Idx)
+            mem_tbl_read(Id, Idx)
     after 5000 ->
               throw(written_timeout)
     end.
@@ -302,3 +329,49 @@ stop_profile(Config) ->
     lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}),
     lg_callgrind:profile_many("lg_write_many.gz.*", "lg_write_many.out",#{running => false}),
     ok.
+
+
+% mem table read functions
+% the actual logic is implemented in ra_log_file
+mem_tbl_read(Id, Idx) ->
+    case ets:lookup(ra_log_open_mem_tables, Id) of
+        [{_, Fst, _, _}] = Tids when Idx >= Fst ->
+            tbl_lookup(Tids, Idx);
+        _ ->
+            closed_mem_tbl_read(Id, Idx)
+    end.
+
+closed_mem_tbl_read(Id, Idx) ->
+    case ets:lookup(ra_log_closed_mem_tables, Id) of
+        [] ->
+            undefined;
+        Tids0 ->
+            Tids = lists:sort(fun(A, B) -> B > A end, Tids0),
+            closed_tbl_lookup(Tids, Idx)
+    end.
+
+closed_tbl_lookup([], _Idx) ->
+    undefined;
+closed_tbl_lookup([{_, _, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
+    % TODO: it is possible the ETS table has been deleted at this
+    % point so should catch the error
+    case ets:lookup(Tid, Idx) of
+        [] ->
+            closed_tbl_lookup(Tail, Idx);
+        [Entry] -> Entry
+    end;
+closed_tbl_lookup([_ | Tail], Idx) ->
+    closed_tbl_lookup(Tail, Idx).
+
+tbl_lookup([], _Idx) ->
+    undefined;
+tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
+    % TODO: it is possible the ETS table has been deleted at this
+    % point so should catch the error
+    case ets:lookup(Tid, Idx) of
+        [] ->
+            tbl_lookup(Tail, Idx);
+        [Entry] -> Entry
+    end;
+tbl_lookup([_ | Tail], Idx) ->
+    tbl_lookup(Tail, Idx).
