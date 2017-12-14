@@ -9,10 +9,12 @@
          system_terminate/4,
          write_debug/3]).
 
+-compile([inline_list_funcs]).
+
 -include("ra.hrl").
 
 -define(MIN_MAX_BATCH_SIZE, 20).
--define(MAX_MAX_BATCH_SIZE, 1000).
+-define(MAX_MAX_BATCH_SIZE, 2000).
 -define(METRICS_WINDOW_SIZE, 100).
 -define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
 
@@ -155,16 +157,8 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     %  assumed that any remaining wal files need to be re-processed.
     WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
     ?DBG("WAL: recovering ~p", [WalFiles]),
-    % if we have open mem tables we need to retain these during recovery to
-    % ensure range doesn't suddenly shrink
-    % also if we have more than one wal file we can't suddenly process the older
-    % file into the open mem table as during processing readers of the tables
-    % will not get the latest available data.
-    % hence we need to recover without writing into ra_log_open_mem_tables
-    %
-    % TODO: first we should recover all the tables - then we should update
-    % the lookup tables
-    % create an ets table to hold recovery information
+    % First we recover all the tables using a temporary lookup table.
+    % Then we update the actual lookup tables atomically.
     _ = ets:new(ra_log_recover_mem_tables,
                 [set, named_table, {read_concurrency, true}, private]),
     % compute all closed mem table lookups required so we can insert them
@@ -172,7 +166,6 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % It needs to be atomic so that readers don't accidentally read partially recovered
     % tables mixed with old tables
     All = [begin
-               % TOOD: avoid reading the whole file at once
                {ok, Data} = file:read_file(F),
                ok = recover_records(Data, #{}),
                recovering_to_closed(F)
@@ -224,7 +217,7 @@ loop_wait(State0, Parent, Debug0) ->
     end.
 
 loop_batched(#state{max_batch_size = Written,
-                    batch  = #batch{writes = Written}} = State0,
+                    batch = #batch{writes = Written}} = State0,
              Parent, Debug0) ->
     % complete batch after seeing max_batch_size writes
     {State, Debug} = complete_batch(State0, Debug0),
@@ -285,7 +278,6 @@ write_data(Id, Idx, Term, Data0, Trunc,
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
     State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-    % TODO make checksum optional
     Entry = <<Idx:64/integer,
               Term:64/integer,
               EntryData/binary>>,
@@ -351,7 +343,7 @@ update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table
     case ets:lookup(OpnMemTbl, Id) of
         [{_Id, From0, _To, Tid}] ->
-            _ = ets:insert(Tid, {Idx, Term, Entry}),
+            true = ets:insert(Tid, {Idx, Term, Entry}),
             From = case Truncate of
                        true ->
                            Idx;
@@ -407,9 +399,6 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
     % flushed to persistent tables asynchronously
-    % Also give away ets ownership to the ra node as it will be responsible
-    % for deleting it
-    % TODO: alternatively we could have a separate ETS cleanup process
     [begin
          % In order to ensure that reads are done in the correct causal order
          % we need to append a monotonically increasing value for readers to sort
@@ -481,7 +470,7 @@ complete_batch(#state{wal = #wal{fd = Fd},
 incr_batch(#batch{writes = Writes,
                   waiting = Waiting0} = Batch, Id, {Idx, Term}) ->
     Waiting = maps:update_with(Id, fun ({From, _, _}) ->
-                                           {From, Idx, Term}
+                                           {min(Idx, From), Idx, Term}
                                    end, {Idx, Idx, Term}, Waiting0),
     Batch#batch{writes = Writes + 1,
                 waiting = Waiting}.
@@ -546,7 +535,7 @@ send_write(Wal, Msg) ->
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
                  max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
-                 compute_checksums => false,
+                 compute_checksums => true,
                  additional_wal_file_modes => []},
                Conf).
 

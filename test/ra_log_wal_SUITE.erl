@@ -15,6 +15,7 @@ all_tests() ->
      basic_log_writes,
      write_to_unavailable_wal_returns_error,
      write_many,
+     overwrite,
      truncate_write,
      out_of_seq_writes,
      roll_over,
@@ -48,9 +49,9 @@ basic_log_writes(Config) ->
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     ok = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
-    {12, 1, "value"} = await_written(Self, {12, 1}),
+    {12, 1, "value"} = await_written(Self, {12, 12, 1}),
     ok = ra_log_wal:write(Self, ra_log_wal, 13, 1, "value2"),
-    {13, 1, "value2"} = await_written(Self, {13, 1}),
+    {13, 1, "value2"} = await_written(Self, {13, 13, 1}),
     % previous log value is still there
     {12, 1, "value"} = mem_tbl_read(Self, 12),
     undefined = mem_tbl_read(Self, 14),
@@ -66,11 +67,11 @@ write_to_unavailable_wal_returns_error(_Config) ->
 write_many(Config) ->
     NumWrites = 10000,
     Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
     % Modes = [],
     {ok, WalPid} = ra_log_wal:start_link(#{dir => Dir,
                                            additional_wal_file_modes => Modes,
-                                           compute_checksums => true}, []),
+                                           compute_checksums => false}, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
@@ -83,7 +84,12 @@ write_many(Config) ->
                   [begin
                        ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
                    end || Idx <- lists:seq(1, NumWrites)],
-                  await_written(Self, {NumWrites, 1})
+                  receive
+                      {ra_log_event, {written, {_, NumWrites, 1}}} ->
+                          ok
+                  after 5000 ->
+                            throw(written_timeout)
+                  end
           end),
     {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
@@ -100,6 +106,24 @@ write_many(Config) ->
     ct:pal("Metrics: ~p~n", [Metrics]),
     ok.
 
+overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    % Modes = [],
+    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
+                                         additional_wal_file_modes => Modes}, []),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = data,
+    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+     || I <- lists:seq(1, 3)],
+    await_written(Self, {1, 3, 1}),
+    % write next index then immediately overwrite
+    ok = ra_log_wal:write(Self, ra_log_wal, 4, 1, Data),
+    ok = ra_log_wal:write(Self, ra_log_wal, 2, 2, Data),
+    % ensure we await the correct range that should not have a wonky start
+    await_written(Self, {2, 2, 2}),
+    ok.
+
 truncate_write(Config) ->
     % a truncate write should update the range to not include previous indexes
     % a trucated write does not need to follow the sequence
@@ -113,11 +137,11 @@ truncate_write(Config) ->
     % write 1-3
     [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(Self, {3, 1}),
+    await_written(Self, {1, 3, 1}),
     % then write 7 as may happen after snapshot installation
     ok = ra_log_wal:truncate_write(Self, ra_log_wal, 7, 1, Data),
     ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
-    await_written(Self, {8, 1}),
+    await_written(Self, {7, 8, 1}),
     [{Self, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, Self),
     [_] = ets:lookup(Tid, 7),
     [_] = ets:lookup(Tid, 8),
@@ -139,7 +163,7 @@ out_of_seq_writes(Config) ->
     % write 1-3
     [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(Self, {3, 1}),
+    await_written(Self, {1, 3, 1}),
     % then write 5
     ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
     % ensure an out of sync notification is received
@@ -154,7 +178,7 @@ out_of_seq_writes(Config) ->
     % then write 4 and 5
     ok = ra_log_wal:write(Self, ra_log_wal, 4, 1, Data),
     ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
-    await_written(Self, {5, 1}),
+    await_written(Self, {4, 5, 1}),
 
     % perform another out of sync write
     ok = ra_log_wal:write(Self, ra_log_wal, 7, 1, Data),
@@ -176,7 +200,7 @@ out_of_seq_writes(Config) ->
     end,
     % write the missing one
     ok = ra_log_wal:write(Self, ra_log_wal, 6, 1, Data),
-    await_written(Self, {6, 1}),
+    await_written(Self, {6, 6, 1}),
 
     ok.
 
@@ -304,10 +328,10 @@ empty_mailbox() ->
               ok
     end.
 
-await_written(Id, {Idx, Term}) ->
+await_written(Id, {_From, To, _Term} = Written) ->
     receive
-        {ra_log_event, {written, {_From, Idx, Term}}} ->
-            mem_tbl_read(Id, Idx)
+        {ra_log_event, {written, Written}} ->
+            mem_tbl_read(Id, To)
     after 5000 ->
               throw(written_timeout)
     end.
@@ -325,10 +349,11 @@ stop_profile(Config) ->
     Case = ?config(test_case, Config),
     ct:pal("Stopping profiling for ~p~n", [Case]),
     lg:stop(),
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    timer:sleep(2000),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
+    % this segfaults
+    % timer:sleep(2000),
+    % Dir = ?config(priv_dir, Config),
+    % Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    % lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
     ok.
 
 
