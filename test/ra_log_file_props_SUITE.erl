@@ -32,7 +32,8 @@ all_tests() ->
      read_write_meta,
      sync_meta,
      last_written,
-     last_written_with_wal
+     last_written_with_wal,
+     last_written_with_segment_writer
     ].
 
 groups() ->
@@ -625,6 +626,55 @@ last_written_with_wal_prop(Dir, TestCase) ->
                         (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
           end)).
 
+last_written_with_segment_writer(Config) ->
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    run_proper(fun last_written_with_segment_writer_prop/2, [Dir, TestCase], 25).
+
+last_written_with_segment_writer_prop(Dir, TestCase) ->
+    ?FORALL(
+       Entries, log_entries_gen(1),
+       ?FORALL(
+          Actions, list(frequency([{5, {{wait, wait_gen()}, position(Entries)}},
+                                   {3, {consume, position(Entries)}},
+                                   {2, {stop_segment_writer, position(Entries)}},
+                                   {2, {start_segment_writer, position(Entries)}}])),
+          begin
+              flush(),
+              All = build_action_list(Entries, Actions),
+              Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
+              {Log, Last, LastIdx, Status} =
+                  lists:foldl(fun({wait, Wait}, Acc) ->
+                                      timer:sleep(Wait),
+                                      Acc;
+                                 (consume, {Acc0, Last0, LastIdx, St}) ->
+                                      {Acc1, Last1} = consume_events(Acc0, Last0),
+                                      {Acc1, Last1, LastIdx, St};
+                                 (stop_segment_writer, {Acc0, Last0, LastIdx, sw_up}) ->
+                                      ok = supervisor:terminate_child(ra_log_file_sup, ra_log_file_segment_writer),
+                                      {Acc0, Last0, LastIdx, sw_down};
+                                 (stop_segment_writer, {_, _, _, sw_down} = Acc) ->
+                                      Acc;
+                                 (start_segment_writer, {Acc0, Last0, LastIdx, sw_down}) ->
+                                      {ok, _} = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
+                                      {Acc0, Last0, LastIdx, sw_up};
+                                 (start_segment_writer, {_, _, _, sw_up} = Acc) ->
+                                      Acc;
+                                 ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
+                                      {error, integrity_error} = ra_log_file:write([Entry], Acc0),
+                                      Acc;
+                                 ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
+                                      {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                      {Acc, Last0, Idx, St}
+                              end, {Log0, {0, 0}, 0, sw_up}, All),
+              Got = ra_log_file:last_written(Log),
+              {Written, Log1} = ra_log_file:take(1, LastIdx, Log),
+              reset(Log1),
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
+                                  [Got, Last, Written, All]),
+                        (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
+          end)).
+
 last_written(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
@@ -689,6 +739,7 @@ run_proper(Fun, Args, NumTests) ->
 					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
 
 reset(Log) ->
+    supervisor:restart_child(ra_log_wal_sup, ra_log_file_segment_writer),
     supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
     ra_log_file:write([{0, 0, empty}], Log),
     receive
