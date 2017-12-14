@@ -64,9 +64,9 @@ init(#{directory := Dir, id := Id} = Conf) ->
 
     % recover current range and any references to segments
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(Id, Dir) of
-                                         {undefined, SRs} -> {{-1, -1}, SRs};
-                                         R ->  R
-                                     end,
+                                          {undefined, SRs} -> {{-1, -1}, SRs};
+                                          R ->  R
+                                      end,
     % recove las snapshot file
     SnapshotState  =
         case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
@@ -524,7 +524,7 @@ closed_mem_tables(Id) ->
             [];
         Tables ->
             lists:sort(fun (A, B) ->
-                               element(4, A) > element(4, B)
+                               element(2, A) > element(2, B)
                        end, Tables)
     end.
 
