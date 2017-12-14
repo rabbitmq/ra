@@ -83,6 +83,7 @@ await(SegWriter)  ->
 %%%===================================================================
 
 init([#{data_dir := DataDir} = Conf]) ->
+    process_flag(trap_exit, true),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{data_dir = DataDir,
                 segment_conf = SegmentConf}}.
