@@ -378,10 +378,11 @@ roll_over(OpnMemTbls, #state{wal = Wal0,
     NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
     {ok, Fd} = file:open(NextFile, Modes),
     case Wal0 of
-        undefined -> ok;
+        undefined ->
+            ok;
         Wal ->
             ok = close_file(Wal#wal.fd),
-            ok = close_open_mem_tables(OpnMemTbls, NextFile, SegWriter)
+            ok = close_open_mem_tables(OpnMemTbls, Wal#wal.filename, SegWriter)
     end,
     State#state{wal = #wal{fd = Fd, filename = NextFile}, file_num = Num}.
 
