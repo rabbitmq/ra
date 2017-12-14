@@ -167,12 +167,24 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % create an ets table to hold recovery information
     _ = ets:new(ra_log_recover_mem_tables,
                 [set, named_table, {read_concurrency, true}, private]),
-    [begin
-         % TOOD: avoid reading the whole file at once
-         {ok, Data} = file:read_file(F),
-         ok = recover_records(Data, #{}),
-         ok = close_open_mem_tables(ra_log_recover_mem_tables, F, TblWriter)
-     end || F <- WalFiles],
+    % compute all closed mem table lookups required so we can insert them
+    % all at once, atomically
+    % It needs to be atomic so that readers don't accidentally read partially recovered
+    % tables mixed with old tables
+    All = [begin
+               % TOOD: avoid reading the whole file at once
+               {ok, Data} = file:read_file(F),
+               ok = recover_records(Data, #{}),
+               recovering_to_closed(F)
+           end || F <- WalFiles],
+    % get all the recovered tables and insert them into closed
+    Closed = lists:append([C || {C, _, _} <- All]),
+    true = ets:insert(ra_log_closed_mem_tables, Closed),
+    % send all the mem tables to segment writer for processing
+    % This could result in duplicate segments
+    [ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, M,F)
+     || {_, M, F} <- All],
+
     Modes = [raw, append, binary] ++ AdditionalModes,
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(ra_log_recover_mem_tables,
@@ -368,14 +380,13 @@ roll_over(State) ->
     roll_over(ra_log_open_mem_tables, State).
 
 
-roll_over(OpnMemTbls, #state{wal = Wal0,
-                             dir = Dir,
-                             file_num = Num0,
-                             file_modes = Modes,
+roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir,
+                             file_num = Num0, file_modes = Modes,
                              segment_writer = SegWriter} = State) ->
     Num = Num0 + 1,
-    ?DBG("wal: completing wal file next ~p~n", [Num]),
-    NextFile = filename:join(Dir, ra_lib:zpad_filename("", "wal", Num)),
+    Fn = ra_lib:zpad_filename("", "wal", Num),
+    NextFile = filename:join(Dir, Fn),
+    ?DBG("wal: opening new file ~p~n", [Fn]),
     {ok, Fd} = file:open(NextFile, Modes),
     case Wal0 of
         undefined ->
@@ -400,7 +411,7 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     % for deleting it
     % TODO: alternatively we could have a separate ETS cleanup process
     [begin
-         % TODO: in order to ensure that reads are done in the correct causal order
+         % In order to ensure that reads are done in the correct causal order
          % we need to append a monotonically increasing value for readers to sort
          % by
          M = erlang:unique_integer([monotonic, positive]),
@@ -414,6 +425,15 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
                                                       Filename),
     ok.
+
+recovering_to_closed(Filename) ->
+    MemTables = ets:tab2list(ra_log_recover_mem_tables),
+    Closed = [begin
+                  M = erlang:unique_integer([monotonic, positive]),
+                  erlang:insert_element(2, T, M)
+              end || T <- MemTables],
+    true = ets:delete_all_objects(ra_log_recover_mem_tables),
+    {Closed, MemTables, Filename}.
 
 
 open_mem_table(Id) ->

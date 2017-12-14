@@ -18,6 +18,7 @@ all_tests() ->
      handle_overwrite,
      receive_segment,
      read_one,
+     take_after_overwrite_and_init,
      validate_sequential_reads,
      validate_reads_for_overlapped_writes,
      cache_overwrite_then_take,
@@ -138,6 +139,24 @@ read_one(Config) ->
     % read two entries
     ?assert(M1 + M2 + M3 + M4 =:= 1),
     ra_log_file:close(Log),
+    ok.
+
+take_after_overwrite_and_init(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
+    Log2 = deliver_written_log_events(Log1, 200),
+    {[_, _, _, _], Log3} = ra_log_file:take(1, 5, Log2),
+    Log4 = write_and_roll_no_deliver(1, 2, 2, Log3),
+    % fake lost segments event
+    Log5 = deliver_written_log_events(Log4, 200),
+    % ensure we cannot take stale entries
+    ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
+    {[{1, 2, _}], Log6} = ra_log_file:take(1, 5, Log5),
+    _ = ra_log_file:close(Log6),
+    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    {[{1, 2, _}], _} = ra_log_file:take(1, 5, Log),
     ok.
 
 
@@ -503,6 +522,11 @@ write_and_roll(From, To, Term, Log0) ->
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     deliver_all_log_events(Log1, 200).
 
+write_and_roll_no_deliver(From, To, Term, Log0) ->
+    Log1 = write_n(From, To, Term, Log0),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log1.
+
 % not inclusivw
 append_n(To, To, _Term, Log) ->
     Log;
@@ -522,8 +546,19 @@ write_n(From, To, Term, Log0) ->
 deliver_all_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
             Log = ra_log_file:handle_event(Evt, Log0),
             deliver_all_log_events(Log, 100)
+    after Timeout ->
+              Log0
+    end.
+
+deliver_written_log_events(Log0, Timeout) ->
+    receive
+        {ra_log_event, {written, _} = Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            Log = ra_log_file:handle_event(Evt, Log0),
+            deliver_written_log_events(Log, 100)
     after Timeout ->
               Log0
     end.

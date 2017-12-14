@@ -96,6 +96,7 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % TODO: test scenario when node crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
+    ?DBG("segment_writer: deleting wal file: ~p", [WalFile]),
     _ = file:delete(WalFile),
 
     {noreply, State};
