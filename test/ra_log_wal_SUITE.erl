@@ -108,7 +108,7 @@ write_many(Config) ->
 
 overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
     % Modes = [],
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
                                          additional_wal_file_modes => Modes}, []),
@@ -128,7 +128,7 @@ truncate_write(Config) ->
     % a truncate write should update the range to not include previous indexes
     % a trucated write does not need to follow the sequence
     Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
     % Modes = [],
     {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
                                          additional_wal_file_modes => Modes}, []),

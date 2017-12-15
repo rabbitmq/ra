@@ -87,22 +87,22 @@ apply(IncomingRaftIdx, {settle, MsgId, CustomerId},
             Effects = [{incr_metrics, ?METRICS_TABLE,
                         [{3, NumChecked}, {4, 1}]} | Effects1],
             {ReleaseCursor, AllEffects} =
-            case gb_sets:size(Indexes) of
-                0 ->
-                    % there are no messages on queue anymore
-                    % we can forward release_cursor all the way until
-                    % the last received command
-                    {undefined,
-                     [{release_cursor, IncomingRaftIdx} | Effects]};
-                _ when ReleaseCursor0 =:= RaftIdx ->
-                    % the release cursor can be fowarded to next available message
-                    Smallest = gb_sets:smallest(Indexes),
-                    {Smallest,
-                     [{release_cursor, Smallest} | Effects]};
-                _ ->
-                    % release cursor cannot be forwarded
-                    {ReleaseCursor0,  Effects}
-                end,
+                case gb_sets:size(Indexes) of
+                    0 ->
+                        % there are no messages on queue anymore
+                        % we can forward release_cursor all the way until
+                        % the last received command
+                        {undefined,
+                         [{release_cursor, IncomingRaftIdx} | Effects]};
+                    _ when ReleaseCursor0 =:= RaftIdx ->
+                        % the release cursor can be fowarded to next available message
+                        Smallest = gb_sets:smallest(Indexes),
+                        {Smallest,
+                         [{release_cursor, Smallest} | Effects]};
+                    _ ->
+                        % release cursor cannot be forwarded
+                        {ReleaseCursor0,  Effects}
+                    end,
             {effects, State#state{release_cursor = ReleaseCursor}, AllEffects};
         _ ->
             {effects, State0, []}

@@ -156,6 +156,7 @@ combine([], [], Acc) ->
     lists:reverse(Acc);
 combine([{_, _, _Crc} = Meta | MetaTail],
         [Data | DataTail], Acc) ->
+    % TODO: optionally validate checksums
     combine(MetaTail, DataTail, [setelement(3, Meta, Data) | Acc]).
 
 read_locs(Idx, FinalIdx, _Index, Acc) when Idx < FinalIdx ->

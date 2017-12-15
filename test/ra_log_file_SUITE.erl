@@ -33,7 +33,7 @@ all_tests() ->
      snapshot_recovery,
      snapshot_installation,
      update_release_cursor,
-     update_release_cursor_after_recovery,
+     missed_closed_tables_are_deleted_at_next_opportunity,
      transient_writer_is_handled
     ].
 
@@ -184,7 +184,7 @@ validate_sequential_reads(Config) ->
            [ColdTaken/1000, ColdReds, Metrics]),
     % we'd like to know if we regress beyond this
     % some of the reductions are spent validating the reads
-    ?assert(ColdReds < 100000),
+    ?assert(ColdReds < 110000),
     {WarmTaken, {WarmReds, FinLog2}} =
         timer:tc(fun () ->
                          {_, R0} = process_info(self(), reductions),
@@ -418,26 +418,34 @@ update_release_cursor(Config) ->
     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
     % assert there are two segments at this point
     [_, _] = filelib:wildcard(filename:join(Dir, "*.segment")),
-    % leave one entry in the current segment
-    Log3 = ra_log_file:update_release_cursor(150, #{n1 => #{}, n2 => #{}},
-                                             initial_state, Log2),
-    Log4 = deliver_all_log_events(Log3, 500),
-    % no segments
-    [] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    % update release cursor to the last entry of the first segment
+    Log2 = ra_log_file:update_release_cursor(127, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log1),
+    Log3 = deliver_all_log_events(Log2, 500),
+    % this should delete a single segment
+    [_] =  find_segments(Dir),
+    Log3b = validate_read(128, 150, 2, Log3),
+    % update the release cursor all the way
+    Log4 = ra_log_file:update_release_cursor(149, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log3b),
+    Log5 = deliver_all_log_events(Log4, 500),
+
+    % no segments should remain
+    [] =  find_segments(Dir),
+
     % append a few more items
-    Log5 = append_and_roll(150, 155, 2, Log4),
-    _Log6 = deliver_all_log_events(Log5, 500),
+    Log6 = append_and_roll(150, 155, 2, Log5),
+    Log = deliver_all_log_events(Log6, 500),
+    validate_read(150, 155, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
     [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
 
     ok.
 
-update_release_cursor_after_recovery(Config) ->
-    % ct:pal("All ets before: ~p", [ets:all()]),
+missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
@@ -445,43 +453,36 @@ update_release_cursor_after_recovery(Config) ->
     % assert there are no segments at this point
     [] = find_segments(Dir),
 
-    % record ets tables before test
-    EtsBefore = ets:all(),
     % create a segment
     Log1 = deliver_all_log_events(append_and_roll(1, 130, 2, Log0), 500),
     % and another but don't notify ra_node
-    Log2 = append_n(130, 150, 2, Log1),
-    Log3 = deliver_all_log_events(Log2, 500),
-    empty_mailbox(),
-    % ok = ra_log_wal:force_roll_over(ra_log_wal),
-
-    % recover WAL
-    ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
-    {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
-    timer:sleep(1000),
-
+    Log2 = append_and_roll_no_deliver(130, 150, 2, Log1),
+    % deliver only written events
+    Log3 = deliver_written_log_events(Log2, 500),
+    % simulate the segments events getting lost due to crash
+    empty_mailbox(500),
+    % although this has been flushed to disk the ra_node wasn't available
+    % to clean it up.
+    [_] = ets:tab2list(ra_log_closed_mem_tables),
     % then deliver all log events
 
-    % assert there is one segment at this point
+    % append and roll some more entries
     Log4 = append_and_roll(150, 155, 2, Log3),
-    % leave one entry in the current segment
-    Log5 = ra_log_file:update_release_cursor(150, #{n1 => #{}, n2 => #{}},
-                                             initial_state, Log4),
-    % Log6 = append_n(155, 160, 2, Log5),
-    Log = deliver_all_log_events(Log5, 500),
 
+    % the missed closed mem table should have been cleaned up at the same
+    % time as the next one.
     [] = ets:tab2list(ra_log_closed_mem_tables),
     [] = ets:tab2list(ra_log_open_mem_tables),
 
-    % assert no ets tables were left behind
-    [] = ets:all() -- EtsBefore,
+    % TODO: validate reads
+    Log5 = validate_read(1, 155, 2, Log4),
 
-    % validate reads are ok
-    {149, 2, _, initial_state} = ra_log_file:read_snapshot(Log),
-    validate_read(150, 155, 2, Log),
+    % then update the release cursor
+    Log6 = ra_log_file:update_release_cursor(154, #{n1 => #{}, n2 => #{}},
+                                             initial_state, Log5),
+    _Log = deliver_all_log_events(Log6, 500),
 
-    % validate there is only one segments left
-    [_] = find_segments(Dir),
+    [] = find_segments(Dir),
     ok.
 
 transient_writer_is_handled(Config) ->
@@ -516,6 +517,11 @@ append_and_roll(From, To, Term, Log0) ->
     Log1 = append_n(From, To, Term, Log0),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     deliver_all_log_events(Log1, 200).
+
+append_and_roll_no_deliver(From, To, Term, Log0) ->
+    Log1 = append_n(From, To, Term, Log0),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log1.
 
 write_and_roll(From, To, Term, Log0) ->
     Log1 = write_n(From, To, Term, Log0),
@@ -575,9 +581,12 @@ find_segments(Dir) ->
     filelib:wildcard(filename:join(Dir, "*.segment")).
 
 empty_mailbox() ->
+    empty_mailbox(100).
+
+empty_mailbox(T) ->
     receive
         _ ->
             empty_mailbox()
-    after 100 ->
+    after T ->
               ok
     end.

@@ -263,17 +263,20 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
-    % TODO: some segments could possibly be recovered at this point if the new
-    % segments already cover their ranges
     % mem_table cleanup
-    % TODO: measure - if this proves expensive it could be done in a separate processes
-    % First remove the closed mem table reference
-    ClsdTbl = lists_find(fun ({_, _, _, _, T}) -> T =:= Tid end,
-                         ets:lookup(ra_log_closed_mem_tables, Id)),
-    false = ClsdTbl =:= undefined, % assert table was found
-    true = ets:delete_object(ra_log_closed_mem_tables, ClsdTbl),
-    % Then delete the actual ETS table
-    true = ets:delete(Tid),
+    % any closed mem tables older than the one just having been flushed should
+    % be ok to delete
+    ClosedTables = closed_mem_tables(Id),
+    Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end, ClosedTables),
+    % not fast but we rarely should have more than one or two closed tables
+    % at any time
+    Obsolete = ClosedTables -- Active,
+    false = Obsolete =:= [], % assert at least one table was found
+    [begin
+         true = ets:delete_object(ra_log_closed_mem_tables, ClosedTbl),
+         % Then delete the actual ETS table
+         true = ets:delete(T)
+     end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
     % compact seg ref list so that only the latest range for a segment
     % file has an entry
     State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
@@ -294,12 +297,14 @@ handle_event({snapshot_written, {Idx, Term}, File},
                 {SegRefs0, OpenSegs0};
             {Active, Obsolete} ->
                 % close all relevant active segments
-                [ok = ra_log_file_segment:close(S) ||
-                 S <- maps:values(maps:with(Obsolete, OpenSegs0))],
+                ObsoleteKeys = [element(3, O) || O <- Obsolete],
                 ?DBG("~p: snapshot_written at ~b. Obsolete segments ~p", [Id, Idx, Obsolete]),
+                % close any open segments
+                [ok = ra_log_file_segment:close(S)
+                 || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
                 ok = ra_log_file_segment_writer:delete_segments(Id, Idx,
                                                                 Obsolete),
-                {Active, maps:without(Obsolete, OpenSegs0)}
+                {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
@@ -394,14 +399,23 @@ update_release_cursor(_Idx, _Cluster, _MachineState,
     State;
 update_release_cursor(Idx, Cluster, MachineState,
                       #state{segment_refs = SegRefs} = State0) ->
-    case lists:any(fun({_From, To, _}) when To < Idx -> true;
+    % The release cursor index is the last entry _not_ contributing
+    % to the current state. I.e. the last entry that can be discarded.
+    % Check here if any segments can be release.
+    case lists:any(fun({_From, To, _}) when To =< Idx -> true;
                       (_) -> false end, SegRefs) of
         true ->
-            % segments can be cleared up - nice
-            SnapIdx = Idx - 1,
-            {Term, State} = fetch_term(SnapIdx, State0),
-            write_snapshot({SnapIdx, Term, Cluster, MachineState},
-                           State#state{snapshot_index_in_progress = SnapIdx});
+            % segments can be cleared up
+            % take a snapshot at the release_cursor
+            {Term, State} = fetch_term(Idx, State0),
+            % TODO: here we use the current cluster configuration in the snapshot,
+            % _not_ the configuration at the snapshot point. Given cluster changes
+            % are applied as they are received I cannot think of any scenarios
+            % where this can cause a problem. That said there may well be :dragons:
+            % here.
+            % The MachineState should be the initial machine state.
+            write_snapshot({Idx, Term, Cluster, MachineState},
+                           State#state{snapshot_index_in_progress = Idx});
         false ->
             State0
     end.
@@ -476,7 +490,6 @@ closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
         [] ->
             {Acc0, MetricOps, {Start0, End}};
         Tables ->
-            ?DBG("closed_mem_tbl_take ~p", [Tables]),
             {Entries, Count, Rem} =
             lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
                                 mem_tbl_take(Range, TblSt, TblEnd, Tid, Count, Ac)
@@ -548,6 +561,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                                       {ok, S} = ra_log_file_segment:open(Fn, #{mode => read}),
                                       S
                               end,
+
                         % actual start point cannot be prior to first segment
                         % index
                         Start = max(Start0, From),
@@ -624,15 +638,6 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
     State#state{first_index = 0, last_written_index_term = {0, 0}};
 maybe_append_0_0_entry(State) ->
     State.
-
-lists_find(_Pred, []) ->
-    undefined;
-lists_find(Pred, [H | Tail]) ->
-    case Pred(H) of
-        true -> H;
-        false ->
-            lists_find(Pred, Tail)
-    end.
 
 resend_from(Idx, #state{id = Id,
                         last_index = LastIdx,
@@ -716,35 +721,6 @@ closed_mem_tbl_take_test() ->
     {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, [], []),
     {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
     ok.
-
-
-% closed_mem_tbl_take_during_recovery_test() ->
-%     % this simulates a take read op during recovery where wal files are
-%     % being re-read into closed mem_tables
-%     ets:delete(ra_log_closed_mem_tables),
-%     _ = ets:new(ra_log_closed_mem_tables, [named_table, bag]),
-%     Tid1 = ets:new(test_id, []),
-%     Tid2 = ets:new(test_id, []),
-%     Tid3 = ets:new(test_id, []),
-%     M1 = erlang:unique_integer([monotonic, positive]),
-%     M2 = erlang:unique_integer([monotonic, positive]),
-%     M3 = erlang:unique_integer([monotonic, positive]),
-%     true = ets:insert(ra_log_closed_mem_tables, {test_id, M1, 5, 7, Tid1}),
-%     true = ets:insert(ra_log_closed_mem_tables, {test_id, M2, 8, 10, Tid2}),
-%     true = ets:insert(ra_log_closed_mem_tables, {test_id, M3, 5, 7, Tid3}),
-%     Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
-%     Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
-%     % seed the mem tables
-%     [ets:insert(Tid1, E) || E <- Entries1],
-%     [ets:insert(Tid2, E) || E <- Entries2],
-%     % this represents the case when only one of the two tables have been recovered
-%     [ets:insert(Tid3, E) || E <- Entries1],
-
-%     Expected = Entries1 ++ Entries2,
-
-%     {Expected, _, undefined} = closed_mem_tbl_take(test_id, {5, 10}, [], []),
-%     {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
-%     ok.
 
 pick_range_test() ->
     Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
