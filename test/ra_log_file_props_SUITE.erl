@@ -508,7 +508,7 @@ next_index_term_prop(Dir, TestCase) ->
                               Entries,
                               ra_log_file:init(#{directory => Dir, id => TestCase})),
            {LastIdx, _LastTerm, _} = lists:last(Entries),
-           Idx = ra_log_file:next_index_term(Log),
+           Idx = ra_log_file:next_index(Log),
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Idx, LastIdx + 1]),
                      LastIdx + 1 == Idx)
