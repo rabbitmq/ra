@@ -25,6 +25,7 @@ all_tests() ->
      last_written_overwrite,
      recovery,
      resend_write,
+     % wal_crash_recover,
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
@@ -303,6 +304,23 @@ resend_write(Config) ->
     meck:unload(ra_log_wal),
     ok.
 
+% wal_crash_recover(Config) ->
+%     Dir = ?config(wal_dir, Config),
+%     {registered_name, Self} = erlang:process_info(self(), registered_name),
+
+%     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+%     Log1 = write_n(1, 3, 2, Log0),
+%     % crash the wal
+%     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
+%     % write someting
+%     {error, _} = ra_log_file:write([{3, 2, <<3:64/integer>>}], Log1),
+%     {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
+%     Log3 = write_n(4, 5, 2, Log1),
+%     Log4 = deliver_all_log_events(Log3, 500),
+%     {4, 2} = ra_log_file:last_written(Log4),
+%     validate_read(1, 5, 2, Log4),
+%     ok.
+
 wal_down_read_availability(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
@@ -363,10 +381,13 @@ detect_lost_written_range(Config) ->
     Log4 = append_n(15, 20, 2, Log3),
     Log5 = deliver_all_log_events(Log4, 2000),
 
+    {19, 2} = ra_log_file:last_written(Log5),
+
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log_file:take(0, 20, Log5),
     ra_log_file:close(Log5),
     Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    {19, 2} = ra_log_file:last_written(Log5),
     {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
     ?assert(length(Entries) =:= 20),
     ?assert(length(RecoveredEntries) =:= 20),

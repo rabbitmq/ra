@@ -258,8 +258,10 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
                     last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
-    ?DBG("~p: ra_log_file: gap detected at ~b!", [Id, FromIdx]),
-    resend_from(LastWrittenIdx + 1, State0);
+    Expected = LastWrittenIdx + 1,
+    ?DBG("~p: ra_log_file: written gap detected at ~b expected ~b!",
+         [Id, FromIdx, Expected]),
+    resend_from(Expected, State0);
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
@@ -446,8 +448,7 @@ can_write(#state{wal = Wal}) ->
 
 %%% Local functions
 
-wal_truncate_write(State = #state{id = Id, cache = Cache,
-                                  wal = Wal},
+wal_truncate_write(#state{id = Id, cache = Cache, wal = Wal} = State,
                    {Idx, Term, Data}) ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
@@ -456,7 +457,7 @@ wal_truncate_write(State = #state{id = Id, cache = Cache,
     State#state{last_index = Idx, last_term = Term,
                 cache = Cache#{Idx => {Term, Data}}}.
 
-wal_write(State = #state{id = Id, cache = Cache, wal = Wal},
+wal_write(#state{id = Id, cache = Cache, wal = Wal} = State,
           {Idx, Term, Data}) ->
     case ra_log_wal:write(Id, Wal, Idx, Term, Data) of
         ok ->
@@ -466,7 +467,7 @@ wal_write(State = #state{id = Id, cache = Cache, wal = Wal},
             exit(wal_down)
     end.
 
-truncate_cache(Idx, State = #state{cache = Cache0}) ->
+truncate_cache(Idx, #state{cache = Cache0} = State) ->
     Cache = maps:filter(fun (K, _) when K > Idx -> true;
                             (_, _) -> false
                         end, Cache0),
@@ -639,8 +640,7 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
 maybe_append_0_0_entry(State) ->
     State.
 
-resend_from(Idx, #state{id = Id,
-                        last_index = LastIdx,
+resend_from(Idx, #state{id = Id, last_index = LastIdx,
                         cache = Cache} = State) ->
     ?DBG("~p: ra_log_file: resending from ~b", [Id, Idx]),
     lists:foldl(fun (I, Acc) ->
