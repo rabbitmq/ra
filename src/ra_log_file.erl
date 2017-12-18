@@ -31,6 +31,8 @@
 -define(METRICS_CLOSED_MEM_TBL_POS, 4).
 -define(METRICS_SEGMENT_POS, 5).
 
+-define(DEFAULT_RESEND_WINDOW_SEC, 20).
+
 -record(state,
         {first_index = -1 :: ra_index(),
          last_index = -1 :: -1 | ra_index(),
@@ -46,7 +48,9 @@
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
-         wal :: atom() % registered name
+         wal :: atom(), % registered name
+         last_resend_time :: maybe(integer()),
+         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer()
         }).
 
 -type ra_log_file_state() :: #state{}.
@@ -57,6 +61,7 @@ init(#{directory := Dir, id := Id} = Conf) ->
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
+    ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
 
     Dets = filename:join(Dir, "ra_log_kv.dets"),
     ok = filelib:ensure_dir(Dets),
@@ -88,7 +93,8 @@ init(#{directory := Dir, id := Id} = Conf) ->
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
                       kv = Kv,
-                      wal = Wal},
+                      wal = Wal,
+                      resend_window_seconds = ResendWindow},
 
     LastIdx = State000#state.last_index,
     % recover the last term
@@ -280,6 +286,10 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
     Expected = LastWrittenIdx + 1,
     ?DBG("~p: ra_log_file: written gap detected at ~b expected ~b!",
          [Id, FromIdx, Expected]),
+    % TODO: in a busy system we should avoid resending for some time after
+    % a resend to avoid excessive resends.
+    % we also can't completely ignore it cause the writes coming from a resend
+    % could also go missing.
     resend_from(Expected, State0);
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
@@ -292,7 +302,7 @@ handle_event({segments, Tid, NewSegs},
     % not fast but we rarely should have more than one or two closed tables
     % at any time
     Obsolete = ClosedTables -- Active,
-    false = Obsolete =:= [], % assert at least one table was found
+    [_|_] = Obsolete, % assert at least one table was found
     [begin
          true = ets:delete_object(ra_log_closed_mem_tables, ClosedTbl),
          % Then delete the actual ETS table
@@ -660,12 +670,26 @@ maybe_append_0_0_entry(State) ->
     State.
 
 resend_from(Idx, #state{id = Id, last_index = LastIdx,
+                        last_resend_time = undefined,
                         cache = Cache} = State) ->
     ?DBG("~p: ra_log_file: resending from ~b", [Id, Idx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))
-                end, State, lists:seq(Idx, LastIdx)).
+                end,
+                State#state{last_resend_time = erlang:system_time(seconds)},
+                lists:seq(Idx, LastIdx));
+resend_from(Idx, #state{last_resend_time = LastResend,
+                        resend_window_seconds = ResendWindow} = State) ->
+    case erlang:system_time(seconds) > LastResend + ResendWindow of
+        true ->
+            % it has been more than a minute since last resend
+            % ok to try again
+            resend_from(Idx, State#state{last_resend_time = undefined});
+        false ->
+            State
+    end.
+
 
 compact_seg_refs(SegRefs) ->
     lists:reverse(

@@ -25,7 +25,7 @@ all_tests() ->
      last_written_overwrite,
      recovery,
      resend_write,
-     % wal_crash_recover,
+     wal_crash_recover,
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
@@ -304,22 +304,28 @@ resend_write(Config) ->
     meck:unload(ra_log_wal),
     ok.
 
-% wal_crash_recover(Config) ->
-%     Dir = ?config(wal_dir, Config),
-%     {registered_name, Self} = erlang:process_info(self(), registered_name),
+wal_crash_recover(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
 
-%     Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
-%     Log1 = write_n(1, 3, 2, Log0),
-%     % crash the wal
-%     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
-%     % write someting
-%     {error, _} = ra_log_file:write([{3, 2, <<3:64/integer>>}], Log1),
-%     {ok, _} = supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
-%     Log3 = write_n(4, 5, 2, Log1),
-%     Log4 = deliver_all_log_events(Log3, 500),
-%     {4, 2} = ra_log_file:last_written(Log4),
-%     validate_read(1, 5, 2, Log4),
-%     ok.
+    Log0 = ra_log_file:init(#{directory => Dir, id => Self,
+                              resend_window => 1 % seconds
+                             }),
+    Log1 = write_n(1, 50, 2, Log0),
+    % crash the wal
+    ok = proc_lib:stop(ra_log_file_segment_writer),
+    % write someting
+    timer:sleep(100),
+    Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
+    ok = proc_lib:stop(ra_log_file_segment_writer),
+    Log3 = write_n(75, 100, 2, Log2),
+    Log4 = deliver_all_log_events(Log3, 250),
+    % wait long enough for the resend window to pass
+    timer:sleep(1500),
+    Log = deliver_all_log_events(write_n(100, 101, 2,  Log4), 500),
+    {100, 2} = ra_log_file:last_written(Log),
+    validate_read(1, 100, 2, Log),
+    ok.
 
 wal_down_read_availability(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -576,6 +582,15 @@ deliver_all_log_events(Log0, Timeout) ->
             ct:pal("log evt: ~p", [Evt]),
             Log = ra_log_file:handle_event(Evt, Log0),
             deliver_all_log_events(Log, 100)
+    after Timeout ->
+              Log0
+    end.
+
+deliver_one_log_events(Log0, Timeout) ->
+    receive
+        {ra_log_event, Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            ra_log_file:handle_event(Evt, Log0)
     after Timeout ->
               Log0
     end.

@@ -21,7 +21,7 @@ init([]) ->
     SegWriter = #{id => ra_log_file_segment_writer,
                   start => {ra_log_file_segment_writer, start_link, [SegWriterConf]}},
     WalConf = #{dir => DataDir},
-    SupFlags = #{strategy => one_for_all, intensity => 1, period => 5},
+    SupFlags = #{strategy => one_for_all, intensity => 5, period => 5},
     WalSup = #{id => ra_log_wal_sup,
                type => supervisor,
                start => {ra_log_wal_sup, start_link, [WalConf]}},
