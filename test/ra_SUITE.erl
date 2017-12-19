@@ -11,7 +11,7 @@ all() ->
     [
      {group, ra_log_memory},
      {group, ra_log_file},
-     {group, ra_reduce_network_usage}
+     {group, ra_log_file_follower_timeouts}
     ].
 
 all_tests() ->
@@ -40,7 +40,7 @@ groups() ->
     [
      {ra_log_memory, [], all_tests()},
      {ra_log_file, [], all_tests()},
-     {ra_reduce_network_usage, [], all_tests()}
+     {ra_log_file_follower_timeouts, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -84,13 +84,14 @@ init_per_group(ra_log_file, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
+                                   election_timeout_strategy => follower_timeout,
                                    await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
                   end
           end,
     [{start_node_fun, Fun} | Config];
-init_per_group(ra_reduce_network_usage, Config) ->
+init_per_group(ra_log_file_follower_timeouts, Config) ->
     Fun = fun (_TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Conf = #{log_module => ra_log_memory,
@@ -99,7 +100,7 @@ init_per_group(ra_reduce_network_usage, Config) ->
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
                                    cluster_id => Name,
-                                   stop_follower_election => true,
+                                   election_timeout_strategy => monitor_and_node_hint,
                                    await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end

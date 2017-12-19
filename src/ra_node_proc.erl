@@ -29,10 +29,10 @@
         ]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_BROADCAST_TIME, 100).
+-define(DEFAULT_BROADCAST_TIME, 50).
 -define(DEFAULT_ELECTION_MULT, 3).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
--define(DEFAULT_FOLLOWER_CATCHUP_TIMEOUT, 30000).
+-define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 
 -type command_reply_mode() ::
     after_log_append | await_consensus | notify_on_consensus.
@@ -58,11 +58,10 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
                 broadcast_time :: non_neg_integer(),
-                election_timeout_multiplier :: non_neg_integer(),
                 proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
-                stop_follower_election :: boolean(),
+                election_timeout_strategy :: ra_node:ra_election_timeout_strategy(),
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer()}).
 
@@ -115,11 +114,11 @@ leader_call(ServerRef, Msg, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init([Config]) ->
+init([Config0]) ->
+    Config = maps:merge(config_defaults(), Config0),
     process_flag(trap_exit, true),
     #{id := Id, cluster := Cluster,
-      machine_state := MacState} = NodeState
-        = ra_node:init(Config),
+      machine_state := MacState} = NodeState = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
     % connect to each peer node before starting election timeout
@@ -130,21 +129,26 @@ init([Config]) ->
                               net_kernel:connect_node(Node);
                           (_) -> node()
                       end, Peers),
-    BroadcastTime = maps:get(broadcast_time, Config, ?DEFAULT_BROADCAST_TIME),
-    Mult = maps:get(election_timeout_multiplier , Config, ?DEFAULT_ELECTION_MULT),
+    BroadcastTime = maps:get(broadcast_time, Config),
+    ElectionTimeoutStrat = maps:get(election_timeout_strategy, Config),
+    AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     State = #state{node_state = NodeState, name = Key,
-                   stop_follower_election = maps:get(stop_follower_election, Config,
-                                                     ?DEFAULT_STOP_FOLLOWER_ELECTION),
+                   election_timeout_strategy = ElectionTimeoutStrat,
                    broadcast_time = BroadcastTime,
-                   election_timeout_multiplier = Mult,
-                   await_condition_timeout = maps:get(await_condition_timeout, Config,
-                                                       ?DEFAULT_FOLLOWER_CATCHUP_TIMEOUT)
-                  },
+                   await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
-    ?DBG("~p init: MachineState: ~p Cluster: ~p~n", [Id, MacState, Peers]),
+    ?DBG("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
+         [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
     {ok, follower, State, election_timeout_action(follower, State)}.
+
+config_defaults() ->
+    #{election_timeout_strategy => monitor_and_node_hint,
+      broadcast_time => ?DEFAULT_BROADCAST_TIME,
+      await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT
+     }.
+
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -180,12 +184,12 @@ leader({call, From}, {state_query, Spec},
 leader(_EventType, {'EXIT', Proxy0, Reason},
        State0 = #state{proxy = Proxy0,
                        broadcast_time = Interval,
-                       stop_follower_election = StopFollowerElection,
+                       election_timeout_strategy = ElectionTimeoutStrat,
                        node_state = NodeState0 = #{id := Id}}) ->
     ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
     {NodeState, Rpcs} = ra_node:make_rpcs(NodeState0),
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval, StopFollowerElection),
+    {ok, Proxy} = ra_proxy:start_link(self(), Interval, ElectionTimeoutStrat),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(info, {node_down, _}, State) ->
@@ -325,12 +329,15 @@ await_condition({call, From}, {dirty_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 await_condition(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
-await_condition(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
-    ?DBG("Leader monitor down, triggering election", []),
+await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
+                State = #state{leader_monitor = MRef, name = Name}) ->
+    ?DBG("~p: Leader monitor down. Setting election timeout.", [Name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
-await_condition(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
-    ?DBG("Leader ~p down, triggering election", [LeaderNode]),
+await_condition(info, {node_down, LeaderNode},
+                State = #state{node_state = #{leader_id := {_, LeaderNode}},
+                               name = Name}) ->
+    ?DBG("~p: Node ~p might be down. Setting election timeout.", [Name, LeaderNode]),
     {keep_state, State, [election_timeout_action(follower, State)]};
 await_condition(info, {node_down, _}, State) ->
     {keep_state, State};
@@ -458,9 +465,9 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
     {State, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = undefined, broadcast_time = Interval,
-                      stop_follower_election = StopFollowerElection} = State,
+                      election_timeout_strategy = ElectStrat} = State,
                Actions) ->
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval, StopFollowerElection),
+    {ok, Proxy} = ra_proxy:start_link(self(), Interval, ElectStrat),
     ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State#state{proxy = Proxy}, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
@@ -497,18 +504,17 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     {State, Actions}.
 
 
-maybe_set_election_timeout(#state{stop_follower_election = true}, Actions) ->
+maybe_set_election_timeout(#state{election_timeout_strategy = monitor_and_node_hint},
+                           Actions) ->
     [{state_timeout, infinity, election_timeout} | Actions];
 maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(follower, State) | Actions].
 
-election_timeout_action(follower, #state{broadcast_time = Timeout,
-                                         election_timeout_multiplier = Mult}) ->
-    T = rand:uniform(Timeout * Mult) + (Timeout * 2),
+election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
+    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 2),
     {state_timeout, T, election_timeout};
-election_timeout_action(candidate, #state{broadcast_time = Timeout,
-                                          election_timeout_multiplier = Mult}) ->
-    T = rand:uniform(Timeout * Mult) + (Timeout * 4),
+election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
+    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
 follower_leader_change(#state{node_state = #{leader_id := L}},

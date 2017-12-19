@@ -27,8 +27,8 @@
 %%% API functions
 %%%===================================================================
 
-start_link(ParentPid, Interval, StopFollowerElection) ->
-    gen_server:start_link(?MODULE, [ParentPid, Interval, StopFollowerElection], []).
+start_link(ParentPid, Interval, ElectionTimeoutStrategy) ->
+    gen_server:start_link(?MODULE, [ParentPid, Interval, ElectionTimeoutStrategy], []).
 
 proxy(Pid, IsUrgent, Appends) ->
     gen_server:cast(Pid, {appends, IsUrgent, Appends}).
@@ -37,7 +37,7 @@ proxy(Pid, IsUrgent, Appends) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Parent, Interval, StopFollowerElection]) ->
+init([Parent, Interval, ElectionTimeoutStrategy]) ->
     TRef = erlang:send_after(Interval, self(), broadcast),
     ok = net_kernel:monitor_nodes(true),
     Nodes = lists:foldl(fun(N, Acc) ->
@@ -48,7 +48,7 @@ init([Parent, Interval, StopFollowerElection]) ->
                 interval = Interval,
                 timer_ref = TRef,
                 nodes = Nodes,
-                quiesce = StopFollowerElection}}.
+                quiesce =  ElectionTimeoutStrategy =:= monitor_and_node_hint}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,

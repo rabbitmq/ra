@@ -52,8 +52,7 @@
       machine_state => term(),
       initial_machine_state => term(),
       broadcast_time => non_neg_integer(), % milliseconds
-      condition => ra_await_condition_fun()
-      }.
+      condition => ra_await_condition_fun()}.
 
 -type ra_state() :: leader | follower | candidate.
 
@@ -61,8 +60,7 @@
                   {ra_node_id(), #append_entries_reply{}} |
                   #request_vote_rpc{} |
                   #request_vote_result{} |
-                  {command, term()} |
-                  sync. % time to fsync
+                  {command, term()}.
 
 -type ra_effect() ::
     ra_machine_effect() |
@@ -74,6 +72,8 @@
 
 -type ra_effects() :: [ra_effect()].
 
+-type ra_election_timeout_strategy() :: follower_timeout | monitor_and_node_hint.
+
 -type ra_node_config() :: #{id => ra_node_id(),
                             log_module => ra_log_memory | ra_log_file,
                             log_init_args => ra_log:ra_log_init_args(),
@@ -81,9 +81,8 @@
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
                             broadcast_time => non_neg_integer(), % milliseconds
-                            election_timeout_multiplier => non_neg_integer(),
                             cluster_id => atom(),
-                            stop_follower_election => boolean(),
+                            election_timeout_strategy => ra_election_timeout_strategy(),
                             await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
@@ -91,7 +90,8 @@
               ra_machine_apply_fun/0,
               ra_msg/0,
               ra_effect/0,
-              ra_effects/0]).
+              ra_effects/0,
+              ra_election_timeout_strategy/0]).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
