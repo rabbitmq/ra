@@ -9,7 +9,7 @@ define PROJECT_ENV
 ]
 endef
 
-TEST_DEPS = proper meck eunit_formatters
+TEST_DEPS = proper meck eunit_formatters common_test
 
 BUILD_DEPS = elvis_mk looking_glass
 
@@ -19,7 +19,9 @@ dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
 
 DEP_PLUGINS = elvis_mk
 
-DIALYZER_OPTS += --apps eunit meck proper --src -r test
+PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib
+
+DIALYZER_OPTS += --apps common_test --src -r test
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 include erlang.mk
 
