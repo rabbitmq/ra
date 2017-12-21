@@ -5,7 +5,7 @@
 -include("ra.hrl").
 
 %% API functions
--export([start_link/3,
+-export([start_link/4,
          proxy/3]).
 
 %% gen_server callbacks
@@ -16,7 +16,8 @@
          terminate/2,
          code_change/3]).
 
--record(state, {appends :: list(),
+-record(state, {id :: term(),
+                appends :: list(),
                 parent :: pid(),
                 interval = 100 :: non_neg_integer(),
                 timer_ref :: maybe(reference()),
@@ -27,8 +28,10 @@
 %%% API functions
 %%%===================================================================
 
-start_link(ParentPid, Interval, ElectionTimeoutStrategy) ->
-    gen_server:start_link(?MODULE, [ParentPid, Interval, ElectionTimeoutStrategy], []).
+start_link(Id, ParentPid, Interval, ElectionTimeoutStrategy) ->
+    gen_server:start_link(?MODULE,
+                          [Id, ParentPid, Interval, ElectionTimeoutStrategy],
+                          []).
 
 proxy(Pid, IsUrgent, Appends) ->
     gen_server:cast(Pid, {appends, IsUrgent, Appends}).
@@ -37,21 +40,21 @@ proxy(Pid, IsUrgent, Appends) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Parent, Interval, ElectionTimeoutStrategy]) ->
+init([Id, Parent, Interval, ElectionTimeoutStrategy]) ->
     TRef = erlang:send_after(Interval, self(), broadcast),
     ok = net_kernel:monitor_nodes(true),
     Nodes = lists:foldl(fun(N, Acc) ->
                                 maps:put(N, ok, Acc)
                         end, #{}, [node() | nodes()]),
-    {ok, #state{appends = [],
+    {ok, #state{id = Id,
+                appends = [],
                 parent = Parent,
                 interval = Interval,
                 timer_ref = TRef,
                 nodes = Nodes,
                 quiesce =  ElectionTimeoutStrategy =:= monitor_and_node_hint}}.
 
-handle_call(_Request, _From, State) ->
-    Reply = ok,
+handle_call(_Request, _From, State) -> Reply = ok,
     {reply, Reply, State}.
 
 handle_cast({appends, _, Appends}, #state{appends = Appends,
@@ -72,17 +75,17 @@ handle_cast({appends, true, Appends}, State0) ->
 handle_info(broadcast, State) ->
     ok = broadcast(State),
     {noreply, reset_timer(State)};
-handle_info({nodeup, Node}, State = #state{nodes = Nodes}) ->
-    ?DBG("proxy: nodeup received x ~p~n", [Node]),
+handle_info({nodeup, Node}, State = #state{id = Id, nodes = Nodes}) ->
+    ?INFO("~p: proxy: nodeup received x ~p~n", [Id, Node]),
     {noreply, State#state{nodes = maps:put(Node, ok, Nodes)}};
 handle_info({nodedown, Node}, State = #state{nodes = Nodes}) ->
     {noreply, State#state{nodes = maps:remove(Node, Nodes)}};
-handle_info(Msg, State) ->
-    ?DBG("proxy: handle info unknown ~p~n", [Msg]),
+handle_info(Msg, #state{id = Id} = State) ->
+    ?WARN("~p: proxy: handle info unknown ~p~n", [Id, Msg]),
     {noreply, State}.
 
-terminate(Reason, _State) ->
-    ?DBG("proxy: terminating with ~p~n", [Reason]),
+terminate(Reason, #state{id = Id}) ->
+    ?INFO("~p: proxy: terminating with ~p~n", [Id, Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -108,7 +111,7 @@ quiesce(State = #state{timer_ref = Ref}) ->
     _ = erlang:cancel_timer(Ref),
     State#state{timer_ref = undefined}.
 
-broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
+broadcast(#state{id = Id, parent = Parent, appends = Appends, nodes = Nodes}) ->
     [begin
          % use the peer ref as the unique rpc reply reference
          % fake gen_call - reply goes to ra_node process
@@ -116,7 +119,7 @@ broadcast(#state{parent = Parent, appends = Appends, nodes = Nodes}) ->
              _ -> ok
          catch
              _:_ = Err ->
-                 ?DBG("Peer broadcast error ~p ~p~n", [Peer, Err]),
+                 ?ERR("~p: proxy: Peer broadcast error ~p ~p~n", [Id, Peer, Err]),
                  ok
          end
      end || {Peer, AE} <- Appends, is_connected(Peer, Nodes)],

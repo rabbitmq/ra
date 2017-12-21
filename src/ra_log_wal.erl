@@ -156,7 +156,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     %  As we have waited for the segment writer to finish processing it is
     %  assumed that any remaining wal files need to be re-processed.
     WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
-    ?DBG("WAL: recovering ~p", [WalFiles]),
+    ?INFO("WAL: recovering ~p", [WalFiles]),
     % First we recover all the tables using a temporary lookup table.
     % Then we update the actual lookup tables atomically.
     _ = ets:new(ra_log_recover_mem_tables,
@@ -316,7 +316,7 @@ handle_msg({append, Id, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?DBG("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
+            ?WARN("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
                  [Id, PrevIdx, Idx]),
             Id ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}}
@@ -378,7 +378,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir,
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?DBG("wal: opening new file ~p~n", [Fn]),
+    ?INFO("wal: opening new file ~p~n", [Fn]),
     {ok, Fd} = file:open(NextFile, Modes),
     case Wal0 of
         undefined ->
@@ -443,7 +443,6 @@ complete_batch(#state{wal = #wal{fd = Fd},
     TS = os:system_time(millisecond),
     ok = file:sync(Fd),
     SyncTS = os:system_time(millisecond),
-    % ?DBG("completing batch ~p~n", [Waiting]),
     _ = ets:update_element(ra_log_wal_metrics, Cursor,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,

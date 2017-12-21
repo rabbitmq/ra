@@ -49,7 +49,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(Info, State) ->
-    ?DBG("~p: info ~p", [?MODULE, Info]),
+    ?INFO("~p: info msg: ~p", [?MODULE, Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->

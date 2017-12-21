@@ -82,7 +82,6 @@ init(#{directory := Dir, id := Id} = Conf) ->
             [] ->
                 undefined
         end,
-    ?DBG("ra_log_file:init SnapshotState ~p First ~p Last ~p", [SnapshotState, FirstIdx, LastIdx0]),
     {SnapIdx, SnapTerm} = case SnapshotState of
                               undefined -> {-1, -1};
                               {I, T, _} -> {I, T}
@@ -114,7 +113,7 @@ init(#{directory := Dir, id := Id} = Conf) ->
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_0_0_entry(State0),
-    ?DBG("ra_log_file:init recovered last_index_term ~p~n", [last_index_term(State)]),
+    ?INFO("ra_log_file:init recovered last_index_term ~p~n", [last_index_term(State)]),
     State.
 
 recover_range(Id, Dir) ->
@@ -262,7 +261,8 @@ last_written(#state{last_written_index_term = LWTI}) ->
 -spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
 handle_event({written, {FromIdx, ToIdx, Term}},
-             #state{last_written_index_term = {LastWrittenIdx, _}} = State0)
+             #state{last_written_index_term = {LastWrittenIdx, _},
+                    id = Id} = State0)
   when FromIdx =< LastWrittenIdx + 1 ->
     % We need to ignore any written events for the same index but in a prior term
     % if we do not we may end up confirming to a leader writes that have not yet
@@ -275,7 +275,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
         X ->
-            ?DBG("written event did not find term ~p found ~p", [{ToIdx, Term}, X]),
+            ?INFO("~p: written event did not find term ~p found ~p", [Id, {ToIdx, Term}, X]),
             State0
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
@@ -284,7 +284,7 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
     Expected = LastWrittenIdx + 1,
-    ?DBG("~p: ra_log_file: written gap detected at ~b expected ~b!",
+    ?WARN("~p: ra_log_file: written gap detected at ~b expected ~b!",
          [Id, FromIdx, Expected]),
     % TODO: in a busy system we should avoid resending for some time after
     % a resend to avoid excessive resends.
@@ -329,7 +329,7 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?DBG("~p: snapshot_written at ~b. Obsolete segments ~p", [Id, Idx, Obsolete]),
+                ?INFO("~p: snapshot_written at ~b. Obsolete segments ~p", [Id, Idx, Obsolete]),
                 % close any open segments
                 [ok = ra_log_file_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
@@ -672,7 +672,7 @@ maybe_append_0_0_entry(State) ->
 resend_from(Idx, #state{id = Id, last_index = LastIdx,
                         last_resend_time = undefined,
                         cache = Cache} = State) ->
-    ?DBG("~p: ra_log_file: resending from ~b", [Id, Idx]),
+    ?WARN("~p: ra_log_file: resending from ~b", [Id, Idx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))

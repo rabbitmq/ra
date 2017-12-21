@@ -73,5 +73,5 @@ handle_write_snapshot(From, Dir, {Index, Term, _, _} = Snapshot) ->
     end.
 
 write(File, Snapshot) ->
-    ?DBG("Writing snapshot file ~p", [File]),
+    ?INFO("snapshot_writer: Writing file ~p", [File]),
     file:write_file(File, term_to_binary(Snapshot)).

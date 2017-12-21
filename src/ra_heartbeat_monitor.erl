@@ -120,13 +120,13 @@ beat_nodes(Nodes, Timeout) ->
                             Acc
                         catch
                             exit:{{nodedown, _}, _} ->
-                                ?DBG("heartbeat: detected node ~p down", [Node]),
+                                ?WARN("heartbeat: detected node ~p down", [Node]),
                                 [Node | Acc];
                             exit:{timeout, _} ->
-                                ?DBG("heartbeat: detected node ~p timeout", [Node]),
+                                ?WARN("heartbeat: detected node ~p timeout", [Node]),
                                 [Node | Acc];
                             exit:Error ->
-                                ?DBG("heartbeat: node ~p failed with: ~p", [Node, Error]),
+                                ?ERR("heartbeat: node ~p failed with: ~p", [Node, Error]),
                                 [Node | Acc]
                         end
                 end, [], Nodes).

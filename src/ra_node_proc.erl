@@ -137,8 +137,8 @@ init([Config0]) ->
                    broadcast_time = BroadcastTime,
                    await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
-    ?DBG("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
-         [Id, MacState, Peers]),
+    ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
+          [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
     {ok, follower, State,
@@ -188,10 +188,10 @@ leader(_EventType, {'EXIT', Proxy0, Reason},
                        broadcast_time = Interval,
                        election_timeout_strategy = ElectionTimeoutStrat,
                        node_state = NodeState0 = #{id := Id}}) ->
-    ?DBG("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
+    ?ERR("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
     % TODO: this is a bit hacky - refactor
     {NodeState, Rpcs} = ra_node:make_rpcs(NodeState0),
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval, ElectionTimeoutStrat),
+    {ok, Proxy} = ra_proxy:start_link(Id, self(), Interval, ElectionTimeoutStrat),
     ok = ra_proxy:proxy(Proxy, true, Rpcs),
     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(info, {node_down, _}, State) ->
@@ -260,7 +260,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?DBG("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
+            ?INFO("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger another election
@@ -268,7 +268,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
              [election_timeout_action(follower, State) | Actions]};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?DBG("~p candidate -> leader term: ~p~n", [Id, Term]),
+            ?INFO("~p candidate -> leader term: ~p~n", [Id, Term]),
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
@@ -277,11 +277,11 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
 
 follower({call, From}, {leader_call, _Cmd},
          State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
-    % ?DBG("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
+    % ?INFO("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
 follower({call, From}, {leader_call, Msg},
          State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
-    ?DBG("~p follower leader call - leader not known. Dropping ~n", [Id]),
+    ?WARN("~p follower leader call - leader not known. Dropping ~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
@@ -290,11 +290,11 @@ follower({call, From}, {dirty_query, QueryFun},
 follower(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
 follower(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
-    ?DBG("Leader monitor down, triggering election", []),
+    ?WARN("Leader monitor down, triggering election", []),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
 follower(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
-    ?DBG("Leader ~p down, triggering election", [LeaderNode]),
+    ?WARN("Leader node ~p may be down, triggering election", [LeaderNode]),
     {keep_state, State, [election_timeout_action(follower, State)]};
 follower(info, {node_down, _}, State) ->
     {keep_state, State};
@@ -308,8 +308,8 @@ follower(EventType, Msg, #state{node_state = #{id := Id},
             {keep_state, State, maybe_set_election_timeout(State, Actions)};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?DBG("~p follower -> candidate term: ~p~n",
-                 [Id, current_term(State1)]),
+            ?INFO("~p follower -> candidate term: ~p~n",
+                  [Id, current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
@@ -322,11 +322,11 @@ follower(EventType, Msg, #state{node_state = #{id := Id},
 
 await_condition({call, From}, {leader_call, _Cmd},
          State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
-    % ?DBG("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
+    % ?INFO("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
 await_condition({call, From}, {leader_call, Msg},
          State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
-    ?DBG("~p follower leader call - leader not known. Dropping ~n", [Id]),
+    ?WARN("~p follower leader call - leader not known. Dropping ~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 await_condition({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
@@ -336,13 +336,13 @@ await_condition(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
                 State = #state{leader_monitor = MRef, name = Name}) ->
-    ?DBG("~p: Leader monitor down. Setting election timeout.", [Name]),
+    ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
 await_condition(info, {node_down, LeaderNode},
                 State = #state{node_state = #{leader_id := {_, LeaderNode}},
                                name = Name}) ->
-    ?DBG("~p: Node ~p might be down. Setting election timeout.", [Name, LeaderNode]),
+    ?WARN("~p: Node ~p might be down. Setting election timeout.", [Name, LeaderNode]),
     {keep_state, State, [election_timeout_action(follower, State)]};
 await_condition(info, {node_down, _}, State) ->
     {keep_state, State};
@@ -357,7 +357,7 @@ await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
               maybe_set_election_timeout(State, Actions)]};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?DBG("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
+            ?INFO("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
@@ -365,14 +365,15 @@ await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
             {keep_state, State1, []}
     end.
 
-handle_event(_EventType, EventContent, StateName, State) ->
-    ?DBG("handle_event unknown ~p~n", [EventContent]),
+handle_event(_EventType, EventContent, StateName,
+             State = #state{node_state = #{id := Id}}) ->
+    ?WARN("~p: handle_event unknown ~p~n", [Id, EventContent]),
     {next_state, StateName, State}.
 
 terminate(Reason, _StateName,
           State = #state{node_state = NodeState = #{id := Id},
                          name = Key}) ->
-    ?DBG("ra: ~p terminating with ~p~n", [Id, Reason]),
+    ?WARN("ra: ~p terminating with ~p~n", [Id, Reason]),
     _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     _ = stop_proxy(State),
@@ -470,9 +471,10 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
     {State, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = undefined, broadcast_time = Interval,
+                      node_state = #{id := Id},
                       election_timeout_strategy = ElectStrat} = State,
                Actions) ->
-    {ok, Proxy} = ra_proxy:start_link(self(), Interval, ElectStrat),
+    {ok, Proxy} = ra_proxy:start_link(Id, self(), Interval, ElectStrat),
     ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State#state{proxy = Proxy}, Actions};
 handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
@@ -535,7 +537,7 @@ follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L,
   when L /= undefined ->
     MRef = swap_monitor(OldMRef, L),
     % leader has either changed or just been set
-    ?DBG("~p detected a new leader ~p in term ~p~n", [Id, L, Term]),
+    ?INFO("~p detected a new leader ~p in term ~p~n", [Id, L, Term]),
     [ok = gen_statem:reply(From, {redirect, L})
      || {From, _Data} <- Pending],
     New#state{pending_commands = [],

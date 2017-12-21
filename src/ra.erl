@@ -92,12 +92,12 @@ start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
     case ra_node_proc:command(ServerRef, JoinCmd, ?DEFAULT_TIMEOUT) of
         {ok, _, _} -> ok;
         {timeout, Who} ->
-            ?DBG("~p: request to ~p timed out trying to join the cluster", [NodeId, Who]),
+            ?ERR("~p: request to ~p timed out trying to join the cluster", [NodeId, Who]),
             % this is awkward - we don't know if the request was received or not
             % it may still get processed so we have to leave the server up
             timeout;
         {error, _} = Err ->
-            ?DBG("~p: request errored whilst ~p tried to join the cluster~n",
+            ?ERR("~p: request errored whilst ~p tried to join the cluster~n",
                  [NodeId, Err]),
             % shut down server
             stop_node(NodeId),
@@ -114,12 +114,12 @@ leave_and_terminate(ServerRef, NodeId) ->
     LeaveCmd = {'$ra_leave', NodeId, await_consensus},
     case ra_node_proc:command(ServerRef, LeaveCmd, ?DEFAULT_TIMEOUT) of
         {timeout, Who} ->
-            ?DBG("request to ~p timed out trying to leave the cluster", [Who]),
+            ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
             timeout;
         {error, no_proc} = Err ->
             Err;
         {ok, _, _} ->
-            ?DBG("~p has left the building. terminating", [NodeId]),
+            ?ERR("~p has left the building. terminating", [NodeId]),
             stop_node(NodeId)
     end.
 

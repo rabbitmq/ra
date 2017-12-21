@@ -72,7 +72,6 @@ open(Filename, Options) ->
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, MaxCount),
-            % ?DBG("Segment ~p recovered index range ~p Max Count ~p", [Base, Range, MaxCount]),
             {ok, #state{version = 1,
                         max_count = MaxCount,
                         filename = Filename,
@@ -88,7 +87,6 @@ open(Filename, Options) ->
         false ->
             MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            % ?DBG("opening segment ~p Max Count ~p", [Base, MaxCount]),
             ok = write_header(MaxCount, Fd),
             {ok, #state{version = 1,
                         max_count = MaxCount,

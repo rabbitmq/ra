@@ -91,8 +91,29 @@
          last_index :: ra_index(),
          last_term :: ra_term()}).
 
-% -define(DBG(_Fmt, _Args), ok).
--define(DBG(Fmt, Args), error_logger:info_msg(Fmt, Args)).
+
+% primitive logging abstraction
+-define(error, true).
+-define(warn, true).
+-define(info, true).
+
+-ifdef(info).
+-define(INFO(Fmt, Args), error_logger:info_msg(Fmt, Args)).
+-else.
+-define(INFO(_, _), ok).
+-endif.
+
+-ifdef(warn).
+-define(WARN(Fmt, Args), error_logger:warning_msg(Fmt, Args)).
+-else.
+-define(WARN(_, _), ok).
+-endif.
+
+-ifdef(error).
+-define(ERR(Fmt, Args), error_logger:error_msg(Fmt, Args)).
+-else.
+-define(ERR(_, _), ok).
+-endif.
 
 -define(DEFAULT_TIMEOUT, 5000).
 
