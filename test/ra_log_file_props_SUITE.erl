@@ -587,7 +587,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
-              {Log, Last, LastIdx, Status} =
+              {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
                                       Acc;
@@ -612,7 +612,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
                                  ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
                                       {error, integrity_error} = ra_log_file:write([Entry], Acc0),
                                       Acc;
-                                 ({Idx, _, _} = Entry, {Acc0, _, _, wal_down} = Acc) ->
+                                 (Entry, {Acc0, _, _, wal_down} = Acc) ->
                                       {error, wal_down} = ra_log_file:write([Entry], Acc0),
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
@@ -644,7 +644,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               Log0 = ra_log_file:init(#{directory => Dir, id => TestCase}),
-              {Log, Last, LastIdx, Status} =
+              {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
                                       Acc;

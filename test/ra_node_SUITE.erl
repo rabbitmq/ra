@@ -67,7 +67,6 @@ init(_Config) ->
     #{id := Id,
       machine_apply_fun := ApplyFun,
       cluster := Cluster,
-      cluster_id := ClusterId,
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
     % ensure it is written to the log
@@ -75,7 +74,6 @@ init(_Config) ->
                  log_module => ra_log_memory,
                  log_init_args => #{},
                  apply_fun => ApplyFun,
-                 cluster_id => ClusterId,
                  initial_nodes => [], % init without known peers
                  init_fun => fun (_) -> undefined end},
     % new
@@ -104,7 +102,6 @@ init_restores_cluster_changes(_Config) ->
                  log_module => ra_log_memory,
                  log_init_args => #{},
                  apply_fun => fun erlang:'+'/2,
-                 cluster_id => some_cluster,
                  initial_nodes => [], % init without known peers
                  init_fun => fun (_) -> 0 end},
     % new
@@ -1029,7 +1026,6 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                   n2 => #{match_index => 0,next_index => N2NextIndex }, % stale peer - previous leader
                   n3 => #{match_index => 3,next_index => 4}}, % uptodate peer
                 cluster_change_permitted => true,
-                cluster_id => test_cluster,
                 cluster_index_term => {0,0},
                 commit_index => 3,
                 current_term => Term,
@@ -1070,7 +1066,6 @@ leader_receives_install_snapshot_result(_Config) ->
                  n2 => #{match_index => 4,next_index => 5},
                  n3 => #{match_index => 0,next_index => 1}},
                cluster_change_permitted => true,
-               cluster_id => test_cluster,
                cluster_index_term => {0,0},
                commit_index => 4,
                current_term => Term,
@@ -1231,7 +1226,6 @@ init_nodes(NodeIds, ApplyFun, MacState) ->
     lists:foldl(fun (NodeId, Acc) ->
                         Args = #{id => NodeId,
                                  initial_nodes => NodeIds,
-                                 cluster_id => test_cluster,
                                  log_module => ra_log_memory,
                                  log_init_args => #{},
                                  apply_fun => ApplyFun,
@@ -1433,7 +1427,6 @@ empty_state(NumNodes, Id) ->
                         end, [], lists:seq(1, NumNodes)),
     ra_node:init(#{id => Id,
                    initial_nodes => Nodes,
-                   cluster_id => ra_cluster,
                    log_module => ra_log_memory,
                    log_init_args => #{},
                    apply_fun => fun (_, E, _) -> E end, % just keep last applied value
@@ -1454,7 +1447,6 @@ base_state(NumNodes) ->
     #{id => n1,
       leader_id => n1,
       cluster => Nodes,
-      cluster_id => test_cluster,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
       pending_cluster_changes => [],

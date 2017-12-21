@@ -69,7 +69,6 @@ init_per_group(ra_log_memory, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   cluster_id => Name,
                                    await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end
@@ -90,7 +89,6 @@ init_per_group(ra_log_file = G, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   cluster_id => Name,
                                    election_timeout_strategy => follower_timeout,
                                    await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
@@ -112,7 +110,6 @@ init_per_group(ra_log_file_follower_timeouts = G, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   cluster_id => Name,
                                    election_timeout_strategy => monitor_and_node_hint,
                                    await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)

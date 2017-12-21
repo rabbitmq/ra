@@ -32,8 +32,7 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
               log_init_args => #{},
               initial_nodes => Nodes,
               apply_fun => ApplyFun,
-              init_fun => fun (_) -> InitialState end,
-              cluster_id => Name},
+              init_fun => fun (_) -> InitialState end},
     [begin
          {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
          Id
@@ -46,8 +45,7 @@ start_node(Name, Peers, ApplyFun, InitialState) ->
              log_init_args => #{},
              apply_fun => ApplyFun,
              init_fun => fun (_) -> InitialState end,
-             initial_nodes => Peers,
-             cluster_id => Name},
+             initial_nodes => Peers},
     start_node(Name, Conf).
 
 %% Starts a ra node on the local erlang node using the provided config.
