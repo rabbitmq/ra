@@ -46,17 +46,22 @@ groups() ->
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
-    ok = application:set_env(ra, segment_max_entries, 128),
-    application:ensure_all_started(ra),
     Config.
 
 end_per_suite(Config) ->
     application:stop(ra),
     Config.
 
+restart_ra(DataDir) ->
+    application:stop(ra),
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, DataDir),
+    ok = application:set_env(ra, segment_max_entries, 128),
+    application:ensure_all_started(ra),
+    ok.
+
 init_per_group(ra_log_memory, Config) ->
+    restart_ra(?config(priv_dir, Config)),
     Fun = fun (_TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Conf = #{log_module => ra_log_memory,
@@ -70,11 +75,13 @@ init_per_group(ra_log_memory, Config) ->
                   end
           end,
    [{start_node_fun, Fun} | Config];
-init_per_group(ra_log_file, Config) ->
+init_per_group(ra_log_file = G, Config) ->
     PrivDir = ?config(priv_dir, Config),
+    DataDir = filename:join([PrivDir, G, "data"]),
+    ok = restart_ra(DataDir),
     Fun = fun (TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
-                          Dir = filename:join([PrivDir, TestCase, ra_lib:to_list(Name)]),
+                          Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
                           % {ok, _} = ra_log_wal:start_link(#{dir => Dir}, []),
                           Conf = #{log_module => ra_log_file,
@@ -91,11 +98,17 @@ init_per_group(ra_log_file, Config) ->
                   end
           end,
     [{start_node_fun, Fun} | Config];
-init_per_group(ra_log_file_follower_timeouts, Config) ->
-    Fun = fun (_TestCase) ->
+init_per_group(ra_log_file_follower_timeouts = G, Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    DataDir = filename:join([PrivDir, G, "data"]),
+    ok = restart_ra(DataDir),
+    Fun = fun (TestCase) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
-                          Conf = #{log_module => ra_log_memory,
-                                   log_init_args => #{},
+                          Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
+                          ok = filelib:ensure_dir(Dir),
+                          Conf = #{log_module => ra_log_file,
+                                   log_init_args => #{directory => Dir,
+                                                      id => Name},
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
@@ -115,6 +128,10 @@ init_per_testcase(TestCase, Config0) ->
     Fun = Fun0(TestCase), % "partial application"
     Config = proplists:delete(start_node_fun, Config0),
     [{test_name, ra_lib:to_list(TestCase)}, {start_node_fun, Fun} | Config].
+
+end_per_testcase(_TestCase, Config) ->
+    ra_nodes_sup:remove_all(),
+    Config.
 
 single_node(Config) ->
     StartNode = ?config(start_node_fun, Config),
@@ -261,24 +278,21 @@ node_recovery(Config) ->
     StartNode = ?config(start_node_fun, Config),
     % start the first node and wait a bit
     ok = StartNode(N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0),
+    % ra_node_proc:trigger_election({N1, node()}),
     % start second node
     ok = StartNode(N2, [{N1, node()}, {N3, node()}], fun erlang:'+'/2, 0),
     % a consensus command tells us there is a functioning 2 node cluster
     {ok, {_, _}, Leader} = ra:send_and_await_consensus({N2, node()}, 5,
                                                        ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
-    % restart Leader
-    gen_statem:stop(Leader, normal, 2000),
+    % stop leader to trigger restart
+    proc_lib:stop(Leader, bad_thing, 5000),
     timer:sleep(1000),
-    N = node(),
-    case Leader of
-        {N1, N} ->
-            ok = StartNode(N1, [{N2, node()}, {N3, node()}], fun erlang:'+'/2, 0);
-        {N2, N} ->
-            ok = StartNode(N2, [{N1, node()}, {N3, node()}], fun erlang:'+'/2, 0)
-    end,
-    timer:sleep(1000),
+    N = case Leader of
+            {N1, _} -> N2;
+            _ -> N1
+        end,
     % issue command
-    {ok, {_, _}, _Leader} = ra:send_and_await_consensus({N2, node()}, 5,
+    {ok, {_, _}, _Leader} = ra:send_and_await_consensus({N, node()}, 5,
                                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     terminate_cluster([N1, N2]).
 
@@ -509,7 +523,7 @@ waitfor(Msg, ExitWith) ->
     end.
 
 terminate_cluster(Nodes) ->
-    [gen_statem:stop(P, normal, 2000) || P <- Nodes].
+    [ra:stop_node(P) || P <- Nodes].
 
 new_node(Name, Config) ->
     StartNode = ?config(start_node_fun, Config),
@@ -527,8 +541,8 @@ add_node(Ref, New) ->
 start_and_join(Ref, New, Config) ->
     StartNode = ?config(start_node_fun, Config),
     ServerRef = {Ref, node()},
-    ok = StartNode(New, [], fun erlang:'+'/2, 0),
     {ok, _, _} = ra:add_node(ServerRef, {New, node()}),
+    ok = StartNode(New, [], fun erlang:'+'/2, 0),
     ok.
 
 start_local_cluster(Num, Name, ApplyFun, InitialState, Config) ->

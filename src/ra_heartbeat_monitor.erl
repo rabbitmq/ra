@@ -130,7 +130,7 @@ beat_nodes(Nodes, Timeout) ->
                                 [Node | Acc]
                         end
                 end, [], Nodes).
-                       
+
 notify_ra_nodes(Nodes, Mapping) ->
     lists:foreach(fun(Node) ->
                           lists:foreach(fun(RaNode) ->

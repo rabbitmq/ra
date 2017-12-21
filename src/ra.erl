@@ -59,14 +59,14 @@ start_node(Name, Conf0) when is_atom(Name) ->
                                     lists:usort([This | Peers])
                             end,
                             Conf0#{id => This}),
-    {ok, _Pid} = ra_node_proc:start_link(Conf),
+    {ok, _Pid} = ra_nodes_sup:start_node(Conf),
     ok.
 
 -spec stop_node(ra_node_id()) -> ok.
 stop_node(ServerRef) ->
-
-    try gen_statem:stop(ServerRef, normal, ?DEFAULT_TIMEOUT) of
-        ok -> ok
+    try ra_nodes_sup:stop_node(ServerRef) of
+        ok -> ok;
+        {error, not_found} -> ok
     catch
         exit:noproc -> ok;
         exit:{{nodedown, _}, _}  -> ok

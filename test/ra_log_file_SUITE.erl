@@ -321,7 +321,7 @@ wal_crash_recover(Config) ->
     Log3 = write_n(75, 100, 2, Log2),
     Log4 = deliver_all_log_events(Log3, 250),
     % wait long enough for the resend window to pass
-    timer:sleep(1500),
+    timer:sleep(2000),
     Log = deliver_all_log_events(write_n(100, 101, 2,  Log4), 500),
     {100, 2} = ra_log_file:last_written(Log),
     validate_read(1, 100, 2, Log),

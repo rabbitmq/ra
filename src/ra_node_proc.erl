@@ -141,12 +141,14 @@ init([Config0]) ->
          [Id, MacState, Peers]),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
-    {ok, follower, State, election_timeout_action(follower, State)}.
+    {ok, follower, State,
+     election_timeout_action(follower, State)}.
 
 config_defaults() ->
     #{election_timeout_strategy => monitor_and_node_hint,
       broadcast_time => ?DEFAULT_BROADCAST_TIME,
-      await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT
+      await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
+      initial_nodes => []
      }.
 
 
@@ -260,7 +262,10 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
             {next_state, follower, State,
-             maybe_set_election_timeout(State, Actions)};
+             % always set an election timeout here to ensure an unelectable
+             % node doesn't cause an electable one not to trigger another election
+             % when not using follower timeouts
+             [election_timeout_action(follower, State) | Actions]};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?DBG("~p candidate -> leader term: ~p~n", [Id, Term]),
@@ -293,26 +298,26 @@ follower(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id 
     {keep_state, State, [election_timeout_action(follower, State)]};
 follower(info, {node_down, _}, State) ->
     {keep_state, State};
-follower(EventType, Msg, State0 = #state{node_state = #{id := Id},
-                                         leader_monitor = MRef,
-                                         await_condition_timeout = FollowerCatchupTimeout}) ->
+follower(EventType, Msg, #state{node_state = #{id := Id},
+                                await_condition_timeout = AwaitCondTimeout,
+                                leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
-            NewState = follower_leader_change(State0, State),
-            %% TODO Why 'State' below and not 'NewState'?
-            {keep_state, NewState, maybe_set_election_timeout(State, Actions)};
+            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            State = follower_leader_change(State0, State2),
+            {keep_state, State, maybe_set_election_timeout(State, Actions)};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?DBG("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
+            ?DBG("~p follower -> candidate term: ~p~n",
+                 [Id, current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
         {await_condition, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
-            NewState = follower_leader_change(State0, State),
-            {next_state, await_condition, NewState,
-             [{state_timeout, FollowerCatchupTimeout, await_condition_timeout} | Actions]}
+            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            State = follower_leader_change(State0, State2),
+            {next_state, await_condition, State,
+             [{state_timeout, AwaitCondTimeout, await_condition_timeout} | Actions]}
     end.
 
 await_condition({call, From}, {leader_call, _Cmd},
@@ -504,8 +509,10 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     {State, Actions}.
 
 
-maybe_set_election_timeout(#state{election_timeout_strategy = monitor_and_node_hint},
-                           Actions) ->
+maybe_set_election_timeout(#state{election_timeout_strategy = monitor_and_node_hint,
+                                  leader_monitor = LeaderMon},
+                           Actions) when LeaderMon =/= undefined ->
+    % only when a leader isn't known should we cancel the election timeout
     [{state_timeout, infinity, election_timeout} | Actions];
 maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(follower, State) | Actions].

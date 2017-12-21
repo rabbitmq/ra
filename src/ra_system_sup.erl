@@ -1,4 +1,4 @@
--module(ra_log_file_sup_sup).
+-module(ra_system_sup).
 
 -behaviour(supervisor).
 
@@ -20,7 +20,10 @@ init([]) ->
     RaLogFileSup = #{id => ra_log_file_sup,
                      type => supervisor,
                      start => {ra_log_file_sup, start_link, []}},
-    {ok, {SupFlags, [Ets, RaLogFileSup]}}.
+    RaNodesSup = #{id => ra_nodes_sup,
+                   type => supervisor,
+                   start => {ra_nodes_sup, start_link, []}},
+    {ok, {SupFlags, [Ets, RaLogFileSup, RaNodesSup]}}.
 
 
 

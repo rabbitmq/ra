@@ -707,7 +707,10 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                                       %% We only sleep if we have to, ensuring that test
                                       %% runs as fast as possible.
                                       timer:sleep(time_diff_to(Ts, 6000)),
-                                      exit(whereis(ra_log_file_segment_writer), kill),
+                                      case whereis(ra_log_file_segment_writer) of
+                                          undefined -> ok;
+                                          P -> exit(P, kill)
+                                      end,
                                       {Acc0, Last0, get_timestamp()};
                                  (Entry, {Acc0, Last0, Ts}) ->
                                       {queued, Acc} = ra_log_file:write([Entry], Acc0),

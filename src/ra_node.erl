@@ -34,7 +34,6 @@
 -type ra_node_state() ::
     #{id => ra_node_id(),
       leader_id => maybe(ra_node_id()),
-      cluster_id => binary(),
       cluster => ra_cluster(),
       cluster_change_permitted => boolean(),
       cluster_index_term => ra_idxterm(),
@@ -81,7 +80,6 @@
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
                             broadcast_time => non_neg_integer(), % milliseconds
-                            cluster_id => atom(),
                             election_timeout_strategy => ra_election_timeout_strategy(),
                             await_condition_timeout => non_neg_integer()}.
 
@@ -102,7 +100,6 @@ name(ClusterId, UniqueSuffix) ->
 -spec init(ra_node_config()) -> ra_node_state().
 init(#{id := Id,
        initial_nodes := InitialNodes,
-       cluster_id := ClusterId,
        log_module := LogMod,
        log_init_args := LogInitArgs,
        apply_fun := MachineApplyFun,
@@ -122,7 +119,6 @@ init(#{id := Id,
         end,
 
     State = #{id => Id,
-              cluster_id => ClusterId,
               cluster => Cluster0,
               % TODO: there may be scenarios when a single node starts up but hasn't
               % yet re-applied it's noop command that we may receive other join

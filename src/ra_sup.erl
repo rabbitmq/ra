@@ -21,12 +21,11 @@ init([]) ->
                          start => {ra_log_file_metrics, start_link, []}},
     SnapshotWriter = #{id => ra_log_file_snapshot_writer,
                        start => {ra_log_file_snapshot_writer, start_link, []}},
-    RaLogFileSupSup = #{id => ra_log_file_sup_sup,
+    RaLogFileSupSup = #{id => ra_system_sup,
                         type => supervisor,
-                        start => {ra_log_file_sup_sup, start_link, []}},
+                        start => {ra_system_sup, start_link, []}},
     Procs = [RaLogFileMetrics,
              SnapshotWriter,
              RaLogFileSupSup,
-             Heartbeat
-             ],
+             Heartbeat],
 	{ok, {SupFlags, Procs}}.
