@@ -73,13 +73,13 @@ go(Node) ->
     auto(Node),
     go0(Node).
 
-go0(Node) ->
+go0(Node0) ->
     TS = os:system_time(millisecond),
     Data = crypto:strong_rand_bytes(1024 * 128),
-    ra:send({raq, Node}, {enqueue, {TS, Data}}),
+    {ok, _, {raq, Node1}} = ra:send({raq, Node0}, {enqueue, {TS, Data}}),
     receive
         {msg, MsgId, _} ->
-            setl(Node, MsgId),
+            {ok, _, {raq, Node}} = setl(Node1, MsgId),
             go0(Node)
     after 5000 ->
               throw(timeout_waiting_for_receive)
@@ -94,17 +94,19 @@ pop(Node) ->
               timeout
     end.
 
-recv(Node) ->
+recv(Node0) ->
     receive
         {msg, Id, TS} ->
+            % TODO: ra_msg should include sending node
             Now = os:system_time(millisecond),
             io:format("MsgId: ~b, Latency: ~bms~n", [Id, Now - TS]),
-            ra:send({raq, Node}, {settle, Id, self()}),
+            {ok, _, {raq, Node}} = ra:send({raq, Node0}, {settle, Id, self()}),
             recv(Node)
     end.
 
 
-start_node(Name, Nodes, ApplyFun, InitFun, Dir) ->
+start_node(Name, Nodes, ApplyFun, InitFun, Dir0) ->
+    Dir = filename:join(Dir0, atom_to_list(Name)),
     Conf = #{log_module => ra_log_file,
              log_init_args => #{directory => Dir, id => Name},
              initial_nodes => Nodes,

@@ -55,14 +55,20 @@
 
 -type ra_log_file_state() :: #state{}.
 
+-type ra_log_file_init_args() :: #{data_dir => string(),
+                                   id => atom(),
+                                   wal => atom(),
+                                   resend_window => integer()}.
 
--spec init(ra_log:ra_log_init_args()) -> ra_log_file_state().
-init(#{directory := Dir, id := Id} = Conf) ->
+-spec init(ra_log_file_init_args()) -> ra_log_file_state().
+init(#{data_dir := BaseDir, id := Id} = Conf) ->
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
 
+    % create subdir for log id
+    Dir = filename:join(BaseDir, ra_lib:to_list(Id)),
     Dets = filename:join(Dir, "ra_log_kv.dets"),
     ok = filelib:ensure_dir(Dets),
     {ok, Kv} = dets:open_file(Dets, []),

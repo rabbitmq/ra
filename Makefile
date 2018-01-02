@@ -9,7 +9,7 @@ define PROJECT_ENV
 ]
 endef
 
-TEST_DEPS = proper meck eunit_formatters common_test
+TEST_DEPS = proper meck eunit_formatters
 
 BUILD_DEPS = elvis_mk looking_glass
 

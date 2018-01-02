@@ -53,9 +53,7 @@ init_per_group(ra_log_file, Config) ->
                       catch
                           _:_ -> ok
                       end,
-                      Dir = filename:join(PrivDir, TestCase),
-                      ok = filelib:ensure_dir(Dir),
-                      ra_log:init(ra_log_file, #{directory => Dir,
+                      ra_log:init(ra_log_file, #{data_dir => PrivDir,
                                                  id => TestCase})
               end,
     [{init_fun, InitFun} | Config].
@@ -282,8 +280,7 @@ snapshot(Config) ->
     {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),
     % initialise another log
-    Dir = filename:join(?config(priv_dir, Config), snapshot),
-    LogB = ra_log:init(ra_log_file, #{directory => Dir,
+    LogB = ra_log:init(ra_log_file, #{data_dir => ?config(priv_dir, Config),
                                       id => snapshot}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
     {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),

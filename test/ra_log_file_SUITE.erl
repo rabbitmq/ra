@@ -62,11 +62,11 @@ end_per_group(tests, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    Dir = filename:join(PrivDir, TestCase),
+    % Dir = filename:join(PrivDir, TestCase),
     register(TestCase, self()),
     application:stop(ra),
     application:start(ra),
-    [{test_case, TestCase}, {wal_dir, Dir} | Config].
+    [{test_case, TestCase}, {wal_dir, PrivDir} | Config].
 
 end_per_testcase(_, _Config) ->
     ok.
@@ -74,7 +74,7 @@ end_per_testcase(_, _Config) ->
 handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {queued, Log1} = ra_log_file:write([{1, 1, "value"}, {2, 1, "value"}], Log0),
     receive
         {ra_log_event, {written, {1, 2, 1}}} -> ok
@@ -100,7 +100,7 @@ handle_overwrite(Config) ->
 receive_segment(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     % write a few entries
     Entries = [{I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
 
@@ -128,7 +128,7 @@ receive_segment(Config) ->
 read_one(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
@@ -145,7 +145,7 @@ read_one(Config) ->
 take_after_overwrite_and_init(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_file:take(1, 5, Log2),
@@ -156,7 +156,7 @@ take_after_overwrite_and_init(Config) ->
     ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     {[{1, 2, _}], Log6} = ra_log_file:take(1, 5, Log5),
     _ = ra_log_file:close(Log6),
-    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {[{1, 2, _}], _} = ra_log_file:take(1, 5, Log),
     ok.
 
@@ -164,7 +164,7 @@ take_after_overwrite_and_init(Config) ->
 validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     % write a few entries
     Log1 = append_and_roll(1, 100, 1, Log0),
     Log2 = append_and_roll(100, 200, 1, Log1),
@@ -203,7 +203,7 @@ validate_sequential_reads(Config) ->
 validate_reads_for_overlapped_writes(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
     % write 300 - 399 in term 1 - no roll
@@ -227,7 +227,7 @@ validate_reads_for_overlapped_writes(Config) ->
 cache_overwrite_then_take(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = write_n(3, 4, 2, Log1),
     % validate only 3 entries can be read even if requested range is greater
@@ -237,7 +237,7 @@ cache_overwrite_then_take(Config) ->
 last_written_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
     {4, 1} = ra_log_file:last_written(Log2),
@@ -250,7 +250,7 @@ last_written_overwrite(Config) ->
 recovery(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_and_roll(1, 10, 1, Log0),
     {9, 1} = ra_log_file:last_index_term(Log1),
@@ -265,7 +265,7 @@ recovery(Config) ->
     application:ensure_all_started(ra),
     % % TODO how to avoid sleep
     timer:sleep(2000),
-    Log5 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log5 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {20, 3} = ra_log_file:last_index_term(Log5),
     Log6 = validate_read(1, 5, 1, Log5),
     Log7 = validate_read(5, 15, 2, Log6),
@@ -284,7 +284,7 @@ resend_write(Config) ->
                                    end),
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
@@ -308,7 +308,7 @@ wal_crash_recover(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
 
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self,
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self,
                               resend_window => 1 % seconds
                              }),
     Log1 = write_n(1, 50, 2, Log0),
@@ -331,7 +331,7 @@ wal_down_read_availability(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
 
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 200),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
@@ -343,7 +343,7 @@ wal_down_append_throws(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
 
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     ?assert(ra_log_file:can_write(Log0)),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     ?assert(not ra_log_file:can_write(Log0)),
@@ -353,7 +353,7 @@ wal_down_append_throws(Config) ->
 wal_down_write_returns_error_wal_down(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
@@ -362,7 +362,7 @@ detect_lost_written_range(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     meck:new(ra_log_wal, [passthrough]),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self,
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self,
                               wal => ra_log_wal}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     % write some entries
@@ -392,7 +392,7 @@ detect_lost_written_range(Config) ->
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log_file:take(0, 20, Log5),
     ra_log_file:close(Log5),
-    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {19, 2} = ra_log_file:last_written(Log5),
     {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
     ?assert(length(Entries) =:= 20),
@@ -403,14 +403,14 @@ detect_lost_written_range(Config) ->
 snapshot_recovery(Config) ->
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
     Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
     Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log_file:close(Log3),
-    Log = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
     Snapshot = ra_log_file:read_snapshot(Log),
     {9, 2} = ra_log_file:last_index_term(Log),
     {[], _} = ra_log_file:take(1, 9, Log),
@@ -423,7 +423,7 @@ snapshot_installation(Config) ->
     % then write entries
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
     Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
@@ -442,17 +442,17 @@ update_release_cursor(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
     % assert there are two segments at this point
-    [_, _] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
     Log2 = ra_log_file:update_release_cursor(127, #{n1 => #{}, n2 => #{}},
                                              initial_state, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     % this should delete a single segment
-    [_] =  find_segments(Dir),
+    [_] = find_segments(Config),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
     Log4 = ra_log_file:update_release_cursor(149, #{n1 => #{}, n2 => #{}},
@@ -460,7 +460,7 @@ update_release_cursor(Config) ->
     Log5 = deliver_all_log_events(Log4, 500),
 
     % no segments should remain
-    [] =  find_segments(Dir),
+    [] =  find_segments(Config),
 
     % append a few more items
     Log6 = append_and_roll(150, 155, 2, Log5),
@@ -468,7 +468,7 @@ update_release_cursor(Config) ->
     validate_read(150, 155, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
-    [_] = filelib:wildcard(filename:join(Dir, "*.segment")),
+    [_] = find_segments(Config),
 
     ok.
 
@@ -476,9 +476,9 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{directory => Dir, id => Self}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
     % assert there are no segments at this point
-    [] = find_segments(Dir),
+    [] = find_segments(Config),
 
     % create a segment
     Log1 = deliver_all_log_events(append_and_roll(1, 130, 2, Log0), 500),
@@ -509,7 +509,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
                                              initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
-    [] = find_segments(Dir),
+    [] = find_segments(Config),
     ok.
 
 transient_writer_is_handled(Config) ->
@@ -517,7 +517,7 @@ transient_writer_is_handled(Config) ->
     {registered_name, _Self} = erlang:process_info(self(), registered_name),
     _Pid = spawn(fun () ->
                          erlang:register(sub_proc, self()),
-                         Log0 = ra_log_file:init(#{directory => Dir, id => sub_proc}),
+                         Log0 = ra_log_file:init(#{data_dir => Dir, id => sub_proc}),
                          Log1 = append_n(1, 10, 2, Log0),
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
@@ -613,8 +613,11 @@ validate_rolled_reads(_Config) ->
     % 5. check there is only one .wal file
     exit(not_implemented).
 
-find_segments(Dir) ->
-    filelib:wildcard(filename:join(Dir, "*.segment")).
+find_segments(Config) ->
+    Dir = ?config(wal_dir, Config),
+    TestCase = ?config(test_case, Config),
+    NodeDataDir = filename:join(Dir, TestCase),
+    filelib:wildcard(filename:join(NodeDataDir, "*.segment")).
 
 empty_mailbox() ->
     empty_mailbox(100).
