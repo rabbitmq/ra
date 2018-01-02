@@ -981,8 +981,8 @@ follower_installs_snapshot(_Config) ->
                  cluster := Config,
                  machine_state := [],
                  leader_id := n1},
-     [{reply, #install_snapshot_result{}}]}
-    = ra_node:handle_follower(ISRpc, FState),
+     [{cast, _, {_, #install_snapshot_result{}}}]} =
+    ra_node:handle_follower(ISRpc, FState),
     ok.
 
 snapshotted_follower_received_append_entries(_Config) ->

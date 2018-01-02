@@ -277,28 +277,29 @@ write_data(Id, Idx, Term, Data0, Trunc,
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
-    State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-    Entry = <<Idx:64/integer,
-              Term:64/integer,
-              EntryData/binary>>,
-    Checksum = case ComputeChecksum of
-                   true -> erlang:adler32(Entry);
-                   false -> 0
-               end,
-    Record = <<HeaderData/binary,
-               Checksum:32/integer,
-               EntryDataLen:32/integer,
-               Entry/binary>>,
-
     % fixed overhead = 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
     DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
         true ->
-            State = roll_over(State0),
-            append_data(State, Id, Idx, Term, Data0, DataSize, Record, Trunc);
+            State = roll_over(State00),
+            % TODO: there is some redundant computation performed by recursing here
+            % it probably doesn't matter as it only happens when a wal file fills up
+            write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
+            State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
+            Entry = <<Idx:64/integer,
+                      Term:64/integer,
+                      EntryData/binary>>,
+            Checksum = case ComputeChecksum of
+                           true -> erlang:adler32(Entry);
+                           false -> 0
+                       end,
+            Record = <<HeaderData/binary,
+                       Checksum:32/integer,
+                       EntryDataLen:32/integer,
+                       Entry/binary>>,
             append_data(State0, Id, Idx, Term, Data0, DataSize, Record, Trunc)
     end.
 

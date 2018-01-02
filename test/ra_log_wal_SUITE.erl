@@ -20,6 +20,7 @@ all_tests() ->
      out_of_seq_writes,
      roll_over,
      recover,
+     recover_after_roll_over,
      recover_truncated_write
     ].
 
@@ -29,7 +30,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
-    application:ensure_all_started(sasl),
+    % application:ensure_all_started(sasl),
     application:ensure_all_started(lg),
     Config.
 
@@ -261,6 +262,25 @@ recover_truncated_write(Config) ->
     timer:sleep(1000),
     [{Self, _, 9, 9, _}] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+    ok.
+
+recover_after_roll_over(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Data = <<42:256/unit:8>>,
+    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self,
+                                      max_wal_size_bytes => byte_size(Data) * 75,
+                                      compute_checksums => true}, []),
+    handle_seg_writer_await(),
+    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, Wal} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    handle_seg_writer_await(),
+    % how can we better wait for recovery to finish?
+    timer:sleep(1000),
+    ?assert(erlang:is_process_alive(Wal)),
     ok.
 
 recover(Config) ->
