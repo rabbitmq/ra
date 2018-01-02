@@ -464,13 +464,13 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
             Reply = append_entries_reply(Term, false, State0),
             {await_condition, State0#{leader_id => LeaderId,
                                       condition => fun follower_catchup_cond/2},
-             [{cast, LeaderId, {Id, Reply}}]};
+             [cast_reply(Id, LeaderId, Reply)]};
         {term_mismatch, State0} ->
             ?INFO("~p: term mismatch/1 follower had entry at ~b but not with term ~b~n",
                   [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
             {follower, State0#{leader_id => LeaderId},
-             [{cast, LeaderId, {Id, Reply}}]}
+             [cast_reply(Id, LeaderId, Reply)]}
     end;
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 State = #{id := Id, current_term := CurTerm}) ->
@@ -478,7 +478,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?INFO("~p: follower request_vote_rpc in ~b but current term ~b",
          [Id, Term, CurTerm]),
-    {follower, State, [{cast, LeaderId, {Id, Reply}}]};
+    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State00 = #{current_term := Term, id := Id,
                             log := Log0, leader_id := LeaderId}) ->
@@ -486,7 +486,7 @@ handle_follower({ra_log_event, {written, _} = Evt},
     State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
-    {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
+    {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
@@ -529,6 +529,7 @@ handle_follower({_PeerId, #append_entries_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
+                                      leader_id = LeaderId,
                                       last_index = LastIndex,
                                       last_term = LastTerm},
                 State = #{id := Id, current_term := CurTerm}) when Term < CurTerm ->
@@ -537,7 +538,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
-    {follower, State, [{reply, Reply}]};
+    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       leader_id = LeaderId,
                                       last_term = LastTerm,
@@ -561,7 +562,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
-    {follower, State, [{reply, Reply}]};
+    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(election_timeout, State) ->
     handle_election_timeout(State);
 handle_follower(Msg, State) ->
@@ -1045,6 +1046,9 @@ drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
         {false, Log} ->
             {Log, Entries}
     end.
+
+cast_reply(From, To, Msg) ->
+    {cast, To, {From, Msg}}.
 
 %%% ===================
 %%% Internal unit tests

@@ -139,18 +139,11 @@ init([Config0]) ->
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
           [Id, MacState, Peers]),
+    % TODO: if election timeout strategy is monitor and hint only we should
+    % at this point try to contact a prior leader, if known or
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
-    {ok, follower, State,
-     election_timeout_action(follower, State)}.
-
-config_defaults() ->
-    #{election_timeout_strategy => monitor_and_node_hint,
-      broadcast_time => ?DEFAULT_BROADCAST_TIME,
-      await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
-      initial_nodes => []
-     }.
-
+    {ok, follower, State, election_timeout_action(follower, State)}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -514,7 +507,7 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
 maybe_set_election_timeout(#state{election_timeout_strategy = monitor_and_node_hint,
                                   leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
-    % only when a leader isn't known should we cancel the election timeout
+    % only when a leader is known should we cancel the election timeout
     [{state_timeout, infinity, election_timeout} | Actions];
 maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(follower, State) | Actions].
@@ -569,3 +562,11 @@ gen_statem_safe_call(ServerRef, Msg, Timeout) ->
 do_state_query(all, State) -> State;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster).
+
+config_defaults() ->
+    #{election_timeout_strategy => monitor_and_node_hint,
+      broadcast_time => ?DEFAULT_BROADCAST_TIME,
+      await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
+      initial_nodes => []
+     }.
+
