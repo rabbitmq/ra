@@ -445,7 +445,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                             % we can use last idx here as the log store
                             % is now fullly up to date.
                             FinalState = State#{log => Log},
-                            {LIdx, LTerm} = last_idx_term(State),
+                            {LIdx, LTerm} = last_idx_term(FinalState),
                             {follower, FinalState,
                              [{next_event, {ra_log_event,
                                             {written, {LIdx, LIdx, LTerm}}}}]};
