@@ -262,8 +262,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             % Only "pipeline" in response to a command
             % Observation: pipelining and "urgent" flag go together?
             {State, Rpcs} = make_pipelined_rpcs(State1),
-            Effects1 = [{send_rpcs, true, Rpcs}
-                        % {incr_metrics, ra_metrics, [{2, 1}, {3, Applied}]}
+            Effects1 = [{send_rpcs, true, Rpcs},
+                        {incr_metrics, ra_metrics, [{2, 1}]}
                         | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
@@ -435,8 +435,8 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     % at this point.
                     % last_applied will be incremented when the written event is
                     % processed
-                    State2 = State1#{commit_index => min(LeaderCommit, LastIdx),
-                                     leader_id => LeaderId},
+                    State = State1#{commit_index => min(LeaderCommit, LastIdx),
+                                    leader_id => LeaderId},
                     % ?INFO("~p: follower received ~p append_entries in ~p.~nEffects ~p",
                     %      [Id, {PLIdx, PLTerm, length(Entries)}, Term, Effects]),
                     case ra_log:write(Entries, Log1) of
@@ -444,16 +444,16 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                             % schedule a written next_event
                             % we can use last idx here as the log store
                             % is now fullly up to date.
-                            State = State2#{log => Log},
+                            FinalState = State#{log => Log},
                             {LIdx, LTerm} = last_idx_term(State),
-                            {follower, State,
+                            {follower, FinalState,
                              [{next_event, {ra_log_event,
                                             {written, {LIdx, LIdx, LTerm}}}}]};
                         {queued, Log} ->
-                            {follower, State1#{log => Log}, []};
+                            {follower, State#{log => Log}, []};
                         {error, wal_down} ->
                             {await_condition,
-                             State2#{condition => fun wal_down_condition/2}, []};
+                             State#{condition => fun wal_down_condition/2}, []};
                         {error, _} = Err ->
                             exit(Err)
                     end
@@ -828,6 +828,7 @@ apply_to(ApplyTo, State0 = #{id := Id,
                              machine_apply_fun := ApplyFun0,
                              machine_state := MacState0})
   when ApplyTo > LastApplied ->
+    % TODO: fetch and apply batches to reduce peak memory usage
     case fetch_entries(LastApplied + 1, ApplyTo, State0) of
         {[], State} ->
             {State, [], 0};

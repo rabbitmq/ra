@@ -13,8 +13,8 @@
 -export([register/2, unregister/1, beat/2]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_HEARTBEAT_MONITOR_INTERVAL, 5000).
--define(DEFAULT_HEARTBEAT_TIMEOUT, 30000).
+-define(DEFAULT_HEARTBEAT_MONITOR_INTERVAL, 1000).
+-define(DEFAULT_HEARTBEAT_TIMEOUT, 5000).
 
 -record(state, {nodes :: [node()],
                 index :: dict:dict(),
