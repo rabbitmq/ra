@@ -29,6 +29,7 @@ stop_node(Id) ->
 
 -spec remove_node(Id :: term()) -> ok | {error, term()}.
 remove_node(Id) ->
+    _ = stop_node(Id),
     supervisor:delete_child(?MODULE, Id).
 
 remove_all() ->
