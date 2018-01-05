@@ -6,7 +6,11 @@
 
 -export([
          init/1,
-         apply/3
+         apply/3,
+         shadow_copy/1,
+         size_test/2,
+         perf_test/2,
+         profile/1
         ]).
 
 -type msg() :: term().
@@ -27,23 +31,31 @@
 
 -record(customer,
         {checked_out = #{} :: #{MsgIndex :: msg_id() => {RaftIndex :: ra_index(), msg()}},
-         next_msg_id = 0 :: msg_id(),
-         num = 0 :: non_neg_integer(),
-         seen = 0 :: non_neg_integer(), % number of allocated messages
+         next_msg_id = 0 :: msg_id(), % part of snapshot data
+         num = 0 :: non_neg_integer(), % part of snapshot data
+         % number of allocated messages
+         % part of snapshot data
+         seen = 0 :: non_neg_integer(),
          lifetime = once :: once | auto}).
 
 -record(state, {name :: atom(),
                 % unassigned messages
                 messages = #{} :: #{ra_index() => msg()},
                 % master index of all enqueue raft indexes
-                % gb_set so that can take the smallest
-                ra_indexes = gb_sets:new() :: gb_sets:set(ra_index()),
+                % gb_trees so that can take the smallest
+                % TODO: gb_trees are too slow for insert heavy workloads
+                % replace with some kidn of map based abstraction
+                ra_indexes = gb_trees:empty() :: gb_trees:tree(ra_index(), #state{}),
                 % defines the lowest index available in the messages map
                 low_index :: ra_index() | undefined,
-                % the current release cursor index
-                release_cursor :: ra_index() | undefined,
+                % the raft index of the first enqueue operation that
+                % contribute to the current state
+                first_enqueue_raft_index :: ra_index() | undefined,
+                % customers need to reflect customer state at time of snapshot
+                % needs to be part of snapshot
                 customers = #{} :: #{customer_id() => #customer{}},
                 % customers that require further service are queued here
+                % needs to be part of snapshot
                 service_queue = queue:new() :: queue:queue(customer_id())
                }).
 
@@ -55,59 +67,49 @@
 init(Name) ->
     #state{name = Name}.
 
+shadow_copy(#state{customers = Customers} = State) ->
+    % creates a copy of the current state suitable for snapshotting
+    State#state{messages = #{},
+                ra_indexes = gb_trees:empty(),
+                low_index = undefined,
+                first_enqueue_raft_index = undefined,
+                customers = maps:map(fun (_, V) -> V#customer{checked_out = #{}} end,
+                                     Customers)
+               }.
+
+
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
 apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes,
                                       messages = Messages,
-                                      release_cursor = ReleaseCursor,
+                                      first_enqueue_raft_index = FirstEnqueueIdx,
                                       low_index = Low} = State0) ->
-    State1 = State0#state{ra_indexes = gb_sets:add(RaftIdx, Indexes),
+    State1 = State0#state{ra_indexes = gb_trees:enter(RaftIdx, shadow_copy(State0), Indexes),
                           messages = Messages#{RaftIdx => Msg},
-                          release_cursor = min(RaftIdx, ReleaseCursor),
+                          first_enqueue_raft_index = min(RaftIdx, FirstEnqueueIdx),
                           low_index = min(RaftIdx, Low)},
     {State, Effects, Num} = checkout(State1, []),
     Metric = {incr_metrics, ?METRICS_TABLE, [{2, 1}, {3, Num}]},
     {effects, State, [Metric | Effects]};
-apply(IncomingRaftIdx, {settle, MsgId, CustomerId},
-      #state{customers = Custs0, service_queue = SQ0,
-             release_cursor = ReleaseCursor0,
-             ra_indexes = Indexes0} = State0) ->
+apply(RaftIdx, {settle, MsgId, CustomerId},
+      #state{customers = Custs0} = State) ->
     case Custs0 of
         #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
-            {{RaftIdx, _}, Checked} = maps:take(MsgId, Checked0),
-
-            Cust = Cust0#customer{checked_out = Checked},
-            {Custs, SQ, Effects0} =
-                update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
-            Indexes = gb_sets:delete(RaftIdx, Indexes0),
-            {State, Effects1, NumChecked} = checkout(State0#state{customers = Custs,
-                                                     ra_indexes = Indexes,
-                                                     service_queue = SQ},
-                                       Effects0),
-            Effects = [{incr_metrics, ?METRICS_TABLE,
-                        [{3, NumChecked}, {4, 1}]} | Effects1],
-            {ReleaseCursor, AllEffects} =
-                case gb_sets:size(Indexes) of
-                    0 ->
-                        % there are no messages on queue anymore
-                        % we can forward release_cursor all the way until
-                        % the last received command
-                        {undefined,
-                         [{release_cursor, IncomingRaftIdx} | Effects]};
-                    _ when ReleaseCursor0 =:= RaftIdx ->
-                        % the release cursor can be fowarded to next available message
-                        Smallest = gb_sets:smallest(Indexes),
-                        {Smallest,
-                         [{release_cursor, Smallest} | Effects]};
-                    _ ->
-                        % release cursor cannot be forwarded
-                        {ReleaseCursor0,  Effects}
-                    end,
-            {effects, State#state{release_cursor = ReleaseCursor}, AllEffects};
+            case maps:take(MsgId, Checked0) of
+                error ->
+                    % null operation
+                    % we must be recovering after a snapshot
+                    % in this case it should not have any effect on the final
+                    % state
+                    {effects, State, []};
+                {{MsgRaftIdx, _}, Checked} ->
+                    settle(RaftIdx, CustomerId, MsgRaftIdx,
+                           Cust0, Checked, State)
+            end;
         _ ->
-            {effects, State0, []}
+            {effects, State, []}
     end;
-apply(_RaftId, {checkout, Spec, Customer}, State0) ->
+apply(_RaftIdx, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State, Effects, Num} = checkout(State1, []),
     Metric = {incr_metrics, ?METRICS_TABLE, [{3, Num}]},
@@ -129,12 +131,53 @@ apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
 
 %%% Internal
 
+settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
+       #state{customers = Custs0, service_queue = SQ0,
+              ra_indexes = Indexes0} = State0) ->
+    Cust = Cust0#customer{checked_out = Checked},
+    {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
+    Indexes = gb_trees:delete(MsgRaftIdx, Indexes0),
+    {State1, Effects1, NumChecked} =
+        checkout(State0#state{customers = Custs,
+                              ra_indexes = Indexes,
+                              service_queue = SQ},
+                 Effects0),
+    Effects2 = [{incr_metrics, ?METRICS_TABLE,
+                [{3, NumChecked}, {4, 1}]} | Effects1],
+    {State, Effects} = update_first_enqueue_raft_index(IncomingRaftIdx,
+                                                       MsgRaftIdx, Effects2,
+                                                       State1),
+    {effects, State, Effects}.
+
+update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
+                                #state{first_enqueue_raft_index = First,
+                                       ra_indexes = Indexes} = State) ->
+    case gb_trees:size(Indexes) of
+        0 ->
+            % there are no messages on queue anymore
+            % we can forward release_cursor all the way until
+            % the last received command
+            {State#state{first_enqueue_raft_index = undefined},
+             [{release_cursor, IncomingRaftIdx, shadow_copy(State)} | Effects]};
+        _ when First =:= MsgRaftIdx ->
+            % the first_enqueue_raft_index can be fowarded to next
+            % available message
+            {Smallest, Shadow} = gb_trees:smallest(Indexes),
+            % we emit the last index _not_ to contribute to the
+            % current state - hence the -1
+            {State#state{first_enqueue_raft_index = Smallest},
+             [{release_cursor, Smallest - 1, Shadow} | Effects]};
+        _ ->
+            % first_enqueue_raft_index  cannot be forwarded
+            {State, Effects}
+    end.
+
 return(RaftId, Msg, #state{messages = Messages,
-                           ra_indexes = Indexes,
+                           % ra_indexes = Indexes,
                            low_index = Low0} = State0) ->
     % this should not affect the release cursor in any way
     State0#state{messages = maps:put(RaftId, Msg, Messages),
-                 ra_indexes = gb_sets:add(RaftId, Indexes),
+                 % ra_indexes = gb_trees:enter(RaftId,  Indexes),
                  low_index = min(RaftId, Low0)}.
 
 
@@ -185,12 +228,13 @@ checkout_one(#state{messages = Messages0,
     end.
 
 find_next_after(Idx, Indexes) ->
+    % TODO: it may be quicker to check the messages map first for Idx+1
     % Idx + 1 to get the next greatest element
-    Iter = gb_sets:iterator_from(Idx + 1, Indexes),
-    case gb_sets:next(Iter) of
+    Iter = gb_trees:iterator_from(Idx + 1, Indexes),
+    case gb_trees:next(Iter) of
         none ->
             undefined;
-        {Elem, _Iter} ->
+        {Elem, _, _Iter} ->
             Elem
     end.
 
@@ -264,6 +308,42 @@ maybe_queue_customer(CustomerId, #customer{checked_out = Checked, num = Num},
     end.
 
 
+size_test(NumMsg, NumCust) ->
+    EnqGen = fun(N) -> {N, {enqueue, N}} end,
+    CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+    S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
+    S = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+    S2 = S#state{ra_indexes = gb_trees:map(fun(_, _) -> undefined end, S#state.ra_indexes)},
+    {erts_debug:size(S), erts_debug:size(S2)}.
+
+perf_test(NumMsg, NumCust) ->
+    timer:tc(fun () ->
+                     EnqGen = fun(N) -> {N, {enqueue, N}} end,
+                     CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+                     S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
+                     _ = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+                     ok
+             end).
+
+profile(File) ->
+    GzFile = atom_to_list(File) ++ ".gz",
+    lg:trace([ra_fifo, maps, queue, gb_trees], lg_file_tracer,
+             GzFile, #{running => false, mode => profile}),
+    NumMsg = 10000,
+    NumCust = 500,
+    EnqGen = fun(N) -> {N, {enqueue, N}} end,
+    CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+    S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
+    _ = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+    lg:stop().
+
+
+run_log(Num, Num, _Gen, State) ->
+    State;
+run_log(Num, Max, Gen, State0) ->
+    {_, E} = Gen(Num),
+    run_log(Num+1, Max, Gen, element(2, apply(Num, E, State0))).
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -292,18 +372,18 @@ release_cursor_test() ->
                       end, Effects)),
     {effects, _Final, Effects1} = settle(5, 0, State4),
     % empty queue forwards release cursor all the way
-    ?assertEffect({release_cursor, 5}, Effects1),
+    ?assertEffect({release_cursor, 5, _}, Effects1),
     ok.
 
 checkout_enq_settle_test() ->
     {effects, State1, [{monitor, _, _}, _]} = check(1, #state{}),
-    {effects, State2, Effects0} = enq(1, first, State1),
+    {effects, State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _, {msg, 0, first}}, Effects0),
-    {effects, State3, [_]} = enq(2, second, State2),
-    {effects, _, Effects} = settle(3, 0, State3),
-    % the release cursor is the smallest raft index that still
+    {effects, State3, [_]} = enq(3, second, State2),
+    {effects, _, Effects} = settle(4, 0, State3),
+    % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
-    ?assertEffect({release_cursor, 2}, Effects),
+    ?assertEffect({release_cursor, 2, _}, Effects),
     ok.
 
 down_customer_returns_unsettled_test() ->
@@ -320,7 +400,42 @@ completed_customer_yields_demonitor_effect_test() ->
     {effects, _, Effects} = settle(3, 0, State1),
     ?assertEffect({demonitor, _}, Effects),
     % release cursor for empty queue
-    ?assertEffect({release_cursor, 3}, Effects),
+    ?assertEffect({release_cursor, 3, _}, Effects),
+    ok.
+
+
+release_cursor_snapshot_state_test() ->
+    OthPid = spawn(fun () -> ok end),
+    Commands = [
+                {checkout, {auto, 5}, self()},
+                {enqueue, 0},
+                {enqueue, 1},
+                {settle, 0, self()},
+                {enqueue, 2},
+                {settle, 1, self()},
+                {checkout, {auto, 4}, OthPid},
+                {enqueue, 3},
+                {enqueue, 4},
+                {settle, 2, self()},
+                {settle, 3, self()},
+                {enqueue, 5},
+                {settle, 0, OthPid},
+                {enqueue, 6},
+                {settle, 4, self()},
+                {checkout, {once, 0}, OthPid}
+              ],
+    Indexes = lists:seq(1, length(Commands)),
+    Entries = lists:zip(Indexes, Commands),
+    {State, Effects} = run_log(init(help), Entries),
+
+    [begin
+         Filtered = lists:dropwhile(fun({X, _}) when X =< SnapIdx -> true;
+                                       (_) -> false
+                                    end, Entries),
+         {S, _} = run_log(SnapState, Filtered),
+         % assert log can be restored from any release cursor index
+         ?assert(S =:= State)
+     end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
 
 enq(Idx, Msg, State) ->
@@ -335,5 +450,10 @@ check(Idx, Num, State) ->
 settle(Idx, MsgId, State) ->
     apply(Idx, {settle, MsgId, self()}, State).
 
+run_log(InitState, Entries) ->
+    lists:foldl(fun ({Idx, E}, {Acc0, Efx0}) ->
+                        {effects, Acc, Efx} = apply(Idx, E, Acc0),
+                        {Acc, Efx0 ++ Efx}
+                end, {InitState, []}, Entries).
 -endif.
 

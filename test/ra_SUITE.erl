@@ -139,6 +139,7 @@ single_node(Config) ->
     {ok, {2,1}, _} = ra:send_and_await_consensus({N1, node()}, 5, 2000),
     terminate_cluster([N1]).
 
+
 stop_node_idemp(Config) ->
     StartNode = ?config(start_node_fun, Config),
     N1 = nn(Config, 1),

@@ -10,9 +10,11 @@
          handle_follower/2,
          handle_await_condition/2,
          make_rpcs/1,
-         update_release_cursor/2,
+         update_release_cursor/3,
          terminate/1
         ]).
+
+-type ra_machine_state() :: term().
 
 -type ra_machine_effect() ::
     {send_msg, pid() | atom() | {atom(), atom()}, term()} |
@@ -20,13 +22,13 @@
     {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
     % current machine state
-    {release_cursor, ra_index()}.
+    {release_cursor, ra_index(), term()}.
 
 -type ra_machine_command() :: {down, pid()} | term().
 
--type ra_machine_apply_fun_return() :: term() | {effects, term(), [ra_machine_effect()]}.
+-type ra_machine_apply_fun_return() :: ra_machine_state() | {effects, ra_machine_state(), [ra_machine_effect()]}.
 -type ra_machine_apply_fun() ::
-        fun((ra_index(), Command :: ra_machine_command(), term()) -> ra_machine_apply_fun_return()) |
+        fun((ra_index(), Command :: ra_machine_command(), ra_machine_state()) -> ra_machine_apply_fun_return()) |
         fun((term(), term()) -> ra_machine_apply_fun_return()).
 
 -type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
@@ -624,7 +626,7 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
     {State, Effects0, Applied} =
         apply_to(EffectiveCommitIndex, State0),
     % filter the effects that should be applied on a follower
-    Effects1 = lists:filter(fun ({release_cursor, _}) -> true;
+    Effects1 = lists:filter(fun ({release_cursor, _, _}) -> true;
                                 ({snapshot_point, _}) -> true;
                                 ({monitor, process, _}) -> true;
                                 ({demonitor, _}) -> true;
@@ -697,9 +699,15 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
-update_release_cursor(Index, State = #{log := Log0,
-                                       initial_machine_state := MacState,
-                                       cluster := Cluster}) ->
+update_release_cursor(Index, MacState,
+                      State = #{log := Log0, cluster := Cluster}) ->
+
+    % 1. CHK A
+    % 2. ENQ (allocated to A[1])
+    % SNAPSHOT: A[1] (no messages)
+    %
+    % 3. ENQ (allocated to A[1, 3])
+    % 4. SET 2 (release cursor is 2) A[3]
     % simply pass on release cursor index to log
     Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
     State#{log => Log}.

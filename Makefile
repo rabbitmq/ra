@@ -19,9 +19,9 @@ dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib
+PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets
 
-DIALYZER_OPTS += --apps common_test --src -r test
+DIALYZER_OPTS += --src -r test
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 include erlang.mk
 

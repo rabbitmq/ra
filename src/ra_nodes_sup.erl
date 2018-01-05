@@ -4,6 +4,7 @@
 
 %% API functions
 -export([start_node/1,
+         restart_node/1,
          stop_node/1,
          remove_node/1,
          remove_all/0,
@@ -22,6 +23,9 @@ start_node(#{id := Id} = Config) ->
                   restart => transient,
                   start => {ra_node_proc, start_link, [Config]}},
     supervisor:start_child(?MODULE, ChildSpec).
+
+restart_node(Id) ->
+    supervisor:restart_child(?MODULE, Id).
 
 -spec stop_node(Id :: term()) -> ok | {error, term()}.
 stop_node(Id) ->

@@ -110,7 +110,7 @@ init_restores_cluster_changes(_Config) ->
                                                       vote_granted = true},
                                  (ra_node:init(InitConf))#{votes => 0,
                                                            voted_for => n1}),
-    {leader, State0 = #{cluster := Cluster0}, [_, {next_event, Next}]} =
+    {leader, State0 = #{cluster := Cluster0}, [_, _, {next_event, Next}]} =
         ra_node:handle_leader({command, noop}, State00),
     {leader, State, _} = ra_node:handle_leader(Next, State0),
     ?assert(maps:size(Cluster0) =:= 1),
@@ -764,6 +764,7 @@ leader_node_join(_Config) ->
                                 prev_log_index = 3,
                                 prev_log_term = 5,
                                 leader_commit = 3}}]},
+     _,
      {next_event, {ra_log_event, {written, {4, 4, 5}}}}] = Effects,
     ok.
 
@@ -775,7 +776,7 @@ leader_node_leave(_Config) ->
     State = (base_state(3))#{cluster => OldCluster},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
-     [{send_rpcs, true, [N3, N2]}, _]} =
+     [{send_rpcs, true, [N3, N2]} | _]} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
                               State),
     % the leaving node is no longer included
@@ -933,7 +934,7 @@ command(_Config) ->
                              leader_commit = 3
                             },
     {leader, _, [{reply, Self, {4, 5}},
-                 {send_rpcs, true, [{n3, AE}, {n2, AE}]},
+                 {send_rpcs, true, [{n3, AE}, {n2, AE}]} |
                  _]} =
         ra_node:handle_leader({command, Cmd}, State),
     ok.
@@ -1283,8 +1284,8 @@ run_effect(NodeId, Nodes0) ->
             lists:foldl(fun ({Id, AppendEntry}, Acc) ->
                                 rpc_interact(Id, NodeId, AppendEntry, Acc)
                         end, Nodes, Entries);
-        {{release_cursor, Idx}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
-            NodeState = ra_node:update_release_cursor(Idx, NodeState0),
+        {{release_cursor, Idx, MacState}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
+            NodeState = ra_node:update_release_cursor(Idx, MacState, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
         {{reply, #append_entries_reply{} = Reply}, Nodes} ->
             Leader = maps:filter(fun (_, {leader, _, _}) -> true;

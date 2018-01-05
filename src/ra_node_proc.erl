@@ -474,9 +474,9 @@ handle_effect({send_rpcs, IsUrgent, AppendEntries}, _EvtType,
                #state{proxy = Proxy} = State, Actions) ->
     ok = ra_proxy:proxy(Proxy, IsUrgent, AppendEntries),
     {State, Actions};
-handle_effect({release_cursor, Index}, _EvtType,
+handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
-    NodeState = ra_node:update_release_cursor(Index, NodeState0),
+    NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect({monitor, process, Pid}, _EvtType,
               #state{monitors = Monitors} = State, Actions) ->
