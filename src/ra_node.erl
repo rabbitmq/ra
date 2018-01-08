@@ -9,6 +9,7 @@
          handle_candidate/2,
          handle_follower/2,
          handle_await_condition/2,
+         overview/1,
          make_rpcs/1,
          update_release_cursor/3,
          terminate/1
@@ -97,8 +98,6 @@
 name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
-
-% TODO: needs more tests around recovery / restart
 -spec init(ra_node_config()) -> ra_node_state().
 init(#{id := Id,
        initial_nodes := InitialNodes,
@@ -123,10 +122,10 @@ init(#{id := Id,
     State = #{id => Id,
               cluster => Cluster0,
               % TODO: there may be scenarios when a single node starts up but hasn't
-              % yet re-applied it's noop command that we may receive other join
+              % yet re-applied its noop command that we may receive other join
               % commands that can't be applied.
               % TODO: what if we have snapshotted and there is no `noop` command
-              % to be applied in the curren term?
+              % to be applied in the current term?
               cluster_change_permitted => false,
               cluster_index_term => {0, 0},
               pending_cluster_changes => [],
@@ -158,8 +157,6 @@ init(#{id := Id,
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
 % is joined with the msg itself. In this instance it is treated as an info
 % message.
-% TODO: we probably cannot rely on this behaviour. This may need to
-% change when the peer proxy gets refactored.
 -spec handle_leader(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
@@ -218,7 +215,6 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                       {LastTerm, L} when LastIdx >= MI -> % entry exists we can forward
                           ?INFO("~p: setting last index for ~p ~p", [Id, PeerId, LastIdx]),
                           {Peer0#{match_index => LastIdx,
-                                  % TODO: should we take max of NI and NextIndex?
                                   next_index => NextIdx}, L};
                       {_Term, L} when LastIdx < MI ->
                           % TODO: this can only really happen when peers are non-persistent.
@@ -570,6 +566,10 @@ handle_follower(election_timeout, State) ->
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
+
+overview(State) ->
+    maps:with([current_term, commit_index, last_applied,
+               cluster, leader_id, voted_for], State).
 
 -spec handle_await_condition(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
@@ -987,7 +987,6 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
     % also we can use the last writted Idx as then
     % the follower may resent items that are currently waiting to
     % be written.
-    %% TODO: use snapshot index/term if not found
     {LWIdx, LWTerm} = ra_log:last_written(Log),
     {LastIdx, _} = last_idx_term(State),
     #append_entries_reply{term = Term, success = Success,

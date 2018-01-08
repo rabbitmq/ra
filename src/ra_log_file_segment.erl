@@ -43,7 +43,8 @@
                                          mode => append | read}.
 -type state() :: #state{}.
 
--export_type([state/0]).
+-export_type([state/0,
+              ra_log_file_segment_options/0]).
 
 -spec open(Filename :: file:filename_all()) ->
     {ok, state()} | {error, term()}.

@@ -18,7 +18,7 @@
          code_change/3]).
 
 -record(state, {data_dir :: file:filename(),
-                segment_conf = #{} :: #{atom() => term()}, % TODO refine type
+                segment_conf = #{} ::  ra_log_file_segment:ra_log_file_segment_options(),
                 active_segments = #{} :: #{atom() => ra_log_file_segment:state()}}).
 
 -include("ra.hrl").
@@ -55,8 +55,7 @@ delete_segments(Who, SnapIdx, SegmentFiles) ->
     ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
     % delete all closed segment files
-    % TODO: this is simplistic
-    [ok = file:delete(F) || {_, _, F} <- SegmentFiles],
+    [_ = file:delete(F) || {_, _, F} <- SegmentFiles],
     gen_server:cast(SegWriter, {delete_segment, Who , SnapIdx, MaybeActive}).
 
 % used to wait for the segment writer to finish processing anything in flight
@@ -152,32 +151,12 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                   active_segments = ActiveSegments} = State) ->
     Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
     Segment0 = case ActiveSegments of
-                  #{RaNodeId := S} -> S;
-                  _ -> open_file(Dir, SegConf)
-              end,
+                   #{RaNodeId := S} -> S;
+                   _ -> open_file(Dir, SegConf)
+               end,
 
-    % TODO: replace with recursive function to avoid creating a potentially
-    % vary large list of integers
-    {Segment, Closed0} =
-    lists:foldl(fun (Idx, {Seg0, Segs}) ->
-                        % TODO: the question here is whether we should allow
-                        % missing indexes or not?
-                        % TODO: how to handle cases when the Tid is no longer around
-                        % due to the writer process having exited?
-                        [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
-                        Data = term_to_binary(Data0),
-                        case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
-                            {ok, Seg} ->
-                                {Seg, Segs};
-                            {error, full} ->
-                                % close and open a new segment
-                                ok = ra_log_file_segment:sync(Seg0),
-                                ok = ra_log_file_segment:close(Seg0),
-                                Seg1 = open_successor_segment(Seg0, SegConf),
-                                {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
-                                {Seg, [Seg0 | Segs]}
-                        end
-                end, {Segment0, []}, lists:seq(StartIdx, EndIdx)),
+    {Segment, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
+                                           Segment0, SegConf),
     % fsync
     ok = ra_log_file_segment:sync(Segment),
 
@@ -188,10 +167,36 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                     {Start, End, ra_log_file_segment:filename(S)}
                 end || S <- [Segment | Closed0]],
 
-    % TODO: better handle and log errors
-    catch (RaNodeId ! {ra_log_event, {segments, Tid, Segments}}),
+    try RaNodeId ! {ra_log_event, {segments, Tid, Segments}} of
+        _ -> ok
+    catch
+        ErrType:Err ->
+            ?ERR("ra_log_file_segment_writer: error sending ra_log_event to"
+                 "~p. Error:~n~p:~p~n", [RaNodeId, ErrType, Err])
+    end,
 
     State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
+
+append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
+    % EndIdx + 1 because FP
+    append_to_segment(Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
+
+append_to_segment(_Tid, EndIdx, EndIdx, Seg, Closed, _SegConf) ->
+    {Seg, Closed};
+append_to_segment(Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
+    [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
+    Data = term_to_binary(Data0),
+    case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
+        {ok, Seg} ->
+            append_to_segment(Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
+        {error, full} ->
+            % close and open a new segment
+            ok = ra_log_file_segment:sync(Seg0),
+            ok = ra_log_file_segment:close(Seg0),
+            Seg1 = open_successor_segment(Seg0, SegConf),
+            {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
+            append_to_segment(Tid, Idx+1, EndIdx, Seg, [Seg0 | Closed], SegConf)
+    end.
 
 find_segment_files(Dir) ->
     lists:reverse(

@@ -43,9 +43,6 @@
          prev_log_term :: ra_term(),
          entries = [] :: [log_entry()]}).
 
-%% TODO: optimisation - follower could send last commit index when
-%% success is false to allow leader to skip to that index
-%% rather than incrementally send append_entries_rpcs
 -record(append_entries_reply,
         {term :: ra_term(),
          success :: boolean(),

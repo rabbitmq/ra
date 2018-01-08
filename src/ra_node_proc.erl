@@ -140,7 +140,8 @@ init([Config0]) ->
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
           [Id, MacState, Peers]),
     % TODO: if election timeout strategy is monitor and hint only we should
-    % at this point try to contact a prior leader, if known or
+    % at this point try to ping all peers so that if there is a current leader
+    % they could make themselves known
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
     {ok, follower, State, election_timeout_action(follower, State)}.
@@ -376,11 +377,11 @@ terminate(Reason, _StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-%% TODO: we should provide a nice overview here including status
-format_status(Opt, [_PDict, StateName, #state{node_state = #{id := Id}}]) ->
+format_status(Opt, [_PDict, StateName, #state{node_state = #{id := Id} = NS}]) ->
     [{id, Id},
      {opt, Opt},
-     {raft_state, StateName}
+     {raft_state, StateName},
+     {ra_node_state, ra_node:overview(NS)}
     ].
 
 %%%===================================================================
@@ -445,7 +446,7 @@ handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),
     {State, Actions};
 % TODO: optimisation we could send the reply using gen_statem:reply to
-% avoid waiting for all effects to finishe processing
+% avoid waiting for all effects to finish processing
 handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
     {State, [Action | Actions]};
 handle_effect({reply, Reply}, {call, From}, State, Actions) ->

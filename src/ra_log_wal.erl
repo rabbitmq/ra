@@ -340,8 +340,8 @@ append_data(#state{wal = #wal{fd = Fd,
                 writers = Writers#{Id => {in_seq, Idx}} }.
 
 update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
-    % TODO: cache current tables to avoid ets lookup?
-    % TODO: if Idx =< First we could truncate the entire table
+    % TODO: if Idx =< First we could truncate the entire table and safe
+    % some disk space when it later is flushed to disk
     case ets:lookup(OpnMemTbl, Id) of
         [{_Id, From0, _To, Tid}] ->
             true = ets:insert(Tid, {Idx, Term, Entry}),
@@ -517,8 +517,7 @@ validate_checksum(Checksum, Idx, Term, Data) ->
         Checksum ->
             ok;
         _ ->
-            % TODO: what else can be done if the data is currupt
-            exit(checksum_validation_failure)
+            exit(wal_checksum_validation_failure)
     end.
 
 send_write(Wal, Msg) ->

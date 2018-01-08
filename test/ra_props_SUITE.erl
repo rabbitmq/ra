@@ -31,7 +31,6 @@ end_per_suite(Config) ->
 
 %% this test mixes associative with non-associative operations to tests that
 %% all nodes apply operations in the same order
-%% TODO: mix in a restart_server type of operation
 non_assoc_prop({Ops, Initial}) ->
     ct:pal("non_assoc_prop Ops: ~p Initial: ~p~n", [Ops, Initial]),
     [A, B, C] = Cluster = ra:start_local_cluster(3, "test",
@@ -41,8 +40,7 @@ non_assoc_prop({Ops, Initial}) ->
     % identity operation to ensure cluster is ready
     {ok, _, Leader} = ra:send_and_await_consensus(A, {add, 0}),
     [ra:send_and_await_consensus(Leader, Op) || Op <- Ops],
-    % TODO: replace with consistent query when ready
-    {ok, _, Leader} = ra:send_and_await_consensus(A, {add, 0}),
+    {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
     timer:sleep(100),
     {ok, {_, ARes}, _} = ra:dirty_query(A, fun id/1),
     {ok, {_, BRes}, _} = ra:dirty_query(B, fun id/1),

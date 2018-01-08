@@ -73,6 +73,11 @@ shadow_copy(#state{customers = Customers} = State) ->
                 ra_indexes = gb_trees:empty(),
                 low_index = undefined,
                 first_enqueue_raft_index = undefined,
+                % TODO: optimise
+                % this is inefficient (from a memory use point of view)
+                % as it creates a new tuple for every customer
+                % even if they haven't changed instead we could just update a copy
+                % of the last dehydrated state with the difference
                 customers = maps:map(fun (_, V) -> V#customer{checked_out = #{}} end,
                                      Customers)
                }.

@@ -167,8 +167,6 @@ append_sync({Idx, Term, _} = Entry, Log0) ->
             ra_log:handle_event({written, {Idx, Idx, Term}}, Log);
         {queued, Log} ->
             receive
-                % TODO: we could now end up re-ordering written notifications
-                % so need to handle that later
                 {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
                     ra_log:handle_event(Evt, Log)
             after 5000 ->
@@ -183,8 +181,6 @@ write_sync(Entries, Log0) ->
             ra_log:handle_event({written, {Idx, Idx, Term}}, Log);
         {queued, Log} ->
             receive
-                % TODO: we could now end up re-ordering written notifications
-                % so need to handle that later
                 {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
                     ra_log:handle_event(Evt, Log)
             after 5000 ->

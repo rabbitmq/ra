@@ -76,11 +76,6 @@ add_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
                          ?DEFAULT_TIMEOUT).
 
-% TODO:
-% add_node_and_await_consensus(ServerRef, NodeId) ->
-%     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, await_consensus},
-%                          ?DEFAULT_TIMEOUT).
-
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).

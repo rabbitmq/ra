@@ -123,9 +123,10 @@ init(#{data_dir := BaseDir, id := Id} = Conf) ->
     State.
 
 recover_range(Id, Dir) ->
-    % 0 check open mem_tables (this assumes wal has finished recovering
-    % TODO: how to check wal recovery is completed
-    % 1 check closed mem_tables to extend
+    % 0. check open mem_tables (this assumes wal has finished recovering
+    % which means it is essential that ra_nodes are part of the same
+    % supervision tree
+    % 1. check closed mem_tables to extend
     OpenRanges = case ets:lookup(ra_log_open_mem_tables, Id) of
                      [] ->
                          [];
@@ -154,9 +155,10 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 
 
 -spec close(ra_log_file_state()) -> ok.
-close(#state{kv = Kv}) ->
-    % TODO: close all open segments
+close(#state{kv = Kv, open_segments = OpenSegs}) ->
     % deliberately ignoring return value
+    % close all open segments
+    [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
     _ = dets:close(Kv),
     ok.
 
@@ -292,10 +294,6 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
     Expected = LastWrittenIdx + 1,
     ?WARN("~p: ra_log_file: written gap detected at ~b expected ~b!",
          [Id, FromIdx, Expected]),
-    % TODO: in a busy system we should avoid resending for some time after
-    % a resend to avoid excessive resends.
-    % we also can't completely ignore it cause the writes coming from a resend
-    % could also go missing.
     resend_from(Expected, State0);
 handle_event({segments, Tid, NewSegs},
              #state{id = Id, segment_refs = SegmentRefs} = State0) ->
@@ -450,7 +448,8 @@ update_release_cursor(Idx, Cluster, MachineState,
             % are applied as they are received I cannot think of any scenarios
             % where this can cause a problem. That said there may well be :dragons:
             % here.
-            % The MachineState should be the initial machine state.
+            % The MachineState is a dehydrated version of the state at
+            % the release_cursor point.
             write_snapshot({Idx, Term, Cluster, MachineState},
                            State#state{snapshot_index_in_progress = Idx});
         false ->
@@ -568,11 +567,7 @@ mem_tbl_take({_Start0, End} = Range, TblStart, _TblEnd, _Tid, Count, Acc0)
 mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Count, Acc0)
   when TblEnd >= End ->
     Start = max(TblStart, Start0),
-    % TODO: replace fold with recursive function
-    Entries = lists:foldl(fun (Idx, Acc) ->
-                                  [Entry] = ets:lookup(Tid, Idx),
-                                  [Entry | Acc]
-                          end, Acc0, lists:seq(End, Start, -1)),
+    Entries = lookup_range(Tid, Start, End, Acc0),
     Remainder = case Start =:= Start0 of
                     true ->
                         % the range was fully covered by the mem table
@@ -581,6 +576,14 @@ mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Count, Acc0)
                         {Start0, Start-1}
                 end,
     {Entries, Count + (End - Start + 1), Remainder}.
+
+lookup_range(Tid, Start, Start, Acc) ->
+    [Entry] = ets:lookup(Tid, Start),
+    [Entry | Acc];
+lookup_range(Tid, Start, End, Acc) when End > Start ->
+    [Entry] = ets:lookup(Tid, End),
+    lookup_range(Tid, Start, End-1, [Entry | Acc]).
+
 
 segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
              Range, Entries0) ->

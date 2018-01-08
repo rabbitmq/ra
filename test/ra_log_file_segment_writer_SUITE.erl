@@ -30,6 +30,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
+    application:ensure_all_started(sasl),
     Config.
 
 end_per_group(tests, Config) ->
