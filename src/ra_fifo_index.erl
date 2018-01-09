@@ -100,11 +100,8 @@ map(F, #state{data = Data} = State) ->
 
 %% internal
 
-find_next(Next, Last, Map) when Next >= Last ->
-    case maps:is_key(Last, Map) of
-        true -> Last;
-        false -> undefined
-    end;
+find_next(Next, Last, _Map) when Next > Last ->
+    undefined;
 find_next(Next, Last, Map) ->
     case Map of
         #{Next := _} ->
@@ -141,6 +138,10 @@ append_test() ->
     one = fetch(1, S4),
     2 = size(S4),
     {1, one} = smallest(S4),
+    S5 = delete(2, delete(1, S4)),
+    ?debugFmt("S5 ~p~n", [S5]),
+    undefined = smallest(S5),
+    0 = size(S0),
     ok.
 
 next_after_test() ->
