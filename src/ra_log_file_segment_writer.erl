@@ -155,10 +155,10 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                    _ -> open_file(Dir, SegConf)
                end,
 
-    {Segment, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
-                                           Segment0, SegConf),
+    {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
+                                            Segment0, SegConf),
     % fsync
-    ok = ra_log_file_segment:sync(Segment),
+    {ok, Segment} = ra_log_file_segment:sync(Segment1),
 
     % notify writerid of new segment update
     % includes the full range of the segment
@@ -191,8 +191,6 @@ append_to_segment(Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
             append_to_segment(Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
         {error, full} ->
             % close and open a new segment
-            ok = ra_log_file_segment:sync(Seg0),
-            ok = ra_log_file_segment:close(Seg0),
             Seg1 = open_successor_segment(Seg0, SegConf),
             {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
             append_to_segment(Tid, Idx+1, EndIdx, Seg, [Seg0 | Closed], SegConf)
@@ -221,5 +219,3 @@ open_file(Dir, SegConf) ->
            end,
     {ok, Segment} = ra_log_file_segment:open(File, SegConf#{mode => append}),
     Segment.
-
-

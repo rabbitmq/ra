@@ -36,12 +36,13 @@
          data_offset :: pos_integer(),
          mode = append :: read | append,
          index = undefined :: maybe(ra_segment_index()),
-         range :: maybe({ra_index(), ra_index()})
+         range :: maybe({ra_index(), ra_index()}),
+         pending = [] :: [{non_neg_integer(), binary()}]
         }).
 
 -type ra_log_file_segment_options() :: #{max_count => non_neg_integer(),
                                          mode => append | read}.
--type state() :: #state{}.
+-opaque state() :: #state{}.
 
 -export_type([state/0,
               ra_log_file_segment_options/0]).
@@ -67,7 +68,7 @@ open(Filename, Options) ->
     % Base = filename:basename(Filename),
     case FileExists of
         true ->
-            % it is a new file
+            % it is a existing file
             % READ and validate VERSION
             MaxCount = read_header(Fd),
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
@@ -102,11 +103,13 @@ open(Filename, Options) ->
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
-append(#state{fd = Fd, index_offset = IndexOffset,
+append(#state{%fd = Fd,
+              index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
-              mode = append} = State,
+              mode = append,
+              pending = Pend0} = State,
        Index, Term, Data) ->
     % check if file is full
     case IndexOffset < DataStart of
@@ -117,20 +120,33 @@ append(#state{fd = Fd, index_offset = IndexOffset,
             IndexData = <<Index:64/integer, Term:64/integer,
                           DataOffset:32/integer, Length:32/integer,
                           Checksum:32/integer>>,
-            ok = file:pwrite(Fd, [{DataOffset, Data}, {IndexOffset, IndexData}]),
+            Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
+            % ok = file:pwrite(Fd, [{DataOffset, Data}, {IndexOffset, IndexData}]),
             Range = update_range(Range0, Index),
             % fsync is done explicitly
             {ok, State#state{index_offset = IndexOffset + ?INDEX_RECORD_SIZE,
                              data_offset = DataOffset + Length,
-                             range = Range}};
+                             range = Range,
+                             pending = Pend}};
         false ->
             {error, full}
      end.
 
--spec sync(state()) -> ok.
-sync(#state{fd = Fd}) ->
-    ok = file:sync(Fd),
-    ok.
+-spec sync(state()) -> {ok, state()} | {error, term()}.
+sync(#state{fd = Fd, pending = []} = State) ->
+    case file:sync(Fd) of
+        ok ->
+            {ok, State};
+        {error, _} = Err ->
+            Err
+    end;
+sync(#state{fd = Fd, pending = Pend} = State) ->
+    case file:pwrite(Fd, Pend) of
+        ok ->
+            sync(State#state{pending = []});
+        {error, _} = Err ->
+            Err
+    end.
 
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
@@ -181,8 +197,13 @@ max_count(#state{max_count = Max}) ->
 filename(#state{filename = Fn}) ->
     filename:absname(Fn).
 
--spec close(state()) ->
-    ok.
+-spec close(state()) -> ok.
+close(#state{fd = Fd, mode = append} = State) ->
+    % close needs to be defensive and idempotent so we ignore the return
+    % values here
+    _ = sync(State),
+    _ = file:close(Fd),
+    ok;
 close(#state{fd = Fd}) ->
     _ = file:close(Fd),
     ok.

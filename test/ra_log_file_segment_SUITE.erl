@@ -21,7 +21,8 @@ all_tests() ->
      full_file,
      try_read_missing,
      overwrite,
-     term_query
+     term_query,
+     write_many
     ].
 
 groups() ->
@@ -71,14 +72,13 @@ write_close_open_write(Config) ->
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data(1)),
     {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data(2)),
-    ok = ra_log_file_segment:sync(Seg),
     ok = ra_log_file_segment:close(Seg),
 
     % reopen file and append again
     {ok, SegA0} = ra_log_file_segment:open(Fn),
     % also open a reader
-    {ok, SegA} = ra_log_file_segment:append(SegA0, 3, 2, Data(3)),
-    ok = ra_log_file_segment:sync(SegA),
+    {ok, SegA1} = ra_log_file_segment:append(SegA0, 3, 2, Data(3)),
+    {ok, SegA} = ra_log_file_segment:sync(SegA1),
     % need to re-read index
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
     {1, 3} = ra_log_file_segment:range(SegR),
@@ -95,8 +95,8 @@ write_then_read(Config) ->
     Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data),
-    {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
-    ok = ra_log_file_segment:sync(Seg),
+    {ok, Seg2} = ra_log_file_segment:append(Seg1, 2, 2, Data),
+    {ok, Seg} = ra_log_file_segment:sync(Seg2),
     ok = ra_log_file_segment:close(Seg),
 
     % read two consequtive entries from index 1
@@ -112,8 +112,8 @@ try_read_missing(Config) ->
     Fn = filename:join(Dir, "seg1.seg"),
     Data = make_data(1024),
     {ok, Seg0} = ra_log_file_segment:open(Fn),
-    {ok, Seg} = ra_log_file_segment:append(Seg0, 1, 2, Data),
-    ok = ra_log_file_segment:sync(Seg),
+    {ok, Seg1} = ra_log_file_segment:append(Seg0, 1, 2, Data),
+    {ok, Seg} = ra_log_file_segment:sync(Seg1),
     ok = ra_log_file_segment:close(Seg),
 
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
@@ -127,14 +127,14 @@ overwrite(Config) ->
     {ok, Seg0} = ra_log_file_segment:open(Fn),
     {ok, Seg1} = ra_log_file_segment:append(Seg0, 5, 2, Data),
     % overwrite - simulates follower receiving entries from new leader
-    {ok, Seg} = ra_log_file_segment:append(Seg1, 2, 2, Data),
-    {2, 2} = ra_log_file_segment:range(Seg),
-    ok = ra_log_file_segment:sync(Seg),
-    ok = ra_log_file_segment:close(Seg),
+    {ok, Seg2} = ra_log_file_segment:append(Seg1, 2, 2, Data),
+    {2, 2} = ra_log_file_segment:range(Seg2),
+    {ok, Seg} = ra_log_file_segment:sync(Seg2),
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
     {2, 2} = ra_log_file_segment:range(Seg),
     [] = ra_log_file_segment:read(SegR, 5, 1),
     [{2, 2, Data}] = ra_log_file_segment:read(SegR, 2, 1),
+    ok = ra_log_file_segment:close(Seg),
     ok.
 
 term_query(Config) ->
@@ -147,9 +147,32 @@ term_query(Config) ->
     {ok, Seg} = ra_log_file_segment:open(Fn, #{mode => read}),
     2 = ra_log_file_segment:term_query(Seg, 5),
     3 = ra_log_file_segment:term_query(Seg, 6),
-    undefined = ra_log_file_segment:term_query(Seg2, 7),
-    _ = ra_log_file_segment:close(Seg2),
+    undefined = ra_log_file_segment:term_query(Seg, 7),
+    _ = ra_log_file_segment:close(Seg),
     ok.
+
+write_many(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data = make_data(1024),
+    {ok, Seg0} = ra_log_file_segment:open(Fn),
+    {Taken, {ok, Seg}} = timer:tc(fun() ->
+                                    S = write_until_full(1, 2, Data, Seg0),
+                                    ra_log_file_segment:sync(S)
+                            end),
+    ct:pal("write_many took ~pms~n", [Taken/1000]),
+
+    ok = ra_log_file_segment:close(Seg),
+    ok.
+
+write_until_full(Idx, Term, Data, Seg0) ->
+    case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
+        {ok, Seg} ->
+            write_until_full(Idx+1, Term, Data, Seg);
+        {error, full} ->
+            Seg0
+    end.
+
 
 %%% Internal
 %%% p

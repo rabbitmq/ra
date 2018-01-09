@@ -15,7 +15,7 @@ start_link(Conf) ->
 
 init([WalConf0]) ->
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
-    AddModes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
+    AddModes = [{delayed_write, 1024 * 1024 * 4, 1}],
     WalConf = maps:merge(#{additional_wal_file_modes => AddModes}, WalConf0),
     Wal = #{id => ra_log_wal,
             start => {ra_log_wal, start_link, [WalConf, []]}},

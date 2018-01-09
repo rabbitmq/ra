@@ -13,10 +13,12 @@
 
 -include("ra.hrl").
 
--define(MIN_MAX_BATCH_SIZE, 20).
--define(MAX_MAX_BATCH_SIZE, 2000).
+-define(MIN_MAX_BATCH_SIZE, 16).
+-define(MAX_MAX_BATCH_SIZE, 16 * 128).
 -define(METRICS_WINDOW_SIZE, 100).
 -define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
+% maximum number of entries for any one writer before requesting flush to disk
+-define(MAX_WRITER_ENTRIES_PER_WAL, 4096 * 4).
 
 % a "writer" has to be a locally registered name to ensure it can be resolved
 % independently of it's pid()
@@ -62,6 +64,7 @@
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
+                      max_writer_entries_per_wal => non_neg_integer(),
                       segment_writer => atom(),
                       compute_checksums => boolean(),
                       additional_wal_file_modes => [term()]}.
@@ -534,6 +537,7 @@ send_write(Wal, Msg) ->
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_file_segment_writer,
                  max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
+                 max_writer_entries_per_wal => ?MAX_WRITER_ENTRIES_PER_WAL,
                  compute_checksums => true,
                  additional_wal_file_modes => []},
                Conf).

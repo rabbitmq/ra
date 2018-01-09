@@ -77,7 +77,7 @@ write_many(Config) ->
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
-    % start_profile(Config, [ra_log_wal, ets, file, os]),
+    start_profile(Config, [ra_log_wal, ets, file, os]),
     {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
     {Taken, _} =
         timer:tc(
@@ -88,7 +88,7 @@ write_many(Config) ->
                   receive
                       {ra_log_event, {written, {_, NumWrites, 1}}} ->
                           ok
-                  after 5000 ->
+                  after 100000 ->
                             throw(written_timeout)
                   end
           end),
@@ -101,7 +101,7 @@ write_many(Config) ->
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
-    % stop_profile(Config),
+    stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
@@ -371,9 +371,9 @@ stop_profile(Config) ->
     lg:stop(),
     % this segfaults
     % timer:sleep(2000),
-    % Dir = ?config(priv_dir, Config),
-    % Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    % lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
+    Dir = ?config(priv_dir, Config),
+    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
     ok.
 
 
