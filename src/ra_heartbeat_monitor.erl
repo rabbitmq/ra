@@ -14,7 +14,7 @@
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_HEARTBEAT_MONITOR_INTERVAL, 1000).
--define(DEFAULT_HEARTBEAT_TIMEOUT, 5000).
+-define(DEFAULT_HEARTBEAT_TIMEOUT, 30000).
 
 -record(state, {nodes :: [node()],
                 index :: dict:dict(),
