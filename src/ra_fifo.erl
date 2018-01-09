@@ -42,10 +42,10 @@
                 % unassigned messages
                 messages = #{} :: #{ra_index() => msg()},
                 % master index of all enqueue raft indexes
-                % gb_trees so that can take the smallest
-                % TODO: gb_trees are too slow for insert heavy workloads
+                % ra_fifo_index so that can take the smallest
+                % TODO: ra_fifo_index are too slow for insert heavy workloads
                 % replace with some kidn of map based abstraction
-                ra_indexes = gb_trees:empty() :: gb_trees:tree(ra_index(), #state{}),
+                ra_indexes = ra_fifo_index:empty() :: ra_fifo_index:state(),
                 % defines the lowest index available in the messages map
                 low_index :: ra_index() | undefined,
                 % the raft index of the first enqueue operation that
@@ -70,7 +70,7 @@ init(Name) ->
 shadow_copy(#state{customers = Customers} = State) ->
     % creates a copy of the current state suitable for snapshotting
     State#state{messages = #{},
-                ra_indexes = gb_trees:empty(),
+                ra_indexes = ra_fifo_index:empty(),
                 low_index = undefined,
                 first_enqueue_raft_index = undefined,
                 % TODO: optimise
@@ -89,7 +89,7 @@ apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes,
                                       messages = Messages,
                                       first_enqueue_raft_index = FirstEnqueueIdx,
                                       low_index = Low} = State0) ->
-    State1 = State0#state{ra_indexes = gb_trees:enter(RaftIdx, shadow_copy(State0), Indexes),
+    State1 = State0#state{ra_indexes = ra_fifo_index:append(RaftIdx, shadow_copy(State0), Indexes),
                           messages = Messages#{RaftIdx => Msg},
                           first_enqueue_raft_index = min(RaftIdx, FirstEnqueueIdx),
                           low_index = min(RaftIdx, Low)},
@@ -141,7 +141,7 @@ settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
               ra_indexes = Indexes0} = State0) ->
     Cust = Cust0#customer{checked_out = Checked},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
-    Indexes = gb_trees:delete(MsgRaftIdx, Indexes0),
+    Indexes = ra_fifo_index:delete(MsgRaftIdx, Indexes0),
     {State1, Effects1, NumChecked} =
         checkout(State0#state{customers = Custs,
                               ra_indexes = Indexes,
@@ -157,7 +157,7 @@ settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
 update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
                                 #state{first_enqueue_raft_index = First,
                                        ra_indexes = Indexes} = State) ->
-    case gb_trees:size(Indexes) of
+    case ra_fifo_index:size(Indexes) of
         0 ->
             % there are no messages on queue anymore
             % we can forward release_cursor all the way until
@@ -167,7 +167,7 @@ update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
         _ when First =:= MsgRaftIdx ->
             % the first_enqueue_raft_index can be fowarded to next
             % available message
-            {Smallest, Shadow} = gb_trees:smallest(Indexes),
+            {Smallest, Shadow} = ra_fifo_index:smallest(Indexes),
             % we emit the last index _not_ to contribute to the
             % current state - hence the -1
             {State#state{first_enqueue_raft_index = Smallest},
@@ -182,7 +182,7 @@ return(RaftId, Msg, #state{messages = Messages,
                            low_index = Low0} = State0) ->
     % this should not affect the release cursor in any way
     State0#state{messages = maps:put(RaftId, Msg, Messages),
-                 % ra_indexes = gb_trees:enter(RaftId,  Indexes),
+                 % ra_indexes = ra_fifo_index:enter(RaftId,  Indexes),
                  low_index = min(RaftId, Low0)}.
 
 
@@ -217,7 +217,7 @@ checkout_one(#state{messages = Messages0,
                             {Custs, SQ, []} = % we expect no effects
                                 update_or_remove_sub(CustomerId, Cust, Custs0, SQ1),
                             State = State0#state{service_queue = SQ,
-                                                 low_index = find_next_after(LowIdx, Indexes),
+                                                 low_index = ra_fifo_index:next_key_after(LowIdx, Indexes),
                                                  messages = Messages,
                                                  customers = Custs},
                             {State, [{send_msg, CustomerId, {msg, Next, Msg}}]};
@@ -230,17 +230,6 @@ checkout_one(#state{messages = Messages0,
             end;
         error ->
             {State0, []}
-    end.
-
-find_next_after(Idx, Indexes) ->
-    % TODO: it may be quicker to check the messages map first for Idx+1
-    % Idx + 1 to get the next greatest element
-    Iter = gb_trees:iterator_from(Idx + 1, Indexes),
-    case gb_trees:next(Iter) of
-        none ->
-            undefined;
-        {Elem, _, _Iter} ->
-            Elem
     end.
 
 
@@ -318,28 +307,34 @@ size_test(NumMsg, NumCust) ->
     CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
     S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
     S = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
-    S2 = S#state{ra_indexes = gb_trees:map(fun(_, _) -> undefined end, S#state.ra_indexes)},
+    S2 = S#state{ra_indexes = ra_fifo_index:map(fun(_, _) -> undefined end, S#state.ra_indexes)},
     {erts_debug:size(S), erts_debug:size(S2)}.
 
 perf_test(NumMsg, NumCust) ->
     timer:tc(fun () ->
                      EnqGen = fun(N) -> {N, {enqueue, N}} end,
-                     CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+                     Pid = spawn(fun() -> ok end),
+                     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
+                     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
                      S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
-                     _ = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+                     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+                     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
                      ok
              end).
 
 profile(File) ->
     GzFile = atom_to_list(File) ++ ".gz",
-    lg:trace([ra_fifo, maps, queue, gb_trees], lg_file_tracer,
+    lg:trace([ra_fifo, maps, queue, ra_fifo_index], lg_file_tracer,
              GzFile, #{running => false, mode => profile}),
     NumMsg = 10000,
     NumCust = 500,
     EnqGen = fun(N) -> {N, {enqueue, N}} end,
-    CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+    Pid = spawn(fun() -> ok end),
+    CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
+    SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
     S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
-    _ = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+    S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+    _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
     lg:stop().
 
 
@@ -441,6 +436,14 @@ release_cursor_snapshot_state_test() ->
          % assert log can be restored from any release cursor index
          ?assert(S =:= State)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
+    ok.
+
+performance_test() ->
+    % just under ~500ms on my machine [Karl]
+    NumMsgs = 100000,
+    {Taken, _} = perf_test(NumMsgs, 0),
+    ?debugFmt("performance_test took ~p ms for ~p messages",
+              [Taken / 1000, NumMsgs]),
     ok.
 
 enq(Idx, Msg, State) ->
