@@ -154,8 +154,8 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
     #{segment_writer := SegWriter} = Conf,
     ok = ra_log_file_segment_writer:await(SegWriter),
 
-    State = recover_wal(Dir, Conf),
-    Debug = sys:debug_options(Options),
+    Debug0 = sys:debug_options(Options),
+    {State, Debug} = recover_wal(Dir, Conf, Debug0),
     loop_wait(State, Parent, Debug).
 
 
@@ -164,7 +164,8 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
                    compute_checksums := ComputeChecksum,
-                   write_strategy := WriteStrategy}) ->
+                   write_strategy := WriteStrategy},
+           Dbg0) ->
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
     _ = file:make_dir(Dir),
@@ -198,14 +199,15 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
 
     Modes = [raw, append, binary],
     FileNum = extract_file_num(lists:reverse(WalFiles)),
-    State = roll_over(ra_log_recover_mem_tables,
-                      #state{dir = Dir,
-                             file_num = FileNum,
-                             file_modes = Modes,
-                             max_wal_size_bytes = MaxWalSize,
-                             compute_checksums = ComputeChecksum,
-                             segment_writer = TblWriter,
-                             write_strategy = WriteStrategy}),
+    StateDbg = roll_over(ra_log_recover_mem_tables,
+                         #state{dir = Dir,
+                                file_num = FileNum,
+                                file_modes = Modes,
+                                max_wal_size_bytes = MaxWalSize,
+                                compute_checksums = ComputeChecksum,
+                                segment_writer = TblWriter,
+                                write_strategy = WriteStrategy},
+                         Dbg0),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
     Open = ets:tab2list(ra_log_open_mem_tables),
@@ -213,7 +215,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % delete all open ets tables
     [true = ets:delete(Tid) || {_, _, _, Tid} <- Open],
     true = ets:delete(ra_log_recover_mem_tables),
-    State.
+    StateDbg.
 
 extract_file_num([]) ->
     0;
@@ -228,10 +230,8 @@ loop_wait(State0, Parent, Debug0) ->
             cleanup(State0#state.wal),
             exit(Reason);
         Msg ->
-            Debug = handle_debug_in(Debug0, Msg),
-            % start a new batch
-            State1 = start_batch(State0),
-            State = handle_msg(Msg, State1),
+            Debug1 = handle_debug_in(Debug0, Msg),
+            {State, Debug} = handle_msg(Msg, State0, Debug1),
             loop_batched(State, Parent, Debug)
     end.
 
@@ -251,8 +251,8 @@ loop_batched(State0, Parent, Debug0) ->
             cleanup(State0#state.wal),
             exit(Reason);
         Msg ->
-            Debug = handle_debug_in(Debug0, Msg),
-            State = handle_msg(Msg, State0),
+            Debug1 = handle_debug_in(Debug0, Msg),
+            {State, Debug} = handle_msg(Msg, State0, Debug1),
             loop_batched(State, Parent, Debug)
     after 0 ->
               {State, Debug} = complete_batch(State0, Debug0),
@@ -289,13 +289,14 @@ serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
     end.
 
 write_data(Id, Idx, Term, Data0, Trunc,
-           #state{batch = undefined} = State) ->
-    write_data(Id, Idx, Term, Data0, Trunc, start_batch(State));
+           #state{batch = undefined} = State, Dbg) ->
+    write_data(Id, Idx, Term, Data0, Trunc, start_batch(State), Dbg);
 write_data(Id, Idx, Term, Data0, Trunc,
            #state{max_wal_size_bytes = MaxWalSize,
                   compute_checksums = ComputeChecksum,
                   wal = #wal{wal_file_size = FileSize,
-                             writer_name_cache = Cache0} = Wal} = State00) ->
+                             writer_name_cache = Cache0} = Wal} = State00,
+          Dbg0) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
@@ -305,10 +306,10 @@ write_data(Id, Idx, Term, Data0, Trunc,
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
         true ->
-            State = roll_over(State00),
+            {State, Dbg} = roll_over(State00, Dbg0),
             % TODO: there is some redundant computation performed by recursing here
             % it probably doesn't matter as it only happens when a wal file fills up
-            write_data(Id, Idx, Term, Data0, Trunc, State);
+            write_data(Id, Idx, Term, Data0, Trunc, State, Dbg);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
             Entry = <<Idx:64/integer,
@@ -322,32 +323,35 @@ write_data(Id, Idx, Term, Data0, Trunc,
                        Checksum:32/integer,
                        EntryDataLen:32/integer,
                        Entry/binary>>,
-            append_data(State0, Id, Idx, Term, Data0, DataSize, Record, Trunc)
+            {append_data(State0, Id, Idx, Term, Data0, DataSize, Record, Trunc),
+             Dbg0}
     end.
 
 handle_msg({append, Id, Idx, Term, Entry},
-           #state{writers = Writers} = State0) ->
+           #state{writers = Writers} = State0,
+          Dbg) ->
     case maps:find(Id, Writers) of
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, false, State0, Dbg);
         error ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, false, State0, Dbg);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes
-            State0;
+            {State0, Dbg};
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
             ?WARN("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
                  [Id, PrevIdx, Idx]),
             Id ! {ra_log_event, {resend_write, PrevIdx + 1}},
-            State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}}
+            {State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}},
+             Dbg}
     end;
-handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
-    write_data(Id, Idx, Term, Entry, true, State0);
-handle_msg(rollover, State) ->
-    roll_over(State).
+handle_msg({truncate, Id, Idx, Term, Entry}, State0, Dbg) ->
+    write_data(Id, Idx, Term, Entry, true, State0, Dbg);
+handle_msg(rollover, State, Dbg) ->
+    roll_over(State, Dbg).
 
 append_data(#state{wal = #wal{fd = Fd,
                               wal_file_size = FileSize} = Wal,
@@ -397,12 +401,12 @@ update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(State0) ->
-    {State, _} = complete_batch(State0, []),
-    roll_over(ra_log_open_mem_tables, State).
+roll_over(State0, Dbg) ->
+    {State, Dbg} = complete_batch(State0, Dbg),
+    roll_over(ra_log_open_mem_tables, State, Dbg).
 
 roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
-                             segment_writer = SegWriter} = State0) ->
+                             segment_writer = SegWriter} = State0, Dbg) ->
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
@@ -415,7 +419,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
             ok = close_open_mem_tables(OpnMemTbls, Wal#wal.filename, SegWriter)
     end,
     State = open_file(NextFile, State0),
-    State#state{file_num = Num}.
+    {State#state{file_num = Num}, Dbg}.
 
 open_file(File, #state{write_strategy = delay_writes_sync,
                        file_modes = Modes0} = State) ->
