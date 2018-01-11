@@ -573,7 +573,7 @@ append_entries_reply_no_success(_Config) ->
                                         {3, 5, usr(<<"hi3">>)}]},
     ExpectedEffects = [{send_rpcs, true, [{n3, AE}, {n2, AE}]}],
     % new peers state is updated
-    {leader, #{cluster := #{n2 := #{next_index := 2, match_index := 1}},
+    {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 1}},
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>}, ExpectedEffects} =
@@ -1043,9 +1043,12 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                                 last_index = 2, % refer to stale entry
                                 last_term = 1}, % in previous term
     % should decrement next_index for n2
-    ExpectedN2NextIndex = 2,
-    {leader, #{cluster := #{n2 := #{next_index := ExpectedN2NextIndex}}},
-     _Effects} = ra_node:handle_leader({n2, AER}, Leader0),
+    % ExpectedN2NextIndex = 2,
+    {leader, #{cluster := #{n2 := #{next_index := 4}}},
+     [{send_rpcs, true,
+       [_,
+        {n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}]}
+       = ra_node:handle_leader({n2, AER}, Leader0),
     ok.
 
 leader_receives_install_snapshot_result(_Config) ->
@@ -1074,16 +1077,6 @@ leader_receives_install_snapshot_result(_Config) ->
                initial_machine_state => [],
                last_applied => 4,
                log => Log,
-               % {ra_log_memory,
-               %  {4,
-               %   #{3 => {1,{'$usr',bah,deq,after_log_append}},
-               %     4 => {1,{'$usr',bah,{enq,apple},after_log_append}}},
-               %   #{current_term => 1,voted_for => n1},
-               %   {2,1,
-               %    #{n1 => #{match_index => 0},
-               %      n2 => #{match_index => 2,next_index => 3},
-               %      n3 => #{match_index => 2,next_index => 3}},
-               %    []}}},
                machine_state => [{4,apple}],
                pending_cluster_changes => [],
                snapshot_points =>
@@ -1096,9 +1089,13 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_index = 2,
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
-                                    next_index := 3}}},
+                                    next_index := 5}}},
      [{send_rpcs, false, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
-    ?assert(lists:any(fun({n3, #append_entries_rpc{}}) -> true;
+    ct:pal("Rpcs ~p", [Rpcs]),
+    ?assert(lists:any(fun({n3,
+                           #append_entries_rpc{entries = [{3, _, _},
+                                                          {4, _, _}]}}) ->
+                              true;
                          (_) -> false end, Rpcs)),
     ok.
 

@@ -94,6 +94,8 @@
               ra_effects/0,
               ra_election_timeout_strategy/0]).
 
+-define(AER_CHUNK_SIZE, 5).
+
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
@@ -168,11 +170,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             ?WARN("~p saw command from unknown peer ~p~n", [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
-            Peer = Peer0#{match_index => max(MI, LastIdx),
+            Peer = Peer0#{match_index => max(MI, LastIdx), % TODO: strictly speaking we should not need to take a max here? assert?
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
-            {State, Rpcs} = make_rpcs(State2),
+            {State, Rpcs} = make_pipelined_rpcs(State2),
             Effects = [{send_rpcs, false, Rpcs},
                        {incr_metrics, ra_metrics, [{3, Applied}]} | Effects0],
             case State of
@@ -235,7 +237,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{next_index => max(min(NI-1, LastIdx), MI)}, L}
                   end,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
-    {State, Rpcs} = make_rpcs(State1),
+    {State, Rpcs} = make_pipelined_rpcs(State1),
     {leader, State, [{send_rpcs, true, Rpcs}]};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
@@ -304,12 +306,17 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
         undefined ->
             ?WARN("~p saw install_snapshot_result from unknown peer ~p~n", [Id, PeerId]),
             {leader, State0, []};
-        Peer0 ->
-            State1 = update_peer(PeerId, Peer0#{match_index => LastIndex,
-                                                next_index => LastIndex + 1},
+        Peer0 = #{next_index := NI} ->
+            State1 = update_peer(PeerId,
+                                 Peer0#{match_index => LastIndex,
+                                        % leader might have pipelined append entries
+                                        % since snapshot was sent
+                                        % need to ensure next index is at least
+                                        % LastIndex + 1 though
+                                        next_index => max(NI, LastIndex+1) },
                                  State0),
 
-            {State, Rpcs} = make_rpcs(State1),
+            {State, Rpcs} = make_pipelined_rpcs(State1),
             Effects = [{send_rpcs, false, Rpcs}],
             {leader, State, Effects}
     end;
@@ -656,24 +663,25 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when PrevTerm =/= undefined ->
-            % The log backend implementation will be responsible for
-            % keeping a cache of recently accessed entries.
-            make_aer_chunk(PeerId, PrevIdx, PrevTerm, 5, State#{log => Log});
+            make_aer_chunk(PeerId, PrevIdx, PrevTerm, ?AER_CHUNK_SIZE,
+                           State#{log => Log});
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
             % to send a snapshot.
             case ra_log:snapshot_index_term(Log) of
                 {PrevIdx, PrevTerm} ->
-                    %     % Previous index is the same as snapshot index
-                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, 5, State#{log => Log});
+                    % Previous index is the same as snapshot index
+                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, ?AER_CHUNK_SIZE,
+                                   State#{log => Log});
                 _ ->
                     {LastIndex, LastTerm, Config, MacState} = ra_log:read_snapshot(Log),
-                    {LastIndex, {PeerId, #install_snapshot_rpc{term = Term,
-                                                               leader_id = Id,
-                                                               last_index = LastIndex,
-                                                               last_term = LastTerm,
-                                                               last_config = Config,
-                                                               data = MacState}},
+                    {LastIndex,
+                     {PeerId, #install_snapshot_rpc{term = Term,
+                                                    leader_id = Id,
+                                                    last_index = LastIndex,
+                                                    last_term = LastTerm,
+                                                    last_config = Config,
+                                                    data = MacState}},
                      State#{log => Log}}
             end
     end.
