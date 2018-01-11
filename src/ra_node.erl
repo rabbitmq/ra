@@ -557,6 +557,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                     machine_state => Data,
                     leader_id => LeaderId},
 
+    % TODO: reply on snapshot written confirmation?
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},

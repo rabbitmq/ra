@@ -54,11 +54,11 @@ append({Idx, Term, Data}, #state{last_index = LastIdx,
     {written, State#state{last_index = Idx,
                           entries = Log#{Idx => {Term, Data}}}};
 append(_Entry, _State) ->
-    exit(integrity_error).
+    exit({integrity_error, undefined}).
 
 -spec write(Entries :: [log_entry()], State::ra_log_memory_state()) ->
     {written, ra_log_memory_state()} |
-    {error, integrity_error}.
+    {error, {integrity_error, term()}}.
 write([{FirstIdx, _, _} | _] = Entries,
       #state{last_index = LastIdx, entries = Log0} = State)
   when FirstIdx =< LastIdx + 1 ->
@@ -83,7 +83,7 @@ write([{FirstIdx, _, _} | _] = Entries,
     {written, State#state{last_index = LastInIdx,
                           entries = Log}};
 write(_Entries, _State) ->
-    {error, integrity_error}.
+    {error, {integrity_error, undefined}}.
 
 
 -spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->
@@ -210,58 +210,3 @@ can_write(_Log) ->
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].
 
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-% append_test() ->
-%     {0, #{}, _, _} = S = init([]),
-%     {ok, {1, #{1 := {1, <<"hi">>}}, _, _}} =
-%     append({1, 1, <<"hi">>}, no_overwrite, sync, S).
-
-% append_twice_test() ->
-%     {0, #{}, _, _} = S = init([]),
-%     Entry = {1, 1, <<"hi">>},
-%     {ok, S2} = append(Entry, no_overwrite, sync, S),
-%     {error, integrity_error} = append(Entry, no_overwrite, sync, S2).
-
-% append_overwrite_test() ->
-%     {0, #{}, _, _} = S = init([]),
-%     Entry = {1, 1, <<"hi">>},
-%     {ok, S2} = append(Entry, overwrite, sync, S),
-%     % TODO: a proper implementation should validate the term isn't decremented
-%     % also it should truncate any item newer than the last written index
-%     {ok,  {1, #{1 := {1, <<"hi">>}}, _, _}} = append(Entry, overwrite, sync, S2).
-
-% take_test() ->
-%     Log = #{1 => {8, <<"one">>},
-%             2 => {8, <<"two">>},
-%             3 => {8, <<"three">>}},
-%     [{1, 8, <<"one">>},
-%      {2, 8, <<"two">>}] = take(1, 2, {3, Log, #{}, undefined}),
-%     [{3, 8, <<"three">>}] = take(3, 2, {3, Log, #{}, undefined}).
-
-% last_test() ->
-%     Log = #{1 => {8, <<"one">>},
-%             2 => {8, <<"two">>},
-%             3 => {8, <<"three">>}},
-%     {3, 8, <<"three">>} = last({3, Log, #{}, undefined}).
-
-% next_index_test() ->
-%     Log = #{1 => {8, <<"one">>},
-%             2 => {8, <<"two">>},
-%             3 => {8, <<"three">>}},
-%     4 = next_index({3, Log, #{}, undefined}).
-
-% fetch_test() ->
-%     Log = #{1 => {8, <<"one">>},
-%             2 => {8, <<"two">>},
-%             3 => {8, <<"three">>}},
-%     {2, 8, <<"two">>} = fetch(2, {3, Log, #{}, undefined}).
-
-% meta_test() ->
-%     State0 = {0, #{}, #{}, undefined},
-%     {ok, State} = write_meta(current_term, 23, State0),
-%     23 = read_meta(current_term, State).
-
--endif.

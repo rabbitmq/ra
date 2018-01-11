@@ -310,6 +310,8 @@ follower(EventType, Msg, #state{node_state = #{id := Id},
         {await_condition, State1, Effects} ->
             {State2, Actions} = handle_effects(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
+            ?INFO("~p follower -> await_condition term: ~p~n",
+                  [Id, current_term(State)]),
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout} | Actions]}
     end.

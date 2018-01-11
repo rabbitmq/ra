@@ -64,7 +64,7 @@
                 State :: ra_log_state()) ->
     {queued, ra_log_state()} |
     {written, ra_log_state()} |
-    {error, integrity_error | wal_down}.
+    {error, {integrity_error, term()} | wal_down}.
 
 -callback take(Start :: ra_index(), Num :: non_neg_integer(),
                State :: ra_log_state()) ->
@@ -152,7 +152,7 @@ append(Entry, {Mod, Log0}) ->
 -spec write(Entries :: [log_entry()], State::ra_log()) ->
     {queued, ra_log()} |
     {written, ra_log()} |
-    {error, integrity_error | wal_down}.
+    {error, {integrity_error, term()} | wal_down}.
 write(Entries, {Mod, Log0}) ->
     case Mod:write(Entries, Log0) of
         {error, _} = Err ->

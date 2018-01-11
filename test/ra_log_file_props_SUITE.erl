@@ -184,8 +184,11 @@ write_missing_entry_prop(Dir, TestCase) ->
               Log = ra_log_file:init(#{data_dir => Dir, id => TestCase}),
               Reply = ra_log_file:write(Head ++ Tail, Log),
               reset(Log),
-              ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
-                        Reply == {error, integrity_error})
+              ?WHENFAIL(ct:pal("Reply: ~p~n", [Reply]),
+                        case Reply of
+                            {error, {integrity_error, _}} -> true;
+                            _ -> false
+                        end)
           end)).
 
 write_overwrite_entry(Config) ->
@@ -230,7 +233,10 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
               Reply = ra_log_file:write(Tail, Log0),
               reset(Log0),
               ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
-                        Reply == {error, integrity_error})
+                        case Reply of
+                            {error, {integrity_error, _}} -> true;
+                            _ -> false
+                        end)
           end)).
 
 append_missing_entry(Config) ->
@@ -250,7 +256,7 @@ append_missing_entry_prop(Dir, TestCase) ->
                            ra_log_file:append(hd(Tail), Log0),
                            false
                        catch
-                           exit:integrity_error ->
+                           exit:{integrity_error, _} ->
                                true
                        end,
               {LogEntries, Log} = ra_log_file:take(1, length(Head), Log0),
@@ -274,9 +280,11 @@ write_index_starts_zero_prop(Dir, TestCase) ->
            Log = ra_log_file:init(#{data_dir => Dir, id => TestCase}),
            Reply = ra_log_file:write([Entry], Log),
            reset(Log),
-           ?WHENFAIL(io:format("Reply: ~p~n",
-                               [Reply]),
-                     Reply == {error, integrity_error})
+           ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
+                     case Reply of
+                         {error, {integrity_error, _}} -> true;
+                         _ -> false
+                     end)
        end).
 
 append(Config) ->
@@ -319,7 +327,7 @@ append_overwrite_entry_prop(Dir, TestCase) ->
                            ra_log_file:append({Idx, Term, <<"overwrite">>}, Log),
                            false
                        catch
-                           exit:integrity_error ->
+                           exit:{integrity_error, _} ->
                                true
                        end,
               reset(Log),
@@ -341,7 +349,7 @@ append_index_starts_one_prop(Dir, TestCase) ->
                        ra_log_file:append(Entry, Log),
                        false
                    catch
-                       exit:integrity_error ->
+                       exit:{integrity_error, _} ->
                            true
                    end,
            reset(Log),
@@ -610,7 +618,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
                                  (start_wal, {_, _, _, wal_up} = Acc) ->
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
-                                      {error, integrity_error} = ra_log_file:write([Entry], Acc0),
+                                      {error, {integrity_error, _}} = ra_log_file:write([Entry], Acc0),
                                       Acc;
                                  (Entry, {Acc0, _, _, wal_down} = Acc) ->
                                       {error, wal_down} = ra_log_file:write([Entry], Acc0),
@@ -662,7 +670,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
                                  (start_segment_writer, {_, _, _, sw_up} = Acc) ->
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
-                                      {error, integrity_error} = ra_log_file:write([Entry], Acc0),
+                                      {error, {integrity_error, _}} = ra_log_file:write([Entry], Acc0),
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
                                       {queued, Acc} = ra_log_file:write([Entry], Acc0),

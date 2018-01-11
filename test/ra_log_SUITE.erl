@@ -209,7 +209,7 @@ append_integrity_error(Config) ->
     Log1 = ra_log:append_sync({Next, Term, "NextIndex"}, Log0),
     % going backwards should fail with integrity error
     Entry = {Next-1, Term, "NextIndex-1"},
-    ?assertExit(integrity_error, ra_log:append(Entry, Log1)),
+    ?assertExit({integrity_error, _}, ra_log:append(Entry, Log1)),
     _Log = ra_log:write_sync([Entry], Log1),
     ok.
 

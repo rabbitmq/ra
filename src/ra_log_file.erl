@@ -167,14 +167,15 @@ close(#state{kv = Kv, open_segments = OpenSegs}) ->
 append(Entry, #state{last_index = LastIdx} = State0)
       when element(1, Entry) =:= LastIdx + 1 ->
     {queued, wal_write(State0, Entry)};
-append(_Entry, _State) ->
-    exit(integrity_error).
+append({Idx, _, _}, #state{last_index = LastIdx}) ->
+    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b", [Idx, LastIdx+1])),
+    exit({integrity_error, Msg}).
 
 
 -spec write(Entries :: [log_entry()],
             State :: ra_log_file_state()) ->
     {queued, ra_log_file_state()} |
-    {error, integrity_error | wal_down}.
+    {error, {integrity_error, term()} | wal_down}.
 write([{FstIdx, _, _} | Rest] = Entries,
       State0 = #state{last_index = LastIdx}) when FstIdx =< LastIdx + 1,
                                                   FstIdx >= 0 ->
@@ -211,15 +212,17 @@ write([{FstIdx, _, _} = First | Entries],
     end;
 write([], State) ->
     {queued, State};
-write(_Entry, _State) ->
-    {error, integrity_error}.
+write([{Idx, _, _} | _], #state{last_index = LastIdx}) ->
+    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b", [Idx, LastIdx+1])),
+    {error, {integrity_error, Msg}}.
 
 verify_entries(_, []) ->
     ok;
 verify_entries(Idx, [{NextIdx, _, _} | Tail]) when Idx + 1 == NextIdx ->
     verify_entries(NextIdx, Tail);
-verify_entries(_, _) ->
-    {error, integrity_error}.
+verify_entries(Idx, Tail) ->
+    Msg = io_lib:format("tried writing ~p - expected ~b", [Tail, Idx+1]),
+    {error, {integrity_error, Msg}}.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
