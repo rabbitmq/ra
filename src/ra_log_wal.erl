@@ -27,8 +27,20 @@
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{writer_id() =>
                                    {From :: ra_index(), To :: ra_index()}},
-                start_time :: maybe(integer())
+                start_time :: maybe(integer()),
+                pending = [] :: iolist()
                }).
+
+-type wal_write_strategy() ::
+    % delay writes until batch completion
+    % reduces the number of syscalls at the expense of memory use
+    delay_writes |
+    % like delay writes but tries to open the file using synchronous io
+    % (O_SYNC) rather than a write(2) followed by an fsync.
+    delay_writes_sync |
+    % each write calls write(2) and fsyncs at batch completion
+    % Allows data to be gcd as soon as possible
+    no_delay.
 
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
@@ -40,7 +52,7 @@
 
 -record(state, {file_num = 0 :: non_neg_integer(),
                 wal :: #wal{} | undefined,
-                batch = #batch{} :: #batch{},
+                batch :: maybe(#batch{}),
                 file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
@@ -58,18 +70,21 @@
                 % and the last index seen
                 writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
-                compute_checksums = false :: boolean()
+                compute_checksums = false :: boolean(),
+                write_strategy = delay_writs :: wal_write_strategy()
                }).
 
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_wal_size_bytes => non_neg_integer(),
+                      %TODO implement
                       max_writer_entries_per_wal => non_neg_integer(),
                       segment_writer => atom(),
                       compute_checksums => boolean(),
-                      additional_wal_file_modes => [term()]}.
+                      wal_strategy => wal_write_strategy()}.
 
--export_type([wal_conf/0]).
+-export_type([wal_conf/0,
+              wal_write_strategy/0]).
 
 
 -spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
@@ -149,7 +164,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
                    compute_checksums := ComputeChecksum,
-                   additional_wal_file_modes := AdditionalModes}) ->
+                   write_strategy := WriteStrategy}) ->
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
     _ = file:make_dir(Dir),
@@ -181,7 +196,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     [ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, M,F)
      || {_, M, F} <- All],
 
-    Modes = [raw, append, binary] ++ AdditionalModes,
+    Modes = [raw, append, binary],
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(ra_log_recover_mem_tables,
                       #state{dir = Dir,
@@ -189,7 +204,8 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                              file_modes = Modes,
                              max_wal_size_bytes = MaxWalSize,
                              compute_checksums = ComputeChecksum,
-                             segment_writer = TblWriter}),
+                             segment_writer = TblWriter,
+                             write_strategy = WriteStrategy}),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
     Open = ets:tab2list(ra_log_open_mem_tables),
@@ -273,6 +289,9 @@ serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
     end.
 
 write_data(Id, Idx, Term, Data0, Trunc,
+           #state{batch = undefined} = State) ->
+    write_data(Id, Idx, Term, Data0, Trunc, start_batch(State));
+write_data(Id, Idx, Term, Data0, Trunc,
            #state{max_wal_size_bytes = MaxWalSize,
                   compute_checksums = ComputeChecksum,
                   wal = #wal{wal_file_size = FileSize,
@@ -333,13 +352,19 @@ handle_msg(rollover, State) ->
 append_data(#state{wal = #wal{fd = Fd,
                               wal_file_size = FileSize} = Wal,
                    batch = Batch,
-                   writers = Writers} = State,
+                   writers = Writers,
+                   write_strategy = WriteStrat} = State,
             Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
-    ok = file:write(Fd, Data),
+    case WriteStrat of
+        no_delay ->
+            ok = file:write(Fd, Data);
+        _ ->
+            ok
+    end,
     true = update_mem_table(ra_log_open_mem_tables, Id, Idx, Term, Entry,
                             Truncate),
     State#state{wal = Wal#wal{wal_file_size = FileSize + DataSize},
-                batch = incr_batch(Batch, Id, {Idx, Term}),
+                batch = incr_batch(Batch, Id, {Idx, Term}, Data),
                 writers = Writers#{Id => {in_seq, Idx}} }.
 
 update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
@@ -372,18 +397,16 @@ update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(State) ->
+roll_over(State0) ->
+    {State, _} = complete_batch(State0, []),
     roll_over(ra_log_open_mem_tables, State).
 
-
-roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir,
-                             file_num = Num0, file_modes = Modes,
-                             segment_writer = SegWriter} = State) ->
+roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
+                             segment_writer = SegWriter} = State0) ->
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
     ?INFO("wal: opening new file ~p~n", [Fn]),
-    {ok, Fd} = file:open(NextFile, Modes),
     case Wal0 of
         undefined ->
             ok;
@@ -391,11 +414,32 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir,
             ok = close_file(Wal#wal.fd),
             ok = close_open_mem_tables(OpnMemTbls, Wal#wal.filename, SegWriter)
     end,
-    State#state{wal = #wal{fd = Fd, filename = NextFile}, file_num = Num}.
+    State = open_file(NextFile, State0),
+    State#state{file_num = Num}.
+
+open_file(File, #state{write_strategy = delay_writes_sync,
+                       file_modes = Modes0} = State) ->
+        Modes = [sync | Modes0],
+        case file:open(File, Modes) of
+            {ok, Fd} ->
+                % many platforms implement O_SYNC a bit like O_DSYNC
+                % perform a manual sync here to ensure metadata is flushed
+                ok = file:sync(Fd),
+                State#state{file_modes = Modes,
+                            wal = #wal{fd = Fd, filename = File}};
+            {error, enotsup} ->
+                ?WARN("WAL: delay_writes_sync not supported. "
+                      "Reverting back to delay_writes strategy.", []),
+                open_file(File, State#state{write_strategy = delay_writes})
+        end;
+open_file(File, #state{file_modes = Modes} = State) ->
+    {ok, Fd} = file:open(File, Modes),
+    State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
 
 close_file(undefined) ->
     ok;
-close_file( Fd) ->
+close_file(Fd) ->
+    ok = file:sync(Fd),
     file:close(Fd).
 
 close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
@@ -438,19 +482,34 @@ open_mem_table(Id) ->
 start_batch(State) ->
     State#state{batch = #batch{start_time = os:system_time(millisecond)}}.
 
+complete_batch(#state{batch = undefined} = State, Debug) ->
+    {State, Debug};
 complete_batch(#state{wal = #wal{fd = Fd},
                       batch = #batch{waiting = Waiting,
                                      writes = NumWrites,
-                                     start_time = ST},
-                      metrics_cursor = Cursor} = State0,
+                                     start_time = ST,
+                                     pending = Pend},
+                      metrics_cursor = Cursor,
+                      write_strategy = WriteStrat} = State0,
                Debug0) ->
+    % ?INFO("completing batch", []),
     TS = os:system_time(millisecond),
-    ok = file:sync(Fd),
+    case WriteStrat of
+        delay_writes_sync ->
+            ok = file:write(Fd, lists:reverse(Pend));
+        delay_writes ->
+            ok = file:write(Fd, lists:reverse(Pend)),
+            ok = file:sync(Fd);
+        no_delay ->
+            ok = file:sync(Fd)
+    end,
+
     SyncTS = os:system_time(millisecond),
     _ = ets:update_element(ra_log_wal_metrics, Cursor,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
-    State = State0#state{metrics_cursor = NextCursor},
+    State = State0#state{metrics_cursor = NextCursor,
+                         batch = undefined},
 
     % notify processes that have synced map(Pid, Token)
     Debug = maps:fold(fun (Id, WrittenInfo, Dbg) ->
@@ -467,16 +526,17 @@ complete_batch(#state{wal = #wal{fd = Fd},
                               sys:handle_debug(Dbg, fun write_debug/3,
                                                ?MODULE, Evt)
                       end, Debug0, Waiting),
-
     {State, Debug}.
 
 incr_batch(#batch{writes = Writes,
-                  waiting = Waiting0} = Batch, Id, {Idx, Term}) ->
+                  waiting = Waiting0,
+                  pending = Pend} = Batch, Id, {Idx, Term}, Data) ->
     Waiting = maps:update_with(Id, fun ({From, _, _}) ->
                                            {min(Idx, From), Idx, Term}
                                    end, {Idx, Idx, Term}, Waiting0),
     Batch#batch{writes = Writes + 1,
-                waiting = Waiting}.
+                waiting = Waiting,
+                pending = [Data | Pend]}.
 
 recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   IdDataLen:16/integer, IdData:IdDataLen/binary,
@@ -539,7 +599,7 @@ merge_conf_defaults(Conf) ->
                  max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
                  max_writer_entries_per_wal => ?MAX_WRITER_ENTRIES_PER_WAL,
                  compute_checksums => true,
-                 additional_wal_file_modes => []},
+                 write_strategy => delay_writes},
                Conf).
 
 to_binary(Term) ->

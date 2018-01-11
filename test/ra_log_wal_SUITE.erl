@@ -6,7 +6,9 @@
 
 all() ->
     [
-     {group, tests}
+     {group, no_delay},
+     {group, delay_writes},
+     {group, delay_writes_sync}
     ].
 
 
@@ -26,28 +28,33 @@ all_tests() ->
 
 groups() ->
     [
-     {tests, [], all_tests()}
+     {no_delay, [], all_tests()},
+     {delay_writes, [], all_tests()},
+     {delay_writes_sync, [], all_tests()}
     ].
 
-init_per_group(tests, Config) ->
+init_per_group(Group, Config) ->
     % application:ensure_all_started(sasl),
     application:ensure_all_started(lg),
-    Config.
+    [{write_strategy, Group} | Config].
 
-end_per_group(tests, Config) ->
+end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    Dir = filename:join(PrivDir, TestCase),
+    G = ?config(write_strategy, Config),
+    Dir = filename:join([PrivDir, G, TestCase]),
     _ = ra_log_file_ets:start_link(),
     register(TestCase, self()),
-    [{test_case, TestCase}, {wal_dir, Dir} | Config].
+    WalConf = #{dir => Dir,
+                write_strategy => G},
+    [{test_case, TestCase}, {wal_conf, WalConf}, {wal_dir, Dir} | Config].
 
 
 basic_log_writes(Config) ->
-    Dir = ?config(wal_dir, Config),
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir}, []),
+    Conf = ?config(wal_conf, Config),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     ok = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(Self, {12, 12, 1}),
@@ -67,17 +74,14 @@ write_to_unavailable_wal_returns_error(_Config) ->
 
 write_many(Config) ->
     NumWrites = 10000,
-    Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
-    % Modes = [],
-    {ok, WalPid} = ra_log_wal:start_link(#{dir => Dir,
-                                           additional_wal_file_modes => Modes,
-                                           compute_checksums => false}, []),
+    Conf = ?config(wal_conf, Config),
+    {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false},
+                                         []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
-    start_profile(Config, [ra_log_wal, ets, file, os]),
+    % start_profile(Config, [ra_log_wal, ets, file, os]),
     {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
     {Taken, _} =
         timer:tc(
@@ -95,24 +99,21 @@ write_many(Config) ->
     {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
     Reds = RedsAfter - RedsBefore,
-    ct:pal("~b 1024 byte writes took ~p milliseconds~nFile modes: ~p~n"
+    ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
            "Reductions: ~b",
-           [NumWrites, Taken / 1000, Modes, Reds]),
+           [NumWrites, Taken / 1000, Reds]),
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
-    stop_profile(Config),
+    % stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
     ok.
 
 overwrite(Config) ->
-    Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
-    % Modes = [],
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
-                                         additional_wal_file_modes => Modes}, []),
+    Conf = ?config(wal_conf, Config),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = data,
     [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
@@ -128,11 +129,8 @@ overwrite(Config) ->
 truncate_write(Config) ->
     % a truncate write should update the range to not include previous indexes
     % a trucated write does not need to follow the sequence
-    Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 1}],
-    % Modes = [],
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
-                                         additional_wal_file_modes => Modes}, []),
+    Conf = ?config(wal_conf, Config),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
@@ -154,11 +152,8 @@ out_of_seq_writes(Config) ->
     % it will notify the write of the missing index and the writer can resend
     % writes from that point
     % the wal will discard all subsequent writes until it receives the missing one
-    Dir = ?config(wal_dir, Config),
-    Modes = [{delayed_write, 1024 * 1024 * 4, 60 * 1000}],
-    % Modes = [],
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
-                                         additional_wal_file_modes => Modes}, []),
+    Conf = ?config(wal_conf, Config),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
@@ -206,13 +201,12 @@ out_of_seq_writes(Config) ->
     ok.
 
 roll_over(Config) ->
-    Dir = ?config(wal_dir, Config),
+    Conf = ?config(wal_conf, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     NumWrites = 5,
     % configure max_wal_size_bytes
-    {ok, _Pid} = ra_log_wal:start_link(#{dir => Dir,
-                                         max_wal_size_bytes => 1024 * NumWrites,
-                                         segment_writer => Self}, []),
+    {ok, _Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
+                                             segment_writer => Self}, []),
     handle_seg_writer_await(),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
@@ -220,7 +214,7 @@ roll_over(Config) ->
          ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
-    receive {ra_log_event, {written, {1, NumWrites, 1}}} -> ok
+    receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
     after 5000 -> throw(written_timeout)
     end,
 
@@ -246,17 +240,18 @@ recover_truncated_write(Config) ->
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
-    Dir = ?config(wal_dir, Config),
+    Conf0 = ?config(wal_conf, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Conf = Conf0#{segment_writer => Self},
     Data = <<42:256/unit:8>>,
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
     ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
@@ -265,18 +260,18 @@ recover_truncated_write(Config) ->
     ok.
 
 recover_after_roll_over(Config) ->
-    Dir = ?config(wal_dir, Config),
+    Conf0 = ?config(wal_conf, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = <<42:256/unit:8>>,
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self,
-                                      max_wal_size_bytes => byte_size(Data) * 75,
-                                      compute_checksums => true}, []),
+    Conf = Conf0#{segment_writer => Self,
+                  max_wal_size_bytes => byte_size(Data) * 75},
+    {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
-    {ok, Wal} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    {ok, Wal} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
@@ -287,11 +282,11 @@ recover(Config) ->
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
-    Dir = ?config(wal_dir, Config),
+    Conf0 = ?config(wal_conf, Config),
     {registered_name, Self} = erlang:process_info(self(), registered_name),
+    Conf = Conf0#{segment_writer => Self},
     Data = <<42:256/unit:8>>,
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self,
-                                      compute_checksums => true}, []),
+    {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
@@ -300,7 +295,7 @@ recover(Config) ->
      || Idx <- lists:seq(101, 200)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
-    {ok, _} = ra_log_wal:start_link(#{dir => Dir, segment_writer => Self}, []),
+    {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
