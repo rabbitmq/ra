@@ -214,23 +214,37 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     % if the last_index exists and has a matching term we can forward
     % match_index and update next_index directly
     {Peer, Log} = case ra_log:fetch_term(LastIdx, Log0) of
-                      {LastTerm, L} when LastIdx >= MI -> % entry exists we can forward
-                          ?INFO("~p: setting last index for ~p ~p", [Id, PeerId, LastIdx]),
+                      {undefined, L} ->
+                          % entry was not found - simply set next index to
+                          ?INFO("~p: setting next index for ~p ~p",
+                                [Id, PeerId, NextIdx]),
+                          {Peer0#{match_index => LastIdx,
+                                  next_index => NextIdx}, L};
+                      % entry exists we can forward
+                      {LastTerm, L} when LastIdx >= MI ->
+                          ?INFO("~p: setting last index for ~p ~p",
+                                [Id, PeerId, LastIdx]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => NextIdx}, L};
                       {_Term, L} when LastIdx < MI ->
-                          % TODO: this can only really happen when peers are non-persistent.
-                          % should they turn-into non-voters when this sitution is detected
-                          ?ERR("~p leader: peer returned last_index [~p in ~p] lower than recorded "
-                               "match index [~p]. Resetting peers state to last_index.~n",
+                          % TODO: this can only really happen when peers are
+                          % non-persistent.
+                          % should they turn-into non-voters when this sitution
+                          % is detected
+                          ?ERR("~p leader: peer returned last_index [~p in ~p]"
+                               " lower than recorded match index [~p]."
+                                "Resetting peer's state to last_index.~n",
                                [Id, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
                       {EntryTerm, L} ->
-                          ?INFO("~p leader received last_index with different term ~p~n",
-                               [Id, EntryTerm]),
-                          % last_index has a different term
-                          % The peer must have received an entry from a previous leader
+                          ?INFO("~p leader received last_index from ~p with "
+                                "different term ~p~n",
+                                [Id, PeerId, EntryTerm]),
+                          % last_index has a different term or entry does not
+                          % exist
+                          % The peer must have received an entry from a previous
+                          % leader
                           % and the current leader wrote a different entry at the same
                           % index in a different term.
                           % decrement next_index but don't go lower than match index.
@@ -771,7 +785,7 @@ update_meta(Updates, #{log := Log0} = State) ->
     State1#{log => Log}.
 
 update_term(Term, State = #{current_term := CurTerm})
-  when Term > CurTerm ->
+  when Term =/= undefined andalso Term > CurTerm ->
         update_meta([{current_term, Term},
                      {voted_for, undefined}], State);
 update_term(_, State) ->
@@ -796,8 +810,6 @@ is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
 
 has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
     case ra_log:fetch_term(Idx, Log0) of
-        {Term, Log} ->
-            {entry_ok, State#{log => Log}};
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
                 {Idx, Term} ->
@@ -807,6 +819,8 @@ has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
                 _ ->
                     {missing, State#{log => Log}}
             end;
+        {Term, Log} ->
+            {entry_ok, State#{log => Log}};
         {_OtherTerm, Log} ->
             {term_mismatch, State#{log => Log}}
     end.
@@ -993,7 +1007,7 @@ append_cluster_change(Cluster, From, ReplyMode,
 append_entries_reply(Term, Success, State = #{log := Log}) ->
     % ah - we can't use the the last received idx
     % as it may not have been persisted yet
-    % also we can use the last writted Idx as then
+    % also we can't use the last writted Idx as then
     % the follower may resent items that are currently waiting to
     % be written.
     {LWIdx, LWTerm} = ra_log:last_written(Log),
