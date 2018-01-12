@@ -14,7 +14,7 @@
          fetch/2,
          fetch_term/2,
          next_index/1,
-         write_snapshot/2,
+         install_snapshot/2,
          read_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
@@ -171,57 +171,39 @@ append({Idx, _, _}, #state{last_index = LastIdx}) ->
     Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b", [Idx, LastIdx+1])),
     exit({integrity_error, Msg}).
 
-
 -spec write(Entries :: [log_entry()],
             State :: ra_log_file_state()) ->
     {queued, ra_log_file_state()} |
     {error, {integrity_error, term()} | wal_down}.
-write([{FstIdx, _, _} | Rest] = Entries,
-      State0 = #state{last_index = LastIdx}) when FstIdx =< LastIdx + 1,
-                                                  FstIdx >= 0 ->
-    % TODO: wal should provide batch api
-    case verify_entries(FstIdx, Rest) of
-        ok ->
-            try
-                State = lists:foldl(fun (Entry, S) ->
-                                            wal_write(S, Entry)
-                                    end, State0, Entries),
-                {queued, State}
-            catch
-                exit:wal_down ->
-                    {error, wal_down}
+write([{FstIdx, _, _} = First | Rest] = Entries,
+      #state{last_index = LastIdx,
+             snapshot_state = SnapState} = State00)
+  when FstIdx =< LastIdx + 1 andalso FstIdx >= 0 ->
+    case SnapState of
+        {SnapIdx, _, _} when FstIdx =:= SnapIdx +1 ->
+            % it is the next entry after a snapshot
+            % we need to tell the wal to truncate as we
+            % are not going to receive any entries prior to the snapshot
+            case verify_entries(FstIdx, Rest) of
+                ok ->
+                    State0 = wal_truncate_write(State00, First),
+                    % write the rest normally
+                    State = lists:foldl(fun (Entry, S) ->
+                                                wal_write(S, Entry)
+                                        end, State0, Rest),
+                    {queued, State};
+                Error ->
+                    Error
             end;
-        Error ->
-            Error
-    end;
-write([{FstIdx, _, _} = First | Entries],
-      State00 = #state{snapshot_index_in_progress = SnapIdx})
-      when FstIdx =:= SnapIdx + 1 ->
-    % the next write after a snapshot has started should be a "truncating" write
-    % to the WAL
-    case verify_entries(FstIdx, Entries) of
-        ok ->
-            State0 = wal_truncate_write(State00, First),
-                                                % write the rest normally
-            State = lists:foldl(fun (Entry, S) ->
-                                        wal_write(S, Entry)
-                                end, State0, Entries),
-            {queued, State};
-        Error ->
-            Error
+        _ ->
+            write_entries(Entries, State00)
     end;
 write([], State) ->
     {queued, State};
-write([{Idx, _, _} | _], #state{last_index = LastIdx}) ->
-    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b", [Idx, LastIdx+1])),
-    {error, {integrity_error, Msg}}.
-
-verify_entries(_, []) ->
-    ok;
-verify_entries(Idx, [{NextIdx, _, _} | Tail]) when Idx + 1 == NextIdx ->
-    verify_entries(NextIdx, Tail);
-verify_entries(Idx, Tail) ->
-    Msg = io_lib:format("tried writing ~p - expected ~b", [Tail, Idx+1]),
+write([{Idx, _, _} | _], #state{id = Id, last_index = LastIdx}) ->
+    Msg = lists:flatten(io_lib:format("~p: ra_log_file:write/2 "
+                                      "tried writing ~b - expected ~b",
+                                      [Id, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
@@ -286,7 +268,8 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
         X ->
-            ?INFO("~p: written event did not find term ~p found ~p", [Id, {ToIdx, Term}, X]),
+            ?INFO("~p: written event did not find term ~p found ~p",
+                  [Id, {ToIdx, Term}, X]),
             State0
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
@@ -336,7 +319,8 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("~p: snapshot_written at ~b. Obsolete segments ~p", [Id, Idx, Obsolete]),
+                ?INFO("~p: snapshot_written at ~b. Obsolete segments ~p",
+                      [Id, Idx, Obsolete]),
                 % close any open segments
                 [ok = ra_log_file_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
@@ -397,12 +381,16 @@ fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
             end
     end.
 
--spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
-                     State :: ra_log_file_state()) ->
+-spec install_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
+                       State :: ra_log_file_state()) ->
     ra_log_file_state().
-write_snapshot(Snapshot, #state{directory = Dir} = State) ->
-    ok = ra_log_file_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
-    State#state{snapshot_index_in_progress = element(1, Snapshot)}.
+install_snapshot({Idx, Term, _, _} = Snapshot,
+                 #state{directory = Dir} = State) ->
+    % syncronous call when follower receives a snapshot
+    {ok, File} = ra_log_file_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    handle_event({snapshot_written, {Idx, Term}, File},
+    State#state{last_index = Idx,
+                last_written_index_term = {Idx, Term}}).
 
 -spec read_snapshot(State :: ra_log_file_state()) ->
     maybe(ra_log:ra_log_snapshot()).
@@ -453,8 +441,7 @@ update_release_cursor(Idx, Cluster, MachineState,
             % here.
             % The MachineState is a dehydrated version of the state at
             % the release_cursor point.
-            write_snapshot({Idx, Term, Cluster, MachineState},
-                           State#state{snapshot_index_in_progress = Idx});
+            write_snapshot({Idx, Term, Cluster, MachineState}, State);
         false ->
             State0
     end.
@@ -642,7 +629,6 @@ segment_term_query0(_Idx, [], Open) ->
     {undefined, Open}.
 
 
-
 cache_take(Start, Num, #state{cache = Cache, last_index = LastIdx}) ->
     Highest = min(LastIdx, Start + Num - 1),
     % cache needs to be queried in reverse to ensure
@@ -713,6 +699,37 @@ compact_seg_refs(SegRefs) ->
                               false -> [S | Acc]
                           end
                   end, [], SegRefs)).
+
+verify_entries(_, []) ->
+    ok;
+verify_entries(Idx, [{NextIdx, _, _} | Tail]) when Idx + 1 == NextIdx ->
+    verify_entries(NextIdx, Tail);
+verify_entries(Idx, Tail) ->
+    Msg = io_lib:format("ra_log_file:verify_entries/2 "
+                        "tried writing ~p - expected ~b",
+                        [Tail, Idx+1]),
+    {error, {integrity_error, lists:flatten(Msg)}}.
+
+write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
+    case verify_entries(FstIdx, Rest) of
+        ok ->
+            try
+                % TODO: wal should provide batch api
+                State = lists:foldl(fun (Entry, S) ->
+                                            wal_write(S, Entry)
+                                    end, State0, Entries),
+                {queued, State}
+            catch
+                exit:wal_down ->
+                    {error, wal_down}
+            end;
+        Error ->
+            Error
+    end.
+
+write_snapshot(Snapshot, #state{directory = Dir} = State) ->
+    ok = ra_log_file_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
+    State#state{snapshot_index_in_progress = element(1, Snapshot)}.
 
 %%%% TESTS
 

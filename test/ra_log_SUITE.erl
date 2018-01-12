@@ -254,7 +254,7 @@ meta(Config) ->
     ok.
 
 snapshot(Config) ->
-    % tests explicit externally triggered snaphostting
+    % tests installation of snapshot received from leader
     Log0 = ?config(ra_log, Config),
     % no snapshot yet
     undefined = ra_log:read_snapshot(Log0),
@@ -263,13 +263,7 @@ snapshot(Config) ->
     {LastIdx, LastTerm} = ra_log:last_index_term(Log2),
     Cluster = #{node1 => #{}},
     Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
-    Log3 = ra_log:write_snapshot(Snapshot, Log2),
-    Log4 = receive
-               {ra_log_event, Evt} ->
-                   ra_log:handle_event(Evt, Log3)
-           after 2000 ->
-                 throw(ra_log_event_timeout)
-           end,
+    Log4 = ra_log:install_snapshot(Snapshot, Log2),
 
     % ensure entries prior to snapshot are no longer there
     {undefined, Log5} = ra_log:fetch(LastIdx, Log4),

@@ -88,7 +88,7 @@ init(_Config) ->
       voted_for := some_node} = ra_node:init(InitConf),
     % snapshot
     Snapshot = {3, 5, Cluster, "hi1+2+3"},
-    LogS = ra_log:write_snapshot(Snapshot, Log),
+    LogS = ra_log:install_snapshot(Snapshot, Log),
     meck:expect(ra_log, init, fun (_, _) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -1060,7 +1060,7 @@ leader_receives_install_snapshot_result(_Config) ->
                       [{1, 1, noop},
                        {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
                        {4, 1, {'$usr',pid, {enq,pear}, after_log_append}}]),
-    Log = ra_log:write_snapshot({2,1,
+    Log = ra_log:install_snapshot({2,1,
                                  #{n1 => #{match_index => 0},
                                    n2 => #{match_index => 2,next_index => 3},
                                    n3 => #{match_index => 2,next_index => 3}},

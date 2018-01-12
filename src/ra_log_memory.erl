@@ -12,7 +12,7 @@
          fetch_term/2,
          flush/2,
          next_index/1,
-         write_snapshot/2,
+         install_snapshot/2,
          read_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
@@ -163,10 +163,10 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
--spec write_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
+-spec install_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
                      State :: ra_log_memory_state()) ->
     ra_log_memory_state().
-write_snapshot(Snapshot, #state{entries = Log0} = State) ->
+install_snapshot(Snapshot, #state{entries = Log0} = State) ->
     Index  = element(1, Snapshot),
     % discard log
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),

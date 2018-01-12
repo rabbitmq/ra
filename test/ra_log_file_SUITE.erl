@@ -135,8 +135,7 @@ read_one(Config) ->
     {[_], Log} = ra_log_file:take(1, 5, Log2),
     % read out of range
     {[], Log} = ra_log_file:take(5, 5, Log2),
-    [{_, M1, M2, M3, M4} = M] = ets:lookup(ra_log_file_metrics, Self),
-    ct:pal("M ~p", [M]),
+    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
     % read two entries
     ?assert(M1 + M2 + M3 + M4 =:= 1),
     ra_log_file:close(Log),
@@ -153,7 +152,6 @@ take_after_overwrite_and_init(Config) ->
     % fake lost segments event
     Log5 = deliver_written_log_events(Log4, 200),
     % ensure we cannot take stale entries
-    ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     {[{1, 2, _}], Log6} = ra_log_file:take(1, 5, Log5),
     _ = ra_log_file:close(Log6),
     Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
@@ -407,7 +405,7 @@ snapshot_recovery(Config) ->
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
     Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
-    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+    Log2 = ra_log_file:install_snapshot(Snapshot, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log_file:close(Log3),
     Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
@@ -427,7 +425,7 @@ snapshot_installation(Config) ->
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
     Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
-    Log2 = ra_log_file:write_snapshot(Snapshot, Log1),
+    Log2 = ra_log_file:install_snapshot(Snapshot, Log1),
 
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes

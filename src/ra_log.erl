@@ -16,7 +16,7 @@
          last_written/1,
          next_index/1,
          read_snapshot/1,
-         write_snapshot/2,
+         install_snapshot/2,
          snapshot_index_term/1,
          update_release_cursor/4,
          read_meta/2,
@@ -88,8 +88,8 @@
     maybe(ra_idxterm()).
 
 % writes snapshot to storage and discards any prior entries
--callback write_snapshot(Snapshot :: ra_log_snapshot(),
-                         State :: ra_log_state()) ->
+-callback install_snapshot(Snapshot :: ra_log_snapshot(),
+                           State :: ra_log_state()) ->
     ra_log_state().
 
 -callback read_snapshot(State :: ra_log_state()) ->
@@ -214,9 +214,9 @@ last_written({Mod, Log}) ->
 next_index({Mod, Log}) ->
     Mod:next_index(Log).
 
--spec write_snapshot(Snapshot :: ra_log_snapshot(), State::ra_log()) -> ra_log().
-write_snapshot(Snapshot, {Mod, Log0}) ->
-    Log = Mod:write_snapshot(Snapshot, Log0),
+-spec install_snapshot(Snapshot :: ra_log_snapshot(), State::ra_log()) -> ra_log().
+install_snapshot(Snapshot, {Mod, Log0}) ->
+    Log = Mod:install_snapshot(Snapshot, Log0),
     {Mod, Log}.
 
 -spec read_snapshot(State::ra_log()) -> maybe(ra_log_snapshot()).

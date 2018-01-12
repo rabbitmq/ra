@@ -554,7 +554,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                            current_term := CurTerm}) when Term >= CurTerm ->
     ?INFO("~p: installing snapshot at index ~p in ~p", [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
-    Log = ra_log:write_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
+    Log = ra_log:install_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
     % TODO: should we also update metadata?
     State = State0#{log => Log,
                     current_term => Term,
