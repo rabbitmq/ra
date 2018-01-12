@@ -117,8 +117,8 @@ leader_call(ServerRef, Msg, Timeout) ->
 init([Config0]) ->
     Config = maps:merge(config_defaults(), Config0),
     process_flag(trap_exit, true),
-    #{id := Id, cluster := Cluster,
-      machine_state := MacState} = NodeState = ra_node:init(Config),
+    {#{id := Id, cluster := Cluster,
+       machine_state := MacState} = NodeState, Effects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
     % connect to each peer node before starting election timeout
@@ -132,19 +132,20 @@ init([Config0]) ->
     BroadcastTime = maps:get(broadcast_time, Config),
     ElectionTimeoutStrat = maps:get(election_timeout_strategy, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
-    State = #state{node_state = NodeState, name = Key,
+    State0 = #state{node_state = NodeState, name = Key,
                    election_timeout_strategy = ElectionTimeoutStrat,
                    broadcast_time = BroadcastTime,
                    await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
           [Id, MacState, Peers]),
+    {State, Actions} = handle_effects(Effects, cast, State0),
     % TODO: if election timeout strategy is monitor and hint only we should
     % at this point try to ping all peers so that if there is a current leader
     % they could make themselves known
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
-    {ok, follower, State, election_timeout_action(follower, State)}.
+    {ok, follower, State, [election_timeout_action(follower, State) | Actions]}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -348,6 +349,8 @@ await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
+            ?INFO("~p await_condition -> follower term: ~p~n",
+                  [Id, current_term(State)]),
             {next_state, follower, NewState,
              [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};

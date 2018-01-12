@@ -100,7 +100,7 @@
 name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
 
--spec init(ra_node_config()) -> ra_node_state().
+-spec init(ra_node_config()) -> {ra_node_state(), ra_effects()}.
 init(#{id := Id,
        initial_nodes := InitialNodes,
        log_module := LogMod,
@@ -121,25 +121,25 @@ init(#{id := Id,
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
 
-    State = #{id => Id,
-              cluster => Cluster0,
-              % TODO: there may be scenarios when a single node starts up but hasn't
-              % yet re-applied its noop command that we may receive other join
-              % commands that can't be applied.
-              % TODO: what if we have snapshotted and there is no `noop` command
-              % to be applied in the current term?
-              cluster_change_permitted => false,
-              cluster_index_term => {0, 0},
-              pending_cluster_changes => [],
-              current_term => CurrentTerm,
-              voted_for => VotedFor,
-              commit_index => CommitIndex,
-              last_applied => CommitIndex,
-              log => Log1,
-              machine_apply_fun => wrap_machine_fun(MachineApplyFun),
-              machine_state => MacState,
-              % for snapshots
-              initial_machine_state => InitialMachineState},
+    State0 = #{id => Id,
+               cluster => Cluster0,
+               % TODO: there may be scenarios when a single node starts up but hasn't
+               % yet re-applied its noop command that we may receive other join
+               % commands that can't be applied.
+               % TODO: what if we have snapshotted and there is no `noop` command
+               % to be applied in the current term?
+               cluster_change_permitted => false,
+               cluster_index_term => {0, 0},
+               pending_cluster_changes => [],
+               current_term => CurrentTerm,
+               voted_for => VotedFor,
+               commit_index => CommitIndex,
+               last_applied => CommitIndex,
+               log => Log1,
+               machine_apply_fun => wrap_machine_fun(MachineApplyFun),
+               machine_state => MacState,
+               % for snapshots
+               initial_machine_state => InitialMachineState},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -151,9 +151,15 @@ init(#{id := Id,
                               Acc
                       end, {{SnapshotIndexTerm, Cluster0}, Log1}),
     % TODO: do we need to set previous cluster here?
-    State#{cluster => Cluster,
-           cluster_index_term => ClusterIndexTerm,
-           log => Log}.
+    State = State0#{cluster => Cluster,
+                    cluster_index_term => ClusterIndexTerm,
+                    log => Log},
+    % send unsuccessful append entries reply to each known peer
+    Reply = append_entries_reply(CurrentTerm, false, State),
+    Effects = [{cast, PeerId, {Id, Reply}}
+               || {PeerId, _} <- maps:to_list(peers(State))],
+    {State, Effects}.
+
 
 % the peer id in the append_entries_reply message is an artifact of
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
@@ -175,7 +181,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
             {State, Rpcs} = make_pipelined_rpcs(State2),
-            Effects = [{send_rpcs, false, Rpcs},
+            Effects = [{send_rpcs, true, Rpcs},
                        {incr_metrics, ra_metrics, [{3, Applied}]} | Effects0],
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
@@ -268,8 +274,6 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                         % fake written event
                         {State0,
                          [{next_event, {ra_log_event, {written, {Idx, Idx, Term}}}}]};
-                        % we have synced - forward leader match_index
-                        % evaluate_quorum(State0);
                     queued ->
                         {State0, []}
                 end,
@@ -331,7 +335,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                                  State0),
 
             {State, Rpcs} = make_pipelined_rpcs(State1),
-            Effects = [{send_rpcs, false, Rpcs}],
+            Effects = [{send_rpcs, true, Rpcs}],
             {leader, State, Effects}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
@@ -703,7 +707,7 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
 make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
                #{log := Log0, current_term := Term, id := Id,
                  commit_index := CommitIndex} = State) ->
-    Next = PrevIdx  + 1,
+    Next = PrevIdx + 1,
     {Entries, Log} = ra_log:take(Next, Num, Log0),
     LastIndex = case Entries of
                     [] -> PrevIdx;

@@ -63,6 +63,9 @@ end_per_testcase(_TestCase, Config) ->
 
 id(X) -> X.
 
+ra_node_init(Conf) ->
+    element(1, ra_node:init(Conf)).
+
 init(_Config) ->
     #{id := Id,
       machine_apply_fun := ApplyFun,
@@ -78,14 +81,14 @@ init(_Config) ->
                  init_fun => fun (_) -> undefined end},
     % new
     #{current_term := 0,
-      voted_for := undefined} = ra_node:init(InitConf),
+      voted_for := undefined} = ra_node_init(InitConf),
     % previous data
     {ok, Log1} = ra_log:write_meta(voted_for, some_node, Log0),
     {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log1),
     ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_, _) -> Log end),
     #{current_term := 5,
-      voted_for := some_node} = ra_node:init(InitConf),
+      voted_for := some_node} = ra_node_init(InitConf),
     % snapshot
     Snapshot = {3, 5, Cluster, "hi1+2+3"},
     LogS = ra_log:install_snapshot(Snapshot, Log),
@@ -94,7 +97,7 @@ init(_Config) ->
       commit_index := 3,
       machine_state := "hi1+2+3",
       cluster := Cluster,
-      voted_for := some_node} = ra_node:init(InitConf),
+      voted_for := some_node} = ra_node_init(InitConf),
     ok.
 
 init_restores_cluster_changes(_Config) ->
@@ -108,7 +111,7 @@ init_restores_cluster_changes(_Config) ->
     {leader, State00, _} =
         ra_node:handle_candidate(#request_vote_result{term = 0,
                                                       vote_granted = true},
-                                 (ra_node:init(InitConf))#{votes => 0,
+                                 (ra_node_init(InitConf))#{votes => 0,
                                                            voted_for => n1}),
     {leader, State0 = #{cluster := Cluster0}, [_, _, {next_event, Next}]} =
         ra_node:handle_leader({command, noop}, State00),
@@ -125,7 +128,7 @@ init_restores_cluster_changes(_Config) ->
     ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_, _) -> Log0 end),
 
-    #{cluster := #{n1 := _, n2 := _}} = ra_node:init(InitConf),
+    #{cluster := #{n1 := _, n2 := _}} = ra_node_init(InitConf),
     ok.
 
 election_timeout(_Config) ->
@@ -522,7 +525,7 @@ append_entries_reply_success(_Config) ->
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
     ExpectedEffects =
-        {send_rpcs, false,
+        {send_rpcs, true,
          [ {n3, #append_entries_rpc{term = 5, leader_id = n1,
                                     prev_log_index = 1,
                                     prev_log_term = 1,
@@ -1090,7 +1093,7 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
                                     next_index := 5}}},
-     [{send_rpcs, false, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
+     [{send_rpcs, true, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
     ct:pal("Rpcs ~p", [Rpcs]),
     ?assert(lists:any(fun({n3,
                            #append_entries_rpc{entries = [{3, _, _},
@@ -1228,7 +1231,7 @@ init_nodes(NodeIds, ApplyFun, MacState) ->
                                  log_init_args => #{},
                                  apply_fun => ApplyFun,
                                  init_fun => fun (_) -> MacState end},
-                        Acc#{NodeId => {follower, ra_node:init(Args), []}}
+                        Acc#{NodeId => {follower, ra_node_init(Args), []}}
                 end, #{}, NodeIds).
 
 run_election_without(CandId, WithoutId, Nodes0) ->
@@ -1423,7 +1426,7 @@ empty_state(NumNodes, Id) ->
     Nodes = lists:foldl(fun(N, Acc) ->
                                 [list_to_atom("n" ++ integer_to_list(N)) | Acc]
                         end, [], lists:seq(1, NumNodes)),
-    ra_node:init(#{id => Id,
+    ra_node_init(#{id => Id,
                    initial_nodes => Nodes,
                    log_module => ra_log_memory,
                    log_init_args => #{},

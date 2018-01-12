@@ -10,8 +10,8 @@
 all() ->
     [
      {group, ra_log_memory},
-     {group, ra_log_file},
-     {group, ra_log_file_follower_timeouts}
+     {group, ra_log_file}
+     % {group, ra_log_file_follower_timeouts}
     ].
 
 all_tests() ->
@@ -82,14 +82,13 @@ init_per_group(ra_log_file = G, Config) ->
                   fun (Name, Nodes, ApplyFun, InitialState) ->
                           Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
-                          % {ok, _} = ra_log_wal:start_link(#{dir => Dir}, []),
                           Conf = #{log_module => ra_log_file,
                                    log_init_args => #{data_dir => Dir,
                                                       id => Name},
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   election_timeout_strategy => follower_timeout,
+                                   election_timeout_strategy => monitor_and_node_hint,
                                    await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
@@ -110,7 +109,7 @@ init_per_group(ra_log_file_follower_timeouts = G, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   election_timeout_strategy => monitor_and_node_hint,
+                                   election_timeout_strategy => follower_timeout,
                                    await_condition_timeout => 5000},
                           ra:start_node(Name, Conf)
                   end
