@@ -68,6 +68,8 @@ handle_cast({appends, false, Appends}, State0) ->
 handle_cast({appends, true, Appends}, State0) ->
     % urgent send append entries now
     State = State0#state{appends = Appends},
+
+    ?INFO("proxy sending ~p~n", [Appends]),
     ok = broadcast(State),
     % as we have just broadcast we can reset the timer
     {noreply, reset_timer(State)}.
