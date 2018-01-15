@@ -35,6 +35,7 @@
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 50).
 -define(DEFAULT_ELECTION_MULT, 3).
+-define(RPC_INTERVAL_MS, 1000).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 
@@ -62,7 +63,6 @@
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
                 broadcast_time :: non_neg_integer(),
-                % proxy :: maybe(pid()),
                 monitors = #{} :: #{pid() => reference()},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 election_timeout_strategy :: ra_node:ra_election_timeout_strategy(),
@@ -181,17 +181,6 @@ leader({call, From}, {state_query, Spec},
          State = #state{node_state = NodeState}) ->
     Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
-% leader(_EventType, {'EXIT', Proxy0, Reason},
-%        State0 = #state{proxy = Proxy0,
-%                        broadcast_time = Interval,
-%                        election_timeout_strategy = ElectionTimeoutStrat,
-%                        node_state = NodeState0 = #{id := Id}}) ->
-%     ?ERR("~p leader proxy exited with ~p~nrestarting..~n", [Id, Reason]),
-%     % TODO: this is a bit hacky - refactor
-%     {NodeState, Rpcs} = ra_node:make_rpcs(NodeState0),
-%     {ok, Proxy} = ra_proxy:start_link(Id, self(), Interval, ElectionTimeoutStrat),
-%     ok = ra_proxy:proxy(Proxy, true, Rpcs),
-%     {keep_state, State0#state{proxy = Proxy, node_state = NodeState}};
 leader(info, {node_down, _}, State) ->
     {keep_state, State};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
@@ -216,13 +205,17 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
         error ->
             {keep_state, State0, []}
     end;
+leader(_, rpc_timeout, State) ->
+    {NodeState, Rpcs} = ra_node:make_rpcs(State#state.node_state),
+    ?INFO("rpc_timeout rpcs ~p", [Rpcs]),
+    {keep_state, ra_node_proc:send_rpcs(Rpcs, State#state{node_state = NodeState}),
+     set_rpc_timer(State, [])};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            % State2 = stop_proxy(State1),
             {State, Actions} = handle_effects(Effects, EventType, State1),
             {next_state, follower, State,
              maybe_set_election_timeout(State, Actions)};
@@ -270,7 +263,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            {next_state, leader, State, Actions ++ NextEvents}
+            {next_state, leader, State, set_rpc_timer(State, Actions ++ NextEvents)}
     end.
 
 follower({call, From}, {leader_call, _Cmd},
@@ -348,6 +341,7 @@ await_condition(info, {node_down, _}, State) ->
     {keep_state, State};
 await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
                                                 leader_monitor = MRef}) ->
+    % ?INFO("~p await_condition msg: ~p~n", [Id, Msg]),
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -378,7 +372,6 @@ terminate(Reason, _StateName,
     ?WARN("ra: ~p terminating with ~p~n", [Id, Reason]),
     _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
-    % _ = stop_proxy(State),
     _ = ra_node:terminate(NodeState),
     ok.
 
@@ -395,12 +388,6 @@ format_status(Opt, [_PDict, StateName, #state{node_state = #{id := Id} = NS}]) -
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-stop_proxy(#state{proxy = undefined} = State) ->
-    State;
-stop_proxy(#state{proxy = Proxy} = State) ->
-    catch(gen_server:stop(Proxy, normal, 100)),
-    State#state{proxy = undefined}.
 
 handle_leader(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, NodeState, Effects} = ra_node:handle_leader(Msg, NodeState0),
@@ -473,7 +460,7 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
     {State, Actions};
 handle_effect({send_rpcs, _IsUrgent, Rpcs}, _EvtType, State0, Actions) ->
     {Taken, State} = timer:tc(fun() -> ra_node_proc:send_rpcs(Rpcs, State0) end),
-    ?INFO("send_rpcs took ~pms", [Taken / 1000]),
+    ?INFO("send_rpcs took ~pms ~p", [Taken / 1000, Rpcs]),
     {State, Actions};
 handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
@@ -510,7 +497,7 @@ send_rpcs(Rpcs, State) ->
                 end, State, Rpcs).
 
 send(To, Msg, State) ->
-    case erlang:send(To, Msg, [noconnect]) of
+    case erlang:send(To, {'$gen_cast', Msg}, [noconnect]) of
         ok -> State;
         noconnect ->
             % TODO: implement
@@ -533,6 +520,11 @@ election_timeout_action(follower, #state{broadcast_time = Timeout}) ->
 election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
+
+% sets the rpc timer for ensuring liveness with nodes that have fallen behind
+set_rpc_timer(_State, Actions) ->
+    [{{timeout, rpc_timeout}, ?RPC_INTERVAL_MS, rpc_timeout} | Actions].
+
 
 follower_leader_change(#state{node_state = #{leader_id := L}},
                        #state{node_state = #{leader_id := L}} = New) ->

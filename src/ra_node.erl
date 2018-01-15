@@ -683,11 +683,12 @@ make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
                        [Entry | Entries]}
               end, {State0, []}, pipelineable_peers(State0)).
 
+% makes empty append entries for peers that aren't pipelineable 
 make_rpcs(State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
                       {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
                       {S, [Entry | Entries]}
-              end, {State, []}, peers(State)).
+              end, {State, []}, stale_peers(State)).
 
 append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
                                            current_term := Term} = State) ->
@@ -790,8 +791,8 @@ peers(#{id := Id, cluster := Nodes}) ->
     maps:remove(Id, Nodes).
 
 % returns the peers that should receive piplined entries
-pipelineable_peers(#{id := Id, cluster := Nodes,
-                     commit_index := CommitIndex, log := Log}) ->
+pipelineable_peers(#{commit_index := CommitIndex,
+                     log := Log} = State) ->
     NextIdx  = ra_log:next_index(Log),
     maps:filter(fun (_Id, #{next_index := NI}) when NI < NextIdx ->
                         % there are unsent items
@@ -801,7 +802,19 @@ pipelineable_peers(#{id := Id, cluster := Nodes,
                         true;
                     (_Id, _) ->
                         false
-                end, maps:remove(Id, Nodes)).
+                end, peers(State)).
+
+% peers that could need an update
+% TODO: introduce a last_seen timestamp to avoid sending additional message
+% in high-load scenarios
+stale_peers(State) ->
+    maps:filter(fun (_Id, #{next_index := NI,
+                            match_index := MI}) when MI < NI - 1 ->
+                        % there are unconfirmed items
+                        true;
+                    (_Id, _) ->
+                        false
+                end, peers(State)).
 
 peer_ids(State) ->
     maps:keys(peers(State)).
