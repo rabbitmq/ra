@@ -54,7 +54,9 @@
       machine_state => term(),
       initial_machine_state => term(),
       broadcast_time => non_neg_integer(), % milliseconds
-      condition => ra_await_condition_fun()}.
+      condition => ra_await_condition_fun(),
+      condition_timeout_effects => [ra_effect()]
+     }.
 
 -type ra_state() :: leader | follower | candidate.
 
@@ -95,6 +97,9 @@
               ra_election_timeout_strategy/0]).
 
 -define(AER_CHUNK_SIZE, 5).
+% TODO: test what is a good deafult here
+% TODO: make configurable
+-define(MAX_PIPELINE_DISTANCE, 1000).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
@@ -138,6 +143,7 @@ init(#{id := Id,
                log => Log1,
                machine_apply_fun => wrap_machine_fun(MachineApplyFun),
                machine_state => MacState,
+               condition_timeout_effects => [],
                % for snapshots
                initial_machine_state => InitialMachineState},
     % Find last cluster change and idxterm and use as initial cluster
@@ -228,8 +234,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                   next_index => NextIdx}, L};
                       % entry exists we can forward
                       {LastTerm, L} when LastIdx >= MI ->
-                          ?INFO("~p: setting last index for ~p ~p",
-                                [Id, PeerId, LastIdx]),
+                          ?INFO("~p: setting last index to ~b, next_index ~p for ~p",
+                                [Id, LastIdx, NextIdx, PeerId]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => NextIdx}, L};
                       {_Term, L} when LastIdx < MI ->
@@ -485,9 +491,12 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
             ?INFO("~p: follower did not have entry at ~b in ~b~n",
                   [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
+            Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition, State0#{leader_id => LeaderId,
-                                      condition => fun follower_catchup_cond/2},
-             [cast_reply(Id, LeaderId, Reply)]};
+                                      condition => fun follower_catchup_cond/2,
+                                      % repeat reply effect on condition timeout
+                                      condition_timeout_effects => Effects},
+             Effects};
         {term_mismatch, State0} ->
             ?INFO("~p: term mismatch/1 follower had entry at ~b but not with term ~b~n",
                   [Id, PLIdx, PLTerm]),
@@ -603,8 +612,9 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, cast, Msg}]};
 handle_await_condition(election_timeout, State) ->
     handle_election_timeout(State);
-handle_await_condition(await_condition_timeout, State) ->
-    {follower, State, []};
+handle_await_condition(await_condition_timeout,
+                       #{condition_timeout_effects := Effects} = State) ->
+    {follower, State#{condition_timeout_effects => []}, Effects};
 handle_await_condition(Msg,#{condition := Cond} = State) ->
     case Cond(Msg, State) of
         true ->
@@ -662,13 +672,16 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
     Effects = [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects1],
     {State, Effects}.
 
-make_pipelined_rpcs(State0) ->
+make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
     maps:fold(fun(PeerId, Peer = #{next_index := Next}, {S0, Entries}) ->
                       {LastIdx, Entry, S} =
                           append_entries_or_snapshot(PeerId, Next, S0),
-                      {update_peer(PeerId, Peer#{next_index => LastIdx+1}, S),
+                      {update_peer(PeerId,
+                                   Peer#{next_index => LastIdx+1,
+                                         commit_index => CommitIndex},
+                                   S),
                        [Entry | Entries]}
-              end, {State0, []}, peers(State0)).
+              end, {State0, []}, pipelineable_peers(State0)).
 
 make_rpcs(State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
@@ -762,14 +775,33 @@ handle_election_timeout(State0 = #{id := Id, current_term := CurrentTerm}) ->
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     State = update_meta([{current_term, NewTerm}, {voted_for, Id}], State0),
-    {candidate,
-     State#{leader_id => undefined,
-            votes => 0},
+    {candidate, State#{leader_id => undefined,
+                       votes => 0},
      [{next_event, cast, VoteForSelf},
       {send_vote_requests, VoteRequests}]}.
 
+new_peer() ->
+    #{next_index => 1,
+      match_index => 0,
+      commit_index => 0,
+      pipelining_allowed => false}.
+
 peers(#{id := Id, cluster := Nodes}) ->
     maps:remove(Id, Nodes).
+
+% returns the peers that should receive piplined entries
+pipelineable_peers(#{id := Id, cluster := Nodes,
+                     commit_index := CommitIndex, log := Log}) ->
+    NextIdx  = ra_log:next_index(Log),
+    maps:filter(fun (_Id, #{next_index := NI}) when NI < NextIdx ->
+                        % there are unsent items
+                        true;
+                    (_Id, #{commit_index := CI}) when CI < CommitIndex ->
+                        % the commit index has been updated
+                        true;
+                    (_Id, _) ->
+                        false
+                end, maps:remove(Id, Nodes)).
 
 peer_ids(State) ->
     maps:keys(peers(State)).
@@ -942,8 +974,7 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
             % already a member do nothing
             {not_appended, State};
         _ ->
-            Cluster = OldCluster#{JoiningNode => #{next_index => 1,
-                                                   match_index => 0}},
+            Cluster = OldCluster#{JoiningNode => new_peer()},
             append_cluster_change(Cluster, From, ReplyMode, State)
     end;
 append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},

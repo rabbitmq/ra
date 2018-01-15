@@ -58,6 +58,7 @@ restart_ra(DataDir) ->
     ok = application:set_env(ra, data_dir, DataDir),
     ok = application:set_env(ra, segment_max_entries, 128),
     application:ensure_all_started(ra),
+    application:ensure_all_started(sasl),
     ok.
 
 init_per_group(ra_log_memory, Config) ->
@@ -261,6 +262,7 @@ start_nodes(Config) ->
                  {N1, _} -> {N2, node()};
                  _ -> {N1, node()}
              end,
+    ct:pal("shutting down ~p", [Target]),
     gen_statem:stop(Target, normal, 2000),
     % issue command to confirm n3 joined the cluster successfully
     {ok, {4, Term}, _} = ra:send_and_await_consensus({N3, node()}, 5,
@@ -427,17 +429,19 @@ contains(Match, Entries) ->
               end, Entries).
 
 follower_catchup(Config) ->
-    meck:new(ra_proxy, [passthrough]),
-    meck:expect(ra_proxy, proxy,
-                fun(F, S, [{_, #append_entries_rpc{entries = Entries}} | _] = T) ->
+    meck:new(ra_node_proc, [passthrough]),
+    meck:expect(ra_node_proc, send_rpcs,
+                fun([{_, #append_entries_rpc{entries = Entries}}] = T, S) ->
                         case contains(500, Entries) of
                             true ->
-                                ok;
+                                ct:pal("dropped 500"),
+                                S;
                             false ->
-                                meck:passthrough([F, S, T])
+                                ct:pal("passthrough ~p", [T]),
+                                meck:passthrough([T, S])
                         end;
-                   (F, S, T) ->
-                        meck:passthrough([F, S, T])
+                   (T, S) ->
+                        meck:passthrough([T, S])
                 end),
     StartNode = ?config(start_node_fun, Config),
     % suite unique node names
@@ -463,15 +467,20 @@ follower_catchup(Config) ->
     after 2000 ->
             case get_gen_statem_status({Follower, node()}) of
                 await_condition -> ok;
-                FollowerStatus0 -> exit({unexpected_follower_status, FollowerStatus0})
+                FollowerStatus0 ->
+                    exit({unexpected_follower_status, FollowerStatus0})
             end
     end,
     meck:unload(),
+    % we wait for the condition to time out - then the follower will re-issue
+    % the aer with the original condition which should trigger a re-wind of of
+    % the next_index and a subsequent resend of missing entries
     receive
         {consensus, IdxTerm} ->
             case get_gen_statem_status({Follower, node()}) of
                 follower -> ok;
-                FollowerStatus1 -> exit({unexpected_follower_status, FollowerStatus1})
+                FollowerStatus1 ->
+                    exit({unexpected_follower_status, FollowerStatus1})
             end,
             ok
     after 6000 ->
@@ -539,7 +548,7 @@ start_and_join(Ref, New, Config) ->
     StartNode = ?config(start_node_fun, Config),
     ServerRef = {Ref, node()},
     {ok, _, _} = ra:add_node(ServerRef, {New, node()}),
-    ok = StartNode(New, [], fun erlang:'+'/2, 0),
+    ok = StartNode(New, [ServerRef], fun erlang:'+'/2, 0),
     ok.
 
 start_local_cluster(Num, Name, ApplyFun, InitialState, Config) ->

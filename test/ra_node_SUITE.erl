@@ -468,7 +468,9 @@ follower_catchup_condition(_Config) ->
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
     {follower, State, [{next_event, cast, Msg}]} = ra_node:handle_await_condition(Msg, State),
-    {follower, State, []} = ra_node:handle_await_condition(await_condition_timeout, State),
+    {follower, _, [{cast, n1, {n1, #append_entries_reply{success = false,
+                                                         next_index = 4}}}]}
+    = ra_node:handle_await_condition(await_condition_timeout, State),
 
     {candidate, _, _} = ra_node:handle_await_condition(election_timeout, State).
 
@@ -526,17 +528,13 @@ append_entries_reply_success(_Config) ->
                                      last_index = 3, last_term = 5}},
     ExpectedEffects =
         {send_rpcs, true,
-         [ {n3, #append_entries_rpc{term = 5, leader_id = n1,
-                                    prev_log_index = 1,
-                                    prev_log_term = 1,
-                                    leader_commit = 3,
-                                    entries = [{2, 3, usr(<<"hi2">>)},
-                                               {3, 5, usr(<<"hi3">>)}]}},
-           {n2, #append_entries_rpc{term = 5, leader_id = n1,
-                                    prev_log_index = 3,
-                                    prev_log_term = 5,
-                                    leader_commit = 3}}
-           ]},
+         [{n3, #append_entries_rpc{term = 5, leader_id = n1,
+                                   prev_log_index = 1,
+                                   prev_log_term = 1,
+                                   leader_commit = 3,
+                                   entries = [{2, 3, usr(<<"hi2">>)},
+                                              {3, 5, usr(<<"hi3">>)}]}}
+         ]},
     % update match index
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 3}},
                commit_index := 3,
@@ -1049,8 +1047,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     % ExpectedN2NextIndex = 2,
     {leader, #{cluster := #{n2 := #{next_index := 4}}},
      [{send_rpcs, true,
-       [_,
-        {n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}]}
+       [{n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}]}
        = ra_node:handle_leader({n2, AER}, Leader0),
     ok.
 
