@@ -33,7 +33,8 @@ all_tests() ->
      start_and_join_then_leave_and_terminate,
      leader_steps_down_after_replicating_new_cluster,
      stop_leader_and_wait_for_elections,
-     follower_catchup
+     follower_catchup,
+     post_partition_liveness
     ].
 
 groups() ->
@@ -487,6 +488,43 @@ follower_catchup(Config) ->
               exit(consensus_not_achieved)
     end,
     terminate_cluster([N1, N2]).
+
+post_partition_liveness(Config) ->
+    meck:new(ra_node_proc, [passthrough]),
+    StartNode = ?config(start_node_fun, Config),
+    % suite unique node names
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    % start the first node and wait a bit
+    ok = StartNode (N1, [{N2, node()}], fun erlang:'+'/2, 0),
+    % start second node
+    ok = StartNode(N2, [{N1, node()}], fun erlang:'+'/2, 0),
+    timer:sleep(1000),
+    % a consensus command tells us there is a functioning cluster
+    {ok, _, Leader} = ra:send_and_await_consensus({N1, node()}, 5,
+                                                   ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+
+    % simulate partition
+    meck:expect(ra_node_proc, send_rpcs, fun(_, S) -> S end),
+    % send an entry that will not be replicated
+    {ok, IdxTerm, Leader} = ra:send_and_notify(Leader, 500),
+    % assert we don't achieve consensus
+    receive
+        {consensus, IdxTerm} ->
+            exit(unexpected_consensus)
+    after 1000 ->
+              ok
+    end,
+    % heal partition
+    meck:unload(),
+    % assert consensus completes after some time
+    receive
+        {consensus, IdxTerm} ->
+            ok
+    after 6500 ->
+            exit(consensus_timeout)
+    end,
+    ok.
 
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),

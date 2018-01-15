@@ -23,7 +23,7 @@
 %% Uniquely identifies a ra node
 %% NB: ra nodes need to be registered as need to be reachable under the old
 %% name after restarts. Pids won't do.
--type ra_node_id() :: {Name :: atom(), Node :: node()}.
+-type ra_node_id() :: atom() | {Name :: atom(), Node :: node()}.
 
 -type ra_peer_state() :: #{next_index => non_neg_integer(),
                            match_index => non_neg_integer(),
