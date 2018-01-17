@@ -158,10 +158,7 @@ init(#{id := Id,
                     cluster_index_term => ClusterIndexTerm,
                     log => Log},
     % send unsuccessful append entries reply to each known peer
-    Reply = append_entries_reply(CurrentTerm, false, State),
-    Effects = [{cast, PeerId, {Id, Reply}}
-               || {PeerId, _} <- maps:to_list(peers(State))],
-    {State, Effects}.
+    {State, []}.
 
 
 % the peer id in the append_entries_reply message is an artifact of
