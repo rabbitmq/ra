@@ -188,6 +188,7 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
                 ok ->
                     State0 = wal_truncate_write(State00, First),
                     % write the rest normally
+                    % TODO: batch api for wal
                     State = lists:foldl(fun (Entry, S) ->
                                                 wal_write(S, Entry)
                                         end, State0, Rest),
@@ -676,6 +677,7 @@ resend_from(Idx, #state{id = Id, last_index = LastIdx,
                         wal_write(Acc, erlang:insert_element(1, X, I))
                 end,
                 State#state{last_resend_time = erlang:system_time(seconds)},
+                % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
 resend_from(Idx, #state{last_resend_time = LastResend,
                         resend_window_seconds = ResendWindow} = State) ->
