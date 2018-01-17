@@ -157,7 +157,6 @@ init(#{id := Id,
     State = State0#{cluster => Cluster,
                     cluster_index_term => ClusterIndexTerm,
                     log => Log},
-    % send unsuccessful append entries reply to each known peer
     {State, []}.
 
 
@@ -790,13 +789,16 @@ pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
     NextIdx  = ra_log:next_index(Log),
     maps:filter(fun (_Id, #{next_index := NI,
+                            match_index := MI,
                             pipelining_enabled := true}) when NI < NextIdx ->
                         % there are unsent items
-                        true;
+                        NI - MI < ?MAX_PIPELINE_DISTANCE;
                     (_Id, #{commit_index := CI,
+                            next_index := NI,
+                            match_index := MI,
                             pipelining_enabled := true}) when CI < CommitIndex ->
                         % the commit index has been updated
-                        true;
+                        NI - MI < ?MAX_PIPELINE_DISTANCE;
                     (_Id, _) ->
                         false
                 end, peers(State)).

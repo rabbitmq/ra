@@ -234,7 +234,7 @@ start_nodes(Config) ->
     ok = StartNode(N3, [{N1, node()}, {N2, node()}], fun erlang:'+'/2, 0),
     timer:sleep(1000),
     % issue command
-    {ok, {3, Term}, Leader} = ra:send_and_await_consensus({N3, node()}, 5,
+    {ok, {_, Term}, Leader} = ra:send_and_await_consensus({N3, node()}, 5,
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % shut down non leader
     Target = case Leader of
@@ -373,7 +373,7 @@ stop_leader_and_wait_for_elections(Config) ->
     ok = StartNode(n3, [{n1, node()}, {n2, node()}], fun erlang:'+'/2, 0),
     timer:sleep(1000),
     % issue command
-    {ok, {3, Term}, Leader} = ra:send_and_await_consensus({n3, node()}, 5),
+    {ok, {_, Term}, Leader} = ra:send_and_await_consensus({n3, node()}, 5),
     % shut down the leader
     gen_statem:stop(Leader, normal, 2000),
     timer:sleep(10000),
