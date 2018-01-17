@@ -76,8 +76,6 @@
 
 -type ra_effects() :: [ra_effect()].
 
--type ra_election_timeout_strategy() :: follower_timeout | monitor_and_node_hint.
-
 -type ra_node_config() :: #{id => ra_node_id(),
                             log_module => ra_log_memory | ra_log_file,
                             log_init_args => ra_log:ra_log_init_args(),
@@ -85,16 +83,15 @@
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
                             broadcast_time => non_neg_integer(), % milliseconds
-                            election_timeout_strategy => ra_election_timeout_strategy(),
-                            await_condition_timeout => non_neg_integer()}.
+                            await_condition_timeout => non_neg_integer(),
+                            wait_on_init => boolean()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
               ra_machine_apply_fun/0,
               ra_msg/0,
               ra_effect/0,
-              ra_effects/0,
-              ra_election_timeout_strategy/0]).
+              ra_effects/0]).
 
 -define(AER_CHUNK_SIZE, 5).
 % TODO: test what is a good deafult here
@@ -673,14 +670,12 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
     {State, Effects}.
 
 make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
-    maps:fold(fun(PeerId, Peer = #{next_index := Next}, {S0, Entries}) ->
+    maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Entries}) ->
                       {LastIdx, Entry, S} =
                           append_entries_or_snapshot(PeerId, Next, S0),
-                      {update_peer(PeerId,
-                                   Peer#{next_index => LastIdx+1,
-                                         commit_index => CommitIndex},
-                                   S),
-                       [Entry | Entries]}
+                      Peer = Peer0#{next_index => LastIdx+1,
+                                    commit_index => CommitIndex},
+                      {update_peer(PeerId, Peer,S), [Entry | Entries]}
               end, {State0, []}, pipelineable_peers(State0)).
 
 % makes empty append entries for peers that aren't pipelineable 
@@ -785,7 +780,10 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index => 0,
-      pipelining_allowed => false}.
+      pipelining_enabled => true}.
+
+new_peer_with(Map) ->
+    maps:merge(new_peer(), Map).
 
 peers(#{id := Id, cluster := Nodes}) ->
     maps:remove(Id, Nodes).
@@ -794,10 +792,12 @@ peers(#{id := Id, cluster := Nodes}) ->
 pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
     NextIdx  = ra_log:next_index(Log),
-    maps:filter(fun (_Id, #{next_index := NI}) when NI < NextIdx ->
+    maps:filter(fun (_Id, #{next_index := NI,
+                            pipelining_enabled := true}) when NI < NextIdx ->
                         % there are unsent items
                         true;
-                    (_Id, #{commit_index := CI}) when CI < CommitIndex ->
+                    (_Id, #{commit_index := CI,
+                            pipelining_enabled := true}) when CI < CommitIndex ->
                         % the commit index has been updated
                         true;
                     (_Id, _) ->
@@ -811,6 +811,8 @@ stale_peers(State) ->
     maps:filter(fun (_Id, #{next_index := NI,
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
+                        true;
+                    (_Id, #{pipelining_enabled := false}) ->
                         true;
                     (_Id, _) ->
                         false
@@ -883,22 +885,22 @@ fetch_entries(From, To, #{log := Log0} = State) ->
 
 make_cluster(Self, Nodes) ->
     case lists:foldl(fun(N, Acc) ->
-                             Acc#{N => #{match_index => 0}}
+                             Acc#{N => new_peer()}
                      end, #{}, Nodes) of
         #{Self := _} = Cluster ->
             % current node is already in cluster - do nothing
             Cluster;
         Cluster ->
             % add current node to cluster
-            Cluster#{Self => #{match_index => 0}}
+            Cluster#{Self => new_peer()}
     end.
 
 initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     PeerIds = peer_ids(State),
     NextIdx = ra_log:next_index(Log),
     Cluster = lists:foldl(fun(PeerId, Acc) ->
-                                  Acc#{PeerId => #{match_index => 0,
-                                                   next_index => NextIdx}}
+                                  Acc#{PeerId =>
+                                       new_peer_with(#{next_index => NextIdx})}
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 

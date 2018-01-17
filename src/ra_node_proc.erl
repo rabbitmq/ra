@@ -25,12 +25,11 @@
          command/3,
          query/3,
          state_query/2,
-         trigger_election/1
+         trigger_election/1,
+         ping/2
         ]).
 
-% -ifdef(TEST).
 -export([send_rpcs/2]).
-% -endif.
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 50).
@@ -57,15 +56,19 @@
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
+-type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
+
+-type states() :: leader | follower | candiate | await_condition.
+
 -export_type([ra_leader_call_ret/1,
-              ra_cmd_ret/0]).
+              ra_cmd_ret/0,
+              safe_call_ret/1]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
                 broadcast_time :: non_neg_integer(),
                 monitors = #{} :: #{pid() => reference()},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
-                election_timeout_strategy :: ra_node:ra_election_timeout_strategy(),
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer()}).
 
@@ -99,6 +102,11 @@ state_query(ServerRef, Spec) ->
 
 trigger_election(ServerRef) ->
     gen_statem:cast(ServerRef, trigger_election).
+
+-spec ping(ra_node_id(), timeout()) -> safe_call_ret({pong, states()}).
+ping(ServerRef, Timeout) ->
+    gen_statem_safe_call(ServerRef, ping, Timeout).
+
 
 leader_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, {leader_call, Msg},
@@ -134,22 +142,24 @@ init([Config0]) ->
                           (_) -> node()
                       end, Peers),
     BroadcastTime = maps:get(broadcast_time, Config),
-    ElectionTimeoutStrat = maps:get(election_timeout_strategy, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     State0 = #state{node_state = NodeState, name = Key,
-                   election_timeout_strategy = ElectionTimeoutStrat,
-                   broadcast_time = BroadcastTime,
-                   await_condition_timeout = AwaitCondTimeout},
+                    broadcast_time = BroadcastTime,
+                    await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
           [Id, MacState, Peers]),
-    {State, Actions} = handle_effects(Effects, cast, State0),
-    % TODO: if election timeout strategy is monitor and hint only we should
-    % at this point try to ping all peers so that if there is a current leader
-    % they could make themselves known
+    {State, Actions0} = handle_effects(Effects, cast, State0),
     % TODO: should we have a longer election timeout here if a prior leader
     % has been voted for as this would imply the existence of a current cluster
-    {ok, follower, State, [election_timeout_action(follower, State) | Actions]}.
+    Actions = case maps:get(wait_on_init, Config) of
+                  true ->
+                      Actions0;
+                  false ->
+                      [election_timeout_action(follower, State) | Actions0]
+              end,
+
+    {ok, follower, State, Actions}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -181,6 +191,8 @@ leader({call, From}, {state_query, Spec},
          State = #state{node_state = NodeState}) ->
     Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+leader({call, From}, ping, State) ->
+    {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_down, _}, State) ->
     {keep_state, State};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
@@ -205,11 +217,9 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
         error ->
             {keep_state, State0, []}
     end;
-leader(_, rpc_timeout, State) ->
-    {NodeState, Rpcs} = ra_node:make_rpcs(State#state.node_state),
-    ?INFO("rpc_timeout rpcs ~p", [Rpcs]),
-    {keep_state, ra_node_proc:send_rpcs(Rpcs, State#state{node_state = NodeState}),
-     set_rpc_timer(State, [])};
+leader(_, rpc_timeout, State0) ->
+    State = send_rpcs(State0),
+    {keep_state, State, set_rpc_timer(State, [])};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -234,6 +244,8 @@ candidate({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+candidate({call, From}, ping, State) ->
+    {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_down, _}, State) ->
     {keep_state, State};
 candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
@@ -280,13 +292,24 @@ follower({call, From}, {dirty_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 follower(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
-follower(info, {'DOWN', MRef, process, _Pid, _Info}, State = #state{leader_monitor = MRef}) ->
-    ?WARN("Leader monitor down, triggering election", []),
-    {keep_state, State#state{leader_monitor = undefined},
-     [election_timeout_action(follower, State)]};
-follower(info, {node_down, LeaderNode}, State = #state{node_state = #{leader_id := {_, LeaderNode}}}) ->
-    ?WARN("Leader node ~p may be down, triggering election", [LeaderNode]),
-    {keep_state, State, [election_timeout_action(follower, State)]};
+follower({call, From}, ping, State) ->
+    {keep_state, State, [{reply, From, {pong, follower}}]};
+follower(info, {'DOWN', MRef, process, _Pid, Info},
+         #state{leader_monitor = MRef,
+                node_state = #{id := Id, leader_id := Leader}} = State) ->
+    case Info of
+        noconnection ->
+            handle_leader_down(Leader, State);
+        _ ->
+            ?WARN("~p: Leader monitor down with ~p, setting election timeout~n",
+                  [Id, Info]),
+            {keep_state, State#state{leader_monitor = undefined},
+             [election_timeout_action(follower, State)]}
+    end;
+follower(info, {node_down, LeaderNode},
+         #state{node_state = #{leader_id := {_, LeaderNode} = Leader}} = State) ->
+    ?WARN("Leader node ~p may be down, setting election timeout", [LeaderNode]),
+    handle_leader_down(Leader, State);
 follower(info, {node_down, _}, State) ->
     {keep_state, State};
 follower(EventType, Msg, #state{node_state = #{id := Id},
@@ -325,6 +348,8 @@ await_condition({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
+await_condition({call, From}, ping, State) ->
+    {keep_state, State, [{reply, From, {pong, await_condition}}]};
 await_condition(_Type, trigger_election, State) ->
     {keep_state, State, [{next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
@@ -341,7 +366,6 @@ await_condition(info, {node_down, _}, State) ->
     {keep_state, State};
 await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
                                                 leader_monitor = MRef}) ->
-    % ?INFO("~p await_condition msg: ~p~n", [Id, Msg]),
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -459,8 +483,11 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
      end || {N, M} <- VoteRequests],
     {State, Actions};
 handle_effect({send_rpcs, _IsUrgent, Rpcs}, _EvtType, State0, Actions) ->
-    {Taken, State} = timer:tc(fun() -> ra_node_proc:send_rpcs(Rpcs, State0) end),
-    ?INFO("send_rpcs took ~pms ~p", [Taken / 1000, Rpcs]),
+    % fully qualified use only so that we can mock it for testing
+    % TODO: review / refactor
+    {_Taken, State} = timer:tc(fun() -> ra_node_proc:send_rpcs(Rpcs, State0) end),
+    % TODO: record metrics for sending times
+    % ?INFO("send_rpcs took ~pms ~p", [Taken / 1000, Rpcs]),
     {State, Actions};
 handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
@@ -491,23 +518,35 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions}.
 
+send_rpcs(State0) ->
+    {State, Rpcs} = make_rpcs(State0),
+    % module call so that we can mock
+    % TODO: review
+    ?MODULE:send_rpcs(Rpcs, State).
+
 send_rpcs(Rpcs, State) ->
     lists:foldl(fun ({To, Rpc}, Acc) ->
                         send(To, Rpc, Acc)
                 end, State, Rpcs).
 
+make_rpcs(State) ->
+    {NodeState, Rpcs} = ra_node:make_rpcs(State#state.node_state),
+    {State#state{node_state = NodeState}, Rpcs}.
+
 send(To, Msg, State) ->
-    case erlang:send(To, {'$gen_cast', Msg}, [noconnect]) of
+    % need to avoid any blocking delays here
+    case erlang:send(To, {'$gen_cast', Msg}, [noconnect, nosuspend]) of
         ok -> State;
-        noconnect ->
-            % TODO: implement
-            NodeState = ra_node:update_peer_status(
-                          To, noconnect, State#state.node_state),
-            State#state{node_state = NodeState}
+        _ ->
+            State
+            % TODO: disable pipelining when we know a node is
+            % down
+            % NodeState = ra_node:update_peer_status(
+            %               To, noconnect, State#state.node_state),
+            % State#state{node_state = NodeState}
     end.
 
-maybe_set_election_timeout(#state{election_timeout_strategy = monitor_and_node_hint,
-                                  leader_monitor = LeaderMon},
+maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
     % only when a leader is known should we cancel the election timeout
     [{state_timeout, infinity, election_timeout} | Actions];
@@ -571,9 +610,25 @@ do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster).
 
 config_defaults() ->
-    #{election_timeout_strategy => monitor_and_node_hint,
-      broadcast_time => ?DEFAULT_BROADCAST_TIME,
+    #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
-      initial_nodes => []
+      initial_nodes => [],
+      wait_on_init => false
      }.
 
+handle_leader_down(Leader, #state{leader_monitor = Mon,
+                                  node_state = #{id := Id}} = State) ->
+    % ping leader to check if up
+    case ra_node_proc:ping(Leader, 1000) of
+        {pong, leader} ->
+            % leader is not down
+            ok = ra_lib:iter_maybe(Mon, fun erlang:demonitor/1),
+            {keep_state,
+             State#state{leader_monitor = monitor(process, Leader)},
+             []};
+        PingRes ->
+            ?INFO("~p: Leader ~p appears down. Ping returned: ~p~n"
+                  " Setting election timeout~n", [Id, Leader, PingRes]),
+            {keep_state, State#state{leader_monitor = undefined},
+             [election_timeout_action(follower, State)]}
+    end.

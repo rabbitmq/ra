@@ -30,7 +30,7 @@
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index => non_neg_integer(),
-                           pipelining_allowed => boolean()}.
+                           pipelining_enabled => boolean()}.
 
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
