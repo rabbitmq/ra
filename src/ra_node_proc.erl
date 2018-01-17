@@ -268,14 +268,18 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger another election
              % when not using follower timeouts
-             [election_timeout_action(follower, State) | Actions]};
+             % TODO: only set this is leader was not detected
+             [election_timeout_action(candidate, State) | Actions]};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?INFO("~p candidate -> leader term: ~p~n", [Id, Term]),
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            {next_state, leader, State, set_rpc_timer(State, Actions ++ NextEvents)}
+            % TODO: need to send append entries to all nodes in case they are also
+            % in an election phase and are setting election timers
+            {next_state, leader, State,
+             set_rpc_timer(State, Actions ++ NextEvents)}
     end.
 
 follower({call, From}, {leader_call, _Cmd},
