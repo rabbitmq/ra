@@ -267,10 +267,10 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % 10ms worth of entries
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
-        X ->
+        {X, State} ->
             ?INFO("~p: written event did not find term ~p found ~p",
                   [Id, {ToIdx, Term}, X]),
-            State0
+            State
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
              #state{id = Id,
