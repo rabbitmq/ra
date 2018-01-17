@@ -9,7 +9,7 @@
 
 all() ->
     [
-     {group, ra_log_memory},
+     % {group, ra_log_memory},
      {group, ra_log_file}
      % {group, ra_log_file_follower_timeouts}
     ].
@@ -39,9 +39,8 @@ all_tests() ->
 
 groups() ->
     [
-     {ra_log_memory, [], all_tests()},
-     {ra_log_file, [], all_tests()},
-     {ra_log_file_follower_timeouts, [], all_tests()}
+     % {ra_log_memory, [], all_tests()},
+     {ra_log_file, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -90,33 +89,12 @@ init_per_group(ra_log_file = G, Config) ->
                                    initial_nodes => Nodes,
                                    apply_fun => ApplyFun,
                                    init_fun => fun (_) -> InitialState end,
-                                   election_timeout_strategy => monitor_and_node_hint,
                                    await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
                           ra:start_node(Name, Conf)
                   end
           end,
-    [{start_node_fun, Fun} | Config];
-init_per_group(ra_log_file_follower_timeouts = G, Config) ->
-    PrivDir = ?config(priv_dir, Config),
-    DataDir = filename:join([PrivDir, G, "data"]),
-    ok = restart_ra(DataDir),
-    Fun = fun (TestCase) ->
-                  fun (Name, Nodes, ApplyFun, InitialState) ->
-                          Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
-                          ok = filelib:ensure_dir(Dir),
-                          Conf = #{log_module => ra_log_file,
-                                   log_init_args => #{data_dir => Dir,
-                                                      id => Name},
-                                   initial_nodes => Nodes,
-                                   apply_fun => ApplyFun,
-                                   init_fun => fun (_) -> InitialState end,
-                                   election_timeout_strategy => follower_timeout,
-                                   await_condition_timeout => 5000},
-                          ra:start_node(Name, Conf)
-                  end
-          end,
-   [{start_node_fun, Fun} | Config].
+    [{start_node_fun, Fun} | Config].
 
 end_per_group(_, Config) ->
     Config.

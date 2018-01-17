@@ -516,9 +516,10 @@ candidate_handles_append_entries_rpc(_Config) ->
     ok.
 
 append_entries_reply_success(_Config) ->
-    Cluster = #{n1 => #{next_index => 5, match_index => 4},
-                n2 => #{next_index => 1, match_index => 0},
-                n3 => #{next_index => 2, match_index => 1}},
+    Cluster = #{n1 => new_peer_with(#{next_index => 5, match_index => 4}),
+                n2 => new_peer_with(#{next_index => 1, match_index => 0,
+                                      commit_index => 3}),
+                n3 => new_peer_with(#{next_index => 2, match_index => 1})},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
@@ -557,8 +558,9 @@ append_entries_reply_success(_Config) ->
 append_entries_reply_no_success(_Config) ->
     % decrement next_index for peer if success = false
     Cluster = #{n1 => #{},
-                n2 => #{next_index => 3, match_index => 0},
-                n3 => #{next_index => 2, match_index => 1}},
+                n2 => new_peer_with(#{next_index => 3, match_index => 0}),
+                n3 => new_peer_with(#{next_index => 2, match_index => 1,
+                                      commit_index => 1})},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
@@ -732,9 +734,9 @@ leader_noop_operation_enables_cluster_change(_Config) ->
     ok.
 
 leader_node_join(_Config) ->
-    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3}},
+    OldCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   n2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   n3 => new_peer_with(#{next_index => 4, match_index => 3})},
     State0 = (base_state(3))#{cluster => OldCluster},
     % raft nodes should switch to the new configuration after log append
     % and further cluster changes should be disallowed
@@ -770,10 +772,10 @@ leader_node_join(_Config) ->
     ok.
 
 leader_node_leave(_Config) ->
-    OldCluster = #{n1 => #{next_index => 4, match_index => 3},
-                   n2 => #{next_index => 4, match_index => 3},
-                   n3 => #{next_index => 4, match_index => 3},
-                   n4 => #{next_index => 1, match_index => 0}},
+    OldCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   n2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   n3 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   n4 => new_peer_with(#{next_index => 1, match_index => 0})},
     State = (base_state(3))#{cluster => OldCluster},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
@@ -955,12 +957,11 @@ quorum(_Config) ->
         = ra_node:handle_candidate(HighTermResult, State1),
 
     % quorum has been achieved - candidate becomes leader
-    PeerState = #{next_index => 3+1, % leaders last log index + 1
-                  match_index => 0}, % initd to 0
-
+    PeerState = new_peer_with(#{next_index => 3+1, % leaders last log index + 1
+                                match_index => 0}), % initd to 0
     % when candidate becomes leader the next operation should be a noop
-    {leader, #{cluster := #{n1 := #{next_index := 4},
-                            n2 := PeerState,
+    % and all peers should be initialised with the appropriate state
+    {leader, #{cluster := #{n2 := PeerState,
                             n3 := PeerState,
                             n4 := PeerState,
                             n5 := PeerState}},
@@ -1021,12 +1022,13 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                               ra_log:append_sync(E, L)
                       end, {ra_log_memory, ra_log_memory:init(#{})},
                       [{1, 1, noop},
-                       {2, 2, {'$usr',pid, {enq,apple}, after_log_append}},
-                       {3, 5, {2, {'$usr',pid, {enq,pear}, after_log_append}}}]),
+                       {2, 2, {'$usr', pid, {enq, apple}, after_log_append}},
+                       {3, 5, {2, {'$usr', pid, {enq, pear}, after_log_append}}}]),
     Leader0 = #{cluster =>
-                #{n1 => #{match_index => 0}, % current leader in term 2
-                  n2 => #{match_index => 0,next_index => N2NextIndex }, % stale peer - previous leader
-                  n3 => #{match_index => 3,next_index => 4}}, % uptodate peer
+                #{n1 => new_peer_with(#{match_index => 0}), % current leader in term 2
+                  n2 => new_peer_with(#{match_index => 0,next_index => N2NextIndex}), % stale peer - previous leader
+                  n3 => new_peer_with(#{match_index => 3,next_index => 4,
+                                        commit_index => 3})}, % uptodate peer
                 cluster_change_permitted => true,
                 cluster_index_term => {0,0},
                 commit_index => 3,
@@ -1036,8 +1038,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 last_applied => 4,
                 log => Log,
                 machine_state => [{4,apple}],
-                pending_cluster_changes => [],
-                snapshot_points => #{}},
+                pending_cluster_changes => []},
     AER = #append_entries_reply{success = false,
                                 term = Term,
                                 next_index = 3,
@@ -1057,18 +1058,21 @@ leader_receives_install_snapshot_result(_Config) ->
     Log0 = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
                       end, {ra_log_memory, ra_log_memory:init(#{})},
-                      [{1, 1, noop},
+                      [{1, 1, noop}, {2, 1, noop},
                        {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
                        {4, 1, {'$usr',pid, {enq,pear}, after_log_append}}]),
     Log = ra_log:install_snapshot({2,1,
-                                 #{n1 => #{match_index => 0},
-                                   n2 => #{match_index => 2,next_index => 3},
-                                   n3 => #{match_index => 2,next_index => 3}},
+                                 #{n1 => new_peer_with(#{match_index => 0}),
+                                   n2 => new_peer_with(#{match_index => 2,
+                                                         next_index => 3}),
+                                   n3 => new_peer_with(#{match_index => 2,
+                                                         next_index => 3})},
                                  []}, Log0),
     Leader = #{cluster =>
-               #{n1 => #{match_index => 0},
-                 n2 => #{match_index => 4,next_index => 5},
-                 n3 => #{match_index => 0,next_index => 1}},
+               #{n1 => new_peer_with(#{match_index => 0}),
+                 n2 => new_peer_with(#{match_index => 4, next_index => 5,
+                                       commit_index => 4}),
+                 n3 => new_peer_with(#{match_index => 0, next_index => 1})},
                cluster_change_permitted => true,
                cluster_index_term => {0,0},
                commit_index => 4,
@@ -1078,20 +1082,13 @@ leader_receives_install_snapshot_result(_Config) ->
                last_applied => 4,
                log => Log,
                machine_state => [{4,apple}],
-               pending_cluster_changes => [],
-               snapshot_points =>
-               #{4 =>
-                 {1,
-                  #{n1 => #{match_index => 0},
-                    n2 => #{match_index => 4,next_index => 5},
-                    n3 => #{match_index => 0,next_index => 1}}}}},
+               pending_cluster_changes => []},
     ISR = #install_snapshot_result{term = Term,
                                    last_index = 2,
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
                                     next_index := 5}}},
      [{send_rpcs, true, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
-    ct:pal("Rpcs ~p", [Rpcs]),
     ?assert(lists:any(fun({n3,
                            #append_entries_rpc{entries = [{3, _, _},
                                                           {4, _, _}]}}) ->
@@ -1439,8 +1436,9 @@ base_state(NumNodes) ->
                        {3, 5, usr(<<"hi3">>)}]),
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
-                                Acc#{Name => #{next_index => 4,
-                                               match_index => 3}}
+                                Acc#{Name =>
+                                     new_peer_with(#{next_index => 4,
+                                                     match_index => 3})}
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
       leader_id => n1,
@@ -1465,3 +1463,12 @@ usr(Data) ->
 dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),
     T.
+
+new_peer() ->
+    #{next_index => 1,
+      match_index => 0,
+      commit_index => 0,
+      pipelining_enabled => true}.
+
+new_peer_with(Map) ->
+    maps:merge(new_peer(), Map).

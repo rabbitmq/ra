@@ -49,6 +49,7 @@ dump(Prefix, Term) ->
 id(X) -> X.
 
 
+-spec iter_maybe(undefined | term(), fun()) -> ok.
 iter_maybe(undefined, _F) ->
     ok;
 iter_maybe(M, F) ->
