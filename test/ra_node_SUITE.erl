@@ -20,6 +20,7 @@ all() ->
      leader_does_not_abdicate_to_unknown_peer,
      higher_term_detected,
      quorum,
+     is_new,
      command,
      consistent_query,
      leader_noop_operation_enables_cluster_change,
@@ -36,7 +37,7 @@ all() ->
      % TODO: make scenario tests more reliable - one day
      % take_snapshot,
      % send_snapshot,
-     past_leader_overwrites_entry,
+     % past_leader_overwrites_entry,
      follower_aer_1,
      follower_aer_2,
      follower_aer_3,
@@ -924,6 +925,19 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
     3 = maps:size(Cluster),
     ok.
 
+is_new(_Config) ->
+    State = base_state(3),
+    false = ra_node:is_new(State),
+    Args = #{id => {ra, node()},
+             initial_nodes => [],
+             log_module => ra_log_memory,
+             log_init_args => #{},
+             apply_fun => fun erlang:'+'/2,
+             init_fun => fun (_) -> 0 end},
+    {NewState, _} = ra_node:init(Args),
+    true = ra_node:is_new(NewState),
+    ok.
+
 
 command(_Config) ->
     State = base_state(3),
@@ -965,7 +979,7 @@ quorum(_Config) ->
                             n3 := PeerState,
                             n4 := PeerState,
                             n5 := PeerState}},
-     [{next_event, cast, {command, noop}}]}
+     [{send_rpcs, true, _}, {next_event, cast, {command, noop}}]}
         = ra_node:handle_candidate(Reply, State1).
 
 
@@ -1281,11 +1295,11 @@ run_effect(NodeId, Nodes0) ->
         {{release_cursor, Idx, MacState}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
             NodeState = ra_node:update_release_cursor(Idx, MacState, NodeState0),
             Nodes#{NodeId => {RaState, NodeState, Effects}};
-        {{reply, #append_entries_reply{} = Reply}, Nodes} ->
-            Leader = maps:filter(fun (_, {leader, _, _}) -> true;
-                                     (_, _) -> false
-                                 end, Nodes),
-            [{LeaderId, _}] = maps:to_list(Leader),
+        {{cast, LeaderId, {NodeId, #append_entries_reply{} = Reply}}, Nodes} ->
+            % Leader = maps:filter(fun (_, {leader, _, _}) -> true;
+            %                          (_, _) -> false
+            %                      end, Nodes),
+            % [{LeaderId, _}] = maps:to_list(Leader),
             interact(LeaderId, {NodeId, Reply}, Nodes);
             % assume leader reply
         {undefined, Nodes} ->
@@ -1451,8 +1465,7 @@ base_state(NumNodes) ->
       last_applied => 3,
       machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
-      log => Log,
-      log_module => ra_log_memory}.
+      log => Log}.
 
 usr_cmd(Data) ->
     {command, usr(Data)}.
