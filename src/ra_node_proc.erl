@@ -100,6 +100,7 @@ query(ServerRef, QueryFun, consistent) ->
 state_query(ServerRef, Spec) ->
     leader_call(ServerRef, {state_query, Spec}, ?DEFAULT_TIMEOUT).
 
+-spec trigger_election(ra_node_id()) -> ok.
 trigger_election(ServerRef) ->
     gen_statem:cast(ServerRef, trigger_election).
 
@@ -127,15 +128,13 @@ leader_call(ServerRef, Msg, Timeout) ->
 %%%===================================================================
 
 init([Config0]) ->
-    Config = maps:merge(config_defaults(), Config0),
     process_flag(trap_exit, true),
+    Config = maps:merge(config_defaults(), Config0),
     {#{id := Id, cluster := Cluster,
        machine_state := MacState} = NodeState, Effects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
-    % connect to each peer node before starting election timeout
-    % this should allow a current leader to detect the node is back and begin
-    % sending append entries again
+    % ensure each relevant node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
     _ = lists:foreach(fun ({_, Node}) ->
                               net_kernel:connect_node(Node);
@@ -150,9 +149,10 @@ init([Config0]) ->
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
           [Id, MacState, Peers]),
     {State, Actions0} = handle_effects(Effects, cast, State0),
-    % TODO: should we have a longer election timeout here if a prior leader
-    % has been voted for as this would imply the existence of a current cluster
-    Actions = case maps:get(wait_on_init, Config) of
+    % New cluster starts should be coordinated and elections triggered explicitly
+    % hence if this is a new one we wait here.
+    % Else we set an election timer
+    Actions = case ra_node:is_new(State#state.node_state) of
                   true ->
                       Actions0;
                   false ->
@@ -263,7 +263,7 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p candidate -> follower term: ~p ~p~n", [Id, Term, Actions]),
+            ?INFO("~p candidate -> follower term: ~p~n", [Id, Term]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger another election
@@ -288,7 +288,8 @@ follower({call, From}, {leader_call, _Cmd},
     {keep_state, State, {reply, From, {redirect, LeaderId}}};
 follower({call, From}, {leader_call, Msg},
          State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
-    ?WARN("~p follower leader call - leader not known. Dropping ~n", [Id]),
+    ?WARN("~p follower leader call - leader not known. "
+          "Command will be forwarded once leader is known.~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
@@ -616,8 +617,7 @@ do_state_query(members, #{cluster := Cluster}) ->
 config_defaults() ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
-      initial_nodes => [],
-      wait_on_init => false
+      initial_nodes => []
      }.
 
 handle_leader_down(Leader, #state{leader_monitor = Mon,

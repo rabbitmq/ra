@@ -18,6 +18,7 @@
          stop_node/1,
          add_node/2,
          remove_node/2,
+         trigger_election/1,
          start_and_join/5,
          leave_and_terminate/1,
          leave_and_terminate/2
@@ -26,17 +27,19 @@
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
 
 start_local_cluster(Num, Name, ApplyFun, InitialState) ->
-    Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
-             || N <- lists:seq(1, Num)],
+    [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
+                           || N <- lists:seq(1, Num)],
     Conf0 = #{log_module => ra_log_memory,
               log_init_args => #{},
               initial_nodes => Nodes,
               apply_fun => ApplyFun,
               init_fun => fun (_) -> InitialState end},
-    [begin
-         {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
-         Id
-     end || Id <- Nodes].
+    Res = [begin
+               {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
+               Id
+           end || Id <- Nodes],
+    ok = ra:trigger_election(Node1),
+    Res.
 
 
 -spec start_node(atom(), [ra_node_id()], ra_node:ra_machine_apply_fun(), term()) -> ok.
@@ -79,6 +82,10 @@ add_node(ServerRef, NodeId) ->
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).
+
+-spec trigger_election(ra_node_id()) -> ok.
+trigger_election(Id) ->
+    ra_node_proc:trigger_election(Id).
 
 start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
     ok = start_node(Name, Peers, ApplyFun, InitialState),

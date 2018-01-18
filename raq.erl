@@ -3,7 +3,7 @@
 -export([
          i/1,
          s/1,
-         s/3,
+         s/2,
          sj/2,
          pub/1,
          setl/2,
@@ -35,21 +35,21 @@ i(Vol0) ->
     ok.
 
 s(Vol) ->
-    s(Vol, [], false).
+    s(Vol, []).
 
-s(Vol, Nodes, Wait) ->
+s(Vol, Nodes) ->
     Dir = filename:join(["/Volumes", Vol]),
     i(Dir),
     InitFun = fun (Name) ->
                       _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
                       ra_fifo:init(raq)
               end,
-    start_node(raq, [{raq, N} || N <- Nodes], fun ra_fifo:apply/3, InitFun, Dir, Wait).
+    start_node(raq, [{raq, N} || N <- Nodes], fun ra_fifo:apply/3, InitFun, Dir).
 
 sj(PeerNode, Vol) ->
     {ok, _, _Leader} = ra:add_node({raq, PeerNode}, {raq, node()}),
     % tryi init node without known peers
-    s(Vol, [], true).
+    s(Vol, []).
 
 check(Node) ->
     ra:send({raq, Node}, {checkout, {once, 5}, self()}).
@@ -110,13 +110,12 @@ recv(Node0) ->
     end.
 
 
-start_node(Name, Nodes, ApplyFun, InitFun, Dir, Wait) ->
+start_node(Name, Nodes, ApplyFun, InitFun, Dir) ->
     Conf = #{log_module => ra_log_file,
              log_init_args => #{data_dir => Dir, id => Name},
              initial_nodes => Nodes,
              apply_fun => ApplyFun,
              init_fun => InitFun,
-             cluster_id => Name,
-             wait_on_init => Wait},
+             cluster_id => Name},
     ra:start_node(Name, Conf).
 

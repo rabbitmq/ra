@@ -10,6 +10,8 @@
          handle_follower/2,
          handle_await_condition/2,
          overview/1,
+         is_new/1,
+         % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
          terminate/1
@@ -68,10 +70,12 @@
 
 -type ra_effect() ::
     ra_machine_effect() |
-    {reply, ra_msg()} |
+    {reply, #append_entries_reply{} | #request_vote_result{}} |
+    {cast, ra_node_id(), term()} |
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
+    {next_event, cast, ra_msg()} |
     {incr_metrics, Table :: atom(), [{Pos :: non_neg_integer(), Incr :: integer()}]}.
 
 -type ra_effects() :: [ra_effect()].
@@ -83,8 +87,7 @@
                             apply_fun => ra_machine_apply_fun(),
                             init_fun => fun((atom()) -> term()),
                             broadcast_time => non_neg_integer(), % milliseconds
-                            await_condition_timeout => non_neg_integer(),
-                            wait_on_init => boolean()}.
+                            await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
@@ -375,17 +378,20 @@ handle_leader(Msg, State) ->
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  State0 = #{current_term := Term, votes := Votes,
                             cluster := Nodes}) ->
-    NewVotes = Votes+1,
+    NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            State = initialise_peers(State0),
+            {State, Rpcs} = make_all_rpcs(
+                              initialise_peers(State0)),
             {leader, maps:without([votes, leader_id], State),
-             [{next_event, cast, {command, noop}}]};
+             [{send_rpcs, true, Rpcs},
+              {next_event, cast, {command, noop}}]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
 handle_candidate(#request_vote_result{term = Term},
-                 State0 = #{current_term := CurTerm, id := Id}) when Term > CurTerm ->
+                 State0 = #{current_term := CurTerm, id := Id})
+  when Term > CurTerm ->
     ?INFO("~p candidate request_vote_result with higher term received ~p -> ~p",
           [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
@@ -402,7 +408,10 @@ handle_candidate(#append_entries_rpc{},
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{reply, Reply}]};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
-                 State0 = #{current_term := CurTerm}) when Term > CurTerm ->
+                 #{id := Id, current_term := CurTerm} = State0)
+  when Term > CurTerm ->
+    ?INFO("~p candidate append_entries_reply with higher term received ~p -> ~p",
+          [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
@@ -529,7 +538,8 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_term = LLTerm},
                 State0 = #{current_term := CurTerm, id := Id})
   when Term >= CurTerm ->
-    State = update_term(Term, State0), LastIdxTerm = last_idx_term(State),
+    State = update_term(Term, State0),
+    LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true ->
             ?INFO("~p granting vote for ~p for term ~p previous term was ~p",
@@ -538,8 +548,11 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
         false ->
-            ?INFO("~p declining vote for ~p for term ~p, last log index ~p",
-                  [Id, Cand, Term, LLIdx]),
+            {LastIdx, _} = LastIdxTerm,
+            ?INFO("~p declining vote for ~p for term ~p,"
+                  " candidate last log index was: ~p~n"
+                  " last log entry seen is: ~p~n",
+                  [Id, Cand, Term, LLIdx, LastIdx]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State#{current_term => Term}, [{reply, Reply}]}
     end;
@@ -595,10 +608,6 @@ handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
 
-overview(State) ->
-    maps:with([current_term, commit_index, last_applied,
-               cluster, leader_id, voted_for], State).
-
 -spec handle_await_condition(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
@@ -616,6 +625,15 @@ handle_await_condition(Msg,#{condition := Cond} = State) ->
             % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
+
+-spec overview(ra_node_state()) -> map().
+overview(State) ->
+    maps:with([current_term, commit_index, last_applied,
+               cluster, leader_id, voted_for], State).
+
+-spec is_new(ra_node_state()) -> boolean().
+is_new(#{log := Log}) ->
+    ra_log:next_index(Log) =:= 1.
 
 % Internal
 
@@ -680,6 +698,12 @@ make_rpcs(State) ->
                       {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
                       {S, [Entry | Entries]}
               end, {State, []}, stale_peers(State)).
+
+make_all_rpcs(State) ->
+    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
+                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
+                      {S, [Entry | Entries]}
+              end, {State, []}, peers(State)).
 
 append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
                                            current_term := Term} = State) ->
@@ -778,6 +802,14 @@ new_peer() ->
       commit_index => 0,
       pipelining_enabled => true}.
 
+% is_new_peer(#{next_index := 1,
+%               match_index := 0,
+%               commit_index := 0}) ->
+%     true;
+% is_new_peer(_Peer) ->
+%     false.
+
+
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
 
@@ -810,10 +842,11 @@ stale_peers(State) ->
     maps:filter(fun (_Id, #{next_index := NI,
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
+                        % TODO: now() - last_seen > ?RCP_INTERVAL_MS
                         true;
                     (_Id, #{pipelining_enabled := false}) ->
                         true;
-                    (_Id, _) ->
+                    (_Id, _Peer) ->
                         false
                 end, peers(State)).
 
@@ -944,7 +977,7 @@ apply_with(_Id, _ApplyFun, {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}}
             {State, MacSt, Effects};
 apply_with(Id, _ApplyFun, {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
          {State0, MacSt, Effects0}) ->
-            ?INFO("~p: applying ra cluster change to ~p~n", [Id, New]),
+            ?INFO("~p: applying ra cluster change to ~p~n", [Id, maps:keys(New)]),
             Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
             State = State0#{cluster_change_permitted => true},
             % add pending cluster change as next event
@@ -986,6 +1019,7 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
     case OldCluster of
         #{JoiningNode := _} ->
             % already a member do nothing
+            % TODO: reply?
             {not_appended, State};
         _ ->
             Cluster = OldCluster#{JoiningNode => new_peer()},
