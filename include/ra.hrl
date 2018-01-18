@@ -29,8 +29,7 @@
                            match_index => non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
-                           commit_index => non_neg_integer(),
-                           pipelining_enabled => boolean()}.
+                           commit_index => non_neg_integer()}.
 
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 

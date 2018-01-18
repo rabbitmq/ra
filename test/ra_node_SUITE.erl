@@ -1480,8 +1480,7 @@ dump(T) ->
 new_peer() ->
     #{next_index => 1,
       match_index => 0,
-      commit_index => 0,
-      pipelining_enabled => true}.
+      commit_index => 0}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).

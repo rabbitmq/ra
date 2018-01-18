@@ -799,8 +799,7 @@ handle_election_timeout(State0 = #{id := Id, current_term := CurrentTerm}) ->
 new_peer() ->
     #{next_index => 1,
       match_index => 0,
-      commit_index => 0,
-      pipelining_enabled => true}.
+      commit_index => 0}.
 
 % is_new_peer(#{next_index := 1,
 %               match_index := 0,
@@ -821,14 +820,12 @@ pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
     NextIdx  = ra_log:next_index(Log),
     maps:filter(fun (_Id, #{next_index := NI,
-                            match_index := MI,
-                            pipelining_enabled := true}) when NI < NextIdx ->
+                            match_index := MI}) when NI < NextIdx ->
                         % there are unsent items
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
                     (_Id, #{commit_index := CI,
                             next_index := NI,
-                            match_index := MI,
-                            pipelining_enabled := true}) when CI < CommitIndex ->
+                            match_index := MI}) when CI < CommitIndex ->
                         % the commit index has been updated
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
                     (_Id, _) ->
@@ -843,8 +840,6 @@ stale_peers(State) ->
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
                         % TODO: now() - last_seen > ?RCP_INTERVAL_MS
-                        true;
-                    (_Id, #{pipelining_enabled := false}) ->
                         true;
                     (_Id, _Peer) ->
                         false
