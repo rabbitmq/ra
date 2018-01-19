@@ -4,7 +4,8 @@
 
 -export([
          init/1,
-         apply/3
+         apply/3,
+         leader_effects/1
         ]).
 init(_) -> {[], []}.
 
@@ -19,3 +20,4 @@ apply(_Idx, _, [] = State) ->
     {State, []}.
 
 
+leader_effects(_) -> [].

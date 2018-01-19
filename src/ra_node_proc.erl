@@ -204,9 +204,10 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
             {leader, NodeState, Effects} =
                 ra_node:handle_leader({command, {'$usr', Pid, {down, Pid}, after_log_append}},
                                       NodeState0),
-                {State, Actions0} = handle_effects(Effects, call,
-                                                   State0#state{node_state = NodeState,
-                                                                monitors = Monitors}),
+            {State, Actions0} =
+                handle_effects(Effects, call,
+                               State0#state{node_state = NodeState,
+                                            monitors = Monitors}),
             % remove replies
             % TODO: make this nicer
             Actions = lists:filter(fun({reply, _}) -> false;
@@ -227,7 +228,10 @@ leader(EventType, Msg, State0) ->
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            {next_state, follower, State,
+            % demonitor when stepping down
+            ok = lists:foreach(fun erlang:demonitor/1,
+                               maps:values(State#state.monitors)),
+            {next_state, follower, State#state{monitors = #{}},
              maybe_set_election_timeout(State, Actions)};
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
@@ -276,8 +280,6 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            % TODO: need to send append entries to all nodes in case they are also
-            % in an election phase and are setting election timers
             {next_state, leader, State,
              set_rpc_timer(State, Actions ++ NextEvents)}
     end.

@@ -9,6 +9,7 @@
 -export([
          init/1,
          apply/3,
+         leader_effects/1,
          shadow_copy/1,
          size_test/2,
          perf_test/2,
@@ -72,21 +73,6 @@
 init(Name) ->
     {#state{name = Name}, []}.
 
-shadow_copy(#state{customers = Customers} = State) ->
-    % creates a copy of the current state suitable for snapshotting
-    State#state{messages = #{},
-                ra_indexes = ra_fifo_index:empty(),
-                low_index = undefined,
-                first_enqueue_raft_index = undefined,
-                % TODO: optimise
-                % this is inefficient (from a memory use point of view)
-                % as it creates a new tuple for every customer
-                % even if they haven't changed instead we could just update a copy
-                % of the last dehydrated state with the difference
-                customers = maps:map(fun (_, V) -> V#customer{checked_out = #{}} end,
-                                     Customers)
-               }.
-
 
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
@@ -140,6 +126,11 @@ apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
             % already removed - do nothing
             {State0, []}
     end.
+
+-spec leader_effects(state()) -> ra_machine:effects().
+leader_effects(#state{customers = Custs}) ->
+    % return effects to monitor all current customers
+    [{monitor, process, C} || C <- maps:keys(Custs)].
 
 %%% Internal
 
@@ -349,6 +340,21 @@ run_log(Num, Num, _Gen, State) ->
 run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
     run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
+
+shadow_copy(#state{customers = Customers} = State) ->
+    % creates a copy of the current state suitable for snapshotting
+    State#state{messages = #{},
+                ra_indexes = ra_fifo_index:empty(),
+                low_index = undefined,
+                first_enqueue_raft_index = undefined,
+                % TODO: optimise
+                % this is inefficient (from a memory use point of view)
+                % as it creates a new tuple for every customer
+                % even if they haven't changed instead we could just update a copy
+                % of the last dehydrated state with the difference
+                customers = maps:map(fun (_, V) -> V#customer{checked_out = #{}} end,
+                                     Customers)
+               }.
 
 
 -ifdef(TEST).

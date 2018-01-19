@@ -58,7 +58,8 @@
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
-    {incr_metrics, Table :: atom(), [{Pos :: non_neg_integer(), Incr :: integer()}]}.
+    {incr_metrics, Table :: atom(),
+     [{Pos :: non_neg_integer(), Incr :: integer()}]}.
 
 -type ra_effects() :: [ra_effect()].
 
@@ -354,16 +355,19 @@ handle_leader(Msg, State) ->
 -spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
-                 State0 = #{current_term := Term, votes := Votes,
-                            cluster := Nodes}) ->
+                 #{current_term := Term, votes := Votes,
+                   cluster := Nodes, machine := Machine,
+                   machine_state := MacState} = State0) ->
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State, Rpcs} = make_all_rpcs(
                               initialise_peers(State0)),
+            Effects = ra_machine:leader_effects(Machine, MacState),
             {leader, maps:without([votes, leader_id], State),
              [{send_rpcs, true, Rpcs},
-              {next_event, cast, {command, noop}}]};
+              {next_event, cast, {command, noop}}
+             | Effects]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
@@ -652,9 +656,6 @@ evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
         apply_to(EffectiveCommitIndex, State0),
     % filter the effects that should be applied on a follower
     Effects1 = lists:filter(fun ({release_cursor, _, _}) -> true;
-                                ({snapshot_point, _}) -> true;
-                                ({monitor, process, _}) -> true;
-                                ({demonitor, _}) -> true;
                                 ({incr_metrics, _, _}) -> true;
                                 (_) -> false
                             end, Effects0),
