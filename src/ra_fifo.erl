@@ -1,5 +1,7 @@
 -module(ra_fifo).
 
+-behaviour(ra_machine).
+
 -compile({no_auto_import, [apply/3]}).
 
 -include("ra.hrl").
@@ -24,6 +26,8 @@
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgId :: msg_id(), Customer :: customer_id()} |
     {return, MsgId :: msg_id(), Customer :: customer_id()}.
+
+-type command() :: protocol() | ra_machine:builtin_command().
 
 -define(METRICS_TABLE, ra_fifo_metrics).
 % metrics tuple format:
@@ -59,13 +63,14 @@
                 service_queue = queue:new() :: queue:queue(customer_id())
                }).
 
--type state() :: #state{}.
+-opaque state() :: #state{}.
 
--export_type([protocol/0]).
+-export_type([protocol/0,
+              state/0]).
 
--spec init(atom()) -> state().
+-spec init(atom()) -> {state(), ra_machine:effects()}.
 init(Name) ->
-    #state{name = Name}.
+    {#state{name = Name}, []}.
 
 shadow_copy(#state{customers = Customers} = State) ->
     % creates a copy of the current state suitable for snapshotting
@@ -85,6 +90,8 @@ shadow_copy(#state{customers = Customers} = State) ->
 
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
+-spec apply(ra_index(), command(), state()) ->
+    {state(), ra_machine:effects()}.
 apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes,
                                       messages = Messages,
                                       first_enqueue_raft_index = FirstEnqueueIdx,
@@ -95,7 +102,7 @@ apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes,
                           low_index = min(RaftIdx, Low)},
     {State, Effects, Num} = checkout(State1, []),
     Metric = {incr_metrics, ?METRICS_TABLE, [{2, 1}, {3, Num}]},
-    {effects, State, [Metric | Effects]};
+    {State, [Metric | Effects]};
 apply(RaftIdx, {settle, MsgId, CustomerId},
       #state{customers = Custs0} = State) ->
     case Custs0 of
@@ -106,19 +113,19 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
                     % we must be recovering after a snapshot
                     % in this case it should not have any effect on the final
                     % state
-                    {effects, State, []};
+                    {State, []};
                 {{MsgRaftIdx, _}, Checked} ->
                     settle(RaftIdx, CustomerId, MsgRaftIdx,
                            Cust0, Checked, State)
             end;
         _ ->
-            {effects, State, []}
+            {State, []}
     end;
 apply(_RaftIdx, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State, Effects, Num} = checkout(State1, []),
     Metric = {incr_metrics, ?METRICS_TABLE, [{3, Num}]},
-    {effects, State, [{monitor, process, Customer}, Metric | Effects]};
+    {State, [{monitor, process, Customer}, Metric | Effects]};
 apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
     % return checked out messages to main queue
     case maps:take(CustomerId, Custs0) of
@@ -128,10 +135,10 @@ apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
                                  end, State0, Checked0),
             Metric = {incr_metrics, ?METRICS_TABLE,
                       [{5, maps:size(Checked0)}]},
-            {effects, State#state{customers = Custs}, [Metric]};
+            {State#state{customers = Custs}, [Metric]};
         error ->
             % already removed - do nothing
-            {effects, State0, []}
+            {State0, []}
     end.
 
 %%% Internal
@@ -149,10 +156,9 @@ settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
                  Effects0),
     Effects2 = [{incr_metrics, ?METRICS_TABLE,
                 [{3, NumChecked}, {4, 1}]} | Effects1],
-    {State, Effects} = update_first_enqueue_raft_index(IncomingRaftIdx,
-                                                       MsgRaftIdx, Effects2,
-                                                       State1),
-    {effects, State, Effects}.
+    update_first_enqueue_raft_index(IncomingRaftIdx,
+                                    MsgRaftIdx, Effects2,
+                                    State1).
 
 update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
                                 #state{first_enqueue_raft_index = First,
@@ -316,7 +322,7 @@ perf_test(NumMsg, NumCust) ->
                      Pid = spawn(fun() -> ok end),
                      CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
                      SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-                     S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
+                     S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
                      S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
                      _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
                      ok
@@ -332,7 +338,7 @@ profile(File) ->
     Pid = spawn(fun() -> ok end),
     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-    S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
+    S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
     lg:stop().
@@ -342,7 +348,7 @@ run_log(Num, Num, _Gen, State) ->
     State;
 run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
-    run_log(Num+1, Max, Gen, element(2, apply(Num, E, State0))).
+    run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
 
 
 -ifdef(TEST).
@@ -354,50 +360,50 @@ run_log(Num, Max, Gen, State0) ->
                       end, Effects))).
 
 enq_enq_checkout_test() ->
-    {effects, State1, _} = enq(1, first, #state{}),
-    {effects, State2, _} = enq(2, second, State1),
-    {effects, _State3, Effects} =
+    {State1, _} = enq(1, first, #state{}),
+    {State2, _} = enq(2, second, State1),
+    {_State3, Effects} =
         apply(3, {checkout, {once, 2}, self()}, State2),
     ?assertEffect({monitor, _, _}, Effects),
     ok.
 
 release_cursor_test() ->
-    {effects, State1, _} = enq(1, first, #state{}),
-    {effects, State2, _} = enq(2, second, State1),
-    {effects, State3, _} = check(3, 10, State2),
-    {effects, State4, Effects} = settle(4, 1, State3),
+    {State1, _} = enq(1, first, #state{}),
+    {State2, _} = enq(2, second, State1),
+    {State3, _} = check(3, 10, State2),
+    {State4, Effects} = settle(4, 1, State3),
     % no release cursor update at this point
     ?assert(lists:any(fun ({release_cursor, _}) -> false;
                           (_) -> true
                       end, Effects)),
-    {effects, _Final, Effects1} = settle(5, 0, State4),
+    {_Final, Effects1} = settle(5, 0, State4),
     % empty queue forwards release cursor all the way
     ?assertEffect({release_cursor, 5, _}, Effects1),
     ok.
 
 checkout_enq_settle_test() ->
-    {effects, State1, [{monitor, _, _}, _]} = check(1, #state{}),
-    {effects, State2, Effects0} = enq(2, first, State1),
+    {State1, [{monitor, _, _}, _]} = check(1, #state{}),
+    {State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _, {msg, 0, first}}, Effects0),
-    {effects, State3, [_]} = enq(3, second, State2),
-    {effects, _, Effects} = settle(4, 0, State3),
+    {State3, [_]} = enq(3, second, State2),
+    {_, Effects} = settle(4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
     ?assertEffect({release_cursor, 2, _}, Effects),
     ok.
 
 down_customer_returns_unsettled_test() ->
-    {effects, State0, [_]} = enq(1, second, init(test)),
-    {effects, State1, [{monitor, process, Pid}, _, _Del]} = check(2, State0),
-    {effects, State2, [_]} = apply(3, {down, Pid}, State1),
-    {effects, _State, Effects} = check(4, State2),
+    {State0, [_]} = enq(1, second, element(1, init(test))),
+    {State1, [{monitor, process, Pid}, _, _Del]} = check(2, State0),
+    {State2, [_]} = apply(3, {down, Pid}, State1),
+    {_State, Effects} = check(4, State2),
     ?assertEffect({monitor, process, _}, Effects),
     ok.
 
 completed_customer_yields_demonitor_effect_test() ->
-    {effects, State0, [{incr_metrics, _, _}]} = enq(1, second, init(test)),
-    {effects, State1, [{monitor, process, _}, _, _Msg]} = check(2, State0),
-    {effects, _, Effects} = settle(3, 0, State1),
+    {State0, [{incr_metrics, _, _}]} = enq(1, second, element(1, init(test))),
+    {State1, [{monitor, process, _}, _, _Msg]} = check(2, State0),
+    {_, Effects} = settle(3, 0, State1),
     ?assertEffect({demonitor, _}, Effects),
     % release cursor for empty queue
     ?assertEffect({release_cursor, 3, _}, Effects),
@@ -426,7 +432,7 @@ release_cursor_snapshot_state_test() ->
               ],
     Indexes = lists:seq(1, length(Commands)),
     Entries = lists:zip(Indexes, Commands),
-    {State, Effects} = run_log(init(help), Entries),
+    {State, Effects} = run_log(element(1, init(help)), Entries),
 
     [begin
          Filtered = lists:dropwhile(fun({X, _}) when X =< SnapIdx -> true;
@@ -460,7 +466,7 @@ settle(Idx, MsgId, State) ->
 
 run_log(InitState, Entries) ->
     lists:foldl(fun ({Idx, E}, {Acc0, Efx0}) ->
-                        {effects, Acc, Efx} = apply(Idx, E, Acc0),
+                        {Acc, Efx} = apply(Idx, E, Acc0),
                         {Acc, Efx0 ++ Efx}
                 end, {InitState, []}, Entries).
 -endif.

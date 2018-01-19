@@ -2,6 +2,8 @@
 
 -include("ra.hrl").
 
+-compile(inline_list_funcs).
+
 -export([
          name/2,
          init/1,
@@ -16,23 +18,6 @@
          update_release_cursor/3,
          terminate/1
         ]).
-
--type ra_machine_state() :: term().
-
--type ra_machine_effect() ::
-    {send_msg, pid() | atom() | {atom(), atom()}, term()} |
-    {monitor, process, pid()} |
-    {demonitor, pid()} |
-    % indicates that none of the preceeding entries contribute to the
-    % current machine state
-    {release_cursor, ra_index(), term()}.
-
--type ra_machine_command() :: {down, pid()} | term().
-
--type ra_machine_apply_fun_return() :: ra_machine_state() | {effects, ra_machine_state(), [ra_machine_effect()]}.
--type ra_machine_apply_fun() ::
-        fun((ra_index(), Command :: ra_machine_command(), ra_machine_state()) -> ra_machine_apply_fun_return()) |
-        fun((term(), term()) -> ra_machine_apply_fun_return()).
 
 -type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
 
@@ -51,11 +36,8 @@
       commit_index => ra_index(),
       last_applied => ra_index(),
       stop_after => ra_index(),
-      % fun implementing ra machine
-      machine_apply_fun => ra_machine_apply_fun(),
+      machine => ra_machine:machine(),
       machine_state => term(),
-      initial_machine_state => term(),
-      broadcast_time => non_neg_integer(), % milliseconds
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()]
      }.
@@ -69,7 +51,7 @@
                   {command, term()}.
 
 -type ra_effect() ::
-    ra_machine_effect() |
+    ra_machine:effect() |
     {reply, #append_entries_reply{} | #request_vote_result{}} |
     {cast, ra_node_id(), term()} |
     {send_vote_requests, [{ra_node_id(), #request_vote_rpc{}}]} |
@@ -84,17 +66,16 @@
                             log_module => ra_log_memory | ra_log_file,
                             log_init_args => ra_log:ra_log_init_args(),
                             initial_nodes => [ra_node_id()],
-                            apply_fun => ra_machine_apply_fun(),
-                            init_fun => fun((atom()) -> term()),
+                            machine => ra_machine:machine(),
+                            % TODO: maps this top rpc_timeout instead as no
+                            % longer used
                             broadcast_time => non_neg_integer(), % milliseconds
                             await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
-              ra_machine_apply_fun/0,
-              ra_msg/0,
-              ra_effect/0,
-              ra_effects/0]).
+              ra_msg/0
+             ]).
 
 -define(AER_CHUNK_SIZE, 5).
 % TODO: test what is a good deafult here
@@ -110,14 +91,13 @@ init(#{id := Id,
        initial_nodes := InitialNodes,
        log_module := LogMod,
        log_init_args := LogInitArgs,
-       apply_fun := MachineApplyFun,
-       init_fun := MachineInitFun}) ->
+       machine := Machine}) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
     {ok, Log1} = ra_log:write_meta(current_term, CurrentTerm, Log0),
-    InitialMachineState = MachineInitFun(Name),
+    {InitialMachineState, InitEffects} = ra_machine:init(Machine, Name),
     {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log1) of
             undefined ->
@@ -141,11 +121,9 @@ init(#{id := Id,
                commit_index => CommitIndex,
                last_applied => CommitIndex,
                log => Log1,
-               machine_apply_fun => wrap_machine_fun(MachineApplyFun),
+               machine => Machine,
                machine_state => MacState,
-               condition_timeout_effects => [],
-               % for snapshots
-               initial_machine_state => InitialMachineState},
+               condition_timeout_effects => []},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
@@ -160,7 +138,7 @@ init(#{id := Id,
     State = State0#{cluster => Cluster,
                     cluster_index_term => ClusterIndexTerm,
                     log => Log},
-    {State, []}.
+    {State, InitEffects}.
 
 
 % the peer id in the append_entries_reply message is an artifact of
@@ -459,7 +437,7 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
                     {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
                 [{FirstIdx, _FirstTerm, _} | _] ->
 
-                    {LastIdx, State1} = lists:foldl(fun append_log_follower/2,
+                    {LastIdx, State1} = lists:foldl(fun pre_append_log_follower/2,
                                                     {FirstIdx, State0},
                                                     Entries),
                     % Increment only commit_index here as we are not applying anything
@@ -934,7 +912,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
 
 apply_to(ApplyTo, State0 = #{id := Id,
                              last_applied := LastApplied,
-                             machine_apply_fun := ApplyFun0,
+                             machine := Machine,
                              machine_state := MacState0})
   when ApplyTo > LastApplied ->
     % TODO: fetch and apply batches to reduce peak memory usage
@@ -943,7 +921,7 @@ apply_to(ApplyTo, State0 = #{id := Id,
             {State, [], 0};
         {Entries, State1} ->
             {State, MacState, NewEffects} =
-                lists:foldl(fun(E, St) -> apply_with(Id, ApplyFun0, E, St) end,
+                lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
                             {State1, MacState0, []}, Entries),
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
             % NewApplied = min(ApplyTo, LastEntryIdx),
@@ -955,35 +933,37 @@ apply_to(ApplyTo, State0 = #{id := Id,
 apply_to(_ApplyTo, State) ->
     {State, [], 0}.
 
-apply_with(_Id, ApplyFun, {Idx, Term, {'$usr', From, Cmd, ReplyType}},
-        {State, MacSt, Effects0}) ->
-            case ApplyFun(Idx, Cmd, MacSt) of
-                {effects, NextMacSt, Efx} ->
-                    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-                    {State, NextMacSt, Effects ++ Efx};
-                NextMacSt ->
-                    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-                    {State, NextMacSt, Effects}
-            end;
-apply_with(_Id, _ApplyFun, {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
-        {State, MacSt, Effects0}) ->
-            Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
-                                ReplyType, Effects0),
-            {State, MacSt, Effects};
-apply_with(Id, _ApplyFun, {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
-         {State0, MacSt, Effects0}) ->
-            ?INFO("~p: applying ra cluster change to ~p~n", [Id, maps:keys(New)]),
-            Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-            State = State0#{cluster_change_permitted => true},
-            % add pending cluster change as next event
-            {Effects1, State1} = add_next_cluster_change(Effects, State),
-            {State1, MacSt, Effects1};
-apply_with(Id, _ApplyFun, {_Idx, Term, noop}, {State0 = #{current_term := Term}, MacSt, Effects}) ->
-            ?INFO("~p: enabling ra cluster changes in ~b~n", [Id, Term]),
-            State = State0#{cluster_change_permitted => true},
-            {State, MacSt, Effects};
-apply_with(_Id, _ApplyFun, _, Acc) ->
-            Acc.
+apply_with(_Id, Machine,
+           {Idx, Term, {'$usr', From, Cmd, ReplyType}},
+           {State, MacSt, Effects0}) ->
+    {NextMacSt, Efx} = ra_machine:apply(Machine, Idx, Cmd, MacSt),
+    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+    {State, NextMacSt, Effects ++ Efx};
+apply_with(_Id, _Machine,
+           {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
+           {State, MacSt, Effects0}) ->
+    Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
+                        ReplyType, Effects0),
+    {State, MacSt, Effects};
+apply_with(Id, _Machine,
+           {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
+           {State0, MacSt, Effects0}) ->
+    ?INFO("~p: applying ra cluster change to ~p~n", [Id, maps:keys(New)]),
+    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+    State = State0#{cluster_change_permitted => true},
+    % add pending cluster change as next event
+    {Effects1, State1} = add_next_cluster_change(Effects, State),
+    {State1, MacSt, Effects1};
+apply_with(Id, _Machine,
+           {_Idx, Term, noop},
+           {State0 = #{current_term := Term}, MacSt, Effects}) ->
+    ?INFO("~p: enabling ra cluster changes in ~b~n", [Id, Term]),
+    State = State0#{cluster_change_permitted => true},
+    {State, MacSt, Effects};
+apply_with(Id, _Machine, Cmd, Acc) ->
+    % TODO: uh why a catch all here? try to remove this and see if it breaks
+    ?WARN("~p: apply_with: unhandled command: ~p~n", [Id, Cmd]),
+    Acc.
 
 add_next_cluster_change(Effects,
                         State = #{pending_cluster_changes := [C | Rest]}) ->
@@ -1039,7 +1019,7 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
             {written, NextIdx, Term, State#{log => Log}}
     end.
 
-append_log_follower({Idx, Term, Cmd} = Entry,
+pre_append_log_follower({Idx, Term, Cmd} = Entry,
                     {_, State = #{cluster_index_term := {Idx, CITTerm}}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
@@ -1055,12 +1035,12 @@ append_log_follower({Idx, Term, Cmd} = Entry,
             {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
-            append_log_follower(Entry, {Idx, State1})
+            pre_append_log_follower(Entry, {Idx, State1})
     end;
-append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
+pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                     {_, State}) ->
     {{Idx, Term}, State#{cluster => Cluster, cluster_index_term => {Idx, Term}}};
-append_log_follower({Idx, _, _}, {_, State}) ->
+pre_append_log_follower({Idx, _, _}, {_, State}) ->
     {Idx, State}.
 
 append_cluster_change(Cluster, From, ReplyMode,
@@ -1135,15 +1115,6 @@ fold_log_from(From, Folder, {St, Log0}) ->
         {Entries, Log}  ->
             St1 = lists:foldl(Folder, St, Entries),
             fold_log_from(From + 5, Folder, {St1, Log})
-    end.
-
-wrap_machine_fun(Fun) ->
-    case erlang:fun_info(Fun, arity) of
-        {arity, 2} ->
-            % user is not insterested in the index
-            % of the entry
-            fun(_Idx, Cmd, State) -> Fun(Cmd, State) end;
-        {arity, 3} -> Fun
     end.
 
 drop_existing({Log0, []}) ->

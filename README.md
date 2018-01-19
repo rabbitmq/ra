@@ -45,7 +45,6 @@ which has two major shortcomings:
  * Replication algorithm is linear
  * Failure recovery procedure requires expensive topology changes
 
-
 ## Design
 
 TBD

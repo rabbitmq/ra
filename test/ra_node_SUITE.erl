@@ -69,7 +69,7 @@ ra_node_init(Conf) ->
 
 init(_Config) ->
     #{id := Id,
-      machine_apply_fun := ApplyFun,
+      machine := Machine,
       cluster := Cluster,
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
@@ -77,9 +77,8 @@ init(_Config) ->
     InitConf = #{id => Id,
                  log_module => ra_log_memory,
                  log_init_args => #{},
-                 apply_fun => ApplyFun,
-                 initial_nodes => [], % init without known peers
-                 init_fun => fun (_) -> undefined end},
+                 machine => Machine,
+                 initial_nodes => []}, % init without known peers
     % new
     #{current_term := 0,
       voted_for := undefined} = ra_node_init(InitConf),
@@ -105,9 +104,8 @@ init_restores_cluster_changes(_Config) ->
     InitConf = #{id => n1,
                  log_module => ra_log_memory,
                  log_init_args => #{},
-                 apply_fun => fun erlang:'+'/2,
-                 initial_nodes => [], % init without known peers
-                 init_fun => fun (_) -> 0 end},
+                 machine => {simple, fun erlang:'+'/2, 0},
+                 initial_nodes => []}, % init without known peers
     % new
     {leader, State00, _} =
         ra_node:handle_candidate(#request_vote_result{term = 0,
@@ -167,7 +165,7 @@ follower_aer_1(_Config) ->
                                entries = [entry(2, 1, two)]},
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 0,
-                          machine_state := undefined},
+                          machine_state := <<>>},
      [{next_event, _}]} = ra_node:handle_follower(AER2, State1),
 
     % {written, 1} -> last_applied: 1 - replies with last_index = 1, next_index = 3
@@ -235,7 +233,7 @@ follower_aer_2(_Config) ->
     % {written, 1} -> last_applied: 0, reply: last_applied = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 0, last_applied := 0,
-                          machine_state := undefined},
+                          machine_state := <<>>},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}, _]}
@@ -932,8 +930,7 @@ is_new(_Config) ->
              initial_nodes => [],
              log_module => ra_log_memory,
              log_init_args => #{},
-             apply_fun => fun erlang:'+'/2,
-             init_fun => fun (_) -> 0 end},
+             machine => {simple, fun erlang:'+'/2, 0}},
     {NewState, _} = ra_node:init(Args),
     true = ra_node:is_new(NewState),
     ok.
@@ -985,7 +982,7 @@ quorum(_Config) ->
 
 follower_installs_snapshot(_Config) ->
     #{n3 := {_, FState = #{cluster := Config}, _}}
-    = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
+    = init_nodes([n1, n2, n3], {module, ra_queue}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -1004,7 +1001,7 @@ follower_installs_snapshot(_Config) ->
 
 snapshotted_follower_received_append_entries(_Config) ->
     #{n3 := {_, FState0 = #{cluster := Config}, _}} =
-        init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
+        init_nodes([n1, n2, n3], {module, ra_queue}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -1116,7 +1113,7 @@ leader_receives_install_snapshot_result(_Config) ->
 %%%
 take_snapshot(_Config) ->
     % * takes snapshot in response to state machine release_cursor effect
-    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -1138,7 +1135,7 @@ take_snapshot(_Config) ->
     ok.
 
 send_snapshot(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -1169,7 +1166,7 @@ send_snapshot(_Config) ->
     ok.
 
 past_leader_overwrites_entry(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], fun ra_queue:simple_apply/3, []),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -1231,14 +1228,13 @@ run_effects_leader(Id, Nodes) ->
 
 %%% helpers
 
-init_nodes(NodeIds, ApplyFun, MacState) ->
+init_nodes(NodeIds, Machine) ->
     lists:foldl(fun (NodeId, Acc) ->
                         Args = #{id => NodeId,
                                  initial_nodes => NodeIds,
                                  log_module => ra_log_memory,
                                  log_init_args => #{},
-                                 apply_fun => ApplyFun,
-                                 init_fun => fun (_) -> MacState end},
+                                 machine => Machine},
                         Acc#{NodeId => {follower, ra_node_init(Args), []}}
                 end, #{}, NodeIds).
 
@@ -1438,8 +1434,7 @@ empty_state(NumNodes, Id) ->
                    initial_nodes => Nodes,
                    log_module => ra_log_memory,
                    log_init_args => #{},
-                   apply_fun => fun (_, E, _) -> E end, % just keep last applied value
-                   init_fun => fun (_) -> undefined end}).
+                   machine => {simple, fun (E, _) -> E end, <<>>}}). % just keep last applied value
 
 base_state(NumNodes) ->
     Log = lists:foldl(fun(E, L) ->
@@ -1463,7 +1458,7 @@ base_state(NumNodes) ->
       current_term => 5,
       commit_index => 3,
       last_applied => 3,
-      machine_apply_fun => fun (_, E, _) -> E end, % just keep last applied value
+      machine => {simple, fun (E, _) -> E end, <<>>}, % just keep last applied value
       machine_state => <<"hi3">>, % last entry has been applied
       log => Log}.
 

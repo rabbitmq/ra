@@ -15,8 +15,7 @@
                log_module => ra_log_memory,
                log_init_args => [{node1, node()}, {node2, node()}, {node3, node()}],
                initial_nodes => [],
-               apply_fun => fun erlang:'+'/2,
-               init_fun => fun(_) -> 0}, % the initial state of the machine
+               machine => {simple, fun erlang:'+'/2, 0}}, % the "apply" function + the initial state
     ```
 
 2. Start a cluster

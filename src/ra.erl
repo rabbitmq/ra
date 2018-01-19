@@ -3,7 +3,7 @@
 -include("ra.hrl").
 
 -export([
-         start_local_cluster/4,
+         start_local_cluster/3,
          send/2,
          send/3,
          send_and_await_consensus/2,
@@ -14,26 +14,25 @@
          members/1,
          consistent_query/2,
          start_node/2,
-         start_node/4,
+         start_node/3,
          stop_node/1,
          add_node/2,
          remove_node/2,
          trigger_election/1,
-         start_and_join/5,
+         start_and_join/4,
          leave_and_terminate/1,
          leave_and_terminate/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
 
-start_local_cluster(Num, Name, ApplyFun, InitialState) ->
+start_local_cluster(Num, Name, Machine) ->
     [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
                            || N <- lists:seq(1, Num)],
     Conf0 = #{log_module => ra_log_memory,
               log_init_args => #{},
               initial_nodes => Nodes,
-              apply_fun => ApplyFun,
-              init_fun => fun (_) -> InitialState end},
+              machine => Machine},
     Res = [begin
                {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
                Id
@@ -42,12 +41,11 @@ start_local_cluster(Num, Name, ApplyFun, InitialState) ->
     Res.
 
 
--spec start_node(atom(), [ra_node_id()], ra_node:ra_machine_apply_fun(), term()) -> ok.
-start_node(Name, Peers, ApplyFun, InitialState) ->
+-spec start_node(atom(), [ra_node_id()], ra_machine:machine()) -> ok.
+start_node(Name, Peers, Machine) ->
     Conf = #{log_module => ra_log_memory,
              log_init_args => #{},
-             apply_fun => ApplyFun,
-             init_fun => fun (_) -> InitialState end,
+             machine => Machine,
              initial_nodes => Peers},
     start_node(Name, Conf).
 
@@ -87,8 +85,8 @@ remove_node(ServerRef, NodeId) ->
 trigger_election(Id) ->
     ra_node_proc:trigger_election(Id).
 
-start_and_join(ServerRef, Name, Peers, ApplyFun, InitialState) ->
-    ok = start_node(Name, Peers, ApplyFun, InitialState),
+start_and_join(ServerRef, Name, Peers, Machine) ->
+    ok = start_node(Name, Peers, Machine),
     NodeId = {Name, node()},
     JoinCmd = {'$ra_join', NodeId, await_consensus},
     case ra_node_proc:command(ServerRef, JoinCmd, ?DEFAULT_TIMEOUT) of
