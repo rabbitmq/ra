@@ -409,7 +409,8 @@ terminate(Reason, _StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-format_status(Opt, [_PDict, StateName, #state{node_state = #{id := Id} = NS}]) ->
+format_status(Opt, [_PDict, StateName,
+                    #state{node_state = #{id := Id} = NS}]) ->
     [{id, Id},
      {opt, Opt},
      {raft_state, StateName},
@@ -463,7 +464,7 @@ handle_effect({next_event, Evt}, EvtType, State, Actions) ->
 handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
-    To ! Msg,
+    ok = send_msg(To, Msg),
     {State, Actions};
 handle_effect({notify, Who, IdxTerm}, _EvtType, State, Actions) ->
     _ = Who ! {consensus, IdxTerm},
@@ -533,24 +534,34 @@ send_rpcs(State0) ->
 
 send_rpcs(Rpcs, State) ->
     lists:foldl(fun ({To, Rpc}, Acc) ->
-                        send(To, Rpc, Acc)
+                        send_rpc(To, Rpc, Acc)
                 end, State, Rpcs).
 
 make_rpcs(State) ->
     {NodeState, Rpcs} = ra_node:make_rpcs(State#state.node_state),
     {State#state{node_state = NodeState}, Rpcs}.
 
-send(To, Msg, State) ->
-    % need to avoid any blocking delays here
+send_rpc(To, Msg, State) ->
+    % fake gen cast - need to avoid any blocking delays here
     case erlang:send(To, {'$gen_cast', Msg}, [noconnect, nosuspend]) of
-        ok -> State;
+        ok ->
+            State;
         _ ->
             State
             % TODO: disable pipelining when we know a node is
             % down
-            % NodeState = ra_node:update_peer_status(
-            %               To, noconnect, State#state.node_state),
-            % State#state{node_state = NodeState}
+    end.
+
+send_msg(To, Msg) ->
+    % need to avoid delays
+    case erlang:send(To, Msg, [noconnect]) of
+        ok ->
+            ok;
+        noconnect ->
+            % try sending the message in another process
+            % TODO: if this also fails we could try to notify the statemachine
+            _ = spawn(fun () -> To ! Msg end),
+            ok
     end.
 
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
