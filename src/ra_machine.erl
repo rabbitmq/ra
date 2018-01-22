@@ -38,7 +38,7 @@
 -callback init(Name :: atom()) -> {state(), effects()}.
 
 -callback 'apply'(Index :: ra_index(), command(), state()) ->
-    {state(), ra_node:ra_effects()}.
+    {state(), effects()}.
 
 % called when a node becomes leader, use this to return any effects that should
 % be applied only to a leader, such as monitors

@@ -465,8 +465,8 @@ handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
     To ! Msg,
     {State, Actions};
-handle_effect({notify, Who, Reply}, _EvtType, State, Actions) ->
-    _ = Who ! {consensus, Reply},
+handle_effect({notify, Who, IdxTerm}, _EvtType, State, Actions) ->
+    _ = Who ! {consensus, IdxTerm},
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),

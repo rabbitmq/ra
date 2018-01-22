@@ -58,6 +58,7 @@
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
+    {notify, pid(), ra_idxterm()} |
     {incr_metrics, Table :: atom(),
      [{Pos :: non_neg_integer(), Incr :: integer()}]}.
 
