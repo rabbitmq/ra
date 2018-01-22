@@ -289,7 +289,7 @@ send_and_notify(Config) ->
                             {simple, fun erlang:'+'/2, 9}, Config),
     {ok, IdxTerm, _Leader} = ra:send_and_notify(A, 5),
     receive
-        {consensus, IdxTerm} -> ok
+        {ra_event, _, {consensus, IdxTerm}} -> ok
     after 2000 ->
               exit(consensus_timeout)
     end,
@@ -391,7 +391,7 @@ queue_example(Config) ->
     waitfor(test_msg, apply_timeout),
     % check that the message isn't delivered multiple times
     receive
-        test_msg ->
+        {ra_event, _, test_msg} ->
             exit(double_delivery)
     after 500 -> ok
     end,
@@ -435,7 +435,7 @@ follower_catchup(Config) ->
     {ok, IdxTerm, Leader0} = ra:send_and_notify({N1, node()}, 501),
     [Follower] = [N1, N2] -- [element(1, Leader0)],
     receive
-        {consensus, IdxTerm} ->
+        {ra_event, _, {consensus, IdxTerm}} ->
             exit(unexpected_consensus)
     after 1000 ->
             case get_gen_statem_status({Follower, node()}) of
@@ -450,7 +450,7 @@ follower_catchup(Config) ->
     % the aer with the original condition which should trigger a re-wind of of
     % the next_index and a subsequent resend of missing entries
     receive
-        {consensus, IdxTerm} ->
+        {ra_event, _, {consensus, IdxTerm}} ->
             case get_gen_statem_status({Follower, node()}) of
                 follower ->
                     ok;
@@ -484,7 +484,7 @@ post_partition_liveness(Config) ->
     {ok, IdxTerm, Leader} = ra:send_and_notify(Leader, 500),
     % assert we don't achieve consensus
     receive
-        {consensus, IdxTerm} ->
+        {ra_event, _, {consensus, IdxTerm}} ->
             exit(unexpected_consensus)
     after 1000 ->
               ok
@@ -493,7 +493,7 @@ post_partition_liveness(Config) ->
     meck:unload(),
     % assert consensus completes after some time
     receive
-        {consensus, IdxTerm} ->
+        {ra_event, _, {consensus, IdxTerm}} ->
             ok
     after 6500 ->
             exit(consensus_timeout)
@@ -534,7 +534,7 @@ queue_apply({dequeue, For},
 
 waitfor(Msg, ExitWith) ->
     receive
-        Msg -> ok
+        {ra_event, _, Msg} -> ok
     after 3000 ->
               exit(ExitWith)
     end.

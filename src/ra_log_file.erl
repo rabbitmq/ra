@@ -70,7 +70,7 @@ init(#{data_dir := BaseDir, id := Id} = Conf) ->
 
     % create subdir for log id
     Dir = filename:join(BaseDir, ra_lib:to_list(Id)),
-    Dets = filename:join(Dir, "ra_log_kv.dets"),
+    Dets = filename:join(Dir, "meta.dets"),
     ok = filelib:ensure_dir(Dets),
     {ok, Kv} = dets:open_file(Dets, []),
 
@@ -160,6 +160,7 @@ close(#state{kv = Kv, open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
     [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
+    _ = dets:sync(Kv),
     _ = dets:close(Kv),
     ok.
 

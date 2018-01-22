@@ -67,7 +67,7 @@ first(Config) ->
 
     _ = ra:send_and_await_consensus(NodeId, {enqueue, one}),
     receive
-        {msg, MsgId, _} ->
+        {ra_event, _, {msg, MsgId, _}} ->
             _ = ra:send_and_await_consensus(NodeId, {settle, MsgId, self()})
     after 5000 ->
               exit(await_msg_timeout)
@@ -79,7 +79,7 @@ first(Config) ->
     _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
     ct:pal("restarted node"),
     receive
-        {msg, _, two} -> ok
+        {ra_event, _, {msg, _, two}} -> ok
     after 2000 ->
               exit(await_msg_timeout)
     end,

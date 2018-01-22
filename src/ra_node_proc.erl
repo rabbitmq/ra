@@ -464,10 +464,10 @@ handle_effect({next_event, Evt}, EvtType, State, Actions) ->
 handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
-    ok = send_msg(To, Msg),
+    ok = send_ra_event(To, Msg, State),
     {State, Actions};
 handle_effect({notify, Who, IdxTerm}, _EvtType, State, Actions) ->
-    _ = Who ! {consensus, IdxTerm},
+    ok = send_ra_event(Who, {consensus, IdxTerm}, State),
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),
@@ -552,17 +552,22 @@ send_rpc(To, Msg, State) ->
             % down
     end.
 
-send_msg(To, Msg) ->
+send_ra_event(To, Msg, State) ->
+    Id = id(State),
+    RaEvt = {ra_event, Id, Msg},
     % need to avoid delays
-    case erlang:send(To, Msg, [noconnect]) of
+    case erlang:send(To, RaEvt, [noconnect]) of
         ok ->
             ok;
         noconnect ->
             % try sending the message in another process
             % TODO: if this also fails we could try to notify the statemachine
-            _ = spawn(fun () -> To ! Msg end),
+            _ = spawn(fun () -> To ! RaEvt end),
             ok
     end.
+
+id(#state{node_state = NodeState}) ->
+    ra_node:id(NodeState).
 
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->

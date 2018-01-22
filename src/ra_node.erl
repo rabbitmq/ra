@@ -13,6 +13,7 @@
          handle_await_condition/2,
          overview/1,
          is_new/1,
+         id/1,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
@@ -622,6 +623,9 @@ overview(#{log := Log, machine := Machine,
 -spec is_new(ra_node_state()) -> boolean().
 is_new(#{log := Log}) ->
     ra_log:next_index(Log) =:= 1.
+
+-spec id(ra_node_state()) -> ra_node_id().
+id(#{id := Id}) -> Id.
 
 % Internal
 
