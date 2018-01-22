@@ -10,6 +10,7 @@
          init/1,
          apply/3,
          leader_effects/1,
+         overview/1,
          shadow_copy/1,
          size_test/2,
          perf_test/2,
@@ -48,8 +49,9 @@
                 messages = #{} :: #{ra_index() => msg()},
                 % master index of all enqueue raft indexes
                 % ra_fifo_index so that can take the smallest
-                % TODO: ra_fifo_index are too slow for insert heavy workloads
-                % replace with some kidn of map based abstraction
+                % gb_trees were too slow for insert heavy workloads
+                % ra_fifo_index can also be slow when calculating the smallest
+                % index when there are large gaps
                 ra_indexes = ra_fifo_index:empty() :: ra_fifo_index:state(),
                 % defines the lowest index available in the messages map
                 low_index :: ra_index() | undefined,
@@ -132,6 +134,11 @@ leader_effects(#state{customers = Custs}) ->
     % return effects to monitor all current customers
     [{monitor, process, C} || C <- maps:keys(Custs)].
 
+overview(#state{customers = Custs,
+                ra_indexes = Indexes}) ->
+    #{type => ?MODULE,
+      num_customers => maps:size(Custs),
+      num_messages => ra_fifo_index:size(Indexes)}.
 %%% Internal
 
 settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,

@@ -20,6 +20,7 @@
          write_meta/3,
          sync_meta/1,
          can_write/1,
+         overview/1,
          to_list/1
         ]).
 
@@ -206,6 +207,13 @@ sync_meta(_Log) ->
 
 can_write(_Log) ->
     true.
+
+overview(Log) ->
+    #{type => ?MODULE,
+      last_index => Log#state.last_index,
+      last_written => Log#state.last_written,
+      num_entries => maps:size(Log#state.entries)}.
+
 
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].

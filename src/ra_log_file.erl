@@ -21,7 +21,8 @@
          read_meta/2,
          write_meta/3,
          sync_meta/1,
-         can_write/1
+         can_write/1,
+         overview/1
         ]).
 
 -include("ra.hrl").
@@ -471,6 +472,19 @@ sync_meta(#state{kv = Kv}) ->
 can_write(#state{wal = Wal}) ->
     undefined =/= whereis(Wal).
 
+
+overview(#state{last_index = LastIndex,
+                last_written_index_term = LWIT,
+                snapshot_index_in_progress = SIIP,
+                segment_refs = Segs,
+                open_segments = OpenSegs}) ->
+    #{type => ?MODULE,
+      last_index => LastIndex,
+      last_written_index_term => LWIT,
+      num_segments => length(Segs),
+      open_segments => maps:size(OpenSegs),
+      snapshot_index_in_progress => SIIP
+     }.
 %%% Local functions
 
 wal_truncate_write(#state{id = Id, cache = Cache, wal = Wal} = State,

@@ -610,9 +610,14 @@ handle_await_condition(Msg,#{condition := Cond} = State) ->
     end.
 
 -spec overview(ra_node_state()) -> map().
-overview(State) ->
-    maps:with([current_term, commit_index, last_applied,
-               cluster, leader_id, voted_for], State).
+overview(#{log := Log, machine := Machine,
+           machine_state := MacState} = State) ->
+    O = maps:with([current_term, commit_index, last_applied,
+                   cluster, leader_id, voted_for], State),
+    LogOverview = ra_log:overview(Log),
+    MacOverview = ra_machine:overview(Machine, MacState),
+    O#{log => LogOverview,
+       machine => MacOverview}.
 
 -spec is_new(ra_node_state()) -> boolean().
 is_new(#{log := Log}) ->

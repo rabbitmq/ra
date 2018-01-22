@@ -7,7 +7,8 @@
 
 -export([init/2,
          apply/4,
-         leader_effects/2
+         leader_effects/2,
+         overview/2
         ]).
 
 -type state() :: term().
@@ -44,6 +45,8 @@
 % be applied only to a leader, such as monitors
 -callback leader_effects(state()) -> effects().
 
+% a map of overview information - needs to be efficient
+-callback overview(state()) -> map().
 
 -spec init(machine(), atom()) -> {state(), effects()}.
 init({module, Mod}, Name) ->
@@ -63,3 +66,10 @@ leader_effects({module, Mod}, State) ->
     Mod:leader_effects(State);
 leader_effects({simple, _, _}, _State) ->
     [].
+
+-spec overview(machine(), state()) -> map().
+overview({module, Mod}, State) ->
+    Mod:overview(State);
+overview({simple, _, _}, _State) ->
+    #{type => simple}.
+

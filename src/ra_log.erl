@@ -25,7 +25,8 @@
          write_meta/4,
          sync_meta/1,
          can_write/1,
-         exists/2
+         exists/2,
+         overview/1
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -118,6 +119,8 @@
 -callback can_write(State :: ra_log_state()) ->
     boolean().
 
+-callback overview(State :: ra_log_state()) ->
+    map().
 %%
 %% API
 %%
@@ -288,3 +291,7 @@ exists({Idx, Term}, Log0) ->
         {Term, Log} -> {true, Log};
         {_, Log} -> {false, Log}
     end.
+
+-spec overview(State :: ra_log()) -> map().
+overview({Mod, Log}) ->
+    Mod:overview(Log).

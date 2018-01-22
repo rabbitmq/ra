@@ -5,7 +5,8 @@
 -export([
          init/1,
          apply/3,
-         leader_effects/1
+         leader_effects/1,
+         overview/1
         ]).
 init(_) -> {[], []}.
 
@@ -21,3 +22,5 @@ apply(_Idx, _, [] = State) ->
 
 
 leader_effects(_) -> [].
+
+overview(_) -> #{}.
