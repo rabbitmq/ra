@@ -464,10 +464,10 @@ handle_effect({next_event, Evt}, EvtType, State, Actions) ->
 handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
-    ok = send_ra_event(To, Msg, State),
+    ok = send_ra_event(To, Msg, machine, State),
     {State, Actions};
 handle_effect({notify, Who, IdxTerm}, _EvtType, State, Actions) ->
-    ok = send_ra_event(Who, {consensus, IdxTerm}, State),
+    ok = send_ra_event(Who, IdxTerm, consensus, State),
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),
@@ -552,9 +552,9 @@ send_rpc(To, Msg, State) ->
             % down
     end.
 
-send_ra_event(To, Msg, State) ->
+send_ra_event(To, Msg, EvtType, State) ->
     Id = id(State),
-    RaEvt = {ra_event, Id, Msg},
+    RaEvt = {ra_event, Id, EvtType, Msg},
     % need to avoid delays
     case erlang:send(To, RaEvt, [noconnect]) of
         ok ->
