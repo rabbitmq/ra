@@ -154,7 +154,7 @@ accept_mem_tables_overwrite(Config) ->
 
 accept_mem_tables_rollover(Config) ->
     Dir = ?config(wal_dir, Config),
-    % configure max dets segment size
+    % configure max segment size
     Conf = #{data_dir => Dir,
              segment_conf => #{max_count => 8}},
     {ok, Pid} = ra_log_file_segment_writer:start_link(Conf),
@@ -169,7 +169,6 @@ accept_mem_tables_rollover(Config) ->
               throw(ra_log_event_timeout)
     end,
     % receive then receive again to breach segment size limit
-    % ensure dets segment is closed and writer id notified: {log_event, {segment_closed, Path}}
     ok = gen_server:stop(Pid),
     ok.
 

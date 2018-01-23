@@ -43,7 +43,7 @@
          segment_refs = [] :: [ra_log:ra_segment_ref()],
          open_segments = #{} :: #{file:filename() => ra_log_file_segment:state()},
          directory :: list(),
-         kv :: reference(),
+         kv :: ra_log_file_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
          % if this is set a snapshot write is in progress for the
          % index specified
@@ -70,9 +70,9 @@ init(#{data_dir := BaseDir, id := Id} = Conf) ->
 
     % create subdir for log id
     Dir = filename:join(BaseDir, ra_lib:to_list(Id)),
-    Dets = filename:join(Dir, "meta.dets"),
-    ok = filelib:ensure_dir(Dets),
-    {ok, Kv} = dets:open_file(Dets, []),
+    Meta = filename:join(Dir, "meta.dat"),
+    ok = filelib:ensure_dir(Meta),
+    Kv = ra_log_file_meta:init(Meta),
 
     % recover current range and any references to segments
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(Id, Dir) of
@@ -160,8 +160,8 @@ close(#state{kv = Kv, open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
     [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
-    _ = dets:sync(Kv),
-    _ = dets:close(Kv),
+    % close also fsyncs
+    _ = ra_log_file_meta:close(Kv),
     ok.
 
 -spec append(Entry :: log_entry(), State :: ra_log_file_state()) ->
@@ -453,21 +453,17 @@ update_release_cursor(Idx, Cluster, MachineState,
 -spec read_meta(Key :: ra_log:ra_meta_key(),
                 State :: ra_log_file_state()) -> maybe(term()).
 read_meta(Key, #state{kv = Kv}) ->
-    case dets:lookup(Kv, Key) of
-        [] -> undefined;
-        [Value] ->
-            element(2, Value)
-    end.
+    ra_log_file_meta:fetch(Key, Kv).
 
 -spec write_meta(Key :: ra_log:ra_meta_key(), Value :: term(),
                  State :: ra_log_file_state()) ->
     {ok,  ra_log_file_state()} | {error, term()}.
 write_meta(Key, Value, State = #state{kv = Kv}) ->
-    ok = dets:insert(Kv, {Key, Value}),
+    ok = ra_log_file_meta:store(Key, Value, Kv),
     {ok, State}.
 
 sync_meta(#state{kv = Kv}) ->
-    ok = dets:sync(Kv),
+    ok = ra_log_file_meta:sync(Kv),
     ok.
 
 can_write(#state{wal = Wal}) ->

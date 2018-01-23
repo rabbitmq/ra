@@ -248,9 +248,12 @@ last(Config) ->
 
 meta(Config) ->
     Log0 = ?config(ra_log, Config),
-    {ok, Log} = ra_log:write_meta(current_term, 87, Log0),
-    87 = ra_log:read_meta(current_term, Log),
-    undefined = ra_log:read_meta(missing_key, Log),
+    {ok, Log1} = ra_log:write_meta(current_term, 87, Log0),
+    87 = ra_log:read_meta(current_term, Log1),
+    {ok, Log2} = ra_log:write_meta(last_applied, 42, Log1),
+    42 = ra_log:read_meta(last_applied, Log2),
+    {ok, Log} = ra_log:write_meta(voted_for, cream, Log2),
+    cream = ra_log:read_meta(voted_for, Log),
     ok.
 
 snapshot(Config) ->

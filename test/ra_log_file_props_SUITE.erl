@@ -527,9 +527,13 @@ read_write_meta(Config) ->
     TestCase = ?config(test_case, Config),
     run_proper(fun read_write_meta_prop/2, [Dir, TestCase], 100).
 
+-type meta_data() :: {current_term, non_neg_integer()} |
+                     {last_applied, non_neg_integer()} |
+                     {voted_for, {atom(), atom()}}.
+
 read_write_meta_prop(Dir, TestCase) ->
     ?FORALL(
-       Meta0, list({atom(), binary()}),
+       Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
                             ra_log_file:init(#{data_dir => Dir, id => TestCase})),
@@ -550,7 +554,7 @@ sync_meta(Config) ->
 
 sync_meta_prop(Dir, TestCase) ->
     ?FORALL(
-       Meta0, list({atom(), binary()}),
+       Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
                             ra_log_file:init(#{data_dir => Dir, id => TestCase})),
