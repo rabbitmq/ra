@@ -133,7 +133,7 @@ init(#{id := Id,
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
-    {{ClusterIndexTerm, Cluster}, Log} =
+    {{ClusterIndexTerm, Cluster}, Log1} =
     fold_log_from(CommitIndex,
                   fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
                           {{Idx, Term}, Cluster};
@@ -146,10 +146,13 @@ init(#{id := Id,
     {State, _, _} = apply_to(CommitIndex,
                              State0#{cluster => Cluster,
                                      cluster_index_term => ClusterIndexTerm,
-                                     log => Log}),
+                                     log => Log1}),
 
-    % TODO: close segments to reclaim file descriptors
-    {State, InitEffects}.
+    % close and re-open log to ensure segments aren't unnecessarily kept
+    % open
+    ok = ra_log:close(maps:get(log, State)),
+    Log = ra_log:init(LogMod, LogInitArgs),
+    {State#{log => Log}, InitEffects}.
 
 
 % the peer id in the append_entries_reply message is an artifact of
