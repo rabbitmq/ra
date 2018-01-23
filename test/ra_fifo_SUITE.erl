@@ -17,7 +17,8 @@ all_tests() ->
     [
      first,
      leader_monitors_customer,
-     follower_takes_over_monitor
+     follower_takes_over_monitor,
+     restarted_node_does_not_reissue_side_effects
     ].
 
 groups() ->
@@ -104,7 +105,7 @@ leader_monitors_customer(Config) ->
     ra_nodes_sup:stop_node(NodeId),
     _ = ra_nodes_sup:restart_node(NodeId),
     % check monitors are re-applied after restart
-    _ = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
     ra_nodes_sup:stop_node(NodeId),
@@ -136,6 +137,37 @@ follower_takes_over_monitor(Config) ->
     ra_nodes_sup:stop_node(NodeId2),
     ok.
 
+restarted_node_does_not_reissue_side_effects(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    Name = element(1, NodeId),
+    Conf = #{id => NodeId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, id => Name},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
+    _ = ra_nodes_sup:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    receive
+        {ra_event, _, machine, {msg, MsgId, _}} ->
+            {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, self()})
+    after 2000 ->
+              exit(ra_event_timeout)
+    end,
+    ra_nodes_sup:stop_node(NodeId),
+    _ = ra_nodes_sup:restart_node(NodeId),
+    %  check message isn't re-received
+    receive
+        {ra_event, _, machine, {msg, _, _}} ->
+            exit(unexpected_ra_event)
+    after 1000 ->
+              ok
+    end,
+    ra_nodes_sup:stop_node(NodeId),
+    ok.
 
 conf({Name, _} = NodeId, Dir, Peers) ->
     #{id => NodeId,

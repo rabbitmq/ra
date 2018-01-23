@@ -11,7 +11,6 @@ all() ->
     [
      % {group, ra_log_memory},
      {group, ra_log_file}
-     % {group, ra_log_file_follower_timeouts}
     ].
 
 all_tests() ->

@@ -98,16 +98,19 @@ init(#{id := Id,
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
+    LastApplied = ra_log:read_meta(last_applied, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
-    {ok, Log1} = ra_log:write_meta(current_term, CurrentTerm, Log0),
     {InitialMachineState, InitEffects} = ra_machine:init(Machine, Name),
-    {CommitIndex, Cluster0, MacState, SnapshotIndexTerm} =
-        case ra_log:read_snapshot(Log1) of
+    {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
+        case ra_log:read_snapshot(Log0) of
             undefined ->
-                {0, make_cluster(Id, InitialNodes), InitialMachineState, {0, 0}};
+                {0,
+                 make_cluster(Id, InitialNodes), InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
+
+    CommitIndex = max(LastApplied, FirstIndex),
 
     State0 = #{id => Id,
                cluster => Cluster0,
@@ -122,8 +125,8 @@ init(#{id := Id,
                current_term => CurrentTerm,
                voted_for => VotedFor,
                commit_index => CommitIndex,
-               last_applied => CommitIndex,
-               log => Log1,
+               last_applied => FirstIndex - 1,
+               log => Log0,
                machine => Machine,
                machine_state => MacState,
                condition_timeout_effects => []},
@@ -131,16 +134,21 @@ init(#{id := Id,
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
     {{ClusterIndexTerm, Cluster}, Log} =
-        fold_log_from(CommitIndex,
-                      fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
-                              {{Idx, Term}, Cluster};
-                         (_, Acc) ->
-                              Acc
-                      end, {{SnapshotIndexTerm, Cluster0}, Log1}),
+    fold_log_from(CommitIndex,
+                  fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _Acc) ->
+                          {{Idx, Term}, Cluster};
+                     (_, Acc) ->
+                          Acc
+                  end, {{SnapshotIndexTerm, Cluster0}, Log0}),
     % TODO: do we need to set previous cluster here?
-    State = State0#{cluster => Cluster,
-                    cluster_index_term => ClusterIndexTerm,
-                    log => Log},
+    % apply entries to the statemachine and
+    % throw away the effects as they have already been issued
+    {State, _, _} = apply_to(CommitIndex,
+                             State0#{cluster => Cluster,
+                                     cluster_index_term => ClusterIndexTerm,
+                                     log => Log}),
+
+    % TODO: close segments to reclaim file descriptors
     {State, InitEffects}.
 
 
@@ -366,6 +374,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {State, Rpcs} = make_all_rpcs(
                               initialise_peers(State0)),
             Effects = ra_machine:leader_effects(Machine, MacState),
+            ?INFO("leader effects ~p ~p~n", [Effects, MacState]),
             {leader, maps:without([votes, leader_id], State),
              [{send_rpcs, true, Rpcs},
               {next_event, cast, {command, noop}}
@@ -921,10 +930,11 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 
-apply_to(ApplyTo, State0 = #{id := Id,
-                             last_applied := LastApplied,
-                             machine := Machine,
-                             machine_state := MacState0})
+apply_to(ApplyTo, #{id := Id,
+                    last_applied := LastApplied,
+                    machine := Machine,
+                    machine_state := MacState0,
+                    log := Log0} = State0)
   when ApplyTo > LastApplied ->
     % TODO: fetch and apply batches to reduce peak memory usage
     case fetch_entries(LastApplied + 1, ApplyTo, State0) of
@@ -937,8 +947,16 @@ apply_to(ApplyTo, State0 = #{id := Id,
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
             % NewApplied = min(ApplyTo, LastEntryIdx),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
+            % Persist last_applied - as there is an inherent race we cannot
+            % always guarantee that side effects won't be re-issued when a follower
+            % that has seen an entry but not the commit_index takes over and this
+            % is performance critical we don't need to fsync the write. This will
+            % help reduce the potential for duplicate side effects being issued
+            % after full cluster restart and new leader elections
+            {ok, Log} = ra_log:write_meta(last_applied, AppliedTo, Log0, false),
             {State#{last_applied => AppliedTo,
-                    machine_state => MacState}, NewEffects,
+                    machine_state => MacState,
+                    log => Log}, NewEffects,
              AppliedTo - LastApplied}
     end;
 apply_to(_ApplyTo, State) ->
