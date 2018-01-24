@@ -16,6 +16,7 @@
          % properties
          id/1,
          leader_id/1,
+         current_term/1,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
@@ -647,6 +648,9 @@ id(#{id := Id}) -> Id.
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
 
+-spec current_term(ra_node_state()) -> maybe(ra_term()).
+current_term(State) ->
+    maps:get(current_term, State).
 % Internal
 
 follower_catchup_cond(#append_entries_rpc{term = Term,

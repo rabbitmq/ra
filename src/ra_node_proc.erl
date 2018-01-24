@@ -182,7 +182,7 @@ leader(EventType, {leader_call, Msg}, State) ->
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {command, {CmdType, Data, ReplyMode}},
-       State0 = #state{node_state = NodeState0}) ->
+       #state{node_state = NodeState0} = State0) ->
     %% Persist command into log
     %% Return raft index + term to caller so they can wait for apply
     %% notifications
@@ -198,11 +198,11 @@ leader(EventType, {command, {CmdType, Data, ReplyMode}},
                                       State0#state{node_state = NodeState}),
     {keep_state, State, Actions};
 leader({call, From}, {dirty_query, QueryFun},
-         State = #state{node_state = NodeState}) ->
+       #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, leader, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
-         State = #state{node_state = NodeState}) ->
+       #state{node_state = NodeState} = State) ->
     Reply = do_state_query(Spec, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, ping, State) ->
@@ -210,8 +210,8 @@ leader({call, From}, ping, State) ->
 leader(info, {node_down, _}, State) ->
     {keep_state, State};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
-       State0 = #state{monitors = Monitors0,
-                       node_state = NodeState0}) ->
+       #state{monitors = Monitors0,
+              node_state = NodeState0} = State0) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
             % there is a monitor with the correct ref - create next_event action
@@ -258,17 +258,19 @@ leader(EventType, Msg, State0) ->
 candidate({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+candidate(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+         State) ->
+    ok = reject_command(Pid, Corr, State),
+    {keep_state, State, []};
 candidate({call, From}, {dirty_query, QueryFun},
-         State = #state{node_state = NodeState}) ->
+         #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_down, _}, State) ->
     {keep_state, State};
-candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
-                                                         current_term := Term},
-                                          pending_commands = Pending}) ->
+candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
             {State, Actions0} = handle_effects(Effects, EventType, State1),
@@ -281,7 +283,8 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p candidate -> follower term: ~p~n", [Id, Term]),
+            ?INFO("~p candidate -> follower term: ~p~n",
+                  [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger another election
@@ -290,7 +293,8 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
              [election_timeout_action(candidate, State) | Actions]};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p candidate -> leader term: ~p~n", [Id, Term]),
+            ?INFO("~p candidate -> leader term: ~p~n",
+                  [id(State), current_term(State)]),
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
@@ -298,26 +302,15 @@ candidate(EventType, Msg, State0 = #state{node_state = #{id := Id,
              set_rpc_timer(State, Actions ++ NextEvents)}
     end.
 
-follower({call, From}, {leader_call, _Cmd},
-         State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
-    % ?INFO("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
-    {keep_state, State, {reply, From, {redirect, LeaderId}}};
-follower({call, From}, {leader_call, Msg},
-         State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
-    ?WARN("~p follower leader call - leader not known. "
-          "Command will be forwarded once leader is known.~n", [Id]),
-    {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+
+follower({call, From}, {leader_call, Msg}, State) ->
+    maybe_redirect(From, Msg, State);
 follower(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
-         State = #state{node_state = NodeState}) ->
-    Id = ra_node:id(NodeState),
-    LeaderId = ra_node:leader_id(NodeState),
-    ?INFO("~p follower received leader command - rejecting to ~p ~n",
-          [Id, LeaderId]),
-    ok = send_ra_event(Pid, {not_leader, LeaderId, Corr}, command_rejected,
-                       State),
+         State) ->
+    ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 follower({call, From}, {dirty_query, QueryFun},
-         State = #state{node_state = NodeState}) ->
+         #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 follower(_Type, trigger_election, State) ->
@@ -325,25 +318,26 @@ follower(_Type, trigger_election, State) ->
 follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
-         #state{leader_monitor = MRef,
-                node_state = #{id := Id, leader_id := Leader}} = State) ->
+         #state{leader_monitor = MRef} = State) ->
     case Info of
         noconnection ->
-            handle_leader_down(Leader, State);
+            handle_leader_down(State);
         _ ->
             ?WARN("~p: Leader monitor down with ~p, setting election timeout~n",
-                  [Id, Info]),
+                  [id(State), Info]),
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(follower, State)]}
     end;
-follower(info, {node_down, LeaderNode},
-         #state{node_state = #{leader_id := {_, LeaderNode} = Leader}} = State) ->
-    ?WARN("Leader node ~p may be down, setting election timeout", [LeaderNode]),
-    handle_leader_down(Leader, State);
-follower(info, {node_down, _}, State) ->
-    {keep_state, State};
-follower(EventType, Msg, #state{node_state = #{id := Id},
-                                await_condition_timeout = AwaitCondTimeout,
+follower(info, {node_down, LeaderNode}, State) ->
+    case leader_id(State) of
+        {_, LeaderNode} ->
+            ?WARN("~p: Leader node ~p may be down, setting election timeout",
+                  [id(State), LeaderNode]),
+            handle_leader_down(State);
+        _ ->
+            {keep_state, State}
+    end;
+follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
@@ -353,7 +347,7 @@ follower(EventType, Msg, #state{node_state = #{id := Id},
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?INFO("~p follower -> candidate term: ~p~n",
-                  [Id, current_term(State1)]),
+                  [id(State), current_term(State)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
@@ -361,21 +355,15 @@ follower(EventType, Msg, #state{node_state = #{id := Id},
             {State2, Actions} = handle_effects(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
             ?INFO("~p follower -> await_condition term: ~p~n",
-                  [Id, current_term(State)]),
+                  [id(State), current_term(State)]),
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout} | Actions]}
     end.
 
-await_condition({call, From}, {leader_call, _Cmd},
-         State = #state{node_state = #{leader_id := LeaderId, id := _Id}}) ->
-    % ?INFO("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
-    {keep_state, State, {reply, From, {redirect, LeaderId}}};
-await_condition({call, From}, {leader_call, Msg},
-         State = #state{pending_commands = Pending, node_state = #{id := Id}}) ->
-    ?WARN("~p follower leader call - leader not known. Dropping ~n", [Id]),
-    {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+await_condition({call, From}, {leader_call, Msg}, State) ->
+    maybe_redirect(From, Msg, State);
 await_condition({call, From}, {dirty_query, QueryFun},
-         State = #state{node_state = NodeState}) ->
+                #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 await_condition({call, From}, ping, State) ->
@@ -387,27 +375,30 @@ await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
     ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
-await_condition(info, {node_down, LeaderNode},
-                State = #state{node_state = #{leader_id := {_, LeaderNode}},
-                               name = Name}) ->
-    ?WARN("~p: Node ~p might be down. Setting election timeout.", [Name, LeaderNode]),
-    {keep_state, State, [election_timeout_action(follower, State)]};
-await_condition(info, {node_down, _}, State) ->
-    {keep_state, State};
-await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
+await_condition(info, {node_down, LeaderNode}, State) ->
+    case leader_id(State) of
+        {_, LeaderNode} ->
+            ?WARN("~p: Node ~p might be down. Setting election timeout.",
+                  [id(State), LeaderNode]),
+            {keep_state, State, [election_timeout_action(follower, State)]};
+        _ ->
+            {keep_state, State}
+    end;
+await_condition(EventType, Msg, State0 = #state{node_state = NState,
                                                 leader_monitor = MRef}) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
             ?INFO("~p await_condition -> follower term: ~p~n",
-                  [Id, current_term(State)]),
+                  [id(State), current_term(State)]),
             {next_state, follower, NewState,
              [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p follower -> candidate term: ~p~n", [Id, current_term(State1)]),
+            ?INFO("~p follower -> candidate term: ~p~n",
+                  [ra_node:id(NState), current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
              [election_timeout_action(candidate, State) | Actions]};
@@ -415,15 +406,14 @@ await_condition(EventType, Msg, State0 = #state{node_state = #{id := Id},
             {keep_state, State1, []}
     end.
 
-handle_event(_EventType, EventContent, StateName,
-             State = #state{node_state = #{id := Id}}) ->
-    ?WARN("~p: handle_event unknown ~p~n", [Id, EventContent]),
+handle_event(_EventType, EventContent, StateName, State) ->
+    ?WARN("~p: handle_event unknown ~p~n", [id(State), EventContent]),
     {next_state, StateName, State}.
 
 terminate(Reason, _StateName,
-          #state{node_state = NodeState = #{id := Id},
-                 name = Key}) ->
-    ?WARN("ra: ~p terminating with ~p~n", [Id, Reason]),
+          #state{name = Key,
+                 node_state = NodeState} = State) ->
+    ?WARN("ra: ~p terminating with ~p~n", [id(State), Reason]),
     _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     _ = ra_node:terminate(NodeState),
@@ -432,9 +422,8 @@ terminate(Reason, _StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-format_status(Opt, [_PDict, StateName,
-                    #state{node_state = #{id := Id} = NS}]) ->
-    [{id, Id},
+format_status(Opt, [_PDict, StateName, #state{node_state = NS}]) ->
+    [{id, ra_node:id(NS)},
      {opt, Opt},
      {raft_state, StateName},
      {ra_node_state, ra_node:overview(NS)}
@@ -459,8 +448,6 @@ handle_follower(Msg, #state{node_state = NodeState0} = State) ->
 handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, NodeState, Effects} = ra_node:handle_await_condition(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
-
-current_term(#state{node_state = #{current_term := T}}) -> T.
 
 perform_dirty_query(QueryFun, leader, #{machine_state := MacState,
                                         last_applied := Last,
@@ -590,6 +577,12 @@ send_ra_event(To, Msg, EvtType, State) ->
 id(#state{node_state = NodeState}) ->
     ra_node:id(NodeState).
 
+leader_id(#state{node_state = NodeState}) ->
+    ra_node:leader_id(NodeState).
+
+current_term(#state{node_state = NodeState}) ->
+    ra_node:current_term(NodeState).
+
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
     % only when a leader is known should we cancel the election timeout
@@ -609,23 +602,25 @@ set_rpc_timer(_State, Actions) ->
     [{{timeout, rpc_timeout}, ?RPC_INTERVAL_MS, rpc_timeout} | Actions].
 
 
-follower_leader_change(#state{node_state = #{leader_id := L}},
-                       #state{node_state = #{leader_id := L}} = New) ->
-    % no change
-    New;
-follower_leader_change(_Old, #state{node_state = #{id := Id, leader_id := L,
-                                                   current_term := Term},
-                                    pending_commands = Pending,
-                                    leader_monitor = OldMRef } = New)
-  when L /= undefined ->
-    MRef = swap_monitor(OldMRef, L),
-    % leader has either changed or just been set
-    ?INFO("~p detected a new leader ~p in term ~p~n", [Id, L, Term]),
-    [ok = gen_statem:reply(From, {redirect, L})
-     || {From, _Data} <- Pending],
-    New#state{pending_commands = [],
-              leader_monitor = MRef};
-follower_leader_change(_Old, New) -> New.
+follower_leader_change(Old, #state{pending_commands = Pending,
+                                   leader_monitor = OldMRef} = New) ->
+    OldLeader = leader_id(Old),
+    case leader_id(New) of
+        OldLeader ->
+            % no change
+            New;
+        undefined ->
+            New;
+        NewLeader ->
+            MRef = swap_monitor(OldMRef, NewLeader),
+            % leader has either changed or just been set
+            ?INFO("~p detected a new leader ~p in term ~p~n",
+                  [id(New), NewLeader, current_term(New)]),
+            [ok = gen_statem:reply(From, {redirect, NewLeader})
+             || {From, _Data} <- Pending],
+            New#state{pending_commands = [],
+                      leader_monitor = MRef}
+    end.
 
 swap_monitor(MRef, L) ->
     stop_monitor(MRef),
@@ -659,8 +654,8 @@ config_defaults() ->
       initial_nodes => []
      }.
 
-handle_leader_down(Leader, #state{leader_monitor = Mon,
-                                  node_state = #{id := Id}} = State) ->
+handle_leader_down(#state{leader_monitor = Mon} = State) ->
+    Leader = leader_id(State),
     % ping leader to check if up
     case ra_node_proc:ping(Leader, 1000) of
         {pong, leader} ->
@@ -671,7 +666,28 @@ handle_leader_down(Leader, #state{leader_monitor = Mon,
              []};
         PingRes ->
             ?INFO("~p: Leader ~p appears down. Ping returned: ~p~n"
-                  " Setting election timeout~n", [Id, Leader, PingRes]),
+                  " Setting election timeout~n",
+                  [id(State), Leader, PingRes]),
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(follower, State)]}
     end.
+
+maybe_redirect(From, Msg, #state{pending_commands = Pending} = State) ->
+    case leader_id(State) of
+        undefined ->
+            ?WARN("~p leader call - leader not known. "
+                  "Command will be forwarded once leader is known.~n",
+                  [id(State)]),
+            {keep_state,
+             State#state{pending_commands = [{From, Msg} | Pending]}};
+        LeaderId ->
+            % ?INFO("~p follower leader call - redirecting to ~p ~n", [Id, LeaderId]),
+            {keep_state, State, {reply, From, {redirect, LeaderId}}}
+    end.
+
+reject_command(Pid, Corr, State) ->
+    LeaderId = leader_id(State),
+    ?INFO("~p follower received leader command - rejecting to ~p ~n",
+          [id(State), LeaderId]),
+    send_ra_event(Pid, {not_leader, LeaderId, Corr}, command_rejected,
+                       State).
