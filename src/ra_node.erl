@@ -173,7 +173,9 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             ?WARN("~p saw command from unknown peer ~p~n", [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
-            Peer = Peer0#{match_index => max(MI, LastIdx), % TODO: strictly speaking we should not need to take a max here? assert?
+            % TODO: strictly speaking we should not need to take a max here?
+            % assert?
+            Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
@@ -311,20 +313,22 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
             ?WARN("~p saw command from unknown peer ~p~n", [Id, PeerId]),
             {leader, State0, []};
         _ ->
-            ?INFO("~p leader saw install_snapshot_result for term ~p abdicates term: ~p!~n",
-                 [Id, Term, CurTerm]),
+            ?INFO("~p leader saw install_snapshot_result for term ~p"
+                  " abdicates term: ~p!~n", [Id, Term, CurTerm]),
             {follower, update_term(Term, State0), []}
     end;
 handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
               #{id := Id} = State0) ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~p saw install_snapshot_result from unknown peer ~p~n", [Id, PeerId]),
+            ?WARN("~p saw install_snapshot_result from unknown peer ~p~n",
+                  [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{next_index := NI} ->
             State1 = update_peer(PeerId,
                                  Peer0#{match_index => LastIndex,
-                                        % leader might have pipelined append entries
+                                        % leader might have pipelined
+                                        % append entries
                                         % since snapshot was sent
                                         % need to ensure next index is at least
                                         % LastIndex + 1 though
@@ -343,8 +347,8 @@ handle_leader(#append_entries_rpc{term = Term} = Msg,
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
                                                   id := Id}) ->
-    ?ERR("~p leader saw append_entries_rpc for same term ~p this should not happen: ~p!~n",
-         [Id, Term]),
+    ?ERR("~p leader saw append_entries_rpc for same term ~p"
+         " this should not happen: ~p!~n", [Id, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
 % TODO: reply to append_entries_rpcs that have lower term?
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
@@ -356,8 +360,8 @@ handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
                   [Id, Cand]),
             {leader, State0, []};
         _ ->
-            ?INFO("~p leader saw request_vote_rpc for term ~p abdicates term: ~p!~n",
-                  [Id, Term, CurTerm]),
+            ?INFO("~p leader saw request_vote_rpc for term ~p"
+                  " abdicates term: ~p!~n", [Id, Term, CurTerm]),
             {follower, update_term(Term, State0), [{next_event, Msg}]}
     end;
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
@@ -391,15 +395,17 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
 handle_candidate(#request_vote_result{term = Term},
                  State0 = #{current_term := CurTerm, id := Id})
   when Term > CurTerm ->
-    ?INFO("~p candidate request_vote_result with higher term received ~p -> ~p",
-          [Id, CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
+    ?INFO("~p: candidate request_vote_result with higher term"
+          " received ~p -> ~p", [Id, CurTerm, Term]),
+    State = update_meta([{current_term, Term}, {voted_for, undefined}],
+                        State0),
     {follower, State, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
                  State0 = #{current_term := CurTerm}) when Term >= CurTerm ->
-    State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
+    State = update_meta([{current_term, Term}, {voted_for, undefined}],
+                        State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{},
                  State = #{current_term := CurTerm}) ->
@@ -948,25 +954,25 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
 apply_to(ApplyTo, #{id := Id,
                     last_applied := LastApplied,
                     machine := Machine,
-                    machine_state := MacState0,
-                    log := Log0} = State0)
+                    machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
     % TODO: fetch and apply batches to reduce peak memory usage
     case fetch_entries(LastApplied + 1, ApplyTo, State0) of
         {[], State} ->
             {State, [], 0};
         {Entries, State1} ->
-            {State, MacState, NewEffects} =
+            {#{log := Log0} = State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
                             {State1, MacState0, []}, Entries),
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
-            % NewApplied = min(ApplyTo, LastEntryIdx),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
+
             % Persist last_applied - as there is an inherent race we cannot
-            % always guarantee that side effects won't be re-issued when a follower
-            % that has seen an entry but not the commit_index takes over and this
-            % is performance critical we don't need to fsync the write. This will
-            % help reduce the potential for duplicate side effects being issued
+            % always guarantee that side effects won't be re-issued when a
+            % follower that has seen an entry but not the commit_index
+            % takes over and this % is performance critical we don't need
+            % to fsync the write. This will % help reduce the potential for
+            % duplicate side effects being issued
             % after full cluster restart and new leader elections
             {ok, Log} = ra_log:write_meta(last_applied, AppliedTo, Log0, false),
             {State#{last_applied => AppliedTo,
@@ -1121,7 +1127,6 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           next_index = LastIdx + 1,
                           last_index = LWIdx,
                           last_term = LWTerm}.
-
 
 evaluate_quorum(State0) ->
     State = #{commit_index := CI} = increment_commit_index(State0),

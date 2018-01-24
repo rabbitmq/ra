@@ -214,9 +214,10 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
               node_state = NodeState0} = State0) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
-            % there is a monitor with the correct ref - create next_event action
+            % there is a monitor for the ref - create next_event action
             {leader, NodeState, Effects} =
-                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid}, after_log_append}},
+                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid},
+                                                 after_log_append}},
                                       NodeState0),
             {State, Actions0} =
                 handle_effects(Effects, call,
