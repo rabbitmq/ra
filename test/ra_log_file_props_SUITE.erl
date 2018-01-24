@@ -78,7 +78,7 @@ wait_sequence_gen(N) ->
     ?LET(List, vector(N, wait_gen()), List).
 
 wait_gen() ->
-    frequency([{5, 0}, {3, choose(1, 50)}, {1, choose(100, 500)}]).
+    frequency([{8, 0}, {5, choose(1, 40)}, {1, choose(60, 350)}]).
 
 consume_gen(N) ->
     ?LET(List, vector(N, boolean()), List).
@@ -570,7 +570,7 @@ write_meta([{Key, Value} | Rest], Log0) ->
 last_written_with_wal(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_with_wal_prop/2, [Dir, TestCase], 25).
+    run_proper(fun last_written_with_wal_prop/2, [Dir, TestCase], 15).
 
 build_action_list(Entries, Actions) ->
     lists:flatten(lists:map(fun(Index) ->
@@ -704,7 +704,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               Log0 = ra_log_file:init(#{data_dir => Dir, id => TestCase,
-                                        resend_window => 5}),
+                                        resend_window => 2}),
               ra_log_file:take(1, 10, Log0),
               {Log, Last, Ts} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
@@ -713,12 +713,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                                  (consume, {Acc0, Last0, Ts}) ->
                                       {Acc1, Last1} = consume_events(Acc0, Last0),
                                       {Acc1, Last1, Ts};
-                                 (crash_segment_writer, {Acc0, Last0, Ts}) ->
-                                      %% Ensure that we do not kill the supervision tree
-                                      %% by reaching the max restarts of 1 x 5s
-                                      %% We only sleep if we have to, ensuring that test
-                                      %% runs as fast as possible.
-                                      timer:sleep(time_diff_to(Ts, 6000)),
+                                 (crash_segment_writer, {Acc0, Last0, _Ts}) ->
                                       case whereis(ra_log_file_segment_writer) of
                                           undefined -> ok;
                                           P -> exit(P, kill)
@@ -730,9 +725,8 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                               end, {Log0, {0, 0}, get_timestamp()}, All),
               %% We want to check that eventually we get the last written as the last entry,
               %% despite the segment writer crash. The log file might have to resend
-              %% some entries after it, so it needs time to recover. We'll give it the time
-              %% between max supervisor restarts (> 5s).
-              timer:sleep(time_diff_to(Ts, 6000)),
+              %% some entries after it, so it needs time to recover.
+              timer:sleep(time_diff_to(Ts, 3000)),
               % write an entry to trigger resend protocol if required
               {LastIdx, LastTerm} = ra_log_file:last_index_term(Log),
               E = {LastIdx+1, LastTerm, <<>>},
