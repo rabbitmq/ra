@@ -13,7 +13,9 @@
          handle_await_condition/2,
          overview/1,
          is_new/1,
+         % properties
          id/1,
+         leader_id/1,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
@@ -59,7 +61,7 @@
     {send_rpcs, IsUrgent :: boolean(), [{ra_node_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
-    {notify, pid(), ra_idxterm()} |
+    {notify, pid(), reference()} |
     {incr_metrics, Table :: atom(),
      [{Pos :: non_neg_integer(), Incr :: integer()}]}.
 
@@ -636,8 +638,14 @@ overview(#{log := Log, machine := Machine,
 is_new(#{log := Log}) ->
     ra_log:next_index(Log) =:= 1.
 
+% property helpers
+
 -spec id(ra_node_state()) -> ra_node_id().
 id(#{id := Id}) -> Id.
+
+-spec leader_id(ra_node_state()) -> maybe(ra_node_id()).
+leader_id(State) ->
+    maps:get(leader_id, State, undefined).
 
 % Internal
 
@@ -1008,8 +1016,11 @@ add_next_cluster_change(Effects, State) ->
 
 add_reply(From, Reply, await_consensus, Effects) ->
     [{reply, From, Reply} | Effects];
-add_reply({FromPid, _}, Reply, notify_on_consensus, Effects) ->
-    [{notify, FromPid, Reply} | Effects];
+add_reply(undefined, _IdxTerm, {notify_on_consensus, Corr, Pid}, Effects) ->
+    % notify are casts and thus have to include their own pid()
+    % reply with the supplied correlation so that the sending can do their
+    % own bookkeeping
+    [{notify, Pid, Corr} | Effects];
 add_reply(_From, _Reply, _Mode, Effects) ->
     Effects.
 

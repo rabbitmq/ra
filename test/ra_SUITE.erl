@@ -22,6 +22,7 @@ all_tests() ->
      node_recovery,
      send_and_await_consensus,
      send_and_notify,
+     send_and_notify_reject,
      dirty_query,
      members,
      consistent_query,
@@ -286,9 +287,23 @@ send_and_notify(Config) ->
     [A, _B, _C] = Cluster =
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}, Config),
-    {ok, IdxTerm, _Leader} = ra:send_and_notify(A, 5),
+    Correlation = my_corr,
+    ok = ra:send_and_notify(A, 5, Correlation),
     receive
-        {ra_event, _, consensus, IdxTerm} -> ok
+        {ra_event, _, consensus, Correlation} -> ok
+    after 2000 ->
+              exit(consensus_timeout)
+    end,
+    terminate_cluster(Cluster).
+
+send_and_notify_reject(Config) ->
+    [A, B, _C] = Cluster =
+        start_local_cluster(3, ?config(test_name, Config),
+                            {simple, fun erlang:'+'/2, 9}, Config),
+    Correlation = my_corr,
+    ok = ra:send_and_notify(B, 5, Correlation),
+    receive
+        {ra_event, _, command_rejected, {not_leader, A, Correlation}} -> ok
     after 2000 ->
               exit(consensus_timeout)
     end,
@@ -429,9 +444,9 @@ follower_catchup(Config) ->
     {ok, _, _Leader} = ra:send_and_await_consensus({N1, node()}, 5,
                                                    ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     % issue command - this will be lost
-    {ok, _, Leader0} = ra:send_and_notify({N1, node()}, 500),
+    ok = ra:send_and_notify({N1, node()}, 500, corr_500),
     % issue next command
-    {ok, IdxTerm, Leader0} = ra:send_and_notify({N1, node()}, 501),
+    {ok, IdxTerm, Leader0} = ra:send({N1, node()}, 501),
     [Follower] = [N1, N2] -- [element(1, Leader0)],
     receive
         {ra_event, _, consensus, IdxTerm} ->
@@ -449,7 +464,7 @@ follower_catchup(Config) ->
     % the aer with the original condition which should trigger a re-wind of of
     % the next_index and a subsequent resend of missing entries
     receive
-        {ra_event, _, consensus, IdxTerm} ->
+        {ra_event, _, consensus, corr_500} ->
             case get_gen_statem_status({Follower, node()}) of
                 follower ->
                     ok;
@@ -480,10 +495,10 @@ post_partition_liveness(Config) ->
     % simulate partition
     meck:expect(ra_node_proc, send_rpcs, fun(_, S) -> S end),
     % send an entry that will not be replicated
-    {ok, IdxTerm, Leader} = ra:send_and_notify(Leader, 500),
+    ok = ra:send_and_notify(Leader, 500, corr_500),
     % assert we don't achieve consensus
     receive
-        {ra_event, _, consensus, IdxTerm} ->
+        {ra_event, _, consensus, corr_500} ->
             exit(unexpected_consensus)
     after 1000 ->
               ok
@@ -492,7 +507,7 @@ post_partition_liveness(Config) ->
     meck:unload(),
     % assert consensus completes after some time
     receive
-        {ra_event, _, consensus, IdxTerm} ->
+        {ra_event, _, consensus, corr_500} ->
             ok
     after 6500 ->
             exit(consensus_timeout)

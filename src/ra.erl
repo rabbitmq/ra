@@ -8,7 +8,6 @@
          send/3,
          send_and_await_consensus/2,
          send_and_await_consensus/3,
-         send_and_notify/2,
          send_and_notify/3,
          dirty_query/2,
          members/1,
@@ -140,13 +139,10 @@ send_and_await_consensus(Ref, Data) ->
 send_and_await_consensus(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, await_consensus), Timeout).
 
--spec send_and_notify(ra_node_id(), term()) -> ra_cmd_ret().
-send_and_notify(Ref, Data) ->
-    send_and_notify(Ref, Data, ?DEFAULT_TIMEOUT).
-
--spec send_and_notify(ra_node_id(), term(), timeout()) -> ra_cmd_ret().
-send_and_notify(Ref, Data, Timeout) ->
-    ra_node_proc:command(Ref, usr(Data, notify_on_consensus), Timeout).
+-spec send_and_notify(ra_node_id(), term(), term()) -> ok.
+send_and_notify(Ref, Data, Correlation) ->
+    Cmd = usr(Data, {notify_on_consensus, Correlation, self()}),
+    ra_node_proc:cast_command(Ref, Cmd).
 
 -spec dirty_query(Node::ra_node_id(), QueryFun::fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.

@@ -23,6 +23,7 @@
 %% API
 -export([start_link/1,
          command/3,
+         cast_command/2,
          query/3,
          state_query/2,
          trigger_election/1,
@@ -38,8 +39,11 @@
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 
--type command_reply_mode() ::
-    after_log_append | await_consensus | notify_on_consensus.
+-type correlation() :: term().
+
+-type command_reply_mode() :: after_log_append |
+                              await_consensus |
+                              {notify_on_consensus, pid(), correlation()}.
 
 -type query_fun() :: fun((term()) -> term()).
 
@@ -48,9 +52,9 @@
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
 
--type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_node_id()}
-                                    | {error, term()}
-                                    | {timeout, ra_node_id()}.
+-type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_node_id()} |
+                                    {error, term()} |
+                                    {timeout, ra_node_id()}.
 
 -type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm()).
 
@@ -85,6 +89,10 @@ start_link(Config = #{id := Id}) ->
     ra_cmd_ret().
 command(ServerRef, Cmd, Timeout) ->
     leader_call(ServerRef, {command, Cmd}, Timeout).
+
+-spec cast_command(ra_node_id(), ra_command()) -> ok.
+cast_command(ServerRef, Cmd) ->
+    gen_statem:cast(ServerRef, {command, Cmd}).
 
 -spec query(ra_node_id(), query_fun(), dirty | consistent) ->
     {ok, {ra_idxterm(), term()}, ra_node_id()}.
@@ -171,12 +179,18 @@ callback_mode() -> state_functions.
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
     leader(EventType, Msg, State);
-leader({call, From} = EventType, {command, {CmdType, Data, ReplyMode}},
+leader(EventType, {leader_cast, Msg}, State) ->
+    leader(EventType, Msg, State);
+leader(EventType, {command, {CmdType, Data, ReplyMode}},
        State0 = #state{node_state = NodeState0}) ->
     %% Persist command into log
     %% Return raft index + term to caller so they can wait for apply
     %% notifications
     %% Send msg to peer with updated state data
+    From = case EventType of
+               cast -> undefined;
+               {call, F} -> F
+           end,
     {leader, NodeState, Effects} =
         ra_node:handle_leader({command, {CmdType, From, Data, ReplyMode}},
                               NodeState0),
@@ -293,6 +307,15 @@ follower({call, From}, {leader_call, Msg},
     ?WARN("~p follower leader call - leader not known. "
           "Command will be forwarded once leader is known.~n", [Id]),
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+follower(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+         State = #state{node_state = NodeState}) ->
+    Id = ra_node:id(NodeState),
+    LeaderId = ra_node:leader_id(NodeState),
+    ?INFO("~p follower received leader command - rejecting to ~p ~n",
+          [Id, LeaderId]),
+    ok = send_ra_event(Pid, {not_leader, LeaderId, Corr}, command_rejected,
+                       State),
+    {keep_state, State, []};
 follower({call, From}, {dirty_query, QueryFun},
          State = #state{node_state = NodeState}) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
@@ -466,14 +489,12 @@ handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
     ok = send_ra_event(To, Msg, machine, State),
     {State, Actions};
-handle_effect({notify, Who, IdxTerm}, _EvtType, State, Actions) ->
-    ok = send_ra_event(Who, IdxTerm, consensus, State),
+handle_effect({notify, Who, Correlation}, _EvtType, State, Actions) ->
+    ok = send_ra_event(Who, Correlation, consensus, State),
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),
     {State, Actions};
-% TODO: optimisation we could send the reply using gen_statem:reply to
-% avoid waiting for all effects to finish processing
 handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
     {State, [Action | Actions]};
 handle_effect({reply, Reply}, {call, From}, State, Actions) ->
