@@ -120,7 +120,8 @@ init(#{data_dir := BaseDir, id := Id} = Conf) ->
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_0_0_entry(State0),
-    ?INFO("ra_log_file:init recovered last_index_term ~p~n", [last_index_term(State)]),
+    ?INFO("ra_log_file:init recovered last_index_term ~p~n",
+          [last_index_term(State)]),
     State.
 
 recover_range(Id, Dir) ->

@@ -13,7 +13,9 @@
          check/1,
          auto/1,
          recv/1,
-         go/1
+         go/1,
+         lg_trace/0,
+         lg_stop/0
         ]).
 
 
@@ -117,3 +119,16 @@ start_node(Name, Nodes, Machine, Dir) ->
              cluster_id => Name},
     ra:start_node(Name, Conf).
 
+lg_trace() ->
+    Name = atom_to_list(node()),
+    lg:trace([ra_node, ra_node_proc, ra_proxy, ra_log_file, ra_fifo],
+             lg_file_tracer,
+             Name ++ ".gz", #{running => false, mode => profile}).
+
+lg_stop() ->
+    Name = atom_to_list(node()),
+    lg:stop(),
+    lgc(Name).
+
+lgc(Name) ->
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}).

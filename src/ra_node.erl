@@ -88,10 +88,10 @@
               ra_msg/0
              ]).
 
--define(AER_CHUNK_SIZE, 5).
-% TODO: test what is a good deafult here
+-define(AER_CHUNK_SIZE, 25).
+% TODO: test what is a good defult here
 % TODO: make configurable
--define(MAX_PIPELINE_DISTANCE, 1000).
+-define(MAX_PIPELINE_DISTANCE, 10000).
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->

@@ -161,7 +161,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     end,
     ra_nodes_sup:stop_node(NodeId),
     _ = ra_nodes_sup:restart_node(NodeId),
-    %  check message isn't re-received
+    %  check message isn't received again
     receive
         {ra_event, _, machine, {msg, _, _}} ->
             exit(unexpected_ra_event)

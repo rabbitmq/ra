@@ -570,13 +570,12 @@ send_ra_event(To, Msg, EvtType, State) ->
     Id = id(State),
     RaEvt = {ra_event, Id, EvtType, Msg},
     % need to avoid delays
-    case erlang:send(To, RaEvt, [noconnect]) of
+    case erlang:send(To, RaEvt, [noconnect, nosuspend]) of
         ok ->
             ok;
         noconnect ->
-            % try sending the message in another process
-            % TODO: if this also fails we could try to notify the statemachine
-            _ = spawn(fun () -> To ! RaEvt end),
+            % TODO: we could try to reconnect here in a different processes
+            % but probably best not from a performance point of view
             ok
     end.
 
