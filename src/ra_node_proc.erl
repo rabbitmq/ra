@@ -35,7 +35,7 @@
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 50).
 -define(DEFAULT_ELECTION_MULT, 3).
--define(RPC_INTERVAL_MS, 1000).
+-define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 
@@ -70,7 +70,8 @@
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
-                broadcast_time :: non_neg_integer(),
+                broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
+                tick_timeout :: non_neg_integer(),
                 monitors = #{} :: #{pid() => reference()},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
@@ -148,10 +149,10 @@ init([Config0]) ->
                               net_kernel:connect_node(Node);
                           (_) -> node()
                       end, Peers),
-    BroadcastTime = maps:get(broadcast_time, Config),
+    TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     State0 = #state{node_state = NodeState, name = Key,
-                    broadcast_time = BroadcastTime,
+                    tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
@@ -167,7 +168,7 @@ init([Config0]) ->
                       [election_timeout_action(follower, State) | Actions0]
               end,
 
-    {ok, follower, State, Actions}.
+    {ok, follower, State, set_tick_timer(State, Actions)}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -233,9 +234,9 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
         error ->
             {keep_state, State0, []}
     end;
-leader(_, rpc_timeout, State0) ->
-    State = send_rpcs(State0),
-    {keep_state, State, set_rpc_timer(State, [])};
+leader(_, tick_timeout, State0) ->
+    State = maybe_persist_last_applied(send_rpcs(State0)),
+    {keep_state, State, set_tick_timer(State, [])};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -255,7 +256,6 @@ leader(EventType, Msg, State0) ->
             {stop, normal, State}
     end.
 
-
 candidate({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -271,6 +271,9 @@ candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_down, _}, State) ->
     {keep_state, State};
+candidate(_, tick_timeout, State0) ->
+    State = maybe_persist_last_applied(State0),
+    {keep_state, State, set_tick_timer(State, [])};
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
@@ -299,8 +302,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            {next_state, leader, State,
-             set_rpc_timer(State, Actions ++ NextEvents)}
+            {next_state, leader, State, Actions ++ NextEvents}
     end.
 
 
@@ -338,6 +340,9 @@ follower(info, {node_down, LeaderNode}, State) ->
         _ ->
             {keep_state, State}
     end;
+follower(_, tick_timeout, State0) ->
+    State = maybe_persist_last_applied(State0),
+    {keep_state, State, set_tick_timer(State, [])};
 follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
@@ -598,9 +603,10 @@ election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
-% sets the rpc timer for ensuring liveness with nodes that have fallen behind
-set_rpc_timer(_State, Actions) ->
-    [{{timeout, rpc_timeout}, ?RPC_INTERVAL_MS, rpc_timeout} | Actions].
+% sets the tock timer for periodical actions such as sending stale rpcs
+% or persisting the last_applied index
+set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
+    [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
 
 follower_leader_change(Old, #state{pending_commands = Pending,
@@ -651,6 +657,7 @@ do_state_query(members, #{cluster := Cluster}) ->
 
 config_defaults() ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
+      tick_timeout => ?TICK_INTERVAL_MS,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_nodes => []
      }.
@@ -692,3 +699,7 @@ reject_command(Pid, Corr, State) ->
           [id(State), LeaderId]),
     send_ra_event(Pid, {not_leader, LeaderId, Corr}, command_rejected,
                        State).
+
+maybe_persist_last_applied(#state{node_state = NS} = State) ->
+     State#state{node_state = ra_node:persist_last_applied(NS)}.
+

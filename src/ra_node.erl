@@ -20,6 +20,7 @@
          % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
+         persist_last_applied/1,
          terminate/1
         ]).
 
@@ -39,6 +40,7 @@
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
+      persisted_last_applied => ra_index(),
       stop_after => ra_index(),
       machine => ra_machine:machine(),
       machine_state => term(),
@@ -73,9 +75,12 @@
                             log_init_args => ra_log:ra_log_init_args(),
                             initial_nodes => [ra_node_id()],
                             machine => ra_machine:machine(),
-                            % TODO: maps this top rpc_timeout instead as no
-                            % longer used
-                            broadcast_time => non_neg_integer(), % milliseconds
+                            % TODO: review - only really used for
+                            % setting election timeouts
+                            broadcast_time => non_neg_integer(), % ms
+                            % for periodic actions such as sending stale rpcs
+                            % and persisting last_applied index
+                            tick_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
@@ -129,6 +134,7 @@ init(#{id := Id,
                voted_for => VotedFor,
                commit_index => CommitIndex,
                last_applied => FirstIndex - 1,
+               persisted_last_applied => LastApplied,
                log => Log0,
                machine => Machine,
                machine_state => MacState,
@@ -774,6 +780,8 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
+-spec update_release_cursor(ra_index(), term(), ra_node_state()) ->
+    ra_node_state().
 update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
 
@@ -787,8 +795,25 @@ update_release_cursor(Index, MacState,
     Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
     State#{log => Log}.
 
+% Persist last_applied - as there is an inherent race we cannot
+% always guarantee that side effects won't be re-issued when a
+% follower that has seen an entry but not the commit_index
+% takes over and this
+% This is done on a schedule
+-spec persist_last_applied(ra_node_state()) -> ra_node_state().
+persist_last_applied(#{persisted_last_applied := L,
+                       last_applied := L} = State) ->
+    % do nothing
+    State;
+persist_last_applied(#{last_applied := L, log := Log0} = State) ->
+    {ok, Log} = ra_log:write_meta(last_applied, L, Log0, false),
+    State#{log => Log,
+           persisted_last_applied => L}.
+
+
 -spec terminate(ra_node_state()) -> ok.
-terminate(#{log := Log}) ->
+terminate(State) ->
+    #{log := Log} = persist_last_applied(State),
     catch ra_log:close(Log),
     ok.
 
@@ -961,23 +986,14 @@ apply_to(ApplyTo, #{id := Id,
         {[], State} ->
             {State, [], 0};
         {Entries, State1} ->
-            {#{log := Log0} = State, MacState, NewEffects} =
+            {State, MacState, NewEffects} =
                 lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
                             {State1, MacState0, []}, Entries),
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
 
-            % Persist last_applied - as there is an inherent race we cannot
-            % always guarantee that side effects won't be re-issued when a
-            % follower that has seen an entry but not the commit_index
-            % takes over and this % is performance critical we don't need
-            % to fsync the write. This will % help reduce the potential for
-            % duplicate side effects being issued
-            % after full cluster restart and new leader elections
-            {ok, Log} = ra_log:write_meta(last_applied, AppliedTo, Log0, false),
             {State#{last_applied => AppliedTo,
-                    machine_state => MacState,
-                    log => Log}, NewEffects,
+                    machine_state => MacState}, NewEffects,
              AppliedTo - LastApplied}
     end;
 apply_to(_ApplyTo, State) ->

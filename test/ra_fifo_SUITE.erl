@@ -137,6 +137,8 @@ follower_takes_over_monitor(Config) ->
     ra_nodes_sup:stop_node(NodeId2),
     ok.
 
+% NB: this is not guaranteed not to re-issue side-effects but only tests
+% that the likelyhood is small
 restarted_node_does_not_reissue_side_effects(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
