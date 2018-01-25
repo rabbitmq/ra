@@ -14,6 +14,7 @@
          auto/1,
          recv/1,
          go/1,
+         go_many/2,
          lg_trace/0,
          lg_stop/0
         ]).
@@ -90,6 +91,9 @@ go0(Node0) ->
     after 5000 ->
               throw(timeout_waiting_for_receive)
     end.
+
+go_many(Num, Node) ->
+    [spawn(fun () -> go(Node) end) || _ <- lists:seq(1, Num)].
 
 pop(Node) ->
     ra:send({raq, Node}, {checkout, {once, 1}, self()}),

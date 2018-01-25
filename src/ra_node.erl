@@ -390,7 +390,6 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {State, Rpcs} = make_all_rpcs(
                               initialise_peers(State0)),
             Effects = ra_machine:leader_effects(Machine, MacState),
-            ?INFO("leader effects ~p ~p~n", [Effects, MacState]),
             {leader, maps:without([votes, leader_id], State),
              [{send_rpcs, true, Rpcs},
               {next_event, cast, {command, noop}}
