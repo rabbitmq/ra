@@ -20,9 +20,14 @@
 % maximum number of entries for any one writer before requesting flush to disk
 -define(MAX_WRITER_ENTRIES_PER_WAL, 4096 * 4).
 
-% a "writer" has to be a locally registered name to ensure it can be resolved
-% independently of it's pid()
--type writer_id() :: atom().
+% a writer_id consists of a unqique local name (see ra_directory) and a writer's
+% current pid().
+% The pid is used for the immediate writer notification
+% The atom is used by the segment writer to send the segments
+% This has the effect that a restarted node has a different identity in terms
+% of it's write notification but the same identity in terms of it's ets
+% tables and segment notification
+-type writer_id() :: {binary(), pid()}.
 
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{writer_id() =>
@@ -87,12 +92,12 @@
               wal_write_strategy/0]).
 
 
--spec write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
+-spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
 write(From, Wal, Idx, Term, Entry) ->
     send_write(Wal, {append, From, Idx, Term, Entry}).
 
--spec truncate_write(pid() | atom(), atom(), ra_index(), ra_term(), term()) ->
+-spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
 truncate_write(From, Wal, Idx, Term, Entry) ->
     send_write(Wal, {truncate, From, Idx, Term, Entry}).
@@ -281,7 +286,7 @@ serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
             % TODO: check overflows of Next
             % cache the last 15 bits of the header word
             BinId = <<1:1/integer, Next:14/integer>>,
-            IdData = to_binary(Id),
+            IdData = term_to_binary(Id),
             IdDataLen = byte_size(IdData),
             MarkerId = <<T:1/integer, 0:1/integer, Next:14/integer,
                          IdDataLen:16/integer, IdData/binary>>,
@@ -327,7 +332,7 @@ write_data(Id, Idx, Term, Data0, Trunc,
              Dbg0}
     end.
 
-handle_msg({append, Id, Idx, Term, Entry},
+handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},
            #state{writers = Writers} = State0,
           Dbg) ->
     case maps:find(Id, Writers) of
@@ -344,7 +349,7 @@ handle_msg({append, Id, Idx, Term, Entry},
             % notify writer
             ?WARN("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
                  [Id, PrevIdx, Idx]),
-            Id ! {ra_log_event, {resend_write, PrevIdx + 1}},
+            Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             {State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}},
              Dbg}
     end;
@@ -371,11 +376,11 @@ append_data(#state{wal = #wal{fd = Fd,
                 batch = incr_batch(Batch, Id, {Idx, Term}, Data),
                 writers = Writers#{Id => {in_seq, Idx}} }.
 
-update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
+update_mem_table(OpnMemTbl, {UId, _}, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table and safe
     % some disk space when it later is flushed to disk
-    case ets:lookup(OpnMemTbl, Id) of
-        [{_Id, From0, _To, Tid}] ->
+    case ets:lookup(OpnMemTbl, UId) of
+        [{_UId, From0, _To, Tid}] ->
             true = ets:insert(Tid, {Idx, Term, Entry}),
             From = case Truncate of
                        true ->
@@ -392,12 +397,12 @@ update_mem_table(OpnMemTbl, Id, Idx, Term, Entry, Truncate) ->
             % a local cache of unflushed entries it is sufficient to update
             % ra_log_open_mem_tables before completing the batch.
             % Instead the `From` and `To` could be kept in the batch.
-            _ = ets:update_element(OpnMemTbl, Id,
+            _ = ets:update_element(OpnMemTbl, UId,
                                    [{2, From}, {3, Idx}]);
         [] ->
             % open new ets table
-            Tid = open_mem_table(Id),
-            true = ets:insert(OpnMemTbl, {Id, Idx, Idx, Tid}),
+            Tid = open_mem_table(UId),
+            true = ets:insert(OpnMemTbl, {UId, Idx, Idx, Tid}),
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
@@ -477,8 +482,13 @@ recovering_to_closed(Filename) ->
     {Closed, MemTables, Filename}.
 
 
-open_mem_table(Id) ->
-    Tid = ets:new(Id, [set, {read_concurrency, true}, public]),
+open_mem_table({UId, _Pid}) ->
+    open_mem_table(UId);
+open_mem_table(UId) ->
+    % lookup the locally registered name of the process to use as ets
+    % name
+    NodeName = ra_directory:what_node(UId),
+    Tid = ets:new(NodeName, [set, {read_concurrency, true}, public]),
     % immediately give away ownership to ets process
     true = ra_log_file_ets:give_away(Tid),
     Tid.
@@ -516,17 +526,13 @@ complete_batch(#state{wal = #wal{fd = Fd},
                          batch = undefined},
 
     % notify processes that have synced map(Pid, Token)
-    Debug = maps:fold(fun (Id, WrittenInfo, Dbg) ->
+    Debug = maps:fold(fun ({_, Pid}, WrittenInfo, Dbg) ->
                               Msg = {ra_log_event, {written, WrittenInfo}},
-                              try Id ! Msg  of
-                                  _ -> ok
-                              catch
-                                  error:badarg ->
-                                      % this will happen if Id is no longer alive
-                                      % and registered
-                                      error_logger:warning_msg("wal: failed to send written notification to ~p~n", [Id])
-                              end,
-                              Evt = {out, {self(), Msg}, Id},
+                              % As we now use a pid it is no longer
+                              % possible to know if the send failed.
+                              % Ah well...
+                              Pid ! Msg,
+                              Evt = {out, {self(), Msg}, Pid},
                               sys:handle_debug(Dbg, fun write_debug/3,
                                                ?MODULE, Evt)
                       end, Debug0, Waiting),

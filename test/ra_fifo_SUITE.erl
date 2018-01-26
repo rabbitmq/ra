@@ -45,16 +45,22 @@ init_per_testcase(TestCase, Config) ->
             ok
     end,
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
-    [{node_id, {TestCase, node()}}, {node_id2, {NodeName2, node()}}
-     |  Config].
+    [
+     {uid, atom_to_binary(TestCase, utf8)},
+     {node_id, {TestCase, node()}},
+     {uid2, atom_to_binary(NodeName2, utf8)},
+     {node_id2, {NodeName2, node()}}
+     | Config].
 
 first(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
+             uid => UId,
              log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, id => Name},
+             log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
@@ -90,10 +96,12 @@ first(Config) ->
 leader_monitors_customer(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
+             uid => UId,
              log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, id => Name},
+             log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
@@ -115,8 +123,10 @@ follower_takes_over_monitor(Config) ->
     PrivDir = ?config(priv_dir, Config),
     {Name1, _} = NodeId1 = ?config(node_id, Config),
     {Name2, _} = NodeId2 = ?config(node_id2, Config),
-    Conf1 = conf(NodeId1, PrivDir, [NodeId1, NodeId2]),
-    Conf2 = conf(NodeId2, PrivDir, [NodeId1, NodeId2]),
+    UId1 = ?config(uid, Config),
+    UId2 = ?config(uid2, Config),
+    Conf1 = conf(UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
+    Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
     _ = ets:insert(ra_fifo_metrics, {Name1, 0, 0, 0, 0}),
     _ = ets:insert(ra_fifo_metrics, {Name2, 0, 0, 0, 0}),
     _ = ra_nodes_sup:start_node(Conf1),
@@ -142,10 +152,12 @@ follower_takes_over_monitor(Config) ->
 restarted_node_does_not_reissue_side_effects(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
+             uid => UId,
              log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, id => Name},
+             log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
@@ -171,9 +183,10 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ra_nodes_sup:stop_node(NodeId),
     ok.
 
-conf({Name, _} = NodeId, Dir, Peers) ->
+conf(UId, NodeId, Dir, Peers) ->
     #{id => NodeId,
+      uid => UId,
       log_module => ra_log_file,
-      log_init_args => #{data_dir => Dir, id => Name},
+      log_init_args => #{data_dir => Dir, uid => UId},
       initial_nodes => Peers,
       machine => {module, ra_fifo}}.

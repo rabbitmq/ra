@@ -35,11 +35,11 @@
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
 
 -record(state,
-        {first_index = -1 :: ra_index(),
+        {uid :: ra_uid(),
+         first_index = -1 :: ra_index(),
          last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
-         id :: atom(),
          segment_refs = [] :: [ra_log:ra_segment_ref()],
          open_segments = #{} :: #{file:filename() => ra_log_file_segment:state()},
          directory :: list(),
@@ -57,25 +57,27 @@
 -type ra_log_file_state() :: #state{}.
 
 -type ra_log_file_init_args() :: #{data_dir => string(),
-                                   id => atom(),
+                                   uid => ra_uid(),
                                    wal => atom(),
                                    resend_window => integer()}.
 
 -spec init(ra_log_file_init_args()) -> ra_log_file_state().
-init(#{data_dir := BaseDir, id := Id} = Conf) ->
+init(#{data_dir := BaseDir, uid := UId} = Conf) ->
     % initialise metrics for this node
-    true = ets:insert(ra_log_file_metrics, {Id, 0, 0, 0, 0}),
+    true = ets:insert(ra_log_file_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
 
     % create subdir for log id
-    Dir = filename:join(BaseDir, ra_lib:to_list(Id)),
+    % TODO: safely encode UId for use a directory name
+    Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
     Meta = filename:join(Dir, "meta.dat"),
     ok = filelib:ensure_dir(Meta),
     Kv = ra_log_file_meta:init(Meta),
 
+
     % recover current range and any references to segments
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(Id, Dir) of
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, Dir) of
                                           {undefined, SRs} -> {{-1, -1}, SRs};
                                           R ->  R
                                       end,
@@ -93,7 +95,7 @@ init(#{data_dir := BaseDir, id := Id} = Conf) ->
                               undefined -> {-1, -1};
                               {I, T, _} -> {I, T}
                           end,
-    State000 = #state{directory = Dir, id = Id,
+    State000 = #state{directory = Dir, uid = UId,
                       first_index = max(SnapIdx, FirstIdx),
                       last_index = max(SnapIdx, LastIdx0),
                       segment_refs = SegRefs,
@@ -204,15 +206,15 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
     end;
 write([], State) ->
     {queued, State};
-write([{Idx, _, _} | _], #state{id = Id, last_index = LastIdx}) ->
+write([{Idx, _, _} | _], #state{uid = UId, last_index = LastIdx}) ->
     Msg = lists:flatten(io_lib:format("~p: ra_log_file:write/2 "
                                       "tried writing ~b - expected ~b",
-                                      [Id, Idx, LastIdx+1])),
+                                      [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
-take(Start, Num, #state{id = Id, first_index = FirstIdx,
+take(Start, Num, #state{uid = UId, first_index = FirstIdx,
                                  last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx ->
     % 0. Check that the request isn't outside of first_index and last_index
@@ -222,23 +224,23 @@ take(Start, Num, #state{id = Id, first_index = FirstIdx,
     % 4. Check on disk segments in turn
     case cache_take(Start, Num, State) of
         {Entries, MetricOps0, undefined} ->
-            ok = update_metrics(Id, MetricOps0),
+            ok = update_metrics(UId, MetricOps0),
             {Entries, State};
         {Entries0, MetricOps0, Rem0} ->
-            case open_mem_tbl_take(Id, Rem0, MetricOps0, Entries0) of
+            case open_mem_tbl_take(UId, Rem0, MetricOps0, Entries0) of
                 {Entries1, MetricOps, undefined} ->
-                    ok = update_metrics(Id, MetricOps),
+                    ok = update_metrics(UId, MetricOps),
                     {Entries1, State};
                 {Entries1, MetricOps1, Rem1} ->
-                    case closed_mem_tbl_take(Id, Rem1, MetricOps1, Entries1) of
+                    case closed_mem_tbl_take(UId, Rem1, MetricOps1, Entries1) of
                         {Entries2, MetricOps, undefined} ->
-                            ok = update_metrics(Id, MetricOps),
+                            ok = update_metrics(UId, MetricOps),
                             {Entries2, State};
                         {Entries2, MetricOps2, {S, E} = Rem2} ->
                             case segment_take(State, Rem2, Entries2) of
                                 {Open, undefined, Entries} ->
                                     MetricOp = {?METRICS_SEGMENT_POS, E - S + 1},
-                                    ok = update_metrics(Id, [MetricOp | MetricOps2]),
+                                    ok = update_metrics(UId, [MetricOp | MetricOps2]),
                                     {Entries, State#state{open_segments = Open}}
                             end
                     end
@@ -259,7 +261,7 @@ last_written(#state{last_written_index_term = LWTI}) ->
     ra_log_file_state().
 handle_event({written, {FromIdx, ToIdx, Term}},
              #state{last_written_index_term = {LastWrittenIdx, _},
-                    id = Id} = State0)
+                    uid = UId} = State0)
   when FromIdx =< LastWrittenIdx + 1 ->
     % We need to ignore any written events for the same index but in a prior term
     % if we do not we may end up confirming to a leader writes that have not yet
@@ -272,26 +274,26 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
         {X, State} ->
-            ?INFO("~p: written event did not find term ~p found ~p",
-                  [Id, {ToIdx, Term}, X]),
+            ?INFO("~s: written event did not find term ~p found ~p",
+                  [UId, {ToIdx, Term}, X]),
             State
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
-             #state{id = Id,
+             #state{uid = UId,
                     last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
     Expected = LastWrittenIdx + 1,
-    ?WARN("~p: ra_log_file: written gap detected at ~b expected ~b!",
-         [Id, FromIdx, Expected]),
+    ?WARN("~s: ra_log_file: written gap detected at ~b expected ~b!",
+         [UId, FromIdx, Expected]),
     resend_from(Expected, State0);
 handle_event({segments, Tid, NewSegs},
-             #state{id = Id, segment_refs = SegmentRefs} = State0) ->
+             #state{uid = UId, segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
     % mem_table cleanup
     % any closed mem tables older than the one just having been flushed should
     % be ok to delete
-    ClosedTables = closed_mem_tables(Id),
+    ClosedTables = closed_mem_tables(UId),
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end, ClosedTables),
     % not fast but we rarely should have more than one or two closed tables
     % at any time
@@ -309,7 +311,7 @@ handle_event({segments, Tid, NewSegs},
                  % in case snapshot_written was lost
                  snapshot_index_in_progress = undefined};
 handle_event({snapshot_written, {Idx, Term}, File},
-             #state{id = Id, open_segments = OpenSegs0,
+             #state{uid = UId, open_segments = OpenSegs0,
                     segment_refs = SegRefs0} = State0) ->
     % delete any segments outside of first_index
     {SegRefs, OpenSegs} =
@@ -323,12 +325,12 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("~p: snapshot_written at ~b. Obsolete segments ~p",
-                      [Id, Idx, Obsolete]),
+                ?INFO("~s: snapshot_written at ~b. Obsolete segments ~p",
+                      [UId, Idx, Obsolete]),
                 % close any open segments
                 [ok = ra_log_file_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
-                ok = ra_log_file_segment_writer:delete_segments(Id, Idx,
+                ok = ra_log_file_segment_writer:delete_segments(UId, Idx,
                                                                 Obsolete),
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
@@ -366,17 +368,17 @@ fetch_term(Idx, #state{last_index = LastIdx,
                        first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
-fetch_term(Idx, #state{cache = Cache, id = Id} = State0) ->
+fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
     case Cache of
         #{Idx := {Term, _}} ->
             {Term, State0};
         _ ->
-            case ets:lookup(ra_log_open_mem_tables, Id) of
+            case ets:lookup(ra_log_open_mem_tables, UId) of
                 [{_, From, To, Tid}] when Idx >= From andalso Idx =< To ->
                     Term = ets:lookup_element(Tid, Idx, 2),
                     {Term, State0};
                 _ ->
-                    case closed_mem_table_term_query(Idx, Id) of
+                    case closed_mem_table_term_query(Idx, UId) of
                         undefined ->
                             segment_term_query(Idx, State0);
                         Term ->
@@ -483,20 +485,21 @@ overview(#state{last_index = LastIndex,
       open_segments => maps:size(OpenSegs),
       snapshot_index_in_progress => SIIP
      }.
+
 %%% Local functions
 
-wal_truncate_write(#state{id = Id, cache = Cache, wal = Wal} = State,
+wal_truncate_write(#state{uid = UId, cache = Cache, wal = Wal} = State,
                    {Idx, Term, Data}) ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
     % and that prior entries should be considered stale
-    ok = ra_log_wal:truncate_write(Id, Wal, Idx, Term, Data),
+    ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
     State#state{last_index = Idx, last_term = Term,
                 cache = Cache#{Idx => {Term, Data}}}.
 
-wal_write(#state{id = Id, cache = Cache, wal = Wal} = State,
+wal_write(#state{uid = UId, cache = Cache, wal = Wal} = State,
           {Idx, Term, Data}) ->
-    case ra_log_wal:write(Id, Wal, Idx, Term, Data) of
+    case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Data) of
         ok ->
             State#state{last_index = Idx, last_term = Term,
                         cache = Cache#{Idx => {Term, Data}}};
@@ -680,10 +683,10 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
 maybe_append_0_0_entry(State) ->
     State.
 
-resend_from(Idx, #state{id = Id, last_index = LastIdx,
+resend_from(Idx, #state{uid = UId, last_index = LastIdx,
                         last_resend_time = undefined,
                         cache = Cache} = State) ->
-    ?WARN("~p: ra_log_file: resending from ~b", [Id, Idx]),
+    ?WARN("~s: ra_log_file: resending from ~b", [UId, Idx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))

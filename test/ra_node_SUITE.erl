@@ -69,12 +69,14 @@ ra_node_init(Conf) ->
 
 init(_Config) ->
     #{id := Id,
+      uid := UId,
       machine := Machine,
       cluster := Cluster,
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
     % ensure it is written to the log
     InitConf = #{id => Id,
+                 uid => UId,
                  log_module => ra_log_memory,
                  log_init_args => #{},
                  machine => Machine,
@@ -102,6 +104,7 @@ init(_Config) ->
 
 init_restores_cluster_changes(_Config) ->
     InitConf = #{id => n1,
+                 uid => <<"n1">>,
                  log_module => ra_log_memory,
                  log_init_args => #{},
                  machine => {simple, fun erlang:'+'/2, 0},
@@ -927,6 +930,7 @@ is_new(_Config) ->
     State = base_state(3),
     false = ra_node:is_new(State),
     Args = #{id => {ra, node()},
+             uid => <<"ra">>,
              initial_nodes => [],
              log_module => ra_log_memory,
              log_init_args => #{},
@@ -1231,6 +1235,7 @@ run_effects_leader(Id, Nodes) ->
 init_nodes(NodeIds, Machine) ->
     lists:foldl(fun (NodeId, Acc) ->
                         Args = #{id => NodeId,
+                                 uid => atom_to_binary(NodeId, utf8),
                                  initial_nodes => NodeIds,
                                  log_module => ra_log_memory,
                                  log_init_args => #{},
@@ -1431,6 +1436,7 @@ empty_state(NumNodes, Id) ->
                                 [list_to_atom("n" ++ integer_to_list(N)) | Acc]
                         end, [], lists:seq(1, NumNodes)),
     ra_node_init(#{id => Id,
+                   uid => atom_to_binary(Id, utf8),
                    initial_nodes => Nodes,
                    log_module => ra_log_memory,
                    log_init_args => #{},
@@ -1450,6 +1456,7 @@ base_state(NumNodes) ->
                                                      match_index => 3})}
                         end, #{}, lists:seq(1, NumNodes)),
     #{id => n1,
+      uid => <<"n1">>,
       leader_id => n1,
       cluster => Nodes,
       cluster_index_term => {0, 0},

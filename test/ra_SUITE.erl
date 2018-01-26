@@ -80,11 +80,13 @@ init_per_group(ra_log_file = G, Config) ->
     ok = restart_ra(DataDir),
     Fun = fun (TestCase) ->
                   fun (Name, Nodes, Machine) ->
+                          UId = atom_to_binary(Name, utf8),
                           Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
-                          Conf = #{log_module => ra_log_file,
+                          Conf = #{uid => UId,
+                                   log_module => ra_log_file,
                                    log_init_args => #{data_dir => Dir,
-                                                      id => Name},
+                                                      uid => UId},
                                    initial_nodes => Nodes,
                                    machine => Machine,
                                    await_condition_timeout => 5000},
@@ -363,7 +365,7 @@ node_catches_up(Config) ->
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
 
-    ok = ra:start_node(N3, InitialNodes, {module, ra_queue}),
+    ok = StartNode(N3, InitialNodes, {module, ra_queue}),
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point the node should be caught up

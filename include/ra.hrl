@@ -20,9 +20,14 @@
 
 %% Sections 5.1-5.3.
 %%
-%% Uniquely identifies a ra node
 %% NB: ra nodes need to be registered as need to be reachable under the old
 %% name after restarts. Pids won't do.
+
+%% Uniquely identifies a ra node on a local erlang node
+%% used for on disk resources and local name to pid mapping
+-type ra_uid() :: binary().
+
+% identifies a ra node
 -type ra_node_id() :: atom() | {Name :: atom(), Node :: node()}.
 
 -type ra_peer_state() :: #{next_index => non_neg_integer(),

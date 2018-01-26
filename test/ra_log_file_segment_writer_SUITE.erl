@@ -19,8 +19,6 @@ all_tests() ->
      accept_mem_tables_append,
      accept_mem_tables_overwrite,
      accept_mem_tables_rollover,
-     % TODO: decide on error handling strategy for segments
-     % accept_mem_tables_for_down_node,
      delete_segments
     ].
 
@@ -30,7 +28,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
-    application:ensure_all_started(sasl),
+    % application:ensure_all_started(sasl),
     Config.
 
 end_per_group(tests, Config) ->
@@ -39,18 +37,22 @@ end_per_group(tests, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
+    ra_directory:init(),
+    UId = atom_to_binary(TestCase, utf8),
+    yes = ra_directory:register_name(UId, self(), TestCase),
     file:make_dir(Dir),
     register(TestCase, self()),
-    [{test_case, TestCase}, {wal_dir, Dir} | Config].
+    [{uid, UId},
+     {test_case, TestCase}, {wal_dir, Dir} | Config].
 
 accept_mem_tables(Config) ->
     Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
     {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(Self, Entries),
-    MemTables = [{Self, 1, 3, Tid}],
+    Tid = make_mem_table(UId, Entries),
+    MemTables = [{UId, 1, 3, Tid}],
     WalFile = filename:join(Dir, "00001.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
@@ -72,11 +74,11 @@ accept_mem_tables(Config) ->
 delete_segments(Config) ->
     Dir = ?config(wal_dir, Config),
     {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(Self, Entries),
-    MemTables = [{Self, 1, 3, Tid}],
+    Tid = make_mem_table(UId, Entries),
+    MemTables = [{UId, 1, 3, Tid}],
     WalFile = filename:join(Dir, "00001.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
@@ -84,14 +86,14 @@ delete_segments(Config) ->
         {ra_log_event, {segments, Tid, [{1, 3, SegmentFile} = Segment]}} ->
             % test a lower index _does not_ delete the file
             ok = ra_log_file_segment_writer:delete_segments(TblWriterPid,
-                                                            Self, 2,
+                                                            UId, 2,
                                                             [Segment]),
             timer:sleep(500),
             ?assert(filelib:is_file(SegmentFile)),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
             ok = ra_log_file_segment_writer:delete_segments(TblWriterPid,
-                                                            Self, 3,
+                                                            UId, 3,
                                                             [Segment]),
             timer:sleep(500),
             % validate file is gone
@@ -105,14 +107,15 @@ delete_segments(Config) ->
 accept_mem_tables_append(Config) ->
     % append to a previously written segment
     Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
     {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     % first batch
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    {MemTables, WalFile} = fake_mem_table(Dir, Entries),
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     % second batch
     Entries2 = [{4, 43, d}, {5, 43, e}],
-    {MemTables2, WalFile2} = fake_mem_table(Dir, Entries2),
+    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables2, WalFile2),
     AllEntries = Entries ++ Entries2,
     receive
@@ -130,13 +133,14 @@ accept_mem_tables_append(Config) ->
 accept_mem_tables_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
+    UId = ?config(uid, Config),
     % first batch
     Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
-    {MemTables, WalFile} = fake_mem_table(Dir, Entries),
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     % second batch overwrites the first
     Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
-    {MemTables2, WalFile2} = fake_mem_table(Dir, Entries2),
+    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables2, WalFile2),
 
     receive
@@ -154,13 +158,14 @@ accept_mem_tables_overwrite(Config) ->
 
 accept_mem_tables_rollover(Config) ->
     Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
     % configure max segment size
     Conf = #{data_dir => Dir,
              segment_conf => #{max_count => 8}},
     {ok, Pid} = ra_log_file_segment_writer:start_link(Conf),
     % more entries than fit a single segment
     Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
-    {MemTables, WalFile} = fake_mem_table(Dir, Entries),
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, _Tid, [{9, 10, _Seg2}, {1, 8, _Seg1}]}} ->
@@ -174,15 +179,15 @@ accept_mem_tables_rollover(Config) ->
 
 accept_mem_tables_for_down_node(Config) ->
     Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
     application:start(sasl),
     {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(not_self, Entries),
-    Tid2 = make_mem_table(Self, Entries),
-    MemTables = [{not_self, 1, 3, Tid},
-                 {Self, 1, 3, Tid2}],
+    Tid = make_mem_table(<<"not_self">>, Entries),
+    Tid2 = make_mem_table(UId, Entries),
+    MemTables = [{<<"not_self">>, 1, 3, Tid},
+                 {UId, 1, 3, Tid2}],
     % delete the ETS table to simulate down node
     ets:delete(Tid),
     WalFile = filename:join(Dir, "00001.wal"),
@@ -203,24 +208,17 @@ accept_mem_tables_for_down_node(Config) ->
     ok = gen_server:stop(TblWriterPid),
     ok.
 
-accept_mem_tables_rollover_overwrite(_Config) ->
-    % create rolled over segment for indexes 10 - 20
-    % then write 1 - 30
-    % TODO: what should happen here
-    % who shouold clean up the first segment
-    not_impl.
-
 %%% Internal
 
-fake_mem_table(Dir, Entries) ->
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Tid = make_mem_table(Self, Entries),
+fake_mem_table(UId, Dir, Entries) ->
+    Tid = make_mem_table(UId, Entries),
     {FirstIdx, _, _} = hd(Entries),
     {LastIdx, _, _} = lists:last(Entries),
-    MemTables = [{Self, FirstIdx, LastIdx, Tid}],
+    MemTables = [{UId, FirstIdx, LastIdx, Tid}],
     {MemTables, filename:join(Dir, "blah.wal")}.
 
-make_mem_table(Name, Entries) ->
-    Tid = ets:new(Name, []),
+make_mem_table(UId, Entries) ->
+    N = ra_directory:what_node(UId),
+    Tid = ets:new(N, []),
     [ets:insert(Tid, E) || E <- Entries],
     Tid.

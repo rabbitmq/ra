@@ -39,6 +39,7 @@ init([]) ->
                 [set, named_table, {read_concurrency, true}, public]),
     _ = ets:new(ra_log_closed_mem_tables,
                 [bag, named_table, {read_concurrency, true}, public]),
+    ra_directory:init(),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->

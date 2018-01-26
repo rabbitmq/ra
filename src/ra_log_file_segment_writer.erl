@@ -18,7 +18,7 @@
          code_change/3]).
 
 -record(state, {data_dir :: file:filename(),
-                segment_conf = #{} ::  ra_log_file_segment:ra_log_file_segment_options(),
+                segment_conf = #{} :: ra_log_file_segment:ra_log_file_segment_options(),
                 active_segments = #{} :: #{atom() => ra_log_file_segment:state()}}).
 
 -include("ra.hrl").
@@ -45,12 +45,12 @@ accept_mem_tables(_SegmentWriter, [], undefined) ->
 accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
--spec delete_segments(pid() | atom(), ra_index(),
+-spec delete_segments(binary(), ra_index(),
                       [ra_log:ra_segment_ref()]) -> ok.
 delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
--spec delete_segments(pid() | atom(), pid() | atom(),
+-spec delete_segments(binary(), pid() | atom(),
                       ra_index(), [ra_log:ra_segment_ref()]) ->
     ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
@@ -145,13 +145,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-do_segment({RaNodeId, StartIdx, EndIdx, Tid},
+do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
                   active_segments = ActiveSegments} = State) ->
-    Dir = filename:join(DataDir, atom_to_list(RaNodeId)),
+    Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
     Segment0 = case ActiveSegments of
-                   #{RaNodeId := S} -> S;
+                   #{RaNodeUId := S} -> S;
                    _ -> open_file(Dir, SegConf)
                end,
 
@@ -167,15 +167,16 @@ do_segment({RaNodeId, StartIdx, EndIdx, Tid},
                     {Start, End, ra_log_file_segment:filename(S)}
                 end || S <- [Segment | Closed0]],
 
-    try RaNodeId ! {ra_log_event, {segments, Tid, Segments}} of
+    Msg = {ra_log_event, {segments, Tid, Segments}},
+    try ra_directory:send(RaNodeUId, Msg) of
         _ -> ok
     catch
         ErrType:Err ->
-            ?ERR("ra_log_file_segment_writer: error sending ra_log_event to"
-                 "~p. Error:~n~p:~p~n", [RaNodeId, ErrType, Err])
+            ?ERR("ra_log_file_segment_writer: error sending ra_log_event to: "
+                 "~p. Error:~n~p:~p~n", [RaNodeUId, ErrType, Err])
     end,
 
-    State#state{active_segments = ActiveSegments#{RaNodeId => Segment}}.
+    State#state{active_segments = ActiveSegments#{RaNodeUId => Segment}}.
 
 append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
     % EndIdx + 1 because FP

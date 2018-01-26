@@ -63,19 +63,21 @@ end_per_group(tests, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     % Dir = filename:join(PrivDir, TestCase),
-    register(TestCase, self()),
+    UId = atom_to_binary(TestCase, utf8),
     application:stop(ra),
     application:start(ra),
-    [{test_case, TestCase}, {wal_dir, PrivDir} | Config].
+    yes = ra_directory:register_name(UId, self(), TestCase),
+    [{uid, UId}, {test_case, TestCase}, {wal_dir, PrivDir} | Config].
 
 end_per_testcase(_, _Config) ->
     ok.
 
 handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
-    {queued, Log1} = ra_log_file:write([{1, 1, "value"}, {2, 1, "value"}], Log0),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
+    {queued, Log1} = ra_log_file:write([{1, 1, "value"},
+                                        {2, 1, "value"}], Log0),
     receive
         {ra_log_event, {written, {1, 2, 1}}} -> ok
     after 2000 ->
@@ -99,8 +101,8 @@ handle_overwrite(Config) ->
 
 receive_segment(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a few entries
     Entries = [{I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
 
@@ -111,7 +113,7 @@ receive_segment(Config) ->
                        end, Log0, Entries),
     Log2 = deliver_all_log_events(Log1, 500),
     {3, 1} = ra_log_file:last_written(Log2),
-    [MemTblTid] = [Tid || {receive_segment, _, _, Tid}
+    [MemTblTid] = [Tid || {<<"receive_segment">>, _, _, Tid}
                           <- ets:tab2list(ra_log_open_mem_tables)],
     % force wal roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
@@ -127,15 +129,15 @@ receive_segment(Config) ->
 
 read_one(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log_file:take(1, 5, Log2),
     % read out of range
     {[], Log} = ra_log_file:take(5, 5, Log2),
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, UId),
     % read two entries
     ?assert(M1 + M2 + M3 + M4 =:= 1),
     ra_log_file:close(Log),
@@ -143,8 +145,8 @@ read_one(Config) ->
 
 take_after_overwrite_and_init(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_file:take(1, 5, Log2),
@@ -154,15 +156,15 @@ take_after_overwrite_and_init(Config) ->
     % ensure we cannot take stale entries
     {[{1, 2, _}], Log6} = ra_log_file:take(1, 5, Log5),
     _ = ra_log_file:close(Log6),
-    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {[{1, 2, _}], _} = ra_log_file:take(1, 5, Log),
     ok.
 
 
 validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a few entries
     Log1 = append_and_roll(1, 100, 1, Log0),
     Log2 = append_and_roll(100, 200, 1, Log1),
@@ -176,7 +178,7 @@ validate_sequential_reads(Config) ->
                          {_, Reds} = process_info(self(), reductions),
                          {Reds - Reds0, L}
                  end),
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, UId),
     ?assert(M1 + M2 + M3 + M4 =:= 1000),
 
     ct:pal("validate_sequential_reads COLD took ~pms Reductions: ~p~nMetrics: ~p",
@@ -200,8 +202,8 @@ validate_sequential_reads(Config) ->
 
 validate_reads_for_overlapped_writes(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
     % write 300 - 399 in term 1 - no roll
@@ -216,7 +218,7 @@ validate_reads_for_overlapped_writes(Config) ->
     Log7 = validate_read(1, 200, 1, Log6),
     Log8 = validate_read(200, 551, 2, Log7),
 
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, Self),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, UId),
     ct:pal("Metrics: ~p", [Metrics]),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log_file:close(Log8),
@@ -224,8 +226,8 @@ validate_reads_for_overlapped_writes(Config) ->
 
 cache_overwrite_then_take(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = write_n(3, 4, 2, Log1),
     % validate only 3 entries can be read even if requested range is greater
@@ -234,8 +236,8 @@ cache_overwrite_then_take(Config) ->
 
 last_written_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
     {4, 1} = ra_log_file:last_written(Log2),
@@ -247,8 +249,8 @@ last_written_overwrite(Config) ->
 
 recovery(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_and_roll(1, 10, 1, Log0),
     {9, 1} = ra_log_file:last_index_term(Log1),
@@ -263,7 +265,7 @@ recovery(Config) ->
     application:ensure_all_started(ra),
     % % TODO how to avoid sleep
     timer:sleep(2000),
-    Log5 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    Log5 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {20, 3} = ra_log_file:last_index_term(Log5),
     Log6 = validate_read(1, 5, 1, Log5),
     Log7 = validate_read(5, 15, 2, Log6),
@@ -281,8 +283,8 @@ resend_write(Config) ->
                                            meck:passthrough([A, B, C, D, E])
                                    end),
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
@@ -304,11 +306,9 @@ resend_write(Config) ->
 
 wal_crash_recover(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self,
-                              resend_window => 1 % seconds
-                             }),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
+                              resend_window => 1}),
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
     ok = proc_lib:stop(ra_log_file_segment_writer),
@@ -327,9 +327,8 @@ wal_crash_recover(Config) ->
 
 wal_down_read_availability(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 200),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
@@ -339,9 +338,8 @@ wal_down_read_availability(Config) ->
 
 wal_down_append_throws(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     ?assert(ra_log_file:can_write(Log0)),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     ?assert(not ra_log_file:can_write(Log0)),
@@ -350,18 +348,18 @@ wal_down_append_throws(Config) ->
 
 wal_down_write_returns_error_wal_down(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
 
 detect_lost_written_range(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    meck:new(ra_log_wal, [passthrough]),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self,
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
                               wal => ra_log_wal}),
+    meck:new(ra_log_wal, [passthrough]),
     {0, 0} = ra_log_file:last_index_term(Log0),
     % write some entries
     Log1 = append_and_roll(1, 10, 2, Log0),
@@ -390,7 +388,7 @@ detect_lost_written_range(Config) ->
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log_file:take(0, 20, Log5),
     ra_log_file:close(Log5),
-    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {19, 2} = ra_log_file:last_written(Log5),
     {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
     ?assert(length(Entries) =:= 20),
@@ -400,15 +398,15 @@ detect_lost_written_range(Config) ->
 
 snapshot_recovery(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
     Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
     Log2 = ra_log_file:install_snapshot(Snapshot, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log_file:close(Log3),
-    Log = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Snapshot = ra_log_file:read_snapshot(Log),
     {9, 2} = ra_log_file:last_index_term(Log),
     {[], _} = ra_log_file:take(1, 9, Log),
@@ -420,8 +418,8 @@ snapshot_installation(Config) ->
     % write snapshot for entry not seen
     % then write entries
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
     Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
@@ -439,8 +437,8 @@ snapshot_installation(Config) ->
 update_release_cursor(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
     % assert there are two segments at this point
@@ -473,8 +471,8 @@ update_release_cursor(Config) ->
 missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Log0 = ra_log_file:init(#{data_dir => Dir, id => Self}),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % assert there are no segments at this point
     [] = find_segments(Config),
 
@@ -512,10 +510,11 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
 
 transient_writer_is_handled(Config) ->
     Dir = ?config(wal_dir, Config),
-    {registered_name, _Self} = erlang:process_info(self(), registered_name),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     _Pid = spawn(fun () ->
-                         erlang:register(sub_proc, self()),
-                         Log0 = ra_log_file:init(#{data_dir => Dir, id => sub_proc}),
+                         ra_directory:register_name(<<"sub_proc">>, self(), sub_proc),
+                         Log0 = ra_log_file:init(#{data_dir => Dir, uid => <<"sub_proc">>}),
                          Log1 = append_n(1, 10, 2, Log0),
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
@@ -613,8 +612,8 @@ validate_rolled_reads(_Config) ->
 
 find_segments(Config) ->
     Dir = ?config(wal_dir, Config),
-    TestCase = ?config(test_case, Config),
-    NodeDataDir = filename:join(Dir, TestCase),
+    UId = ?config(uid, Config),
+    NodeDataDir = filename:join(Dir, binary_to_list(UId)),
     filelib:wildcard(filename:join(NodeDataDir, "*.segment")).
 
 empty_mailbox() ->

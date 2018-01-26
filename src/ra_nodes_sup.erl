@@ -34,6 +34,7 @@ stop_node(Id) ->
 -spec remove_node(Id :: term()) -> ok | {error, term()}.
 remove_node(Id) ->
     _ = stop_node(Id),
+    % TODO: delete data
     supervisor:delete_child(?MODULE, Id).
 
 remove_all() ->

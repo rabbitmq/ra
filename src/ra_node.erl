@@ -28,6 +28,7 @@
 
 -type ra_node_state() ::
     #{id => ra_node_id(),
+      uid => ra_uid(),
       leader_id => maybe(ra_node_id()),
       cluster => ra_cluster(),
       cluster_change_permitted => boolean(),
@@ -71,6 +72,7 @@
 -type ra_effects() :: [ra_effect()].
 
 -type ra_node_config() :: #{id => ra_node_id(),
+                            uid => ra_uid(),
                             log_module => ra_log_memory | ra_log_file,
                             log_init_args => ra_log:ra_log_init_args(),
                             initial_nodes => [ra_node_id()],
@@ -99,6 +101,7 @@ name(ClusterId, UniqueSuffix) ->
 
 -spec init(ra_node_config()) -> {ra_node_state(), ra_effects()}.
 init(#{id := Id,
+       uid := UId,
        initial_nodes := InitialNodes,
        log_module := LogMod,
        log_init_args := LogInitArgs,
@@ -121,6 +124,7 @@ init(#{id := Id,
     CommitIndex = max(LastApplied, FirstIndex),
 
     State0 = #{id => Id,
+               uid => UId,
                cluster => Cluster0,
                % TODO: there may be scenarios when a single node starts up but hasn't
                % yet re-applied its noop command that we may receive other join
@@ -997,6 +1001,7 @@ apply_to(ApplyTo, #{id := Id,
     end;
 apply_to(_ApplyTo, State) ->
     {State, [], 0}.
+
 
 apply_with(_Id, Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},

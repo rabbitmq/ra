@@ -33,7 +33,8 @@ start_local_cluster(Num, Name, Machine) ->
               initial_nodes => Nodes,
               machine => Machine},
     Res = [begin
-               {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id}),
+               {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id,
+                                                           uid => atom_to_binary(element(1, Id), utf8)}),
                Id
            end || Id <- Nodes],
     ok = ra:trigger_election(Node1),

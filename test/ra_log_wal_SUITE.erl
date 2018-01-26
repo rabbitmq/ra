@@ -15,6 +15,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     same_uid_different_process,
      write_to_unavailable_wal_returns_error,
      write_many,
      overwrite,
@@ -34,8 +35,9 @@ groups() ->
     ].
 
 init_per_group(Group, Config) ->
-    % application:ensure_all_started(sasl),
-    application:ensure_all_started(lg),
+    application:ensure_all_started(sasl),
+    ra_directory:init(),
+    % application:ensure_all_started(lg),
     [{write_strategy, Group} | Config].
 
 end_per_group(_, Config) ->
@@ -46,40 +48,68 @@ init_per_testcase(TestCase, Config) ->
     G = ?config(write_strategy, Config),
     Dir = filename:join([PrivDir, G, TestCase]),
     _ = ra_log_file_ets:start_link(),
-    register(TestCase, self()),
-    WalConf = #{dir => Dir,
-                write_strategy => G},
-    [{test_case, TestCase}, {wal_conf, WalConf}, {wal_dir, Dir} | Config].
+    UId = atom_to_binary(TestCase, utf8),
+    yes = ra_directory:register_name(UId, self(), TestCase),
+    WalConf = #{dir => Dir, write_strategy => G},
+    [{writer_id, {UId, self()}},
+     {test_case, TestCase},
+     {wal_conf, WalConf},
+     {wal_dir, Dir} | Config].
 
 
 basic_log_writes(Config) ->
     Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, _Pid} = ra_log_wal:start_link(Conf, []),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    ok = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
-    {12, 1, "value"} = await_written(Self, {12, 12, 1}),
-    ok = ra_log_wal:write(Self, ra_log_wal, 13, 1, "value2"),
-    {13, 1, "value2"} = await_written(Self, {13, 13, 1}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
+    {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
     % previous log value is still there
-    {12, 1, "value"} = mem_tbl_read(Self, 12),
-    undefined = mem_tbl_read(Self, 14),
+    {12, 1, "value"} = mem_tbl_read(UId, 12),
+    undefined = mem_tbl_read(UId, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
     ok.
 
-write_to_unavailable_wal_returns_error(_Config) ->
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    {error, wal_down} = ra_log_wal:write(Self, ra_log_wal, 12, 1, "value"),
-    {error, wal_down} = ra_log_wal:truncate_write(Self, ra_log_wal, 12, 1, "value"),
+same_uid_different_process(Config) ->
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
+    Self = self(),
+    _ = spawn(fun() ->
+                      Wid = {UId, self()},
+                      ok = ra_log_wal:write(Wid, ra_log_wal, 13, 1, "value2"),
+                      {13, 1, "value2"} = await_written(Wid, {13, 13, 1}),
+                      Self ! go
+              end),
+    receive
+        go -> ok
+    after 250 ->
+              exit(go_timeout)
+    end,
+    {12, 1, "value"} = mem_tbl_read(UId, 12),
+    {13, 1, "value2"} = mem_tbl_read(UId, 13),
+
+    ok.
+
+
+
+write_to_unavailable_wal_returns_error(Config) ->
+    WriterId = ?config(writer_id, Config),
+    {error, wal_down} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {error, wal_down} = ra_log_wal:truncate_write(WriterId, ra_log_wal, 12, 1, "value"),
     ok.
 
 write_many(Config) ->
     NumWrites = 10000,
     Conf = ?config(wal_conf, Config),
+    WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false},
                                          []),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
-    ok = ra_log_wal:write(Self, ra_log_wal, 0, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ets, file, os]),
     {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
@@ -87,7 +117,7 @@ write_many(Config) ->
         timer:tc(
           fun () ->
                   [begin
-                       ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+                       ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
                    end || Idx <- lists:seq(1, NumWrites)],
                   receive
                       {ra_log_event, {written, {_, NumWrites, 1}}} ->
@@ -113,35 +143,35 @@ write_many(Config) ->
 
 overwrite(Config) ->
     Conf = ?config(wal_conf, Config),
+    WriterId = ?config(writer_id, Config),
     {ok, _Pid} = ra_log_wal:start_link(Conf, []),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = data,
-    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(Self, {1, 3, 1}),
+    await_written(WriterId, {1, 3, 1}),
     % write next index then immediately overwrite
-    ok = ra_log_wal:write(Self, ra_log_wal, 4, 1, Data),
-    ok = ra_log_wal:write(Self, ra_log_wal, 2, 2, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 2, 2, Data),
     % ensure we await the correct range that should not have a wonky start
-    await_written(Self, {2, 2, 2}),
+    await_written(WriterId, {2, 2, 2}),
     ok.
 
 truncate_write(Config) ->
     % a truncate write should update the range to not include previous indexes
     % a trucated write does not need to follow the sequence
     Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, _Pid} = ra_log_wal:start_link(Conf, []),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
-    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(Self, {1, 3, 1}),
+    await_written(WriterId, {1, 3, 1}),
     % then write 7 as may happen after snapshot installation
-    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 7, 1, Data),
-    ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
-    await_written(Self, {7, 8, 1}),
-    [{Self, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, Self),
+    ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 7, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
+    await_written(WriterId, {7, 8, 1}),
+    [{UId, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
     [_] = ets:lookup(Tid, 7),
     [_] = ets:lookup(Tid, 8),
     ok.
@@ -153,15 +183,15 @@ out_of_seq_writes(Config) ->
     % writes from that point
     % the wal will discard all subsequent writes until it receives the missing one
     Conf = ?config(wal_conf, Config),
+    {_UId, _} = WriterId = ?config(writer_id, Config),
     {ok, _Pid} = ra_log_wal:start_link(Conf, []),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
-    [ok = ra_log_wal:write(Self, ra_log_wal, I, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(Self, {1, 3, 1}),
+    await_written(WriterId, {1, 3, 1}),
     % then write 5
-    ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
     % ensure an out of sync notification is received
     receive
         {ra_log_event, {resend_write, 4}} -> ok
@@ -169,15 +199,15 @@ out_of_seq_writes(Config) ->
               throw(reset_write_timeout)
     end,
     % try writing 6
-    ok = ra_log_wal:write(Self, ra_log_wal, 6, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
 
     % then write 4 and 5
-    ok = ra_log_wal:write(Self, ra_log_wal, 4, 1, Data),
-    ok = ra_log_wal:write(Self, ra_log_wal, 5, 1, Data),
-    await_written(Self, {4, 5, 1}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
+    await_written(WriterId, {4, 5, 1}),
 
     % perform another out of sync write
-    ok = ra_log_wal:write(Self, ra_log_wal, 7, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 7, 1, Data),
     receive
         {ra_log_event, {resend_write, 6}} -> ok
     after 500 ->
@@ -186,7 +216,7 @@ out_of_seq_writes(Config) ->
     % force a roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     % try writing another
-    ok = ra_log_wal:write(Self, ra_log_wal, 8, 1, Data),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
     % ensure a written event is _NOT_ received
     % when a roll-over happens after out of sync write
     receive
@@ -195,23 +225,23 @@ out_of_seq_writes(Config) ->
     after 500 -> ok
     end,
     % write the missing one
-    ok = ra_log_wal:write(Self, ra_log_wal, 6, 1, Data),
-    await_written(Self, {6, 6, 1}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
+    await_written(WriterId, {6, 6, 1}),
 
     ok.
 
 roll_over(Config) ->
     Conf = ?config(wal_conf, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    {UId, _} = WriterId = ?config(writer_id, Config),
     NumWrites = 5,
     % configure max_wal_size_bytes
     {ok, _Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
-                                             segment_writer => Self}, []),
+                                             segment_writer => self()}, []),
     handle_seg_writer_await(),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
-         ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+         ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
     receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
@@ -221,19 +251,19 @@ roll_over(Config) ->
     % validate we receive the new mem tables notifications as if we were
     % the writer process
     receive
-        {'$gen_cast', {mem_tables, [{Self, _Fst, _Lst, Tid}], _}} ->
-            [{Self, 5, 5, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, Self),
+        {'$gen_cast', {mem_tables, [{UId, _Fst, _Lst, Tid}], _}} ->
+            [{UId, 5, 5, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, UId),
             % the current tid is not the same as the rolled over one
             ?assert(Tid =/= CurrentTid),
             % ensure closed mem tables contain the previous mem_table
-            [{Self, _, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, Self)
+            [{UId, _, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, UId)
     after 2000 ->
               throw(new_mem_tables_timeout)
     end,
 
     % TODO: validate we can read first and last written
-    ?assert(undefined =/= mem_tbl_read(Self, 1)),
-    ?assert(undefined =/= mem_tbl_read(Self, 5)),
+    ?assert(undefined =/= mem_tbl_read(UId, 1)),
+    ?assert(undefined =/= mem_tbl_read(UId, 5)),
     ok.
 
 recover_truncated_write(Config) ->
@@ -241,33 +271,33 @@ recover_truncated_write(Config) ->
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
     Conf0 = ?config(wal_conf, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Conf = Conf0#{segment_writer => Self},
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
-    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
-    ok = ra_log_wal:truncate_write(Self, ra_log_wal, 9, 1, Data),
+    ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
-    [{Self, _, 9, 9, _}] =
-        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+    [{UId, _, 9, 9, _}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
     ok.
 
 recover_after_roll_over(Config) ->
     Conf0 = ?config(wal_conf, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
+    WriterId = ?config(writer_id, Config),
     Data = <<42:256/unit:8>>,
-    Conf = Conf0#{segment_writer => Self,
+    Conf = Conf0#{segment_writer => self(),
                   max_wal_size_bytes => byte_size(Data) * 75},
     {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
-    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
@@ -283,15 +313,15 @@ recover(Config) ->
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
     Conf0 = ?config(wal_conf, Config),
-    {registered_name, Self} = erlang:process_info(self(), registered_name),
-    Conf = Conf0#{segment_writer => Self},
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     {ok, _} = ra_log_wal:start_link(Conf, []),
     handle_seg_writer_await(),
-    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 1, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     ra_log_wal:force_roll_over(ra_log_wal),
-    [ok = ra_log_wal:write(Self, ra_log_wal, Idx, 2, Data)
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
@@ -302,22 +332,22 @@ recover(Config) ->
 
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
-    [] = ets:lookup(ra_log_open_mem_tables, Self),
-    [ {Self, _, 1, 100, MTid1}, % this is the "old" table
+    [] = ets:lookup(ra_log_open_mem_tables, UId),
+    [ {UId, _, 1, 100, MTid1}, % this is the "old" table
       % these are the recovered tables
-      {Self, _, 1, 100, MTid2}, {Self, _, 101, 200, MTid4} ] =
-        lists:sort(ets:lookup(ra_log_closed_mem_tables, Self)),
+      {UId, _, 1, 100, MTid2}, {UId, _, 101, 200, MTid4} ] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
     100 = ets:info(MTid1, size),
     100 = ets:info(MTid2, size),
     100 = ets:info(MTid4, size),
     % check that both mem_tables notifications are received by the segment writer
     receive
-        {'$gen_cast', {mem_tables, [{Self, 1, 100, _}], _}} -> ok
+        {'$gen_cast', {mem_tables, [{UId, 1, 100, _}], _}} -> ok
     after 2000 ->
               throw(new_mem_tables_timeout)
     end,
     receive
-        {'$gen_cast', {mem_tables, [{Self, 101, 200, _}], _}} -> ok
+        {'$gen_cast', {mem_tables, [{UId, 101, 200, _}], _}} -> ok
     after 2000 ->
               throw(new_mem_tables_timeout)
     end,
@@ -343,10 +373,10 @@ empty_mailbox() ->
               ok
     end.
 
-await_written(Id, {_From, To, _Term} = Written) ->
+await_written({UId, _}, {_From, To, _Term} = Written) ->
     receive
         {ra_log_event, {written, Written}} ->
-            mem_tbl_read(Id, To)
+            mem_tbl_read(UId, To)
     after 5000 ->
               throw(written_timeout)
     end.

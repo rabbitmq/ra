@@ -48,13 +48,16 @@ init_per_group(ra_log_file, Config) ->
     ok = application:set_env(ra, data_dir, PrivDir),
     application:ensure_all_started(ra),
     InitFun = fun (TestCase) ->
-                      try
-                          register(TestCase, self())
+                      try ra_directory:init() of
+                          _ -> ok
                       catch
-                          _:_ -> ok
+                          _:_ ->
+                               ok
                       end,
+                      UId = atom_to_binary(TestCase, utf8),
+                      ra_directory:register_name(UId, self(), TestCase),
                       ra_log:init(ra_log_file, #{data_dir => PrivDir,
-                                                 id => TestCase})
+                                                 uid => UId})
               end,
     [{init_fun, InitFun} | Config].
 
@@ -278,7 +281,7 @@ snapshot(Config) ->
     Snapshot = ra_log:read_snapshot(Log),
     % initialise another log
     LogB = ra_log:init(ra_log_file, #{data_dir => ?config(priv_dir, Config),
-                                      id => snapshot}),
+                                      uid => <<"snapshot">>}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
     {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),
     Snapshot = ra_log:read_snapshot(LogB),

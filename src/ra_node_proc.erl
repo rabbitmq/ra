@@ -139,9 +139,11 @@ leader_call(ServerRef, Msg, Timeout) ->
 init([Config0]) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    {#{id := Id, cluster := Cluster,
+    {#{id := Id, uid := UId, cluster := Cluster,
        machine_state := MacState} = NodeState, Effects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
+    % ensure ra_directory has the new pid
+    yes = ra_directory:register_name(UId, self(), Key),
     _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
     % ensure each relevant node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
@@ -416,10 +418,11 @@ handle_event(_EventType, EventContent, StateName, State) ->
     ?WARN("~p: handle_event unknown ~p~n", [id(State), EventContent]),
     {next_state, StateName, State}.
 
-terminate(Reason, _StateName,
+terminate(Reason, StateName,
           #state{name = Key,
                  node_state = NodeState} = State) ->
-    ?WARN("ra: ~p terminating with ~p~n", [id(State), Reason]),
+    ?WARN("ra: ~p terminating with ~p in state ~p~n",
+          [id(State), Reason, StateName]),
     _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     _ = ra_node:terminate(NodeState),
