@@ -100,8 +100,42 @@ zpad_extract_num(Fn) ->
     list_to_integer(NumStr).
 
 recursive_delete(Dir) ->
-    % TOOD: if this isn't api safe we could just copy the code from it.
-    reltool_utils:recursive_delete(Dir).
+    case filelib:is_dir(Dir) of
+        true ->
+            case file:list_dir(Dir) of
+                {ok, Files} ->
+                    Fun =
+                    fun(F) -> recursive_delete(filename:join([Dir, F])) end,
+                    lists:foreach(Fun, Files),
+                    delete(Dir, directory);
+                {error, enoent} ->
+                    ok;
+                {error, Reason} ->
+                    Text = file:format_error(Reason),
+                    throw_error("delete file ~ts: ~ts\n", [Dir, Text])
+            end;
+        false ->
+            delete(Dir, regular)
+    end.
+
+delete(File, Type) ->
+    case do_delete(File, Type) of
+        ok ->
+            ok;
+        {error, enoent} ->
+            ok;
+        {error, Reason} ->
+            Text = file:format_error(Reason),
+            throw_error("delete file ~ts: ~ts\n", [File, Text])
+    end.
+
+do_delete(File, regular) ->
+    file:delete(File);
+do_delete(Dir, directory) ->
+    file:del_dir(Dir).
+
+throw_error(Format, Args) ->
+    throw({error, lists:flatten(io_lib:format(Format, Args))}).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
