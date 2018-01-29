@@ -41,7 +41,8 @@ end_per_group(_, Config) ->
 init_per_testcase(TestCase, Config) ->
     case ets:info(ra_fifo_metrics) of
         undefined ->
-            _ = ets:new(ra_fifo_metrics, [public, named_table, {write_concurrency, true}]);
+            _ = ets:new(ra_fifo_metrics,
+                        [public, named_table, {write_concurrency, true}]);
         _ ->
             ok
     end,
@@ -65,7 +66,7 @@ first(Config) ->
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(Conf),
+    _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
 
@@ -81,8 +82,8 @@ first(Config) ->
               exit(await_msg_timeout)
     end,
 
-    _ = ra_nodes_sup:stop_node(NodeId),
-    _ = ra_nodes_sup:restart_node(NodeId),
+    _ = ra:stop_node(NodeId),
+    _ = ra:restart_node(NodeId),
 
     _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
     ct:pal("restarted node"),
@@ -91,7 +92,7 @@ first(Config) ->
     after 2000 ->
               exit(await_msg_timeout)
     end,
-    ra_nodes_sup:stop_node(NodeId),
+    ra:stop_node(NodeId),
     ok.
 
 leader_monitors_customer(Config) ->
@@ -106,18 +107,18 @@ leader_monitors_customer(Config) ->
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(Conf),
+    _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
-    ra_nodes_sup:stop_node(NodeId),
-    _ = ra_nodes_sup:restart_node(NodeId),
+    ra:stop_node(NodeId),
+    _ = ra:restart_node(NodeId),
     % check monitors are re-applied after restart
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
-    ra_nodes_sup:stop_node(NodeId),
+    ra:stop_node(NodeId),
     ok.
 
 follower_takes_over_monitor(Config) ->
@@ -130,8 +131,8 @@ follower_takes_over_monitor(Config) ->
     Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
     _ = ets:insert(ra_fifo_metrics, {Name1, 0, 0, 0, 0}),
     _ = ets:insert(ra_fifo_metrics, {Name2, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(Conf1),
-    _ = ra_nodes_sup:start_node(Conf2),
+    _ = ra:start_node(Conf1),
+    _ = ra:start_node(Conf2),
     ok = ra:trigger_election(NodeId1),
     _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, self()}),
     timer:sleep(500),
@@ -144,37 +145,34 @@ follower_takes_over_monitor(Config) ->
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name2)),
-    ra_nodes_sup:stop_node(NodeId1),
-    ra_nodes_sup:stop_node(NodeId2),
+    ra:stop_node(NodeId1),
+    ra:stop_node(NodeId2),
     ok.
 
 node_is_deleted(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(Conf),
+    _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     % force roll over
-    ra_log_wal:force_roll_over(ra_log_wal),
-    ra:delete_node(NodeId, PrivDir),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ok = ra:delete_node(NodeId),
 
     % start a node with the same nodeid but different uid
     % simulatin the case where a queue got deleted then re-declared shortly
     % afterwards
     UId2 = ?config(uid2, Config),
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(
-          Conf#{uid => UId2,
-                log_init_args => #{data_dir => PrivDir, uid => UId2}}),
+    ok = ra:start_node(Conf#{uid => UId2,
+                             log_init_args => #{data_dir => PrivDir,
+                                                uid => UId2}}),
     ok = ra:trigger_election(NodeId),
     {ok, _, _} = ra:send_and_await_consensus(NodeId,
                                              {checkout, {auto, 10}, self()}),
@@ -183,7 +181,7 @@ node_is_deleted(Config) ->
             exit({unexpected_machine_event, Evt})
     after 500 -> ok
     end,
-    ra:delete_node(NodeId, PrivDir),
+    ok = ra:delete_node(NodeId),
     ok.
 
 % NB: this is not guaranteed not to re-issue side-effects but only tests
@@ -200,7 +198,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
              initial_nodes => [],
              machine => {module, ra_fifo}},
     _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    _ = ra_nodes_sup:start_node(Conf),
+    _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
@@ -210,8 +208,11 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     after 2000 ->
               exit(ra_event_timeout)
     end,
-    ra_nodes_sup:stop_node(NodeId),
-    _ = ra_nodes_sup:restart_node(NodeId),
+    % give the process time to persiste the last_applied index
+    timer:sleep(1000),
+    % kill the process and have it restarted by the supervisor
+    exit(whereis(Name), kill),
+
     %  check message isn't received again
     receive
         {ra_event, _, machine, {msg, _, _}} ->
@@ -219,7 +220,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     after 1000 ->
               ok
     end,
-    ra_nodes_sup:stop_node(NodeId),
+    ok = ra:stop_node(UId),
     ok.
 
 conf(UId, NodeId, Dir, Peers) ->

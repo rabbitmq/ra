@@ -136,11 +136,14 @@ leader_call(ServerRef, Msg, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init([Config0]) ->
+init(Args) ->
     process_flag(trap_exit, true),
-    Config = maps:merge(config_defaults(), Config0),
-    {#{id := Id, uid := UId, cluster := Cluster,
-       machine_state := MacState} = NodeState, Effects} = ra_node:init(Config),
+    Config = case Args of
+                 [A] when is_map(A) ->
+                     maps:merge(config_defaults(), A)
+             end,
+    {#{id := Id, uid := UId, cluster := Cluster} = NodeState,
+     Effects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(), Key),
@@ -157,8 +160,8 @@ init([Config0]) ->
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
-    ?INFO("~p ra_node_proc:init/1: MachineState: ~p Cluster: ~p~n",
-          [Id, MacState, Peers]),
+    ?INFO("~p ra_node_proc:init/1:~n~p~n",
+          [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(Effects, cast, State0),
     % New cluster starts should be coordinated and elections triggered explicitly
     % hence if this is a new one we wait here.
@@ -423,9 +426,9 @@ terminate(Reason, StateName,
                  node_state = NodeState} = State) ->
     ?WARN("ra: ~p terminating with ~p in state ~p~n",
           [id(State), Reason, StateName]),
+    _ = ra_node:terminate(NodeState),
     _ = ra_heartbeat_monitor:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
-    _ = ra_node:terminate(NodeState),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->

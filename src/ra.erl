@@ -12,14 +12,13 @@
          dirty_query/2,
          members/1,
          consistent_query/2,
-         start_node/2,
-         start_node/3,
+         start_node/1,
+         restart_node/1,
          stop_node/1,
-         delete_node/2,
+         delete_node/1,
          add_node/2,
          remove_node/2,
          trigger_election/1,
-         start_and_join/4,
          leave_and_terminate/1,
          leave_and_terminate/2
         ]).
@@ -41,40 +40,43 @@ start_local_cluster(Num, Name, Machine) ->
     ok = ra:trigger_election(Node1),
     Res.
 
-
--spec start_node(atom(), [ra_node_id()], ra_machine:machine()) -> ok.
-start_node(Name, Peers, Machine) ->
-    Conf = #{log_module => ra_log_memory,
-             log_init_args => #{},
-             machine => Machine,
-             initial_nodes => Peers},
-    start_node(Name, Conf).
-
-%% Starts a ra node on the local erlang node using the provided config.
--spec start_node(atom(), ra_node:ra_node_config()) -> ok.
-start_node(Name, Conf0) when is_atom(Name) ->
-    This = {Name, node()},
-    Conf = maps:update_with(initial_nodes,
-                            fun (Peers) ->
-                                    lists:usort([This | Peers])
-                            end,
-                            Conf0#{id => This}),
+%% Starts a ra node
+-spec start_node(ra_node:ra_node_config()) -> ok.
+start_node(Conf) ->
     {ok, _Pid} = ra_nodes_sup:start_node(Conf),
     ok.
 
--spec stop_node(ra_node_id()) -> ok.
-stop_node(ServerRef) ->
-    try ra_nodes_sup:stop_node(ServerRef) of
+-spec restart_node(ra_node_id() | ra_uid()) -> ok | {error, not_registered}.
+restart_node(UId) when is_binary(UId) ->
+    {ok, _Pid} = ra_nodes_sup:restart_node(UId),
+    ok;
+restart_node(NodeId) ->
+    Name = ra_lib:ra_node_id_to_local_name(NodeId),
+    case ra_directory:registered_name_from_node_name(Name) of
+        undefined ->
+            {error, not_registered};
+        UId ->
+            restart_node(UId)
+    end.
+
+-spec stop_node(ra_node_id() | ra_uid()) -> ok.
+stop_node(UId) when is_binary(UId) ->
+    try ra_nodes_sup:stop_node(UId) of
         ok -> ok;
         {error, not_found} -> ok
     catch
         exit:noproc -> ok;
+        % TODO: should not be possible unless we pass a node() around
         exit:{{nodedown, _}, _}  -> ok
-    end.
+    end;
+stop_node(NodeId) ->
+    stop_node(uid_from_nodeid(NodeId)).
 
--spec delete_node(ra_node_id(), file:filename()) -> ok.
-delete_node(NodeId, DataDir) ->
-    ra_nodes_sup:remove_node(NodeId, DataDir).
+-spec delete_node(ra_node_id()) -> ok.
+delete_node(NodeId) ->
+    UId = uid_from_nodeid(NodeId),
+    {ok, DataDir} = application:get_env(ra, data_dir),
+    ra_nodes_sup:delete_node(UId, DataDir).
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
@@ -89,25 +91,6 @@ remove_node(ServerRef, NodeId) ->
 -spec trigger_election(ra_node_id()) -> ok.
 trigger_election(Id) ->
     ra_node_proc:trigger_election(Id).
-
-start_and_join(ServerRef, Name, Peers, Machine) ->
-    ok = start_node(Name, Peers, Machine),
-    NodeId = {Name, node()},
-    JoinCmd = {'$ra_join', NodeId, await_consensus},
-    case ra_node_proc:command(ServerRef, JoinCmd, ?DEFAULT_TIMEOUT) of
-        {ok, _, _} -> ok;
-        {timeout, Who} ->
-            ?ERR("~p: request to ~p timed out trying to join the cluster", [NodeId, Who]),
-            % this is awkward - we don't know if the request was received or not
-            % it may still get processed so we have to leave the server up
-            timeout;
-        {error, _} = Err ->
-            ?ERR("~p: request errored whilst ~p tried to join the cluster~n",
-                 [NodeId, Err]),
-            % shut down server
-            stop_node(NodeId),
-            Err
-    end.
 
 % safe way to remove an active node from a cluster
 leave_and_terminate(NodeId) ->
@@ -168,3 +151,8 @@ members(ServerRef) ->
 
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
+
+uid_from_nodeid(NodeId) ->
+    Name = ra_lib:ra_node_id_to_local_name(NodeId),
+    ra_directory:registered_name_from_node_name(Name).
+

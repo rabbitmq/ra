@@ -13,6 +13,8 @@
 -export_type([
               ]).
 
+-include("ra.hrl").
+
 -define(REVERSE_TBL, ra_directory_reverse).
 
 % registry for a ra node's locally unique name
@@ -31,37 +33,37 @@ init() ->
                               ]),
     ok.
 
--spec register_name(binary(), file:filename(), atom()) -> yes | no.
-register_name(Name, Pid, RaNodeName) ->
-    true = ets:insert(?MODULE, {Name, Pid, RaNodeName}),
-    true = ets:insert(?REVERSE_TBL, {RaNodeName, Name}),
+-spec register_name(ra_uid(), file:filename(), atom()) -> yes | no.
+register_name(UId, Pid, RaNodeName) ->
+    true = ets:insert(?MODULE, {UId, Pid, RaNodeName}),
+    true = ets:insert(?REVERSE_TBL, {RaNodeName, UId}),
     yes.
 
--spec unregister_name(binary()) -> atom().
-unregister_name(Name) ->
-    [{_, _, NodeName}] = ets:take(?MODULE, Name),
+-spec unregister_name(ra_uid()) -> atom().
+unregister_name(UId) ->
+    [{_, _, NodeName}] = ets:take(?MODULE, UId),
     true = ets:delete(?REVERSE_TBL, NodeName),
-    Name.
+    UId.
 
--spec whereis_name(binary()) -> pid() | undefined.
-whereis_name(Name) ->
-    case ets:lookup(?MODULE, Name) of
+-spec whereis_name(ra_uid()) -> pid() | undefined.
+whereis_name(UId) ->
+    case ets:lookup(?MODULE, UId) of
         [{_Name, Pid, _RaNodeName}] -> Pid;
         [] -> undefined
     end.
 
--spec what_node(binary()) -> atom().
-what_node(Name) ->
-    case ets:lookup(?MODULE, Name) of
-        [{_Name, _Pid, Node}] -> Node;
+-spec what_node(ra_uid()) -> atom().
+what_node(UId) ->
+    case ets:lookup(?MODULE, UId) of
+        [{_UId, _Pid, Node}] -> Node;
         [] -> undefined
     end.
 
 registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
     case ets:lookup(?REVERSE_TBL, NodeName) of
         [] -> undefined;
-        [{_, Name}] ->
-            Name
+        [{_, UId}] ->
+            UId
     end.
 
 -spec send(binary(), term()) -> pid().

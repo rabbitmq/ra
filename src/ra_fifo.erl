@@ -75,6 +75,7 @@
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
 init(Name) ->
+    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
     {#state{name = Name}, []}.
 
 
@@ -388,7 +389,17 @@ shadow_copy(#state{customers = Customers} = State) ->
                           (_) -> false
                       end, Effects))).
 
+ensure_ets() ->
+    case ets:info(ra_fifo_metrics) of
+        undefined ->
+            _ = ets:new(ra_fifo_metrics,
+                        [public, named_table, {write_concurrency, true}]);
+        _ ->
+            ok
+    end.
+
 enq_enq_checkout_test() ->
+    ensure_ets(),
     {State1, _} = enq(1, first, #state{}),
     {State2, _} = enq(2, second, State1),
     {_State3, Effects} =
@@ -397,6 +408,7 @@ enq_enq_checkout_test() ->
     ok.
 
 release_cursor_test() ->
+    ensure_ets(),
     {State1, _} = enq(1, first, #state{}),
     {State2, _} = enq(2, second, State1),
     {State3, _} = check(3, 10, State2),
@@ -411,6 +423,7 @@ release_cursor_test() ->
     ok.
 
 checkout_enq_settle_test() ->
+    ensure_ets(),
     {State1, [{monitor, _, _}, _]} = check(1, #state{}),
     {State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _, {msg, 0, first}}, Effects0),
@@ -422,6 +435,7 @@ checkout_enq_settle_test() ->
     ok.
 
 down_customer_returns_unsettled_test() ->
+    ensure_ets(),
     {State0, [_]} = enq(1, second, element(1, init(test))),
     {State1, [{monitor, process, Pid}, _, _Del]} = check(2, State0),
     {State2, [_]} = apply(3, {down, Pid}, State1),
@@ -430,6 +444,7 @@ down_customer_returns_unsettled_test() ->
     ok.
 
 completed_customer_yields_demonitor_effect_test() ->
+    ensure_ets(),
     {State0, [{incr_metrics, _, _}]} = enq(1, second, element(1, init(test))),
     {State1, [{monitor, process, _}, _, _Msg]} = check(2, State0),
     {_, Effects} = settle(3, 0, State1),
@@ -440,6 +455,7 @@ completed_customer_yields_demonitor_effect_test() ->
 
 
 release_cursor_snapshot_state_test() ->
+    ensure_ets(),
     OthPid = spawn(fun () -> ok end),
     Commands = [
                 {checkout, {auto, 5}, self()},
@@ -474,6 +490,7 @@ release_cursor_snapshot_state_test() ->
     ok.
 
 performance_test() ->
+    ensure_ets(),
     % just under ~500ms on my machine [Karl]
     NumMsgs = 100000,
     {Taken, _} = perf_test(NumMsgs, 0),

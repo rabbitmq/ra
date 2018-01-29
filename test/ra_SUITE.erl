@@ -65,12 +65,15 @@ init_per_group(ra_log_memory, Config) ->
     restart_ra(?config(priv_dir, Config)),
     Fun = fun (_TestCase) ->
                   fun (Name, Nodes, Machine) ->
-                          Conf = #{log_module => ra_log_memory,
+                          UId = atom_to_binary(Name, utf8),
+                          Conf = #{id => {Name, node()},
+                                   uid => UId,
+                                   log_module => ra_log_memory,
                                    log_init_args => #{},
                                    initial_nodes => Nodes,
                                    machine => Machine,
                                    await_condition_timeout => 5000},
-                          ra:start_node(Name, Conf)
+                          ra:start_node(Conf)
                   end
           end,
    [{start_node_fun, Fun} | Config];
@@ -83,7 +86,8 @@ init_per_group(ra_log_file = G, Config) ->
                           UId = atom_to_binary(Name, utf8),
                           Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
-                          Conf = #{uid => UId,
+                          Conf = #{id => {Name, node()},
+                                   uid => UId,
                                    log_module => ra_log_file,
                                    log_init_args => #{data_dir => Dir,
                                                       uid => UId},
@@ -91,7 +95,7 @@ init_per_group(ra_log_file = G, Config) ->
                                    machine => Machine,
                                    await_condition_timeout => 5000},
                           ct:pal("starting ~p", [Name]),
-                          ra:start_node(Name, Conf)
+                          ra:start_node(Conf)
                   end
           end,
     [{start_node_fun, Fun} | Config].
