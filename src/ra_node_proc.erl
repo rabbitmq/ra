@@ -144,7 +144,7 @@ init([Config0]) ->
     Key = ra_lib:ra_node_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(), Key),
-    _ = ets:insert_new(ra_metrics, {Key, 0, 0}),
+    _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
     _ = lists:foreach(fun ({_, Node}) ->

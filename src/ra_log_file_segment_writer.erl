@@ -6,6 +6,7 @@
          accept_mem_tables/3,
          delete_segments/3,
          delete_segments/4,
+         release_segments/2,
          await/0,
          await/1
         ]).
@@ -19,7 +20,7 @@
 
 -record(state, {data_dir :: file:filename(),
                 segment_conf = #{} :: ra_log_file_segment:ra_log_file_segment_options(),
-                active_segments = #{} :: #{atom() => ra_log_file_segment:state()}}).
+                active_segments = #{} :: #{ra_uid() => ra_log_file_segment:state()}}).
 
 -include("ra.hrl").
 
@@ -45,18 +46,22 @@ accept_mem_tables(_SegmentWriter, [], undefined) ->
 accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
--spec delete_segments(binary(), ra_index(),
+-spec delete_segments(ra_uid(), ra_index(),
                       [ra_log:ra_segment_ref()]) -> ok.
 delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
--spec delete_segments(binary(), pid() | atom(),
+-spec delete_segments(atom() | pid(), ra_uid(),
                       ra_index(), [ra_log:ra_segment_ref()]) ->
     ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
     % delete all closed segment files
     [_ = file:delete(F) || {_, _, F} <- SegmentFiles],
-    gen_server:cast(SegWriter, {delete_segment, Who , SnapIdx, MaybeActive}).
+    gen_server:cast(SegWriter, {delete_segment, Who, SnapIdx, MaybeActive}).
+
+release_segments(SegWriter, Who) ->
+    gen_server:call(SegWriter, {release_segments, Who}).
+
 
 % used to wait for the segment writer to finish processing anything in flight
 await() ->
@@ -88,7 +93,17 @@ init([#{data_dir := DataDir} = Conf]) ->
                 segment_conf = SegmentConf}}.
 
 handle_call(await, _From, State) ->
-    {reply, ok, State}.
+    {reply, ok, State};
+handle_call({release_segments, Who}, _From,
+            #state{active_segments = ActiveSegments0} = State0) ->
+    case maps:take(Who, ActiveSegments0) of
+        {Seg, ActiveSegments} ->
+            % defensive
+            _ = ra_log_file_segment:close(Seg),
+            {reply, ok, State0#state{active_segments = ActiveSegments}};
+        error ->
+            {reply, ok, State0}
+    end.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
@@ -128,7 +143,6 @@ handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
     end.
 
 
-
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -149,6 +163,7 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
                   active_segments = ActiveSegments} = State) ->
+    % TODO: first check that node is registered?
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
     Segment0 = case ActiveSegments of
                    #{RaNodeUId := S} -> S;

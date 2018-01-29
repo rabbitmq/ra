@@ -18,6 +18,7 @@ all_tests() ->
      first,
      leader_monitors_customer,
      follower_takes_over_monitor,
+     node_is_deleted,
      restarted_node_does_not_reissue_side_effects
     ].
 
@@ -145,6 +146,44 @@ follower_takes_over_monitor(Config) ->
     ?assert(MonitoredByAfter =:= whereis(Name2)),
     ra_nodes_sup:stop_node(NodeId1),
     ra_nodes_sup:stop_node(NodeId2),
+    ok.
+
+node_is_deleted(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Name = element(1, NodeId),
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
+    _ = ra_nodes_sup:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    % force roll over
+    ra_log_wal:force_roll_over(ra_log_wal),
+    ra:delete_node(NodeId, PrivDir),
+
+    % start a node with the same nodeid but different uid
+    % simulatin the case where a queue got deleted then re-declared shortly
+    % afterwards
+    UId2 = ?config(uid2, Config),
+    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
+    _ = ra_nodes_sup:start_node(
+          Conf#{uid => UId2,
+                log_init_args => #{data_dir => PrivDir, uid => UId2}}),
+    ok = ra:trigger_election(NodeId),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId,
+                                             {checkout, {auto, 10}, self()}),
+    receive
+        {ra_event, _, machine, Evt} ->
+            exit({unexpected_machine_event, Evt})
+    after 500 -> ok
+    end,
+    ra:delete_node(NodeId, PrivDir),
     ok.
 
 % NB: this is not guaranteed not to re-issue side-effects but only tests

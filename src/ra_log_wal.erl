@@ -84,7 +84,7 @@
                       max_wal_size_bytes => non_neg_integer(),
                       %TODO implement
                       max_writer_entries_per_wal => non_neg_integer(),
-                      segment_writer => atom(),
+                      segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
                       wal_strategy => wal_write_strategy()}.
 

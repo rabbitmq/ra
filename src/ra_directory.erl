@@ -6,11 +6,14 @@
          unregister_name/1,
          whereis_name/1,
          what_node/1,
+         registered_name_from_node_name/1,
          send/2
          ]).
 
 -export_type([
               ]).
+
+-define(REVERSE_TBL, ra_directory_reverse).
 
 % registry for a ra node's locally unique name
 
@@ -21,19 +24,26 @@ init() ->
                           {read_concurrency, true},
                           {write_concurrency, true}
                          ]),
+    _ = ets:new(?REVERSE_TBL, [named_table,
+                               public,
+                               {read_concurrency, true},
+                               {write_concurrency, true}
+                              ]),
     ok.
 
--spec register_name(binary(), file:dirname(), atom()) -> yes | no.
+-spec register_name(binary(), file:filename(), atom()) -> yes | no.
 register_name(Name, Pid, RaNodeName) ->
     true = ets:insert(?MODULE, {Name, Pid, RaNodeName}),
+    true = ets:insert(?REVERSE_TBL, {RaNodeName, Name}),
     yes.
 
 -spec unregister_name(binary()) -> atom().
 unregister_name(Name) ->
-    true = ets:delete(?MODULE, Name),
+    [{_, _, NodeName}] = ets:take(?MODULE, Name),
+    true = ets:delete(?REVERSE_TBL, NodeName),
     Name.
 
--spec whereis_name(binary()) -> file:dirname().
+-spec whereis_name(binary()) -> pid() | undefined.
 whereis_name(Name) ->
     case ets:lookup(?MODULE, Name) of
         [{_Name, Pid, _RaNodeName}] -> Pid;
@@ -45,6 +55,13 @@ what_node(Name) ->
     case ets:lookup(?MODULE, Name) of
         [{_Name, _Pid, Node}] -> Node;
         [] -> undefined
+    end.
+
+registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
+    case ets:lookup(?REVERSE_TBL, NodeName) of
+        [] -> undefined;
+        [{_, Name}] ->
+            Name
     end.
 
 -spec send(binary(), term()) -> pid().
@@ -67,6 +84,7 @@ basic_test() ->
     % registrations should always succeed - no negative test
     % no = register_name(Name, spawn(fun() -> ok end), test1),
     Self = whereis_name(Name),
+    Name = registered_name_from_node_name(test1),
     test1 = what_node(Name),
     hi_Name = send(Name, hi_Name),
     receive
@@ -77,6 +95,7 @@ basic_test() ->
     Name = unregister_name(Name),
     undefined = whereis_name(Name),
     undefined = what_node(Name),
+    undefined = registered_name_from_node_name(test1),
     ok.
 
 -endif.

@@ -16,7 +16,8 @@
          update_element/3,
          zpad_filename/3,
          zpad_filename_incr/1,
-         zpad_extract_num/1
+         zpad_extract_num/1,
+         recursive_delete/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -98,6 +99,9 @@ zpad_extract_num(Fn) ->
                                      [{capture, all_but_first, list}]),
     list_to_integer(NumStr).
 
+recursive_delete(Dir) ->
+    % TOOD: if this isn't api safe we could just copy the code from it.
+    reltool_utils:recursive_delete(Dir).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

@@ -15,6 +15,7 @@
          start_node/2,
          start_node/3,
          stop_node/1,
+         delete_node/2,
          add_node/2,
          remove_node/2,
          trigger_election/1,
@@ -70,6 +71,10 @@ stop_node(ServerRef) ->
         exit:noproc -> ok;
         exit:{{nodedown, _}, _}  -> ok
     end.
+
+-spec delete_node(ra_node_id(), file:filename()) -> ok.
+delete_node(NodeId, DataDir) ->
+    ra_nodes_sup:remove_node(NodeId, DataDir).
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
