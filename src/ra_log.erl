@@ -26,7 +26,9 @@
          sync_meta/1,
          can_write/1,
          exists/2,
-         overview/1
+         overview/1,
+         write_config/2,
+         read_config/1
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -121,6 +123,13 @@
 
 -callback overview(State :: ra_log_state()) ->
     map().
+
+-callback write_config(Config :: ra_node:ra_node_config(),
+                       State :: ra_log_state()) -> ok.
+
+-callback read_config(State :: ra_log_state()) ->
+    maybe(ra_node:ra_node_config()).
+
 %%
 %% API
 %%
@@ -295,3 +304,13 @@ exists({Idx, Term}, Log0) ->
 -spec overview(State :: ra_log()) -> map().
 overview({Mod, Log}) ->
     Mod:overview(Log).
+
+-spec write_config(Config :: ra_node:ra_node_config(),
+                   State :: ra_log()) -> ok.
+write_config(Config, {Mod, Log}) ->
+    ok = Mod:write_config(Config, Log),
+    ok.
+
+-spec read_config(State :: ra_log()) -> ra_node:ra_node_config().
+read_config({Mod, Log}) ->
+    Mod:read_config(Log).

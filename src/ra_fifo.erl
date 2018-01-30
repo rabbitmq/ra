@@ -491,7 +491,7 @@ release_cursor_snapshot_state_test() ->
 
 performance_test() ->
     ensure_ets(),
-    % just under ~500ms on my machine [Karl]
+    % just under ~200ms on my machine [Karl]
     NumMsgs = 100000,
     {Taken, _} = perf_test(NumMsgs, 0),
     ?debugFmt("performance_test took ~p ms for ~p messages",

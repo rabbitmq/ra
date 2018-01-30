@@ -27,18 +27,13 @@ start_node(#{uid := UId} = Config) ->
                   start => {ra_node_proc, start_link, [Config]}},
     supervisor:start_child(?MODULE, ChildSpec).
 
--spec restart_node(ra_uid()) -> supervisor:startchild_ret().
-restart_node(UId) when is_binary(UId) ->
+-spec restart_node(ra_node:ra_node_config()) -> supervisor:startchild_ret().
+restart_node(#{uid := UId} = Config) when is_binary(UId) ->
     case supervisor:get_childspec(?MODULE, UId) of
         {ok, _} ->
             supervisor:restart_child(?MODULE, UId);
         {error, _Err} ->
-            {ok, DataDir} = application:get_env(data_dir),
-            ChildSpec = #{id => UId,
-                          type => worker,
-                          restart => transient,
-                          start => {ra_node_proc, start_link, [UId, DataDir]}},
-            supervisor:start_child(?MODULE, ChildSpec)
+            start_node(Config)
     end.
 
 
@@ -56,8 +51,15 @@ delete_node(UId, DataDir) ->
     _ = stop_node(UId),
     supervisor:delete_child(?MODULE, UId),
     Dir = filename:join(DataDir, binary_to_list(UId)),
-    % TODO: catch errors?
-    ok = ra_lib:recursive_delete(Dir),
+    % TODO: move into separate retrying process
+    try ra_lib:recursive_delete(Dir) of
+        ok -> ok
+    catch
+        _:_ = Err ->
+            ?WARN("delete_node/2 failed to delete directory ~s~n"
+                  "Error: ~p~n",
+                  [Dir, Err])
+    end,
     ra_directory:unregister_name(UId),
     ok.
 

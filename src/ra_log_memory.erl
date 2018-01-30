@@ -21,6 +21,8 @@
          sync_meta/1,
          can_write/1,
          overview/1,
+         write_config/2,
+         read_config/1,
          to_list/1
         ]).
 
@@ -214,6 +216,11 @@ overview(Log) ->
       last_written => Log#state.last_written,
       num_entries => maps:size(Log#state.entries)}.
 
+write_config(_Config, _Log) ->
+    ok.
+
+read_config(_Log) ->
+    undefined.
 
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].

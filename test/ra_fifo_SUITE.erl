@@ -19,6 +19,7 @@ all_tests() ->
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
+     node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects
     ].
 
@@ -82,8 +83,8 @@ first(Config) ->
               exit(await_msg_timeout)
     end,
 
-    _ = ra:stop_node(NodeId),
-    _ = ra:restart_node(NodeId),
+    _ = ra:stop_node(UId),
+    _ = ra:restart_node(Conf),
 
     _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
     ct:pal("restarted node"),
@@ -112,8 +113,8 @@ leader_monitors_customer(Config) ->
     _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
-    ra:stop_node(NodeId),
-    _ = ra:restart_node(NodeId),
+    ra:stop_node(UId),
+    _ = ra:restart_node(Conf),
     % check monitors are re-applied after restart
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
@@ -184,6 +185,31 @@ node_is_deleted(Config) ->
     ok = ra:delete_node(NodeId),
     ok.
 
+node_restart_after_application_restart(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    application:stop(ra),
+    application:start(ra),
+    % TODO: only until the init race condition in wal is addressed
+    timer:sleep(500),
+    % restart node
+    ok = ra:restart_node(Conf),
+    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),
+    ok = ra:stop_node(NodeId),
+    ok.
+
+
+
 % NB: this is not guaranteed not to re-issue side-effects but only tests
 % that the likelyhood is small
 restarted_node_does_not_reissue_side_effects(Config) ->
@@ -208,7 +234,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     after 2000 ->
               exit(ra_event_timeout)
     end,
-    % give the process time to persiste the last_applied index
+    % give the process time to persist the last_applied index
     timer:sleep(1000),
     % kill the process and have it restarted by the supervisor
     exit(whereis(Name), kill),

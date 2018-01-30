@@ -84,7 +84,7 @@
 -spec start_link(ra_node:ra_node_config()) -> gen_statem_start_ret().
 start_link(Config = #{id := Id}) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
-    gen_statem:start_link({local, Name}, ?MODULE, [Config], []).
+    gen_statem:start_link({local, Name}, ?MODULE, Config, []).
 
 -spec command(ra_node_id(), ra_command(), timeout()) ->
     ra_cmd_ret().
@@ -136,12 +136,9 @@ leader_call(ServerRef, Msg, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init(Args) ->
+init(Config0) when is_map(Config0) ->
     process_flag(trap_exit, true),
-    Config = case Args of
-                 [A] when is_map(A) ->
-                     maps:merge(config_defaults(), A)
-             end,
+    Config = maps:merge(config_defaults(), Config0),
     {#{id := Id, uid := UId, cluster := Cluster} = NodeState,
      Effects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
@@ -163,13 +160,15 @@ init(Args) ->
     ?INFO("~p ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(Effects, cast, State0),
-    % New cluster starts should be coordinated and elections triggered explicitly
-    % hence if this is a new one we wait here.
+    % New cluster starts should be coordinated and elections triggered
+    % explicitly hence if this is a new one we wait here.
     % Else we set an election timer
     Actions = case ra_node:is_new(State#state.node_state) of
                   true ->
                       Actions0;
                   false ->
+                      ?INFO("~p: is not new, setting election timeout.~n",
+                            [Id]),
                       [election_timeout_action(follower, State) | Actions0]
               end,
 

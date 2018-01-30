@@ -46,18 +46,10 @@ start_node(Conf) ->
     {ok, _Pid} = ra_nodes_sup:start_node(Conf),
     ok.
 
--spec restart_node(ra_node_id() | ra_uid()) -> ok | {error, not_registered}.
-restart_node(UId) when is_binary(UId) ->
-    {ok, _Pid} = ra_nodes_sup:restart_node(UId),
-    ok;
-restart_node(NodeId) ->
-    Name = ra_lib:ra_node_id_to_local_name(NodeId),
-    case ra_directory:registered_name_from_node_name(Name) of
-        undefined ->
-            {error, not_registered};
-        UId ->
-            restart_node(UId)
-    end.
+-spec restart_node(ra_node:ra_node_config()) -> ok.
+restart_node(Config) ->
+    {ok, _Pid} = ra_nodes_sup:restart_node(Config),
+    ok.
 
 -spec stop_node(ra_node_id() | ra_uid()) -> ok.
 stop_node(UId) when is_binary(UId) ->

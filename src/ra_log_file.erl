@@ -22,7 +22,9 @@
          write_meta/3,
          sync_meta/1,
          can_write/1,
-         overview/1
+         overview/1,
+         write_config/2,
+         read_config/1
         ]).
 
 -include("ra.hrl").
@@ -485,6 +487,21 @@ overview(#state{last_index = LastIndex,
       open_segments => maps:size(OpenSegs),
       snapshot_index_in_progress => SIIP
      }.
+
+write_config(Config, #state{directory = Dir}) ->
+    ConfigPath = filename:join(Dir, "config"),
+    ok = file:write_file(ConfigPath,
+                         list_to_binary(io_lib:format("~p.", [Config]))),
+    ok.
+
+read_config(#state{directory = Dir}) ->
+    ConfigPath = filename:join(Dir, "config"),
+    case filelib:is_file(ConfigPath) of
+        true ->
+            file:consult(ConfigPath);
+        false ->
+            undefined
+    end.
 
 %%% Local functions
 

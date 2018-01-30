@@ -105,9 +105,10 @@ init(#{id := Id,
        initial_nodes := InitialNodes,
        log_module := LogMod,
        log_init_args := LogInitArgs,
-       machine := Machine}) ->
+       machine := Machine} = Config) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogMod, LogInitArgs),
+    ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     LastApplied = ra_log:read_meta(last_applied, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
@@ -190,8 +191,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
             {State, Rpcs} = make_pipelined_rpcs(State2),
-            Effects = [{send_rpcs, true, Rpcs},
-                       {incr_metrics, ra_metrics, [{3, Applied}]} | Effects0],
+            % TODO: rpcs need to be issued _AFTER_ machine effects or there is
+            % a chance that effects will never be issued if the leader crashes
+            % after sending rpcs but before actioning the machine effects
+            Effects = Effects0 ++ [{send_rpcs, true, Rpcs},
+                                   {incr_metrics, ra_metrics, [{3, Applied}]}],
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
