@@ -75,8 +75,8 @@
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
 init(Name) ->
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
-    {#state{name = Name}, []}.
+    {#state{name = Name},
+     [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0, 0}}]}.
 
 
 incr_enqueue_count(#state{enqueue_count = C} = State)

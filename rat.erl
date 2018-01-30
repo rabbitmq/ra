@@ -145,7 +145,8 @@ sp() ->
     lg:stop().
 
 lgc(Name) ->
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{running => false}).
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",
+                              #{running => false}).
 
 
 

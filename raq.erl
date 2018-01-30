@@ -29,12 +29,6 @@ i(Vol0) ->
     Vol = filename:join("/Volumes", Vol0),
     ok = application:set_env(ra, data_dir, Vol),
     application:ensure_all_started(ra),
-    case ets:info(ra_fifo_metrics) of
-        undefined ->
-            _ = ets:new(ra_fifo_metrics, [public, named_table, {write_concurrency, true}]);
-        _ ->
-            ok
-    end,
     ok.
 
 s(Vol) ->
@@ -44,7 +38,6 @@ s(Vol) ->
 s(Vol, Nodes) ->
     Dir = filename:join(["/Volumes", Vol]),
     i(Dir),
-    _ = ets:insert(ra_fifo_metrics, {raq, 0, 0, 0, 0}),
     start_node(raq, [{raq, N} || N <- Nodes],
                {module, ra_fifo}, Dir).
 

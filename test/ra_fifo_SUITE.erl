@@ -40,13 +40,6 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
-    case ets:info(ra_fifo_metrics) of
-        undefined ->
-            _ = ets:new(ra_fifo_metrics,
-                        [public, named_table, {write_concurrency, true}]);
-        _ ->
-            ok
-    end,
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     [
      {uid, atom_to_binary(TestCase, utf8)},
@@ -59,14 +52,12 @@ first(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
@@ -107,7 +98,6 @@ leader_monitors_customer(Config) ->
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
@@ -130,8 +120,6 @@ follower_takes_over_monitor(Config) ->
     UId2 = ?config(uid2, Config),
     Conf1 = conf(UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
     Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
-    _ = ets:insert(ra_fifo_metrics, {Name1, 0, 0, 0, 0}),
-    _ = ets:insert(ra_fifo_metrics, {Name2, 0, 0, 0, 0}),
     _ = ra:start_node(Conf1),
     _ = ra:start_node(Conf2),
     ok = ra:trigger_election(NodeId1),
@@ -223,7 +211,6 @@ restarted_node_does_not_reissue_side_effects(Config) ->
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo}},
-    _ = ets:insert(ra_fifo_metrics, {Name, 0, 0, 0, 0}),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),

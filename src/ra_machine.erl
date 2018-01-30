@@ -26,7 +26,10 @@
     {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
     % current machine state
-    {release_cursor, ra_index(), term()}.
+    {release_cursor, ra_index(), state()} |
+    % allows the machine to have a metrics table created as well as an
+    % optional initial record
+    {metrics_table, atom(), maybe(tuple())}.
 
 -type effects() :: [effect()].
 

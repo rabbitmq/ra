@@ -140,7 +140,7 @@ init(Config0) when is_map(Config0) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
     {#{id := Id, uid := UId, cluster := Cluster} = NodeState,
-     Effects} = ra_node:init(Config),
+     InitEffects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(), Key),
@@ -159,7 +159,7 @@ init(Config0) when is_map(Config0) ->
     ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
     ?INFO("~p ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
-    {State, Actions0} = handle_effects(Effects, cast, State0),
+    {State, Actions0} = handle_effects(InitEffects, cast, State0),
     % New cluster starts should be coordinated and elections triggered
     % explicitly hence if this is a new one we wait here.
     % Else we set an election timer
@@ -543,6 +543,12 @@ handle_effect({demonitor, Pid}, _EvtType,
 handle_effect({incr_metrics, Table, Ops}, _EvtType,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
+    {State, Actions};
+handle_effect({metrics_table, Table, Record}, _EvtType,
+              State, Actions) ->
+    % this is a call - hopefully only done on init
+    ok = ra_metrics_ets:make_table(Table),
+    true = ets:insert(Table, Record),
     {State, Actions}.
 
 send_rpcs(State0) ->
