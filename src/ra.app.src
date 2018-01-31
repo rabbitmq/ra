@@ -1,0 +1,10 @@
+{application, ra, [
+    {description, "Experimental raft library"},
+    {vsn, "0.1.0"},
+    {registered, [ra_sup]},
+    {applications, [kernel,stdlib,sasl,crypto]},
+    {mod, {ra_app, []}},
+    {env, [
+        {data_dir, "/var/vcap/store/ra/shared"}
+    ]}
+]}.
