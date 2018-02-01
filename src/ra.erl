@@ -3,6 +3,7 @@
 -include("ra.hrl").
 
 -export([
+         start/0,
          start_local_cluster/3,
          send/2,
          send/3,
@@ -24,6 +25,12 @@
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
+
+% starts the ra application
+-spec start() -> ok.
+start() ->
+    {ok, _} = application:ensure_all_started(ra),
+    ok.
 
 start_local_cluster(Num, Name, Machine) ->
     [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
