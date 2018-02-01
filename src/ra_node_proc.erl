@@ -156,7 +156,7 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    ra_heartbeat_monitor:register(Key, [N || {_, N} <- Peers]),
+    _ = [ok = aten:register(N) || {_, N} <- Peers],
     ?INFO("~p ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
@@ -212,7 +212,7 @@ leader({call, From}, {state_query, Spec},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
-leader(info, {node_down, _}, State) ->
+leader(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 leader(info, {'DOWN', MRef, process, Pid, _Info},
        #state{monitors = Monitors0,
@@ -273,7 +273,7 @@ candidate({call, From}, {dirty_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
-candidate(info, {node_down, _}, State) ->
+candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
@@ -335,11 +335,11 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(follower, State)]}
     end;
-follower(info, {node_down, LeaderNode}, State) ->
+follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
-        {_, LeaderNode} ->
+        {_, Node} ->
             ?WARN("~p: Leader node ~p may be down, setting election timeout",
-                  [id(State), LeaderNode]),
+                  [id(State), Node]),
             handle_leader_down(State);
         _ ->
             {keep_state, State}
@@ -385,11 +385,11 @@ await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
     ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(follower, State)]};
-await_condition(info, {node_down, LeaderNode}, State) ->
+await_condition(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
-        {_, LeaderNode} ->
+        {_, Node} ->
             ?WARN("~p: Node ~p might be down. Setting election timeout.",
-                  [id(State), LeaderNode]),
+                  [id(State), Node]),
             {keep_state, State, [election_timeout_action(follower, State)]};
         _ ->
             {keep_state, State}
@@ -426,7 +426,7 @@ terminate(Reason, StateName,
     ?WARN("ra: ~p terminating with ~p in state ~p~n",
           [id(State), Reason, StateName]),
     _ = ra_node:terminate(NodeState),
-    _ = ra_heartbeat_monitor:unregister(Key),
+    _ = aten:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     ok.
 

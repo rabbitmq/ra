@@ -11,7 +11,6 @@ endef
 
 dep_aten = git https://github.com/rabbitmq/aten.git master
 DEPS = aten
-REL_DEPS = aten
 
 TEST_DEPS = proper meck eunit_formatters
 
