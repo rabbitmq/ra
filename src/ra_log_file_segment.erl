@@ -59,47 +59,46 @@ open(Filename, Options) ->
     AbsFilename = filename:absname(Filename),
     FileExists = filelib:is_file(AbsFilename),
     Mode = maps:get(mode, Options, append),
-    {ok, Fd} = case Mode of
-                   append ->
-                       file:open(AbsFilename, [read, write, raw, binary]);
-                   read ->
-                       file:open(AbsFilename, [read, raw, read_ahead, binary])
-               end,
-    % Base = filename:basename(Filename),
-    case FileExists of
-        true ->
-            % it is a existing file
-            % READ and validate VERSION
-            MaxCount = read_header(Fd),
-            IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            {NumIndexRecords, DataOffset, Range, Index} =
-                recover_index(Fd, MaxCount),
-            {ok, #state{version = 1,
-                        max_count = MaxCount,
-                        filename = Filename,
-                        fd = Fd,
-                        index_size = IndexSize,
-                        mode = Mode,
-                        data_start = ?HEADER_SIZE + IndexSize,
-                        data_offset = DataOffset,
-                        index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
-                        range = Range,
-                        % TODO: we don't need an index in memory in append mode
-                        index = Index}};
-        false ->
-            MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
-            IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            ok = write_header(MaxCount, Fd),
-            {ok, #state{version = 1,
-                        max_count = MaxCount,
-                        filename = Filename,
-                        fd = Fd,
-                        index_size = IndexSize,
-                        index_offset = ?HEADER_SIZE,
-                        mode = Mode,
-                        data_start = ?HEADER_SIZE + IndexSize,
-                        data_offset = ?HEADER_SIZE + IndexSize}}
+    Modes = case Mode of
+                append -> [read, write, raw, binary];
+                read -> [read, raw, read_ahead, binary]
+            end,
+    case file:open(AbsFilename, Modes) of
+        {ok, Fd} ->
+            process_file(FileExists, Mode, Filename, Fd, Options);
+        Err -> Err
     end.
+
+process_file(true, Mode, Filename, Fd, _Options) ->
+    MaxCount = read_header(Fd),
+    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+    {NumIndexRecords, DataOffset, Range, Index} =
+    recover_index(Fd, MaxCount),
+    {ok, #state{version = 1,
+                max_count = MaxCount,
+                filename = Filename,
+                fd = Fd,
+                index_size = IndexSize,
+                mode = Mode,
+                data_start = ?HEADER_SIZE + IndexSize,
+                data_offset = DataOffset,
+                index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
+                range = Range,
+                % TODO: we don't need an index in memory in append mode
+                index = Index}};
+process_file(false, Mode, Filename, Fd, Options) ->
+    MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
+    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+    ok = write_header(MaxCount, Fd),
+    {ok, #state{version = 1,
+                max_count = MaxCount,
+                filename = Filename,
+                fd = Fd,
+                index_size = IndexSize,
+                index_offset = ?HEADER_SIZE,
+                mode = Mode,
+                data_start = ?HEADER_SIZE + IndexSize,
+                data_offset = ?HEADER_SIZE + IndexSize}}.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.

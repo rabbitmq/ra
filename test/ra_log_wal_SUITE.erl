@@ -234,10 +234,12 @@ roll_over(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     NumWrites = 5,
+    meck:new(ra_log_file_segment_writer, [passthrough]),
+    meck:expect(ra_log_file_segment_writer, await,
+                fun(_) -> ok end),
     % configure max_wal_size_bytes
     {ok, _Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
                                              segment_writer => self()}, []),
-    handle_seg_writer_await(),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
@@ -264,6 +266,7 @@ roll_over(Config) ->
     % TODO: validate we can read first and last written
     ?assert(undefined =/= mem_tbl_read(UId, 1)),
     ?assert(undefined =/= mem_tbl_read(UId, 5)),
+    meck:unload(),
     ok.
 
 recover_truncated_write(Config) ->
@@ -274,19 +277,21 @@ recover_truncated_write(Config) ->
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
+    meck:new(ra_log_file_segment_writer, [passthrough]),
+    meck:expect(ra_log_file_segment_writer, await,
+                fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
     ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
     [{UId, _, 9, 9, _}] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
+    meck:unload(),
     ok.
 
 recover_after_roll_over(Config) ->
@@ -295,17 +300,18 @@ recover_after_roll_over(Config) ->
     Data = <<42:256/unit:8>>,
     Conf = Conf0#{segment_writer => self(),
                   max_wal_size_bytes => byte_size(Data) * 75},
+    meck:new(ra_log_file_segment_writer, [passthrough]),
+    meck:expect(ra_log_file_segment_writer, await, fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, Wal} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
     ?assert(erlang:is_process_alive(Wal)),
+    meck:unload(),
     ok.
 
 recover(Config) ->
@@ -316,8 +322,9 @@ recover(Config) ->
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
+    meck:new(ra_log_file_segment_writer, [passthrough]),
+    meck:expect(ra_log_file_segment_writer, await, fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -326,7 +333,6 @@ recover(Config) ->
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, _} = ra_log_wal:start_link(Conf, []),
-    handle_seg_writer_await(),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
 
@@ -352,18 +358,8 @@ recover(Config) ->
               throw(new_mem_tables_timeout)
     end,
 
+    meck:unload(),
     ok.
-
-handle_seg_writer_await() ->
-    receive
-        {'$gen_call', From, await} ->
-            gen:reply(From, ok);
-        Msg ->
-            ct:pal("seg writer wait got ~p", [Msg]),
-            handle_seg_writer_await()
-    after 2000 ->
-              throw(seq_writer_await_timeout)
-    end.
 
 empty_mailbox() ->
     receive

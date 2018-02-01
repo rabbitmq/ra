@@ -169,29 +169,34 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
                    #{RaNodeUId := S} -> S;
                    _ -> open_file(Dir, SegConf)
                end,
+    case Segment0 of
+        undefined ->
+            State;
+        _ ->
+            {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
+                                                    Segment0, SegConf),
+            % fsync
+            {ok, Segment} = ra_log_file_segment:sync(Segment1),
 
-    {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
-                                            Segment0, SegConf),
-    % fsync
-    {ok, Segment} = ra_log_file_segment:sync(Segment1),
+            % notify writerid of new segment update
+            % includes the full range of the segment
+            Segments = [begin
+                            {Start, End} = ra_log_file_segment:range(S),
+                            {Start, End, ra_log_file_segment:filename(S)}
+                        end || S <- [Segment | Closed0]],
 
-    % notify writerid of new segment update
-    % includes the full range of the segment
-    Segments = [begin
-                    {Start, End} = ra_log_file_segment:range(S),
-                    {Start, End, ra_log_file_segment:filename(S)}
-                end || S <- [Segment | Closed0]],
-
-    Msg = {ra_log_event, {segments, Tid, Segments}},
-    try ra_directory:send(RaNodeUId, Msg) of
-        _ -> ok
-    catch
-        ErrType:Err ->
-            ?ERR("ra_log_file_segment_writer: error sending ra_log_event to: "
-                 "~p. Error:~n~p:~p~n", [RaNodeUId, ErrType, Err])
-    end,
-
-    State#state{active_segments = ActiveSegments#{RaNodeUId => Segment}}.
+            Msg = {ra_log_event, {segments, Tid, Segments}},
+            try ra_directory:send(RaNodeUId, Msg) of
+                _ -> ok
+            catch
+                ErrType:Err ->
+                    ?ERR("ra_log_file_segment_writer: error sending "
+                         "ra_log_event to: "
+                         "~p. Error:~n~p:~p~n", [RaNodeUId, ErrType, Err])
+            end,
+            State#state{active_segments =
+                        ActiveSegments#{RaNodeUId => Segment}}
+    end.
 
 append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
     % EndIdx + 1 because FP
@@ -233,5 +238,15 @@ open_file(Dir, SegConf) ->
                [F | _Old] ->
                    F
            end,
-    {ok, Segment} = ra_log_file_segment:open(File, SegConf#{mode => append}),
-    Segment.
+    % this needs to be done as the target directory could have been deleted
+    % TODO: it is slightly racy so we should probably catch execptions in the final
+    % varions
+    ok = filelib:ensure_dir(File),
+    case ra_log_file_segment:open(File, SegConf#{mode => append}) of
+        {ok, Segment} ->
+            Segment;
+        Err ->
+            ?WARN("segment_writer: failed to open segment file ~s"
+                  "error: ~P", [File, Err]),
+            undefined
+    end.

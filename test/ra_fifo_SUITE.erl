@@ -188,8 +188,6 @@ node_restart_after_application_restart(Config) ->
     {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     application:stop(ra),
     application:start(ra),
-    % TODO: only until the init race condition in wal is addressed
-    timer:sleep(500),
     % restart node
     ok = ra:restart_node(Conf),
     {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),

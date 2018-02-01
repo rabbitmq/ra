@@ -132,9 +132,12 @@ force_roll_over(Wal) ->
 -spec start_link(Config :: wal_conf(), Options :: list()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
 start_link(Config, Options) ->
+    % this is racy
     case whereis(?MODULE) of
         undefined ->
-            Pid = proc_lib:spawn_link(?MODULE, init, [Config, self(), Options]),
+            % ?INFO("WAL START_LINK", []),
+            {ok, Pid} = proc_lib:start_link(?MODULE, init,
+                                            [Config, self(), Options]),
             register(?MODULE, Pid),
             {ok, Pid};
         Pid ->
@@ -161,6 +164,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 
     Debug0 = sys:debug_options(Options),
     {State, Debug} = recover_wal(Dir, Conf, Debug0),
+    ok = proc_lib:init_ack(Parent, {ok, self()}),
     loop_wait(State, Parent, Debug).
 
 
