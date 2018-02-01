@@ -109,12 +109,15 @@ recv(Node0) ->
 
 
 start_node(Name, Nodes, Machine, Dir) ->
-    Conf = #{log_module => ra_log_file,
-             log_init_args => #{data_dir => Dir, id => Name},
+    UId =  atom_to_binary(Name, utf8),
+    Conf = #{id => {Name, node()},
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => Dir, uid => UId},
              initial_nodes => Nodes,
              machine => Machine,
              cluster_id => Name},
-    ra:start_node(Name, Conf).
+    ra:start_node(Conf).
 
 lg_trace() ->
     Name = atom_to_list(node()),

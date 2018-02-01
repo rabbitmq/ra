@@ -156,7 +156,7 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    _ = [ok = aten:register(N) || {_, N} <- Peers],
+    % _ = [ok = aten:register(N) || {_, N} <- Peers],
     ?INFO("~p ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
@@ -630,6 +630,10 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             New;
         NewLeader ->
             MRef = swap_monitor(OldMRef, NewLeader),
+            LeaderNode = ra_lib:ra_node_id_node(NewLeader),
+            ok = aten:register(LeaderNode),
+            OldLeaderNode = ra_lib:ra_node_id_node(OldLeader),
+            ok = aten:unregister(OldLeaderNode),
             % leader has either changed or just been set
             ?INFO("~p detected a new leader ~p in term ~p~n",
                   [id(New), NewLeader, current_term(New)]),
@@ -675,7 +679,8 @@ config_defaults() ->
 handle_leader_down(#state{leader_monitor = Mon} = State) ->
     Leader = leader_id(State),
     % ping leader to check if up
-    case ra_node_proc:ping(Leader, 1000) of
+    % TODO: this can be replaced by a pre-vote phase
+    case ra_node_proc:ping(Leader, 100) of
         {pong, leader} ->
             % leader is not down
             ok = ra_lib:iter_maybe(Mon, fun erlang:demonitor/1),
