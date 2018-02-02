@@ -64,8 +64,12 @@
 
 -type states() :: leader | follower | candiate | await_condition.
 
--type ra_event() :: {ra_event, ra_node_id(), applied | rejected, correlation()} |
-                    {ra_event, ra_node_id(), machine,  term()}.
+-type ra_event() ::
+    % used for notifying senders of the ultimate fate of their command
+    % sent using ra:send_and_notify
+    {ra_event, ra_node_id(), applied | rejected, correlation()} |
+    % used to send message side-effects emitted by the state machine
+    {ra_event, ra_node_id(), machine,  term()}.
 
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
