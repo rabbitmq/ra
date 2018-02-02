@@ -72,8 +72,7 @@ open(Filename, Options) ->
 process_file(true, Mode, Filename, Fd, _Options) ->
     MaxCount = read_header(Fd),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-    {NumIndexRecords, DataOffset, Range, Index} =
-    recover_index(Fd, MaxCount),
+    {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount),
     {ok, #state{version = 1,
                 max_count = MaxCount,
                 filename = Filename,

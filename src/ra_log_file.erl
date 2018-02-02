@@ -142,8 +142,10 @@ recover_range(Id, Dir) ->
     ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(Id)],
     SegRefs =
     [begin
+         ?INFO("ra_log_file: recovering ~P~n", [S]),
          {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
          {F, L} = ra_log_file_segment:range(Seg),
+         ?INFO("ra_log_file: recovered ~P ~P~n", [S, {F, L}]),
          ok = ra_log_file_segment:close(Seg),
          {F, L, S}
      end || S <- lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))],

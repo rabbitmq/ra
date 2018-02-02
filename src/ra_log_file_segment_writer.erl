@@ -24,6 +24,8 @@
 
 -include("ra.hrl").
 
+-define(AWAIT_TIMEOUT, 30000).
+
 %%% ra_log_file_segment_writer
 %%% receives a set of closed mem_segments from the wal
 %%% appends to the current segment for the ra node
@@ -63,6 +65,7 @@ release_segments(SegWriter, Who) ->
     gen_server:call(SegWriter, {release_segments, Who}).
 
 
+
 % used to wait for the segment writer to finish processing anything in flight
 await() ->
     await(?MODULE).
@@ -76,7 +79,7 @@ await(SegWriter)  ->
               end,
     case IsAlive(SegWriter) of
         true ->
-            gen_server:call(SegWriter, await, 30000);
+            gen_server:call(SegWriter, await, ?AWAIT_TIMEOUT);
         false ->
             % if it is down it isn't processing anything
             ok

@@ -64,9 +64,13 @@
 
 -type states() :: leader | follower | candiate | await_condition.
 
+-type ra_event() :: {ra_event, ra_node_id(), applied | rejected, correlation()} |
+                    {ra_event, ra_node_id(), machine,  term()}.
+
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
-              safe_call_ret/1]).
+              safe_call_ret/1,
+              ra_event/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
@@ -489,7 +493,7 @@ handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
     ok = send_ra_event(To, Msg, machine, State),
     {State, Actions};
 handle_effect({notify, Who, Correlation}, _EvtType, State, Actions) ->
-    ok = send_ra_event(Who, Correlation, consensus, State),
+    ok = send_ra_event(Who, Correlation, applied, State),
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),
@@ -717,7 +721,7 @@ reject_command(Pid, Corr, State) ->
     LeaderId = leader_id(State),
     ?INFO("~p follower received leader command - rejecting to ~p ~n",
           [id(State), LeaderId]),
-    send_ra_event(Pid, {not_leader, LeaderId, Corr}, command_rejected,
+    send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected,
                        State).
 
 maybe_persist_last_applied(#state{node_state = NS} = State) ->

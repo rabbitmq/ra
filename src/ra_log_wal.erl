@@ -510,7 +510,6 @@ complete_batch(#state{wal = #wal{fd = Fd},
                       metrics_cursor = Cursor,
                       write_strategy = WriteStrat} = State0,
                Debug0) ->
-    % ?INFO("completing batch", []),
     TS = os:system_time(millisecond),
     case WriteStrat of
         delay_writes_sync ->
