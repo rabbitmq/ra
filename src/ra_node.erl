@@ -11,6 +11,7 @@
          handle_candidate/2,
          handle_follower/2,
          handle_await_condition/2,
+         tick/1,
          overview/1,
          is_new/1,
          % properties
@@ -643,6 +644,11 @@ handle_await_condition(Msg,#{condition := Cond} = State) ->
             % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
+
+-spec tick(ra_node_state()) -> ra_effects().
+tick(#{machine := Machine, machine_state := MacState}) ->
+    Now = os:system_time(millisecond),
+    ra_machine:tick(Machine, Now, MacState).
 
 -spec overview(ra_node_state()) -> map().
 overview(#{log := Log, machine := Machine,

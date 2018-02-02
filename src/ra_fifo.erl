@@ -10,6 +10,7 @@
          init/1,
          apply/3,
          leader_effects/1,
+         tick/2,
          overview/1,
          shadow_copy/1,
          size_test/2,
@@ -30,6 +31,11 @@
     {return, MsgId :: msg_id(), Customer :: customer_id()}.
 
 -type command() :: protocol() | ra_machine:builtin_command().
+-type metrics() :: {Name :: atom(),
+                    Enqueued :: non_neg_integer(),
+                    CheckedOut :: non_neg_integer(),
+                    Settled :: non_neg_integer(),
+                    Returned :: non_neg_integer()}.
 
 -define(METRICS_TABLE, ra_fifo_metrics).
 -define(SHADOW_COPY_INTERVAL, 128).
@@ -65,7 +71,8 @@
                 customers = #{} :: #{customer_id() => #customer{}},
                 % customers that require further service are queued here
                 % needs to be part of snapshot
-                service_queue = queue:new() :: queue:queue(customer_id())
+                service_queue = queue:new() :: queue:queue(customer_id()),
+                metrics :: metrics()
                }).
 
 -opaque state() :: #state{}.
@@ -75,7 +82,8 @@
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
 init(Name) ->
-    {#state{name = Name},
+    {#state{name = Name,
+            metrics = {Name, 0, 0, 0, 0}},
      [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0, 0}}]}.
 
 
@@ -99,9 +107,9 @@ apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes0,
                           messages = Messages#{RaftIdx => Msg},
                           first_enqueue_raft_index = min(RaftIdx, FirstEnqueueIdx),
                           low_index = min(RaftIdx, Low)},
-    {State, Effects, Num} = checkout(State1, []),
-    Metric = {incr_metrics, ?METRICS_TABLE, [{2, 1}, {3, Num}]},
-    {State, [Metric | Effects]};
+    {State2, Effects, Num} = checkout(State1, []),
+    State = incr_metrics(State2, {1, Num, 0, 0}),
+    {State, Effects};
 apply(RaftIdx, {settle, MsgId, CustomerId},
       #state{customers = Custs0} = State) ->
     case Custs0 of
@@ -122,19 +130,18 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
     end;
 apply(_RaftIdx, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
-    {State, Effects, Num} = checkout(State1, []),
-    Metric = {incr_metrics, ?METRICS_TABLE, [{3, Num}]},
-    {State, [{monitor, process, Customer}, Metric | Effects]};
+    {State2, Effects, Num} = checkout(State1, []),
+    State = incr_metrics(State2, {0, 0, Num, 0}),
+    {State, [{monitor, process, Customer} | Effects]};
 apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
     % return checked out messages to main queue
     case maps:take(CustomerId, Custs0) of
         {#customer{checked_out = Checked0}, Custs} ->
-            State = maps:fold(fun (_MsgId, {RaftId, Msg}, S) ->
-                                         return(RaftId, Msg, S)
-                                 end, State0, Checked0),
-            Metric = {incr_metrics, ?METRICS_TABLE,
-                      [{5, maps:size(Checked0)}]},
-            {State#state{customers = Custs}, [Metric]};
+            State1 = maps:fold(fun (_MsgId, {RaftId, Msg}, S) ->
+                                       return(RaftId, Msg, S)
+                               end, State0, Checked0),
+            State = incr_metrics(State1, {0, 0, 0, maps:size(Checked0)}),
+            {State#state{customers = Custs}, []};
         error ->
             % already removed - do nothing
             {State0, []}
@@ -145,12 +152,21 @@ leader_effects(#state{customers = Custs}) ->
     % return effects to monitor all current customers
     [{monitor, process, C} || C <- maps:keys(Custs)].
 
+
+-spec tick(non_neg_integer(), state()) -> ra_machine:effects().
+tick(_Ts, #state{metrics = Metrics}) ->
+    [{mod_call, ets, insert, [?METRICS_TABLE, Metrics]}].
+
 overview(#state{customers = Custs,
                 ra_indexes = Indexes}) ->
     #{type => ?MODULE,
       num_customers => maps:size(Custs),
       num_messages => ra_fifo_index:size(Indexes)}.
+
 %%% Internal
+
+incr_metrics(#state{metrics = {N, E0, C0, S0, R0}} = State, {E, C, S, R}) ->
+    State#state{metrics = {N, E0 + E, C0 + C, S0 + S, R0 + R}}.
 
 settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0,
@@ -158,16 +174,15 @@ settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
     Cust = Cust0#customer{checked_out = Checked},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
     Indexes = ra_fifo_index:delete(MsgRaftIdx, Indexes0),
-    {State1, Effects1, NumChecked} =
+    {State1, Effects, NumChecked} =
         checkout(State0#state{customers = Custs,
                               ra_indexes = Indexes,
                               service_queue = SQ},
                  Effects0),
-    Effects2 = [{incr_metrics, ?METRICS_TABLE,
-                [{3, NumChecked}, {4, 1}]} | Effects1],
+    State = incr_metrics(State1, {0, NumChecked, 1, 0}),
     update_first_enqueue_raft_index(IncomingRaftIdx,
-                                    MsgRaftIdx, Effects2,
-                                    State1).
+                                    MsgRaftIdx, Effects,
+                                    State).
 
 update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
                                 #state{first_enqueue_raft_index = First,
@@ -400,7 +415,7 @@ ensure_ets() ->
 
 enq_enq_checkout_test() ->
     ensure_ets(),
-    {State1, _} = enq(1, first, #state{}),
+    {State1, _} = enq(1, first, element(1, init(test))),
     {State2, _} = enq(2, second, State1),
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, self()}, State2),
@@ -409,14 +424,11 @@ enq_enq_checkout_test() ->
 
 release_cursor_test() ->
     ensure_ets(),
-    {State1, _} = enq(1, first, #state{}),
+    {State1, _} = enq(1, first, element(1, init(test))),
     {State2, _} = enq(2, second, State1),
     {State3, _} = check(3, 10, State2),
-    {State4, Effects} = settle(4, 1, State3),
-    % no release cursor update at this point
-    ?assert(lists:any(fun ({release_cursor, _}) -> false;
-                          (_) -> true
-                      end, Effects)),
+    % no release cursor effect at this point
+    {State4, []} = settle(4, 1, State3),
     {_Final, Effects1} = settle(5, 0, State4),
     % empty queue forwards release cursor all the way
     ?assertEffect({release_cursor, 5, _}, Effects1),
@@ -424,10 +436,10 @@ release_cursor_test() ->
 
 checkout_enq_settle_test() ->
     ensure_ets(),
-    {State1, [{monitor, _, _}, _]} = check(1, #state{}),
+    {State1, [{monitor, _, _}]} = check(1, element(1, init(test))),
     {State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _, {msg, 0, first}}, Effects0),
-    {State3, [_]} = enq(3, second, State2),
+    {State3, []} = enq(3, second, State2),
     {_, _Effects} = settle(4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
@@ -436,23 +448,29 @@ checkout_enq_settle_test() ->
 
 down_customer_returns_unsettled_test() ->
     ensure_ets(),
-    {State0, [_]} = enq(1, second, element(1, init(test))),
-    {State1, [{monitor, process, Pid}, _, _Del]} = check(2, State0),
-    {State2, [_]} = apply(3, {down, Pid}, State1),
+    {State0, []} = enq(1, second, element(1, init(test))),
+    {State1, [{monitor, process, Pid}, _Del]} = check(2, State0),
+    {State2, []} = apply(3, {down, Pid}, State1),
     {_State, Effects} = check(4, State2),
     ?assertEffect({monitor, process, _}, Effects),
     ok.
 
 completed_customer_yields_demonitor_effect_test() ->
     ensure_ets(),
-    {State0, [{incr_metrics, _, _}]} = enq(1, second, element(1, init(test))),
-    {State1, [{monitor, process, _}, _, _Msg]} = check(2, State0),
+    {State0, []} = enq(1, second, element(1, init(test))),
+    {State1, [{monitor, process, _}, _Msg]} = check(2, State0),
     {_, Effects} = settle(3, 0, State1),
     ?assertEffect({demonitor, _}, Effects),
     % release cursor for empty queue
     ?assertEffect({release_cursor, 3, _}, Effects),
     ok.
 
+tick_test() ->
+    ensure_ets(),
+    {State0, []} = enq(1, second, element(1, init(test))),
+    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 0, 0}]}] =
+        tick(1, State0),
+    ok.
 
 release_cursor_snapshot_state_test() ->
     ensure_ets(),

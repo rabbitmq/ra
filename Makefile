@@ -12,9 +12,9 @@ endef
 dep_aten = git https://github.com/rabbitmq/aten.git master
 DEPS = aten
 
-TEST_DEPS = proper meck eunit_formatters
+TEST_DEPS = proper meck eunit_formatters looking_glass
 
-BUILD_DEPS = elvis_mk looking_glass
+BUILD_DEPS = elvis_mk
 
 LOCAL_DEPS = sasl crypto
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master

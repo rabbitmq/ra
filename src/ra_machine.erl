@@ -8,6 +8,7 @@
 -export([init/2,
          apply/4,
          leader_effects/2,
+         tick/3,
          overview/2
         ]).
 
@@ -18,10 +19,13 @@
 -type machine() :: {simple, apply_fun(), Initial :: state()} |
                    {module, module()}.
 
+-type milliseconds() :: non_neg_integer().
+
 -type builtin_command() :: {down, pid()}.
 
 -type effect() ::
     {send_msg, pid() | atom() | {atom(), atom()}, term()} |
+    {mod_call, module(), atom(), [term()]} |
     {monitor, process, pid()} |
     {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
@@ -48,6 +52,12 @@
 % be applied only to a leader, such as monitors
 -callback leader_effects(state()) -> effects().
 
+% called periodically
+% suitable for returning granular metrics or other
+% periodic actions
+-callback tick(TimeMs :: milliseconds(),
+               state()) -> effects().
+
 % a map of overview information - needs to be efficient
 -callback overview(state()) -> map().
 
@@ -68,6 +78,12 @@ apply({simple, Fun, _InitialState}, _Idx, Cmd, State) ->
 leader_effects({module, Mod}, State) ->
     Mod:leader_effects(State);
 leader_effects({simple, _, _}, _State) ->
+    [].
+
+-spec tick(machine(), milliseconds(), state()) -> effects().
+tick({module, Mod}, TimeMs, State) ->
+    Mod:tick(TimeMs, State);
+tick({simple, _, _}, _TimeMs, _State) ->
     [].
 
 -spec overview(machine(), state()) -> map().

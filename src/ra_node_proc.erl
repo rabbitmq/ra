@@ -156,7 +156,6 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    % _ = [ok = aten:register(N) || {_, N} <- Peers],
     ?INFO("~p ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
@@ -239,8 +238,10 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    State = maybe_persist_last_applied(send_rpcs(State0)),
-    {keep_state, State, set_tick_timer(State, [])};
+    State1 = maybe_persist_last_applied(send_rpcs(State0)),
+    Effects = ra_node:tick(State1#state.node_state),
+    {State, Actions} = handle_effects(Effects, cast, State1),
+    {keep_state, State, set_tick_timer(State, Actions)};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -544,6 +545,10 @@ handle_effect({incr_metrics, Table, Ops}, _EvtType,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
+handle_effect({mod_call, Mod, Fun, Args}, _EvtType,
+              State, Actions) ->
+    _ = erlang:apply(Mod, Fun, Args),
+    {State, Actions};
 handle_effect({metrics_table, Table, Record}, _EvtType,
               State, Actions) ->
     % this is a call - hopefully only done on init
@@ -613,7 +618,7 @@ election_timeout_action(candidate, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
-% sets the tock timer for periodical actions such as sending stale rpcs
+% sets the tock timer for periodic actions such as sending stale rpcs
 % or persisting the last_applied index
 set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].

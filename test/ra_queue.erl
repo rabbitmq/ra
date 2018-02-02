@@ -6,6 +6,7 @@
          init/1,
          apply/3,
          leader_effects/1,
+         tick/2,
          overview/1
         ]).
 init(_) -> {[], []}.
@@ -22,5 +23,8 @@ apply(_Idx, _, [] = State) ->
 
 
 leader_effects(_) -> [].
+
+tick(_, _) -> [].
+
 
 overview(_) -> #{}.
