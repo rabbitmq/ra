@@ -131,7 +131,7 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
 apply(_RaftIdx, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
-    State = incr_metrics(State2, {0, 0, Num, 0}),
+    State = incr_metrics(State2, {0, Num, 0, 0}),
     {State, [{monitor, process, Customer} | Effects]};
 apply(_RaftId, {down, CustomerId}, #state{customers = Custs0} = State0) ->
     % return checked out messages to main queue
