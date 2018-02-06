@@ -17,6 +17,7 @@
          % properties
          id/1,
          leader_id/1,
+         machine/1,
          current_term/1,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -668,6 +669,10 @@ is_new(#{log := Log}) ->
 
 -spec id(ra_node_state()) -> ra_node_id().
 id(#{id := Id}) -> Id.
+
+-spec machine(ra_node_state()) -> module().
+machine(#{machine := Machine}) ->
+    ra_machine:module(Machine).
 
 -spec leader_id(ra_node_state()) -> maybe(ra_node_id()).
 leader_id(State) ->

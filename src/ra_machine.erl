@@ -9,7 +9,8 @@
          apply/4,
          leader_effects/2,
          tick/3,
-         overview/2
+         overview/2,
+         module/1
         ]).
 
 -type state() :: term().
@@ -91,4 +92,8 @@ overview({module, Mod}, State) ->
     Mod:overview(State);
 overview({simple, _, _}, _State) ->
     #{type => simple}.
+
+-spec module(machine()) -> undefined | module().
+module({module, Mod}) -> Mod;
+module(_) -> undefined.
 

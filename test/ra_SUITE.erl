@@ -296,7 +296,7 @@ send_and_notify(Config) ->
     Correlation = my_corr,
     ok = ra:send_and_notify(A, 5, Correlation),
     receive
-        {ra_event, _, applied, Correlation} -> ok
+        {ra_event, {applied, _, Correlation}} -> ok
     after 2000 ->
               exit(consensus_timeout)
     end,
@@ -309,7 +309,7 @@ send_and_notify_reject(Config) ->
     Correlation = my_corr,
     ok = ra:send_and_notify(B, 5, Correlation),
     receive
-        {ra_event, _, rejected, {not_leader, A, Correlation}} -> ok
+        {ra_event, {rejected, _, {not_leader, A, Correlation}}} -> ok
     after 2000 ->
               exit(consensus_timeout)
     end,
@@ -411,7 +411,7 @@ queue_example(Config) ->
     waitfor(test_msg, apply_timeout),
     % check that the message isn't delivered multiple times
     receive
-        {ra_event, _, machine, test_msg} ->
+        {ra_queue, _, test_msg} ->
             exit(double_delivery)
     after 500 -> ok
     end,
@@ -455,7 +455,7 @@ follower_catchup(Config) ->
     {ok, _IdxTerm, Leader0} = ra:send({N1, node()}, 501),
     [Follower] = [N1, N2] -- [element(1, Leader0)],
     receive
-        {ra_event, _, applied, corr_500} ->
+        {ra_event, {applied, _, corr_500}} ->
             exit(unexpected_consensus)
     after 1000 ->
             case get_gen_statem_status({Follower, node()}) of
@@ -470,7 +470,7 @@ follower_catchup(Config) ->
     % the aer with the original condition which should trigger a re-wind of of
     % the next_index and a subsequent resend of missing entries
     receive
-        {ra_event, _, applied, corr_500} ->
+        {ra_event, {applied, _, corr_500}} ->
             case get_gen_statem_status({Follower, node()}) of
                 follower ->
                     ok;
@@ -504,7 +504,7 @@ post_partition_liveness(Config) ->
     ok = ra:send_and_notify(Leader, 500, corr_500),
     % assert we don't achieve consensus
     receive
-        {ra_event, _, applied, corr_500} ->
+        {ra_event, {applied, _, corr_500}} ->
             exit(unexpected_consensus)
     after 1000 ->
               ok
@@ -513,7 +513,7 @@ post_partition_liveness(Config) ->
     meck:unload(),
     % assert consensus completes after some time
     receive
-        {ra_event, _, applied, corr_500} ->
+        {ra_event, {applied, _, corr_500}} ->
             ok
     after 6500 ->
             exit(consensus_timeout)
@@ -554,7 +554,7 @@ queue_apply({dequeue, For},
 
 waitfor(Msg, ExitWith) ->
     receive
-        {ra_event, _, machine, Msg} -> ok
+        {ra_queue, _, Msg} -> ok
     after 3000 ->
               exit(ExitWith)
     end.

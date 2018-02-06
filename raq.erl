@@ -78,7 +78,7 @@ go0(Node0) ->
     Data = crypto:strong_rand_bytes(1024),
     {ok, _, {raq, Node1}} = ra:send({raq, Node0}, {enqueue, {TS, Data}}),
     receive
-        {ra_event, _, machine, {msg, MsgId, _}} ->
+        {ra_fifo, _, {msg, MsgId, _}} ->
             {ok, _, {raq, Node}} = setl(Node1, MsgId),
             go0(Node)
     after 5000 ->
@@ -91,7 +91,7 @@ go_many(Num, Node) ->
 pop(Node) ->
     ra:send({raq, Node}, {checkout, {once, 1}, self()}),
     receive
-        {ra_event, _, machine, {msg, _, _}} = Msg ->
+        {ra_fifo, _, {msg, _, _}} = Msg ->
             Msg
     after 5000 ->
               timeout
@@ -99,7 +99,7 @@ pop(Node) ->
 
 recv(Node0) ->
     receive
-        {ra_event, _, machine, {msg, Id, TS}} ->
+        {ra_fifo, _, {msg, Id, TS}} ->
             % TODO: ra_msg should include sending node
             Now = os:system_time(millisecond),
             io:format("MsgId: ~b, Latency: ~bms~n", [Id, Now - TS]),

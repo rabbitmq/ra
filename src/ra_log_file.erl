@@ -144,8 +144,10 @@ recover_range(UId) ->
     SegFiles = ra_log_file_segment_writer:my_segments(UId),
     SegRefs =
     [begin
+         ?INFO("ra_log_file: recovering ~p~n", [S]),
          {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
          {F, L} = ra_log_file_segment:range(Seg),
+         ?INFO("ra_log_file: recovered ~p ~p~n", [S, {F, L}]),
          ok = ra_log_file_segment:close(Seg),
          {F, L, S}
      end || S <- lists:reverse(SegFiles)],

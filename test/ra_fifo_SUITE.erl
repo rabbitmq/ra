@@ -52,6 +52,7 @@ first(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
+    Cid = {UId, self()},
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
@@ -60,7 +61,7 @@ first(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
+    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
 
     ra_log_wal:force_roll_over(ra_log_wal),
     % create segment the segment will trigger a snapshot
@@ -68,8 +69,8 @@ first(Config) ->
 
     _ = ra:send_and_await_consensus(NodeId, {enqueue, one}),
     receive
-        {ra_event, _, machine, {msg, MsgId, _}} ->
-            _ = ra:send_and_await_consensus(NodeId, {settle, MsgId, self()})
+        {ra_fifo, _, {delivery, C, MsgId, _}} ->
+            _ = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
     after 5000 ->
               exit(await_msg_timeout)
     end,
@@ -80,7 +81,7 @@ first(Config) ->
     _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
     ct:pal("restarted node"),
     receive
-        {ra_event, _, machine, {msg, _, two}} -> ok
+        {ra_fifo, _, {delivery, _, _, two}} -> ok
     after 2000 ->
               exit(await_msg_timeout)
     end,
@@ -91,6 +92,7 @@ leader_monitors_customer(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
+    Cid = {UId, self()},
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
@@ -100,7 +102,7 @@ leader_monitors_customer(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
+    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
     ra:stop_node(UId),
@@ -117,13 +119,14 @@ follower_takes_over_monitor(Config) ->
     {Name1, _} = NodeId1 = ?config(node_id, Config),
     {Name2, _} = NodeId2 = ?config(node_id2, Config),
     UId1 = ?config(uid, Config),
+    CId = {UId1, self()},
     UId2 = ?config(uid2, Config),
     Conf1 = conf(UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
     Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
     _ = ra:start_node(Conf1),
     _ = ra:start_node(Conf2),
     ok = ra:trigger_election(NodeId1),
-    _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, self()}),
+    _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
     timer:sleep(500),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name1)),
@@ -142,6 +145,7 @@ node_is_deleted(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
+    CId = {UId, self()},
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
@@ -164,9 +168,9 @@ node_is_deleted(Config) ->
                                                 uid => UId2}}),
     ok = ra:trigger_election(NodeId),
     {ok, _, _} = ra:send_and_await_consensus(NodeId,
-                                             {checkout, {auto, 10}, self()}),
+                                             {checkout, {auto, 10}, CId}),
     receive
-        {ra_event, _, machine, Evt} ->
+        {ra_fifo, _, Evt} ->
             exit({unexpected_machine_event, Evt})
     after 500 -> ok
     end,
@@ -195,13 +199,13 @@ node_restart_after_application_restart(Config) ->
     ok.
 
 
-
 % NB: this is not guaranteed not to re-issue side-effects but only tests
 % that the likelyhood is small
 restarted_node_does_not_reissue_side_effects(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
+    CId = {UId, self()},
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
@@ -211,13 +215,13 @@ restarted_node_does_not_reissue_side_effects(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, self()}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     receive
-        {ra_event, _, machine, {msg, MsgId, _}} ->
-            {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, self()})
+        {ra_fifo, _, {delivery, C, MsgId, _}} ->
+            {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
     after 2000 ->
-              exit(ra_event_timeout)
+              exit(ra_fifo_event_timeout)
     end,
     % give the process time to persist the last_applied index
     timer:sleep(1000),
@@ -226,8 +230,8 @@ restarted_node_does_not_reissue_side_effects(Config) ->
 
     %  check message isn't received again
     receive
-        {ra_event, _, machine, {msg, _, _}} ->
-            exit(unexpected_ra_event)
+        {ra_fifo, _, {delivery, _, _, _}} ->
+            exit(unexpected_ra_fifo_event)
     after 1000 ->
               ok
     end,
