@@ -426,16 +426,16 @@ contains(Match, Entries) ->
 
 follower_catchup(Config) ->
     meck:new(ra_node_proc, [passthrough]),
-    meck:expect(ra_node_proc, send_rpcs,
-                fun([{_, #append_entries_rpc{entries = Entries}}] = T, S) ->
+    meck:expect(ra_node_proc, send_rpc,
+                fun(P, #append_entries_rpc{entries = Entries} = T) ->
                         case contains(500, Entries) of
                             true ->
-                                S;
+                                ok;
                             false ->
-                                meck:passthrough([T, S])
+                                meck:passthrough([P, T])
                         end;
-                   (T, S) ->
-                        meck:passthrough([T, S])
+                   (P, T) ->
+                        meck:passthrough([P, T])
                 end),
     StartNode = ?config(start_node_fun, Config),
     % suite unique node names
@@ -499,7 +499,7 @@ post_partition_liveness(Config) ->
                                                    ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
 
     % simulate partition
-    meck:expect(ra_node_proc, send_rpcs, fun(_, S) -> S end),
+    meck:expect(ra_node_proc, send_rpc, fun(_, _) -> ok end),
     % send an entry that will not be replicated
     ok = ra:send_and_notify(Leader, 500, corr_500),
     % assert we don't achieve consensus

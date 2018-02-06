@@ -30,7 +30,7 @@
          ping/2
         ]).
 
--export([send_rpcs/2]).
+-export([send_rpc/2]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 50).
@@ -530,10 +530,9 @@ handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
 handle_effect({send_rpcs, _IsUrgent, Rpcs}, _EvtType, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor
-    {_Taken, State} = timer:tc(fun() -> ra_node_proc:send_rpcs(Rpcs, State0) end),
+    [?MODULE:send_rpc(To, Rpc) || {To, Rpc} <- Rpcs],
     % TODO: record metrics for sending times
-    % ?INFO("send_rpcs took ~pms ~p", [Taken / 1000, Rpcs]),
-    {State, Actions};
+    {State0, Actions};
 handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
@@ -577,54 +576,25 @@ send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
     % TODO: review
-    ?MODULE:send_rpcs(Rpcs, State).
-
-send_rpcs(Rpcs, State) ->
-    lists:foldl(fun ({To, Rpc}, Acc) ->
-                        send_rpc(To, Rpc, Acc)
-                end, State, Rpcs).
+    [ok = ?MODULE:send_rpc(To, Rpc) || {To, Rpc} <-  Rpcs],
+    State.
 
 make_rpcs(State) ->
     {NodeState, Rpcs} = ra_node:make_rpcs(State#state.node_state),
     {State#state{node_state = NodeState}, Rpcs}.
 
-send_rpc(To, Msg, State) ->
+send_rpc(To, Msg) ->
     % fake gen cast - need to avoid any blocking delays here
-    case erlang:send(To, {'$gen_cast', Msg}, [noconnect, nosuspend]) of
-        ok ->
-            State;
-        _ ->
-            State
-            % TODO: disable pipelining when we know a node is
-            % down
-    end.
+    send(To, {'$gen_cast', Msg}).
 
 send_ra_event(To, Msg, EvtType, State) ->
     Id = id(State),
-    RaEvt = {ra_event, {EvtType, Id, Msg}},
-    % need to avoid delays
-    case erlang:send(To, RaEvt, [noconnect, nosuspend]) of
-        ok ->
-            ok;
-        noconnect ->
-            % TODO: we could try to reconnect here in a different processes
-            % but probably best not from a performance point of view
-            ok
-    end.
+    send(To, {ra_event, {EvtType, Id, Msg}}).
 
 send_machine_msg(To, Msg, State) ->
     Id = id(State),
     % TODO we could cache this this tuple and only update the last element
-    MacMsg = {machine(State), Id, Msg},
-    % need to avoid delays
-    case erlang:send(To, MacMsg, [noconnect, nosuspend]) of
-        ok ->
-            ok;
-        noconnect ->
-            % TODO: we could try to reconnect here in a different processes
-            % but probably best not from a performance point of view
-            ok
-    end.
+    send(To, {machine(State), Id, Msg}).
 
 id(#state{node_state = NodeState}) ->
     ra_node:id(NodeState).
@@ -757,3 +727,14 @@ reject_command(Pid, Corr, State) ->
 maybe_persist_last_applied(#state{node_state = NS} = State) ->
      State#state{node_state = ra_node:persist_last_applied(NS)}.
 
+send(To, Msg) ->
+    % we do not want to block the ra node whilst attempting to set up
+    % a TCP connection to a potentially down node.
+    case erlang:send(To, Msg, [noconnect, nosuspend]) of
+        ok ->
+            ok;
+        noconnect ->
+            % TODO: we could try to reconnect here in a different processes
+            % but probably best not from a performance point of view
+            ok
+    end.
