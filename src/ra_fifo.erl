@@ -22,7 +22,7 @@
 -type msg_id() :: non_neg_integer().
 -type customer_id() :: pid(). % the entity that receives messages
 
--type checkout_spec() :: {once | auto, Num :: non_neg_integer()}.
+-type checkout_spec() :: {once | auto, Num :: non_neg_integer()} | get.
 
 -type protocol() ::
     {enqueue, Msg :: msg()} |
@@ -128,6 +128,15 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
         _ ->
             {State, []}
     end;
+apply(_RaftIdx, {checkout, get, Customer}, #state{messages = M} = State0)
+  when map_size(M) == 0 ->
+    %% TODO do we need metric visibility of empty get requests?
+    {State0, [{send_msg, Customer, {msg, undefined, empty}}]};
+apply(_RaftIdx, {checkout, get, Customer}, #state{messages = M} = State0) ->
+    State1 = update_customer(Customer, {once, 1}, State0),
+    {State2, Effects, Num} = checkout(State1, []),
+    State = incr_metrics(State2, {0, Num, 0, 0}),
+    {State, [{monitor, process, Customer} | Effects]};
 apply(_RaftIdx, {checkout, Spec, Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -420,6 +429,23 @@ enq_enq_checkout_test() ->
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, self()}, State2),
     ?assertEffect({monitor, _, _}, Effects),
+    ok.
+
+enq_enq_checkout_get_test() ->
+    ensure_ets(),
+    {State1, _} = enq(1, first, element(1, init(test))),
+    {State2, _} = enq(2, second, State1),
+    {_State3, Effects} =
+        apply(3, {checkout, get, self()}, State2),
+    ?assertEffect({send_msg, _, {msg, 0, first}}, Effects),
+    ok.
+
+checkout_get_empty_test() ->
+    ensure_ets(),
+    State = element(1, init(test)),
+    {_State2, Effects} =
+        apply(1, {checkout, get, self()}, State),
+    ?assertEffect({send_msg, _, {msg, undefined, empty}}, Effects),
     ok.
 
 release_cursor_test() ->
