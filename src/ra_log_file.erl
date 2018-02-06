@@ -77,10 +77,10 @@ init(#{data_dir := BaseDir, uid := UId} = Conf) ->
     ok = filelib:ensure_dir(Meta),
     Kv = ra_log_file_meta:init(Meta),
 
-
     % recover current range and any references to segments
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, Dir) of
-                                          {undefined, SRs} -> {{-1, -1}, SRs};
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
+                                          {undefined, SRs} ->
+                                              {{-1, -1}, SRs};
                                           R ->  R
                                       end,
     % recove las snapshot file
@@ -128,27 +128,27 @@ init(#{data_dir := BaseDir, uid := UId} = Conf) ->
           [last_index_term(State)]),
     State.
 
-recover_range(Id, Dir) ->
+recover_range(UId) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_nodes are part of the same
     % supervision tree
     % 1. check closed mem_tables to extend
-    OpenRanges = case ets:lookup(ra_log_open_mem_tables, Id) of
+    OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of
                      [] ->
                          [];
-                     [{Id, First, Last, _}] ->
+                     [{UId, First, Last, _}] ->
                          [{First, Last}]
                  end,
-    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(Id)],
+    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
+    % 2. check segments
+    SegFiles = ra_log_file_segment_writer:my_segments(UId),
     SegRefs =
     [begin
-         ?INFO("ra_log_file: recovering ~P~n", [S]),
          {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
          {F, L} = ra_log_file_segment:range(Seg),
-         ?INFO("ra_log_file: recovered ~P ~P~n", [S, {F, L}]),
          ok = ra_log_file_segment:close(Seg),
          {F, L, S}
-     end || S <- lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))],
+     end || S <- lists:reverse(SegFiles)],
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
     Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
     {pick_range(Ranges, undefined), SegRefs}.
@@ -193,18 +193,10 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
             % it is the next entry after a snapshot
             % we need to tell the wal to truncate as we
             % are not going to receive any entries prior to the snapshot
-            case verify_entries(FstIdx, Rest) of
-                ok ->
-                    State0 = wal_truncate_write(State00, First),
-                    % write the rest normally
-                    % TODO: batch api for wal
-                    State = lists:foldl(fun (Entry, S) ->
-                                                wal_write(S, Entry)
-                                        end, State0, Rest),
-                    {queued, State};
-                Error ->
-                    Error
-            end;
+            State0 = wal_truncate_write(State00, First),
+            % write the rest normally
+            % TODO: batch api for wal
+            write_entries(Rest, State0);
         _ ->
             write_entries(Entries, State00)
     end;
@@ -298,11 +290,17 @@ handle_event({segments, Tid, NewSegs},
     % any closed mem tables older than the one just having been flushed should
     % be ok to delete
     ClosedTables = closed_mem_tables(UId),
-    Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end, ClosedTables),
+    Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
+                             ClosedTables),
     % not fast but we rarely should have more than one or two closed tables
     % at any time
     Obsolete = ClosedTables -- Active,
-    [_|_] = Obsolete, % assert at least one table was found
+    % assert at least one table was found
+    % commented out as if the wal restarts more than once in short succession
+    % we may be processing a segments event referring to open mem tables
+    % that the wal replaced during init. the segment file is still valid and
+    % we'll probably receive another copy shortly.
+    % [_|_] = Obsolete,
     [begin
          true = ets:delete_object(ra_log_closed_mem_tables, ClosedTbl),
          % Then delete the actual ETS table
@@ -612,35 +610,37 @@ lookup_range(Tid, Start, End, Acc) when End > Start ->
 
 segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
              Range, Entries0) ->
-    lists:foldl(fun(_, {_, undefined, _} = Acc) ->
-                    Acc;
-                   ({From, _, _}, {_, {_Start0, End}, _} = Acc)
-                        when From > End ->
-                        Acc;
-                   ({From, To, Fn}, {Open, {Start0, End}, Entries})
-                     when To >= End ->
-                        Seg = case Open of
-                                  #{Fn := S} -> S;
-                                  _ ->
-                                      {ok, S} = ra_log_file_segment:open(Fn, #{mode => read}),
-                                      S
-                              end,
+    lists:foldl(
+      fun(_, {_, undefined, _} = Acc) ->
+              Acc;
+         ({From, _, _}, {_, {_Start0, End}, _} = Acc)
+           when From > End ->
+              Acc;
+         ({From, To, Fn}, {Open, {Start0, End}, Entries})
+           when To >= End ->
+              Seg = case Open of
+                        #{Fn := S} -> S;
+                        _ ->
+                            {ok, S} = ra_log_file_segment:open(Fn,
+                                                               #{mode => read}),
+                            S
+                    end,
 
-                        % actual start point cannot be prior to first segment
-                        % index
-                        Start = max(Start0, From),
-                        Num = End - Start + 1,
-                        New = [ra_lib:update_element(3, E, fun binary_to_term/1)
-                               || E <- ra_log_file_segment:read(Seg, Start, Num)],
-                        % TODO: should we really validate Num was read?
-                        Num = length(New),
-                        Rem = case Start of
-                                  Start0 -> undefined;
-                                  _ ->
-                                      {Start0, Start-1}
-                              end,
-                        {Open#{Fn => Seg}, Rem, New ++ Entries}
-                  end, {OpenSegs, Range, Entries0}, SegRefs).
+              % actual start point cannot be prior to first segment
+              % index
+              Start = max(Start0, From),
+              Num = End - Start + 1,
+              New = [ra_lib:update_element(3, E, fun binary_to_term/1)
+                     || E <- ra_log_file_segment:read(Seg, Start, Num)],
+              % TODO: should we really validate Num was read?
+              Num = length(New),
+              Rem = case Start of
+                        Start0 -> undefined;
+                        _ ->
+                            {Start0, Start-1}
+                    end,
+              {Open#{Fn => Seg}, Rem, New ++ Entries}
+      end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #state{segment_refs = SegRefs,
                                open_segments = OpenSegs} = State) ->
@@ -702,10 +702,20 @@ maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
 maybe_append_0_0_entry(State) ->
     State.
 
-resend_from(Idx, #state{uid = UId, last_index = LastIdx,
-                        last_resend_time = undefined,
-                        cache = Cache} = State) ->
-    ?WARN("~s: ra_log_file: resending from ~b", [UId, Idx]),
+resend_from(Idx, #state{uid = UId} = State0) ->
+    try resend_from0(Idx, State0) of
+        State -> State
+    catch
+        exit:wal_down ->
+            ?WARN("~s: ra_log_file: resending from ~b failed with wal_down",
+                  [UId, Idx]),
+            State0
+    end.
+
+resend_from0(Idx, #state{uid = UId, last_index = LastIdx,
+                         last_resend_time = undefined,
+                         cache = Cache} = State) ->
+    ?INFO("~s: ra_log_file: resending from ~b to ~b", [UId, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))
@@ -713,7 +723,7 @@ resend_from(Idx, #state{uid = UId, last_index = LastIdx,
                 State#state{last_resend_time = erlang:system_time(seconds)},
                 % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
-resend_from(Idx, #state{last_resend_time = LastResend,
+resend_from0(Idx, #state{last_resend_time = LastResend,
                         resend_window_seconds = ResendWindow} = State) ->
     case erlang:system_time(seconds) > LastResend + ResendWindow of
         true ->

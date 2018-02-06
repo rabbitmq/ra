@@ -64,6 +64,7 @@
 
 -type states() :: leader | follower | candiate | await_condition.
 
+%% ra_event types
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_node_id()),
                                    correlation()}.
 
@@ -78,7 +79,8 @@
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
               safe_call_ret/1,
-              ra_event/0]).
+              ra_event/0,
+              ra_event_reject_detail/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
@@ -128,7 +130,6 @@ trigger_election(ServerRef) ->
 -spec ping(ra_node_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerRef, Timeout) ->
     gen_statem_safe_call(ServerRef, ping, Timeout).
-
 
 leader_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, {leader_call, Msg},

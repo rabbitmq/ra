@@ -70,21 +70,25 @@ open(Filename, Options) ->
     end.
 
 process_file(true, Mode, Filename, Fd, _Options) ->
-    MaxCount = read_header(Fd),
-    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-    {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount),
-    {ok, #state{version = 1,
-                max_count = MaxCount,
-                filename = Filename,
-                fd = Fd,
-                index_size = IndexSize,
-                mode = Mode,
-                data_start = ?HEADER_SIZE + IndexSize,
-                data_offset = DataOffset,
-                index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
-                range = Range,
-                % TODO: we don't need an index in memory in append mode
-                index = Index}};
+    case read_header(Fd) of
+        {ok, MaxCount} ->
+            IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+            {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount),
+            {ok, #state{version = 1,
+                        max_count = MaxCount,
+                        filename = Filename,
+                        fd = Fd,
+                        index_size = IndexSize,
+                        mode = Mode,
+                        data_start = ?HEADER_SIZE + IndexSize,
+                        data_offset = DataOffset,
+                        index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
+                        range = Range,
+                        % TODO: we don't need an index in memory in append mode
+                        index = Index}};
+        Err ->
+            Err
+    end;
 process_file(false, Mode, Filename, Fd, Options) ->
     MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
@@ -262,10 +266,16 @@ write_header(MaxCount, Fd) ->
 
 read_header(Fd) ->
     {ok, 0} = file:position(Fd, 0),
-    {ok, Buffer} = file:read(Fd, ?HEADER_SIZE),
-    case Buffer of
-        <<1:16/integer, MaxCount:16/integer>> ->
-            MaxCount;
-        _ ->
-            exit(invalid_segment_version)
+    case file:read(Fd, ?HEADER_SIZE) of
+        {ok, Buffer} ->
+            case Buffer of
+                <<1:16/integer, MaxCount:16/integer>> ->
+                    {ok, MaxCount};
+                _ ->
+                    {error, invalid_segment_version}
+            end;
+        eof ->
+            {error, missing_segment_header};
+        {error, _} = Err ->
+            Err
     end.

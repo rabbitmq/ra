@@ -19,7 +19,8 @@ all_tests() ->
      accept_mem_tables_append,
      accept_mem_tables_overwrite,
      accept_mem_tables_rollover,
-     delete_segments
+     delete_segments,
+     my_segments
     ].
 
 groups() ->
@@ -103,6 +104,28 @@ delete_segments(Config) ->
               throw(ra_log_event_timeout)
     end,
     ok.
+
+my_segments(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
+    UId = ?config(uid, Config),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    Tid = make_mem_table(UId, Entries),
+    MemTables = [{UId, 1, 3, Tid}],
+    WalFile = filename:join(Dir, "00001.wal"),
+    ok = file:write_file(WalFile, <<"waldata">>),
+    ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
+    receive
+        {ra_log_event, {segments, Tid, [{1, 3, SegmentFile}]}} ->
+            [SegmentFile] = ra_log_file_segment_writer:my_segments(UId),
+            ?assert(filelib:is_file(SegmentFile))
+    after 2000 ->
+              exit(ra_log_event_timeout)
+    end,
+    proc_lib:stop(TblWriterPid),
+    ok.
+
 
 accept_mem_tables_append(Config) ->
     % append to a previously written segment

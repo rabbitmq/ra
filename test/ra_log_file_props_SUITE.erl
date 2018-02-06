@@ -58,7 +58,7 @@ init_per_testcase(TestCase, Config) ->
     Dir = filename:join(PrivDir, TestCase),
     % register(TestCase, self()),
     UId = atom_to_binary(TestCase, utf8),
-    ra_directory:register_name(UId, self(), TestCase),
+    yes = ra_directory:register_name(UId, self(), TestCase),
     [{test_case, UId}, {wal_dir, Dir} | Config].
 
 %%------------------
@@ -657,6 +657,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
+              _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
               Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
@@ -685,7 +686,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
               Got = ra_log_file:last_written(Log),
               {Written, Log1} = ra_log_file:take(1, LastIdx, Log),
               reset(Log1),
-              ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
+              ?WHENFAIL(ct:pal("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
                                   [Got, Last, Written, All]),
                         (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
           end)).
@@ -693,7 +694,8 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
 last_written_with_crashing_segment_writer(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_with_crashing_segment_writer_prop/2, [Dir, TestCase], 5).
+    run_proper_noshrink(fun last_written_with_crashing_segment_writer_prop/2,
+                        [Dir, TestCase], 1).
 
 last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
     ?FORALL(
@@ -705,25 +707,36 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
+              _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
               Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
                                         resend_window => 2}),
               ra_log_file:take(1, 10, Log0),
-              {Log, Last, Ts} =
+              {Log, _Last, Ts} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
                                       Acc;
                                  (consume, {Acc0, Last0, Ts}) ->
-                                      {Acc1, Last1} = consume_events(Acc0, Last0),
-                                      {Acc1, Last1, Ts};
+                                      Acc1 = deliver_log_events(Acc0, 500),
+                                      {Acc1, Last0, Ts};
                                  (crash_segment_writer, {Acc0, Last0, _Ts}) ->
-                                      case whereis(ra_log_file_segment_writer) of
-                                          undefined -> ok;
-                                          P -> exit(P, kill)
-                                      end,
-                                      {Acc0, Last0, get_timestamp()};
+                                      Acc = case whereis(ra_log_file_segment_writer) of
+                                                undefined ->
+                                                    Acc0;
+                                                P ->
+                                                    Acc1 = deliver_log_events(Acc0, 500),
+                                                    exit(P, kill),
+                                                    Acc1
+                                            end,
+                                      {Acc, Last0, get_timestamp()};
                                  (Entry, {Acc0, Last0, Ts}) ->
-                                      {queued, Acc} = ra_log_file:write([Entry], Acc0),
-                                      {Acc, Last0, Ts}
+                                      case ra_log_file:write([Entry], Acc0) of
+                                          {queued, Acc} ->
+                                              {Acc, Last0, Ts};
+                                          {error, wal_down} ->
+                                              wait_for_wal(50, 0),
+                                              {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                              {Acc, Last0, Ts}
+                                      end
                               end, {Log0, {0, 0}, get_timestamp()}, All),
               %% We want to check that eventually we get the last written as the last entry,
               %% despite the segment writer crash. The log file might have to resend
@@ -734,22 +747,26 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               E = {LastIdx+1, LastTerm, <<>>},
               ActuallyLastIdxTerm = {LastIdx+1, LastTerm},
               {queued, Log1a} = ra_log_file:write([E], Log),
-              Log1b = deliver_log_events(Log1a, 500),
+              Log1 = deliver_log_events(Log1a, 500),
               % Log1c =  deliver_log_events(Log1b, 500),
               %% Consume all events
-              {Log1, Last1} = consume_events(Log1b, Last),
+              % {Log1, Last1} = consume_events(Log1b, Last),
               %% Request last written
-              Got = ra_log_file:last_written(Log1),
+              LastWritten = ra_log_file:last_written(Log1),
               %% Request entries available, which should be all generated by this test
               {EIdx, ETerm, _} = lists:last(Entries),
               LastEntry = {EIdx, ETerm},
+              ct:pal("Log1 ~p~nopen ~p~nclosed~p~n", [Log1,
+                                                      ets:tab2list(ra_log_open_mem_tables),
+                                                      ets:tab2list(ra_log_closed_mem_tables)
+                                                     ]),
               {Written, Log2} = ra_log_file:take(1, EIdx, Log1),
               %% We got all the data, can reset now
               basic_reset(Log2),
-              ?WHENFAIL(io:format("Last written entry: ~p; expected from events: ~p;"
-                                  " last entry written: ~p~nEntries taken: ~p~n Actions: ~p~n",
-                                  [Got, Last1, LastEntry, Written, All]),
-                        (Got == ActuallyLastIdxTerm)
+              ?WHENFAIL(ct:pal("Last written entry: ~p; actually last idx term: ~p;"
+                               " last entry written: ~p~nEntries taken: ~p~n Actions: ~p~n",
+                               [LastWritten, ActuallyLastIdxTerm, LastEntry, Written, Entries]),
+                        (LastWritten == ActuallyLastIdxTerm)
                         and (Written == Entries))
           end)).
 
@@ -765,6 +782,17 @@ time_diff_to(Ts, To) ->
         T ->
             T
     end.
+
+wait_for_wal(N, N) ->
+    exit(wait_for_wal_timeout);
+wait_for_wal(M, N) ->
+    timer:sleep(100),
+    case whereis(ra_log_wal) of
+        undefined ->
+            wait_for_wal(M, N+1);
+        _ -> ok
+    end.
+
 
 last_written(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -844,6 +872,15 @@ run_proper(Fun, Args, NumTests) ->
        true,
        proper:counterexample(erlang:apply(Fun, Args),
 			     [{numtests, NumTests},
+			      {on_output, fun(".", _) -> ok; % don't print the '.'s on new lines
+					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
+
+run_proper_noshrink(Fun, Args, NumTests) ->
+    ?assertEqual(
+       true,
+       proper:counterexample(erlang:apply(Fun, Args),
+			     [{numtests, NumTests},
+                  noshrink,
 			      {on_output, fun(".", _) -> ok; % don't print the '.'s on new lines
 					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
 basic_reset(Log) ->

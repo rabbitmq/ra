@@ -22,7 +22,8 @@ all_tests() ->
      try_read_missing,
      overwrite,
      term_query,
-     write_many
+     write_many,
+     open_invalid
     ].
 
 groups() ->
@@ -46,6 +47,14 @@ open_close_persists_max_count(Config) ->
     128 = ra_log_file_segment:max_count(Seg),
     undefined = ra_log_file_segment:range(Seg),
     ok = ra_log_file_segment:close(Seg),
+    ok.
+
+open_invalid(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Fd} = file:open(Fn, [write, raw, binary]),
+    {error, missing_segment_header} = ra_log_file_segment:open(Fn),
+    file:close(Fd),
     ok.
 
 full_file(Config) ->

@@ -24,6 +24,7 @@ all_tests() ->
      cache_overwrite_then_take,
      last_written_overwrite,
      recovery,
+     recover_bigly,
      resend_write,
      wal_crash_recover,
      wal_down_read_availability,
@@ -273,6 +274,25 @@ recovery(Config) ->
     ra_log_file:close(Log8),
 
     ok.
+
+recover_bigly(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
+    Log1 = write_n(1, 10000, 1, Log0),
+    Log2 = deliver_all_log_events(Log1, 5),
+    {9999, 1} = ra_log_file:last_index_term(Log2),
+    {9999, 1} = ra_log_file:last_written(Log2),
+    % ra_log_file:close(Log1),
+    application:stop(ra),
+    application:ensure_all_started(ra),
+    % ra_log_file_segment_writer:await(),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
+    {9999, 1} = ra_log_file:last_written(Log),
+    {9999, 1} = ra_log_file:last_index_term(Log),
+    ra_log_file:close(Log),
+    ok.
+
 
 resend_write(Config) ->
     % simulate lost messages requiring the ra node to resend in flight

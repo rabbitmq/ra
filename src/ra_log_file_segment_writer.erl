@@ -7,6 +7,8 @@
          delete_segments/3,
          delete_segments/4,
          release_segments/2,
+         my_segments/1,
+         my_segments/2,
          await/0,
          await/1
         ]).
@@ -54,17 +56,23 @@ delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
 -spec delete_segments(atom() | pid(), ra_uid(),
-                      ra_index(), [ra_log:ra_segment_ref()]) ->
-    ok.
+                      ra_index(), [ra_log:ra_segment_ref()]) -> ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
     % delete all closed segment files
     [_ = file:delete(F) || {_, _, F} <- SegmentFiles],
     gen_server:cast(SegWriter, {delete_segment, Who, SnapIdx, MaybeActive}).
 
+-spec release_segments(atom() | pid(), ra_uid()) -> ok.
 release_segments(SegWriter, Who) ->
     gen_server:call(SegWriter, {release_segments, Who}).
 
+-spec my_segments(ra_uid()) -> [file:filename()].
+my_segments(Who) ->
+    my_segments(?MODULE, Who).
 
+-spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
+my_segments(SegWriter, Who) ->
+    gen_server:call(SegWriter, {my_segments, Who}).
 
 % used to wait for the segment writer to finish processing anything in flight
 await() ->
@@ -106,7 +114,12 @@ handle_call({release_segments, Who}, _From,
             {reply, ok, State0#state{active_segments = ActiveSegments}};
         error ->
             {reply, ok, State0}
-    end.
+    end;
+handle_call({my_segments, Who}, _From,
+            #state{data_dir = DataDir} = State) ->
+    Dir = filename:join(DataDir, ra_lib:to_list(Who)),
+    SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
+    {reply, SegFiles, State}.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
