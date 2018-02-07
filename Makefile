@@ -12,13 +12,14 @@ endef
 dep_aten = git https://github.com/rabbitmq/aten.git master
 DEPS = aten
 
-TEST_DEPS = proper meck eunit_formatters looking_glass
+TEST_DEPS = proper meck eunit_formatters looking_glass rabbitmq_ct_helpers
 
 BUILD_DEPS = elvis_mk
 
 LOCAL_DEPS = sasl crypto
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master
 dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
+dep_rabbitmq_ct_helpers = git https://github.com/rabbitmq/rabbitmq-ct-helpers
 
 DEP_PLUGINS = elvis_mk
 
