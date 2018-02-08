@@ -6,6 +6,7 @@
          disconnect_from_other_nodes/1,
          block_traffic_between/2,
          allow_traffic_between/2]).
+-export([get_dist_port/0]).
 
 enable_dist_proxy_manager(Config) ->
     inet_tcp_proxy_manager:start(),

@@ -8,6 +8,7 @@ all() -> [
             ,publish_ack_node_leave
             ,publish_ack_node_restart
             ,publish_ack_inet_tcp_proxy_blocks_single_node
+            ,publish_ack_disconnect_node
             % ,publish_ack_inet_tcp_proxy_partition_majority
          ].
 
@@ -60,6 +61,16 @@ publish_ack_inet_tcp_proxy_blocks_single_node(Config) ->
                end,
     publish_and_consume(Config, 1000, 100, LogFun, BlockFun).
 
+publish_ack_disconnect_node(Config) ->
+    NodeId = ?config(node_id, Config),
+    Nodes = ?config(nodes, Config),
+    LogFun = fun() -> print_metrics(Nodes) end,
+    BlockFun = fun() ->
+                   print_metrics(Nodes),
+                   disconnect_random_node(NodeId, Nodes)
+               end,
+    publish_and_consume(Config, 1000, 100, LogFun, BlockFun).
+
 % publish_ack_inet_tcp_proxy_partition_majority(Config) ->
 %     NodeId = ?config(node_id, Config),
 %     Nodes = ?config(nodes, Config),
@@ -95,6 +106,11 @@ block_random_node_inet_tcp_proxy(NodeId, Nodes) ->
     [ tcp_inet_proxy_helpers:block_traffic_between(TargetNode, OtherNode)
       || OtherNode <- Nodes,
          OtherNode =/= TargetNode].
+
+disconnect_random_node(NodeId, Nodes) ->
+    TargetNode = get_random_node(NodeId, Nodes),
+    ct:pal("Disconnected node ~p~n", [TargetNode]),
+    rpc:call(TargetNode, inet_tcp_proxy, reconnect, [Nodes]).
 
 % block_random_partition_inet_tcp_proxy(NodeId, Nodes) ->
 %     Node1 = get_random_node(NodeId, Nodes),
