@@ -20,11 +20,22 @@
 
 -type msg() :: term().
 -type msg_id() :: non_neg_integer().
+%% A customer-scoped monotonically incrementing integer included with a
+%% {@link delivery/0.}. Used to settle deliveris using
+%% {@link ra_fifo_client:settle/3.}
+
+-type id_msg() :: {msg_id(), msg()}.
+%% A tuple consisting of the message id and the message term.
+
 -type customer_tag() :: binary().
--type delivery() :: {delivery, customer_tag(), msg_id(), term()}.
-% the entity that receives messages
-% uniquely identifies a customer
+%% An arbitrary binary tag used to distinguish between different customers
+%% set up by the same process. See: {@link ra_fifo_client:checkout/3.}
+
+-type delivery() :: {delivery, customer_tag(), [id_msg()]}.
+%% Represents the delivery of one or more ra_fifo messages.
+
 -type customer_id() :: {customer_tag(), pid()}.
+%% The entity that receives messages. Uniquely identifies a customer.
 
 -type checkout_spec() :: {once | auto, Num :: non_neg_integer()} | get.
 
@@ -40,6 +51,9 @@
                     CheckedOut :: non_neg_integer(),
                     Settled :: non_neg_integer(),
                     Returned :: non_neg_integer()}.
+
+-type client_msg() :: delivery().
+%% the messages `ra_fifo' can send to customers.
 
 -define(METRICS_TABLE, ra_fifo_metrics).
 -define(SHADOW_COPY_INTERVAL, 128).
@@ -83,6 +97,9 @@
 
 -export_type([protocol/0,
               delivery/0,
+              customer_id/0,
+              customer_tag/0,
+              client_msg/0,
               state/0]).
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
@@ -136,7 +153,7 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
 apply(_RaftIdx, {checkout, get, {Tag, Pid}}, #state{messages = M} = State0)
   when map_size(M) == 0 ->
     %% TODO do we need metric visibility of empty get requests?
-    {State0, [{send_msg, Pid, {delivery, Tag, undefined, empty}}]};
+    {State0, [{send_msg, Pid, {delivery, Tag, [{undefined, empty}]}}]};
 apply(_RaftIdx, {checkout, get, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -281,7 +298,7 @@ checkout_one(#state{messages = Messages0,
                                                  low_index = ra_fifo_index:next_key_after(LowIdx, Indexes),
                                                  messages = Messages,
                                                  customers = Custs},
-                            {State, [{send_msg, CPid, {delivery, CTag, Next, Msg}}]};
+                            {State, [{send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}]};
                         undefined ->
                             % customer did not exist but was queued, recurse
                             checkout_one(State0#state{service_queue = SQ1})
@@ -457,7 +474,7 @@ enq_enq_checkout_get_test() ->
     {_State3, Effects} =
         apply(3, {checkout, get, Cid}, State2),
     ?assertEffect({send_msg, _,
-                   {delivery, <<"enq_enq_checkout_get_test">>, 0, first}},
+                   {delivery, <<"enq_enq_checkout_get_test">>, [{0, first}]}},
                   Effects),
     ok.
 
@@ -468,7 +485,7 @@ checkout_get_empty_test() ->
     {_State2, Effects} =
         apply(1, {checkout, get, Cid}, State),
     ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_get_empty_test">>, undefined, empty}},
+                   {delivery, <<"checkout_get_empty_test">>, [{undefined, empty}]}},
                   Effects),
     ok.
 
@@ -491,7 +508,7 @@ checkout_enq_settle_test() ->
     {State1, [{monitor, _, _}]} = check(Cid, 1, element(1, init(test))),
     {State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_enq_settle_test">>, 0, first}},
+                   {delivery, <<"checkout_enq_settle_test">>, [{0, first}]}},
                   Effects0),
     {State3, []} = enq(3, second, State2),
     {_, _Effects} = settle(Cid, 4, 0, State3),

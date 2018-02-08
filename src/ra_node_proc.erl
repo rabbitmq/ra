@@ -68,23 +68,22 @@
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_node_id()),
                                    correlation()}.
 
--type ra_event() ::
+-type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
     % sent using ra:send_and_notify
-    {ra_event, {applied, ra_node_id(), correlation()}} |
-    {ra_event, {rejected, ra_node_id(), ra_event_reject_detail()}}.
-
--type machine_msg () ::
+    {applied, ra_node_id(), correlation()} |
+    {rejected, ra_node_id(), ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
-    % tagged with the state machine module name
-    {module(), ra_node_id(), term()}.
+    {machine, ra_node_id(), term()}.
+
+-type ra_event() :: {ra_event, ra_event_body()}.
 
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
               safe_call_ret/1,
               ra_event_reject_detail/0,
               ra_event/0,
-              machine_msg/0]).
+              ra_event_body/0]).
 
 -record(state, {node_state :: ra_node:ra_node_state(),
                 name :: atom(),
@@ -503,7 +502,7 @@ handle_effect({next_event, Evt}, EvtType, State, Actions) ->
 handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
-    ok = send_machine_msg(To, Msg, State),
+    ok = send_ra_event(To, Msg, machine, State),
     {State, Actions};
 handle_effect({notify, Who, Correlation}, _EvtType, State, Actions) ->
     ok = send_ra_event(Who, Correlation, applied, State),
@@ -591,16 +590,8 @@ send_ra_event(To, Msg, EvtType, State) ->
     Id = id(State),
     send(To, {ra_event, {EvtType, Id, Msg}}).
 
-send_machine_msg(To, Msg, State) ->
-    Id = id(State),
-    % TODO we could cache this this tuple and only update the last element
-    send(To, {machine(State), Id, Msg}).
-
 id(#state{node_state = NodeState}) ->
     ra_node:id(NodeState).
-
-machine(#state{node_state = NodeState}) ->
-    ra_node:machine(NodeState).
 
 leader_id(#state{node_state = NodeState}) ->
     ra_node:leader_id(NodeState).

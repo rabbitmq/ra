@@ -15,7 +15,7 @@ all() ->
 
 all_tests() ->
     [
-     first,
+     ra_fifo_client_basics,
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
@@ -48,11 +48,11 @@ init_per_testcase(TestCase, Config) ->
      {node_id2, {NodeName2, node()}}
      | Config].
 
-first(Config) ->
+ra_fifo_client_basics(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Cid = {UId, self()},
+    CustomerTag = UId,
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
@@ -61,27 +61,51 @@ first(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
+    FState0 = ra_fifo_client:init([NodeId]),
+    {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 10, FState0),
+    % _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
 
     ra_log_wal:force_roll_over(ra_log_wal),
     % create segment the segment will trigger a snapshot
     timer:sleep(1000),
 
-    _ = ra:send_and_await_consensus(NodeId, {enqueue, one}),
-    receive
-        {ra_fifo, _, {delivery, C, MsgId, _}} ->
-            _ = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
-    after 5000 ->
-              exit(await_msg_timeout)
-    end,
+    {ok, _Seq, FState2} = ra_fifo_client:enqueue(one, FState1),
+    % process ra events
+    FState3 = process_ra_event(FState2, 250),
 
+    FState5 = receive
+                  {ra_event, Evt} ->
+                      case ra_fifo_client:handle_ra_event(Evt, FState3) of
+                          {internal, _AcceptedSeqs, _FState4} ->
+                              exit(unexpected_internal_event);
+                          {{delivery, C, [{MsgId, _Msg}]}, FState4} ->
+                              {ok, _, S} = ra_fifo_client:settle(C, MsgId,
+                                                                 FState4),
+                              S
+                      end
+              after 5000 ->
+                        exit(await_msg_timeout)
+              end,
+
+    % process settle applied notificaiton
+    FState5b = process_ra_event(FState5, 250),
     _ = ra:stop_node(UId),
     _ = ra:restart_node(Conf),
 
-    _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
-    ct:pal("restarted node"),
+    % give time to become leader
+    timer:sleep(500),
+    {ok, _, FState6} = ra_fifo_client:enqueue(two, FState5b),
+    % process applied event
+    FState6b = process_ra_event(FState6, 250),
+    % _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
     receive
-        {ra_fifo, _, {delivery, _, _, two}} -> ok
+        {ra_event, E} ->
+            case ra_fifo_client:handle_ra_event(E, FState6b) of
+                {internal, _, _FState7} ->
+                    ct:pal("unexpected event ~p~n", [E]),
+                    exit({unexpected_internal_event, E});
+                {{delivery, _, [{_, two}]}, _FState7} -> ok
+            end
     after 2000 ->
               exit(await_msg_timeout)
     end,
@@ -218,7 +242,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     receive
-        {ra_fifo, _, {delivery, C, MsgId, _}} ->
+        {ra_event, {machine, _, {delivery, C, [{MsgId, _}]}}} ->
             {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
     after 2000 ->
               exit(ra_fifo_event_timeout)
@@ -230,7 +254,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
 
     %  check message isn't received again
     receive
-        {ra_fifo, _, {delivery, _, _, _}} ->
+        {ra_event, {machine, _, {delivery, _, _}}} ->
             exit(unexpected_ra_fifo_event)
     after 1000 ->
               ok
@@ -245,3 +269,22 @@ conf(UId, NodeId, Dir, Peers) ->
       log_init_args => #{data_dir => Dir, uid => UId},
       initial_nodes => Peers,
       machine => {module, ra_fifo}}.
+
+process_ra_event(State, Wait) ->
+    receive
+        {ra_event, Evt} ->
+            ct:pal("processed ra event ~p~n", [Evt]),
+            {internal, _, S} = ra_fifo_client:handle_ra_event(Evt, State),
+            S
+    after Wait ->
+              exit(ra_event_timeout)
+    end.
+
+process_ra_events(State0, Wait) ->
+    receive
+        {ra_event, Evt} ->
+            {internal, _, State} = ra_fifo_client:handle_ra_event(Evt, State0),
+            process_ra_event(State, Wait)
+    after Wait ->
+              State0
+    end.
