@@ -254,15 +254,56 @@ print_node_metrics(Node) ->
     ct:pal("Node ~p metrics ~p~n", [Node, ct_rpc:call(Node, ets, tab2list, [ra_fifo_metrics])]).
 
 
-
-unblock_inet_tcp_proxy(Nodes) ->
+unblock_iptables(Nodes) ->
     ct:pal("Rejoining all nodes"),
-    [ tcp_inet_proxy_helpers:allow_traffic_between(Node, OtherNode)
-      || OtherNode <- Nodes,
-         Node <- Nodes,
-         OtherNode =/= Node ].
+    iptables_cmd("-F partitions_test").
 
-block_random_partition_inet_tcp_proxy(Partition, Nodes) ->
+block_random_partition_iptables(Partition, Nodes) ->
+    block_random_partition(Partition, Nodes, fun block_traffic_with_iptables/2).
+
+block_traffic_with_iptables(Node1, Node2) ->
+    DestPort1 = tcp_inet_proxy_helpers:get_dist_port(Node1),
+    DestPort2 = tcp_inet_proxy_helpers:get_dist_port(Node2),
+    SourcePort1 = get_outgoing_port(Node1, Node2, DestPort2),
+    SourcePort2 = get_outgoing_port(Node2, Node1, DestPort1),
+    block_ports_iptables(DestPort1, SourcePort2),
+    block_ports_iptables(DestPort2, SourcePort1).
+
+block_ports_iptables(DestPort, SourcePort) ->
+    ensure_iptables_chain(),
+    iptables_cmd("-A partitions_test -p tcp -j DROP"
+                 " --destination-port " ++ integer_to_list(DestPort) ++
+                 " --source-port " ++ integer_to_list(SourcePort)).
+
+ensure_iptables_chain() ->
+    iptables_cmd("-N partitions_test").
+
+iptables_cmd(Cmd) ->
+    ct:pal("Running iptables " ++ Cmd),
+    Res = os:cmd("iptables " ++ Cmd),
+    ct:pal("Iptables result: " ++ Res).
+
+get_outgoing_port(Node1, Node2, DestPort) ->
+    rpc:call(Node1, jepsen_like_partitions_SUITE, get_outgoing_port, [Node2, DestPort]).
+
+get_outgoing_port(Node, DestPort) ->
+    %% Ensure there is a connection.
+    rpc:call(Node, erlang, self, []),
+    DistributionSocket = lists:filter(fun(Port) ->
+        case erlang:port_info(Port, name) of
+            {name, "tcp_inet"} ->
+                case inet:peername(Port) of
+                    {ok, {_PH, DestPort}} -> true;
+                    _ -> false
+                end;
+            _ -> false
+        end
+    end,
+    erlang:ports()),
+    {ok, Port} = inet:port(DistributionSocket),
+    Port.
+
+block_random_partition(Partition, Nodes, PartitionFun) ->
     Partition1 = case Partition of
         PartitionSize when is_integer(PartitionSize) ->
             lists:foldl(fun(_, SelectedNodes) ->
@@ -279,13 +320,23 @@ block_random_partition_inet_tcp_proxy(Partition, Nodes) ->
            [Partition1]),
 
     Partition2 = Nodes -- Partition1,
-
     lists:foreach(
         fun(Node) ->
-            [ tcp_inet_proxy_helpers:block_traffic_between(Node, OtherNode)
+            [ PartitionFun(Node, OtherNode)
               || OtherNode <- Partition2 ]
         end,
         Partition1).
+
+unblock_inet_tcp_proxy(Nodes) ->
+    ct:pal("Rejoining all nodes"),
+    [ tcp_inet_proxy_helpers:allow_traffic_between(Node, OtherNode)
+      || OtherNode <- Nodes,
+         Node <- Nodes,
+         OtherNode =/= Node ].
+
+block_random_partition_inet_tcp_proxy(Partition, Nodes) ->
+    block_random_partition(Partition, Nodes,
+                           fun tcp_inet_proxy_helpers:block_traffic_between/2).
 
 get_random_node(Nodes) ->
     lists:nth(rand:uniform(length(Nodes)), Nodes).
