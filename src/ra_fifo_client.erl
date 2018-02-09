@@ -10,6 +10,7 @@
          enqueue/2,
          dequeue/3,
          settle/3,
+         return/3,
          handle_ra_event/2
          ]).
 
@@ -83,26 +84,60 @@ dequeue(CustomerTag, Settlement, State0) ->
 
 %% @doc Settle a message. Permanently removes message from the queue.
 %% @param CustomerTag the tag uniquely identifying the customer.
-%% @param MsgId the message id received with the {@link ra_fifo:delivery/0.}
+%% @param MsgIds the message ids received with the {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, SequenceNumber, State}' if the command was successfully sent.
+%% `{ok, SequenceNumbers, State}' if the command was successfully sent.
 %% {@module} assigns a sequence number to every raft command it issues. The
-%% SequenceNumber can be correlated to the applied sequence numbers returned
+%% SequenceNumbers can be correlated to the applied sequence numbers returned
 %% by the {@link handle_ra_event/2. handle_ra_event/2} function.
 %%
-%% `{error, stop_sending}' if the number of message not yet known to
+%% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
--spec settle(ra_fifo:customer_tag(), non_neg_integer(), state()) ->
-    {ok, Seq :: non_neg_integer(), state()} | {error, stop_sending}.
-settle(CustomerTag, MsgId, State0) ->
+-spec settle(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
+    {ok, MsgIds :: [non_neg_integer()], state()} | {error, stop_sending}.
+settle(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
-    {Seq, State} = next_seq(State0),
-    ok = ra:send_and_notify(Node, {settle, MsgId, CustomerTag}, Seq),
-    {ok, Seq, State}.
+    % TODO: make ra_fifo settle support lists of message ids
+    {Seqs, State} = lists:foldl(
+                     fun (MsgId, {Seqs, S0}) ->
+                             {Seq, S} = next_seq(S0),
+                             ok = ra:send_and_notify(
+                                    Node, {settle, MsgId, CustomerTag}, Seq),
+                             {[Seq | Seqs], S}
+                     end, {[], State0}, MsgIds),
+    {ok, lists:reverse(Seqs), State}.
 
+%% @doc Return a message to the queue.
+%% @param CustomerTag the tag uniquely identifying the customer.
+%% @param MsgIds the message ids to return received
+%% from {@link ra_fifo:delivery/0.}
+%% @param State the {@module} state
+%% @returns
+%% `{ok, SequenceNumbers, State}' if the command was successfully sent.
+%% {@module} assigns a sequence number to every raft command it issues. The
+%% SequenceNumbers can be correlated to the applied sequence numbers returned
+%% by the {@link handle_ra_event/2. handle_ra_event/2} function.
+%%
+%% `{error, stop_sending}' if the number of commands not yet known to
+%% have been successfully applied by ra has reached the maximum limit.
+%% If this happens the caller should either discard or cache the requested
+%% enqueue until at least one <code>ra_event</code> has been processes.
+-spec return(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
+    {ok, MsgIds :: [non_neg_integer()], state()} | {error, stop_sending}.
+return(CustomerTag, [_|_] = MsgIds, State0) ->
+    Node = pick_node(State0),
+    % TODO: make ra_fifo settle support lists of message ids
+    {Seqs, State} = lists:foldl(
+                     fun (MsgId, {Seqs, S0}) ->
+                             {Seq, S} = next_seq(S0),
+                             ok = ra:send_and_notify(
+                                    Node, {return, MsgId, CustomerTag}, Seq),
+                             {[Seq | Seqs], S}
+                     end, {[], State0}, MsgIds),
+    {ok, lists:reverse(Seqs), State}.
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
 %%

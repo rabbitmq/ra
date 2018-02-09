@@ -81,7 +81,7 @@ ra_fifo_client_basics(Config) ->
                           {internal, _AcceptedSeqs, _FState4} ->
                               exit(unexpected_internal_event);
                           {{delivery, C, [{MsgId, _Msg}]}, FState4} ->
-                              {ok, _, S} = ra_fifo_client:settle(C, MsgId,
+                              {ok, _, S} = ra_fifo_client:settle(C, [MsgId],
                                                                  FState4),
                               S
                       end
@@ -106,7 +106,10 @@ ra_fifo_client_basics(Config) ->
                 {internal, _, _FState7} ->
                     ct:pal("unexpected event ~p~n", [E]),
                     exit({unexpected_internal_event, E});
-                {{delivery, _, [{_, {_, two}}]}, _FState7} -> ok
+                {{delivery, Ctag, [{Mid, {_, two}}]}, FState7} ->
+                    {ok, _, _S} = ra_fifo_client:return(Ctag, [Mid],
+                                                        FState7),
+                    ok
             end
     after 2000 ->
               exit(await_msg_timeout)
@@ -308,7 +311,7 @@ ra_fifo_client_dequeue(Config) ->
     {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
     {ok, 1, F4} = ra_fifo_client:enqueue(msg2, F3),
     {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
-    {ok, _, F6} = ra_fifo_client:settle(Tag, MsgId, F5),
+    {ok, _, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
     ct:pal("F6 ~p~n", [F6]),
     ok.
 

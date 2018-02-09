@@ -112,6 +112,7 @@
               customer_tag/0,
               client_msg/0,
               msg/0,
+              msg_id/0,
               delivery_msg/0,
               state/0]).
 
