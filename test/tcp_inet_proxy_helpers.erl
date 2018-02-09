@@ -6,7 +6,7 @@
          disconnect_from_other_nodes/1,
          block_traffic_between/2,
          allow_traffic_between/2]).
--export([get_dist_port/0]).
+-export([get_dist_port/0, get_dist_port/1]).
 -export([wait_for_blocked/3]).
 enable_dist_proxy_manager(Config) ->
     inet_tcp_proxy_manager:start(),
@@ -48,7 +48,10 @@ disconnect_from_other_nodes(Nodes) ->
     ok = inet_tcp_proxy:reconnect(Nodes).
 
 get_dist_port() ->
-    [Self | _] = string:split(atom_to_list(node()), "@"),
+    get_dist_port(node()).
+
+get_dist_port(Node) ->
+    [Self | _] = string:split(atom_to_list(Node), "@"),
     {ok, Names} = net_adm:names(),
     proplists:get_value(Self, Names).
 

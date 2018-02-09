@@ -3,7 +3,11 @@
 
 -include_lib("common_test/include/ct.hrl").
 
-all() -> [publish_ack_inet_tcp_proxy, publish_ack_iptables].
+all() -> [
+ publish_ack_inet_tcp_proxy
+ ,
+ publish_ack_iptables
+].
 
 init_per_testcase(TestCase, Config0) ->
     error_logger:tty(false),
@@ -12,8 +16,8 @@ init_per_testcase(TestCase, Config0) ->
         publish_ack_inet_tcp_proxy -> inet_tcp_proxy;
         publish_ack_iptables -> iptables
     end,
-    Nemesis = spawn_nemesis(Nodes, 2, {random, 10000}, {random, 10000, 20000}, NemesisType),
-    Config1 = [{nodes, Nodes}, {name, publish_ack}, {nemesis, Nemesis} | Config0 ],
+    Nemesis = spawn_nemesis(Nodes, 2, 5000, 10000, NemesisType),
+    Config1 = [{nodes, Nodes}, {name, publish_ack}, {nemesis, Nemesis}, {nemesis_type, NemesisType} | Config0 ],
     Config2 = prepare_erlang_cluster(Config1),
     NodeId = setup_ra_cluster(Config2),
     %% Make sure nodes are synchronised
@@ -50,7 +54,7 @@ publish_ack(Config) ->
     start_delayed(Consumer),
 
     start_delayed(Nemesis),
-% timer:sleep(10000000),
+ %timer:sleep(10000000),
     wait_for_publisher_and_consumer(Publisher, Consumer, false, false).
 
 wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
@@ -207,7 +211,9 @@ spawn_delayed(Fun, State) ->
     spawn_delayed(node(), Fun, State).
 
 wait(Time) when is_integer(Time); Time == infinity ->
-    timer:sleep(Time);
+    ct:pal("Waiting for ~p~n", [Time]),
+    timer:sleep(Time),
+    ct:pal("Finished waiting for ~p~n", [Time]);
 wait({random, UpTo}) when is_integer(UpTo) ->
     Time = rand:uniform(UpTo),
     timer:sleep(Time);
@@ -217,9 +223,15 @@ wait({random, From, UpTo}) when is_integer(From), is_integer(UpTo), UpTo =/= Fro
 
 prepare_erlang_cluster(Config) ->
     Nodes = ?config(nodes, Config),
-    Config0 = tcp_inet_proxy_helpers:enable_dist_proxy_manager(Config),
-    erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
-    tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0).
+    case ?config(nemesis_type, Config) of
+        inet_tcp_proxy ->
+            Config0 = tcp_inet_proxy_helpers:enable_dist_proxy_manager(Config),
+            erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
+            tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0);
+        iptables ->
+            erlang_node_helpers:start_erlang_nodes(Nodes, Config),
+            Config
+    end.
 
 setup_ra_cluster(Config) ->
     Nodes = ?config(nodes, Config),
@@ -272,32 +284,41 @@ print_node_metrics(Node) ->
 
 unblock_iptables(Nodes) ->
     ct:pal("Rejoining all nodes"),
-    iptables_cmd("-F partitions_test").
+    iptables_cmd("-D INPUT -j partitions_test"),
+    iptables_cmd("-F partitions_test"),
+    iptables_cmd("-X partitions_test").
 
 block_random_partition_iptables(Partition, Nodes) ->
+    ensure_iptables_chain(),
     block_random_partition(Partition, Nodes, fun block_traffic_with_iptables/2).
 
 block_traffic_with_iptables(Node1, Node2) ->
-    DestPort1 = rpc:call(Node1, tcp_inet_proxy_helpers, get_dist_port, []),
-    DestPort2 = rpc:call(Node2, tcp_inet_proxy_helpers, get_dist_port, []),
+    DestPort1 = tcp_inet_proxy_helpers:get_dist_port(Node1),
+    DestPort2 = tcp_inet_proxy_helpers:get_dist_port(Node2),
     SourcePort1 = get_outgoing_port(Node1, Node2, DestPort2),
     SourcePort2 = get_outgoing_port(Node2, Node1, DestPort1),
 ct:pal(" DestPort1 ~p~n DestPort2 ~p~n SourcePort1 ~p~n SourcePort2 ~p~n", [DestPort1, DestPort2, SourcePort1, SourcePort2]),
-
-    block_ports_iptables(DestPort1, SourcePort2),
-    block_ports_iptables(DestPort2, SourcePort1),
+    case SourcePort1 of
+        undefined -> ok;
+        _ ->
+            block_ports_iptables(DestPort2, SourcePort1)
+    end,
+    case SourcePort2 of
+        undefined -> ok;
+        _ ->
+            block_ports_iptables(DestPort1, SourcePort2)
+    end,
 % timer:sleep(10000000),
     tcp_inet_proxy_helpers:wait_for_blocked(Node1, Node2, 100).
 
 block_ports_iptables(DestPort, SourcePort) ->
-    ensure_iptables_chain(),
+ct:pal("Cutting port ~p and ~p~n", [DestPort, SourcePort]),
     iptables_cmd("-A partitions_test -p tcp -j DROP"
                  " --destination-port " ++ integer_to_list(DestPort) ++
                  " --source-port " ++ integer_to_list(SourcePort)),
     iptables_cmd("-A partitions_test -p tcp -j DROP"
                  " --destination-port " ++ integer_to_list(SourcePort) ++
                  " --source-port " ++ integer_to_list(DestPort)).
-
 
 ensure_iptables_chain() ->
     iptables_cmd("-N partitions_test"),
@@ -309,12 +330,15 @@ iptables_cmd(Cmd) ->
     ct:pal("Iptables result: " ++ Res).
 
 get_outgoing_port(Node1, Node2, DestPort) ->
+    rpc:call(Node1, rpc, call, [Node2, erlang, self, []]),
+    rpc:call(Node2, rpc, call, [Node1, erlang, self, []]),
+
     rpc:call(Node1, jepsen_like_partitions_SUITE, get_outgoing_port, [Node2, DestPort]).
 
-get_outgoing_port(Node, _DestPort) ->
+get_outgoing_port(Node, DestPort) ->
     %% Ensure there is a connection.
-    DistPort = rpc:call(Node, tcp_inet_proxy_helpers, get_dist_port, []),
-    [DistributionSocket | _] = lists:filter(fun(Port) ->
+    DestPort = rpc:call(Node, tcp_inet_proxy_helpers, get_dist_port, []),
+    DistributionSockets = lists:filter(fun(Port) ->
         case erlang:port_info(Port, name) of
             {name, "tcp_inet"} ->
                 case inet:peername(Port) of
@@ -325,8 +349,12 @@ get_outgoing_port(Node, _DestPort) ->
         end
     end,
     erlang:ports()),
-    {ok, Port} = inet:port(DistributionSocket),
-    Port.
+    case DistributionSockets of
+        [DistributionSocket|_] ->
+            {ok, Port} = inet:port(DistributionSocket),
+            Port;
+        [] -> undefined
+    end.
 
 block_random_partition(Partition, Nodes, PartitionFun) ->
     Partition1 = case Partition of
