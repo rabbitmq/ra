@@ -3,12 +3,16 @@
 
 -include_lib("common_test/include/ct.hrl").
 
-all() -> [publish_ack].
+all() -> [publish_ack_inet_tcp_proxy, publish_ack_iptables].
 
-init_per_testcase(_, Config0) ->
+init_per_testcase(TestCase, Config0) ->
     error_logger:tty(false),
     Nodes = erlang_nodes(5),
-    Nemesis = spawn_nemesis(Nodes, 2, {random, 10000}, {random, 10000, 20000}),
+    NemesisType = case TestCase of
+        publish_ack_inet_tcp_proxy -> inet_tcp_proxy;
+        publish_ack_iptables -> iptables
+    end,
+    Nemesis = spawn_nemesis(Nodes, 2, {random, 10000}, {random, 10000, 20000}, NemesisType),
     Config1 = [{nodes, Nodes}, {name, publish_ack}, {nemesis, Nemesis} | Config0 ],
     Config2 = prepare_erlang_cluster(Config1),
     NodeId = setup_ra_cluster(Config2),
@@ -28,6 +32,10 @@ end_per_testcase(_, Config) ->
     Dir = data_dir(),
     os:cmd("rm -rf " ++ Dir).
 
+publish_ack_inet_tcp_proxy(Config) -> publish_ack(Config).
+
+publish_ack_iptables(Config) -> publish_ack(Config).
+
 publish_ack(Config) ->
     NodeId = ?config(node_id, Config),
     Nodes = ?config(nodes, Config),
@@ -35,14 +43,14 @@ publish_ack(Config) ->
     PublisherNode = get_random_node(Nodes),
     ConsumerNode = get_random_node(Nodes),
 
-    Publisher = spawn_publisher(PublisherNode, NodeId, 100000, self()),
-    Consumer = spawn_consumer(ConsumerNode, NodeId, 100000, self()),
+    Publisher = spawn_publisher(PublisherNode, NodeId, 1000, self()),
+    Consumer = spawn_consumer(ConsumerNode, NodeId, 1000, self()),
     Nemesis = ?config(nemesis, Config),
     start_delayed(Publisher),
     start_delayed(Consumer),
 
     start_delayed(Nemesis),
-timer:sleep(10000000),
+% timer:sleep(10000000),
     wait_for_publisher_and_consumer(Publisher, Consumer, false, false).
 
 wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
@@ -94,6 +102,7 @@ spawn_consumer(Node, NodeId, MessageCount, Pid) ->
                         ct:pal("Duplicate delivery ~p~n", [N]),
                         {ack, N, Duplicates}
                 end,
+                timer:sleep(100),
                 %% Assuming client id does not change.
                 Cid = client_id(),
                 ok = ra:send_and_notify(NewLeader, {settle, MsgId, Cid}, Ref),
@@ -126,6 +135,7 @@ spawn_publisher(Node, NodeId, MessageCount, Pid) ->
             {Sent1, N1, Wait} = case N-1 of
                 MessageCount -> {Sent, N, 1000};
                 _            ->
+                    timer:sleep(100),
                     ok = ra:send_and_notify(Leader, {enqueue, N}, N),
                     {[N | Sent], N+1, 0}
             end,
@@ -162,13 +172,19 @@ spawn_publisher(Node, NodeId, MessageCount, Pid) ->
                      | {random, From :: integer(), UpTo :: integer()}.
 
 -type partition_spec() :: (Size :: integer()) | (Nodes :: [node()]).
--spec spawn_nemesis([node()], partition_spec(), wait_time(), wait_time()) -> pid().
-spawn_nemesis(Nodes, Partition, TimeForPartition, TimeForHeal) ->
+-spec spawn_nemesis([node()], partition_spec(), wait_time(), wait_time(), inet_tcp_proxy | iptables) -> pid().
+spawn_nemesis(Nodes, Partition, TimeForPartition, TimeForHeal, NemesisType) ->
+    {UnblockFun, BlockFun} = case NemesisType of
+        inet_tcp_proxy ->
+            {fun unblock_inet_tcp_proxy/1 ,fun block_random_partition_inet_tcp_proxy/2};
+        iptables ->
+            {fun unblock_iptables/1, fun block_random_partition_iptables/2}
+    end,
     spawn_delayed(
         fun Nemesis(ok) ->
-            unblock_iptables(Nodes),
+            UnblockFun(Nodes),
             wait(TimeForHeal),
-            block_random_partition_iptables(Partition, Nodes),
+            BlockFun(Partition, Nodes),
             wait(TimeForPartition),
             Nemesis(ok)
         end,
@@ -270,7 +286,7 @@ ct:pal(" DestPort1 ~p~n DestPort2 ~p~n SourcePort1 ~p~n SourcePort2 ~p~n", [Dest
 
     block_ports_iptables(DestPort1, SourcePort2),
     block_ports_iptables(DestPort2, SourcePort1),
-timer:sleep(10000000),
+% timer:sleep(10000000),
     tcp_inet_proxy_helpers:wait_for_blocked(Node1, Node2, 100).
 
 block_ports_iptables(DestPort, SourcePort) ->
