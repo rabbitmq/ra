@@ -1021,9 +1021,16 @@ apply_to(_ApplyTo, State) ->
 apply_with(_Id, Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},
            {State, MacSt, Effects0}) ->
-    {NextMacSt, Efx} = ra_machine:apply(Machine, Idx, Cmd, MacSt),
-    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-    {State, NextMacSt, Effects ++ Efx};
+    case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
+        {NextMacSt, Efx} ->
+            % apply returned no reply so use IdxTerm as reply value
+            Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+            {State, NextMacSt, Effects ++ Efx};
+        {NextMacSt, Efx, Reply} ->
+            % apply returned a return value
+            Effects = add_reply(From, Reply, ReplyType, Effects0),
+            {State, NextMacSt, Effects ++ Efx}
+    end;
 apply_with(_Id, _Machine,
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
            {State, MacSt, Effects0}) ->

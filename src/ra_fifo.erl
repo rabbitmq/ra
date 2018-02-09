@@ -18,18 +18,40 @@
          profile/1
         ]).
 
--type msg() :: term().
--type msg_id() :: non_neg_integer().
--type customer_tag() :: binary().
--type delivery() :: {delivery, customer_tag(), msg_id(), term()}.
-% the entity that receives messages
-% uniquely identifies a customer
--type customer_id() :: {customer_tag(), pid()}.
+-type raw_msg() :: term().
+%% The raw message. It is opaque to ra_fifo.
 
--type checkout_spec() :: {once | auto, Num :: non_neg_integer()} | get.
+-type msg_id() :: non_neg_integer().
+%% A customer-scoped monotonically incrementing integer included with a
+%% {@link delivery/0.}. Used to settle deliveris using
+%% {@link ra_fifo_client:settle/3.}
+
+-type msg_header() :: #{delivery_count => non_neg_integer()}.
+%% The message header map:
+%% delivery_count: the number of unsuccessful delivery attempts.
+%%                 A non-zero value indicates a previous attempt.
+
+-type msg() :: {msg_header(), raw_msg()}.
+%% message with a header map.
+
+-type delivery_msg() :: {msg_id(), msg()}.
+%% A tuple consisting of the message id and the headered message.
+
+-type customer_tag() :: binary().
+%% An arbitrary binary tag used to distinguish between different customers
+%% set up by the same process. See: {@link ra_fifo_client:checkout/3.}
+
+-type delivery() :: {delivery, customer_tag(), [delivery_msg()]}.
+%% Represents the delivery of one or more ra_fifo messages.
+
+-type customer_id() :: {customer_tag(), pid()}.
+%% The entity that receives messages. Uniquely identifies a customer.
+
+-type checkout_spec() :: {once | auto, Num :: non_neg_integer()} |
+                         {get, settled | unsettled}.
 
 -type protocol() ::
-    {enqueue, Msg :: msg()} |
+    {enqueue, Msg :: raw_msg()} |
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgId :: msg_id(), Customer :: customer_id()} |
     {return, MsgId :: msg_id(), Customer :: customer_id()}.
@@ -40,6 +62,9 @@
                     CheckedOut :: non_neg_integer(),
                     Settled :: non_neg_integer(),
                     Returned :: non_neg_integer()}.
+
+-type client_msg() :: delivery().
+%% the messages `ra_fifo' can send to customers.
 
 -define(METRICS_TABLE, ra_fifo_metrics).
 -define(SHADOW_COPY_INTERVAL, 128).
@@ -83,6 +108,12 @@
 
 -export_type([protocol/0,
               delivery/0,
+              customer_id/0,
+              customer_tag/0,
+              client_msg/0,
+              msg/0,
+              msg_id/0,
+              delivery_msg/0,
               state/0]).
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
@@ -102,10 +133,11 @@ incr_enqueue_count(#state{enqueue_count = C} = State) ->
 % ra_indexes holds all raft indexes for enqueues currently on queue
 -spec apply(ra_index(), command(), state()) ->
     {state(), ra_machine:effects()}.
-apply(RaftIdx, {enqueue, Msg}, #state{ra_indexes = Indexes0,
+apply(RaftIdx, {enqueue, RawMsg}, #state{ra_indexes = Indexes0,
                                       messages = Messages,
                                       first_enqueue_raft_index = FirstEnqueueIdx,
                                       low_index = Low} = State00) ->
+    Msg = {#{}, RawMsg}, % msg with header map
     {State0, Shadow} = incr_enqueue_count(State00),
     Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
     State1 = State0#state{ra_indexes = Indexes,
@@ -133,20 +165,47 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
         _ ->
             {State, []}
     end;
-apply(_RaftIdx, {checkout, get, {Tag, Pid}}, #state{messages = M} = State0)
-  when map_size(M) == 0 ->
+apply(_RaftIdx, {checkout, {get, _}, {_Tag, _Pid}},
+      #state{messages = M} = State0) when map_size(M) == 0 ->
     %% TODO do we need metric visibility of empty get requests?
-    {State0, [{send_msg, Pid, {delivery, Tag, undefined, empty}}]};
-apply(_RaftIdx, {checkout, get, {_Tag, Pid} = Customer}, State0) ->
+    {State0, [], {get, empty}};
+apply(RaftIdx, {checkout, {get, settled}, CustomerId}, State0) ->
+    % TODO: this clause could probably be optimised
+    State1 = update_customer(CustomerId, {once, 1}, State0),
+    % turn send msg effect into reply
+    {State2, [{send_msg, _, {_, _, [{MsgId, _} = M]}}]} = checkout_one(State1),
+    State3 = incr_metrics(State2, {0, 1, 0, 0}),
+    % immediately settle
+    {State, Effects} = apply(RaftIdx, {settle, MsgId, CustomerId}, State3),
+    {State, Effects, {get, M}};
+apply(_RaftIdx, {checkout, {get, unsettled}, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
-    {State2, Effects, Num} = checkout(State1, []),
-    State = incr_metrics(State2, {0, Num, 0, 0}),
-    {State, [{monitor, process, Pid} | Effects]};
+    {State2, [{send_msg, _, {_, _, [M]}}]} = checkout_one(State1),
+    State = incr_metrics(State2, {0, 1, 0, 0}),
+    {State, [{monitor, process, Pid}], {get, M}};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
     State = incr_metrics(State2, {0, Num, 0, 0}),
     {State, [{monitor, process, Pid} | Effects]};
+apply(_RaftId, {return, MsgId, CustomerId},
+      #state{customers = Custs0} = State) ->
+    case Custs0 of
+        #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
+            case maps:take(MsgId, Checked0) of
+                error ->
+                    % null operation
+                    % we must be recovering after a snapshot
+                    % in this case it should not have any effect on the final
+                    % state
+                    {State, []};
+                {{MsgRaftIdx, Msg}, Checked} ->
+                    return(CustomerId, MsgRaftIdx, Msg,
+                           Cust0, Checked, State)
+            end;
+        _ ->
+            {State, []}
+    end;
 apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
     % return checked out messages to main queue
     % Find the customers for the down pid
@@ -160,7 +219,7 @@ apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
                       case maps:take(CustomerId, Custs0) of
                           {#customer{checked_out = Checked0}, Custs} ->
                               S1 = maps:fold(fun (_MsgId, {RaftId, Msg}, S) ->
-                                                     return(RaftId, Msg, S)
+                                                     return_one(RaftId, Msg, S)
                                              end, S0, Checked0),
                               S = incr_metrics(S1, {0, 0, 0,
                                                     maps:size(Checked0)}),
@@ -171,6 +230,8 @@ apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
                       end
               end, State0, DownCustomers),
     {State, []}.
+
+
 
 -spec leader_effects(state()) -> ra_machine:effects().
 leader_effects(#state{customers = Custs}) ->
@@ -192,6 +253,19 @@ overview(#state{customers = Custs,
 
 incr_metrics(#state{metrics = {N, E0, C0, S0, R0}} = State, {E, C, S, R}) ->
     State#state{metrics = {N, E0 + E, C0 + C, S0 + S, R0 + R}}.
+
+return(CustomerId, MsgRaftIdx, Msg, Cust0, Checked,
+       #state{customers = Custs0, service_queue = SQ0} = State0) ->
+    Cust = Cust0#customer{checked_out = Checked,
+                          seen = Cust0#customer.seen - 1},
+    {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
+    State1 = return_one(MsgRaftIdx, Msg, State0),
+    {State2, Effects, NumChecked} =
+        checkout(State1#state{customers = Custs,
+                              service_queue = SQ},
+                 Effects0),
+    State = incr_metrics(State2, {0, NumChecked, 0, 1}),
+    {State, Effects}.
 
 settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0,
@@ -238,12 +312,14 @@ update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
             {State, Effects}
     end.
 
-return(RaftId, Msg, #state{messages = Messages,
-                           % ra_indexes = Indexes,
-                           low_index = Low0} = State0) ->
+return_one(RaftId, {Header0, RawMsg}, #state{messages = Messages,
+                               low_index = Low0} = State0) ->
+
+    Header = maps:update_with(delivery_count,
+                              fun (C) -> C+1 end,
+                              1, Header0),
     % this should not affect the release cursor in any way
-    State0#state{messages = maps:put(RaftId, Msg, Messages),
-                 % ra_indexes = ra_fifo_index:enter(RaftId,  Indexes),
+    State0#state{messages = maps:put(RaftId, {Header, RawMsg}, Messages),
                  low_index = min(RaftId, Low0)}.
 
 
@@ -281,7 +357,7 @@ checkout_one(#state{messages = Messages0,
                                                  low_index = ra_fifo_index:next_key_after(LowIdx, Indexes),
                                                  messages = Messages,
                                                  customers = Custs},
-                            {State, [{send_msg, CPid, {delivery, CTag, Next, Msg}}]};
+                            {State, [{send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}]};
                         undefined ->
                             % customer did not exist but was queued, recurse
                             checkout_one(State0#state{service_queue = SQ1})
@@ -439,14 +515,13 @@ ensure_ets() ->
     end.
 
 enq_enq_checkout_test() ->
-    ensure_ets(),
     Cid = {<<"enq_enq_checkout_test">>, self()},
     {State1, _} = enq(1, first, element(1, init(test))),
     {State2, _} = enq(2, second, State1),
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, Cid}, State2),
-    ?debugFmt("Effects ~p~n", [Effects]),
     ?assertEffect({monitor, _, _}, Effects),
+    ?assertEffect({send_msg, _, {delivery, _, _}}, Effects),
     ok.
 
 enq_enq_checkout_get_test() ->
@@ -454,22 +529,27 @@ enq_enq_checkout_get_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
     {State1, _} = enq(1, first, element(1, init(test))),
     {State2, _} = enq(2, second, State1),
-    {_State3, Effects} =
-        apply(3, {checkout, get, Cid}, State2),
-    ?assertEffect({send_msg, _,
-                   {delivery, <<"enq_enq_checkout_get_test">>, 0, first}},
-                  Effects),
+    % get returns a reply value
+    {_State3, [{monitor, _, _}], {get, {0, {_, first}}}} =
+        apply(3, {checkout, {get, unsettled}, Cid}, State2),
+    ok.
+
+enq_enq_checkout_get_settled_test() ->
+    ensure_ets(),
+    Cid = {<<"enq_enq_checkout_get_test">>, self()},
+    {State1, _} = enq(1, first, element(1, init(test))),
+    % get returns a reply value
+    {State2, Effects, {get, {0, {_, first}}}} =
+        apply(3, {checkout, {get, settled}, Cid}, State1),
+    ?debugFmt("State3 post settled get ~p~nEffects~p~n", [State2, Effects]),
     ok.
 
 checkout_get_empty_test() ->
     ensure_ets(),
     Cid = {<<"checkout_get_empty_test">>, self()},
     State = element(1, init(test)),
-    {_State2, Effects} =
-        apply(1, {checkout, get, Cid}, State),
-    ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_get_empty_test">>, undefined, empty}},
-                  Effects),
+    {_State2, [], {get, empty}} =
+        apply(1, {checkout, {get, unsettled}, Cid}, State),
     ok.
 
 release_cursor_test() ->
@@ -491,13 +571,45 @@ checkout_enq_settle_test() ->
     {State1, [{monitor, _, _}]} = check(Cid, 1, element(1, init(test))),
     {State2, Effects0} = enq(2, first, State1),
     ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_enq_settle_test">>, 0, first}},
+                   {delivery, <<"checkout_enq_settle_test">>,
+                    [{0, {_, first}}]}},
                   Effects0),
     {State3, []} = enq(3, second, State2),
     {_, _Effects} = settle(Cid, 4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
     % ?assertEffect({release_cursor, 2, _}, Effects),
+    ok.
+
+return_non_existent_test() ->
+    Cid = {<<"cid">>, self()},
+    {State0, []} = enq(1, second, element(1, init(test))),
+    % return non-existent
+    {_State2, []} = apply(3, {return, 99, Cid}, State0),
+    ok.
+
+return_checked_out_test() ->
+    Cid = {<<"cid">>, self()},
+    {State0, []} = enq(1, first, element(1, init(test))),
+    {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
+        check(Cid, 2, State0),
+    % return
+    {_State2, [_]} = apply(3, {return, MsgId, Cid}, State1),
+    % {_, _, {get, {0, first}}} = deq(Cid, 4, State2),
+    ok.
+
+return_auto_checked_out_test() ->
+    Cid = {<<"cid">>, self()},
+    {State00, []} = enq(1, first, element(1, init(test))),
+    {State0, []} = enq(2, second, State00),
+    {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
+        check_auto(Cid, 2, State0),
+    % return should include another delivery
+    {_State2, Effects} = apply(3, {return, MsgId, Cid}, State1),
+    ?debugFmt("Effects ~p~n", [Effects]),
+    ?assertEffect({send_msg, _,
+                   {delivery, _, [{_, {#{delivery_count := 1}, first}}]}},
+                  Effects),
     ok.
 
 down_customer_returns_unsettled_test() ->
@@ -577,8 +689,14 @@ performance_test() ->
 enq(Idx, Msg, State) ->
     apply(Idx, {enqueue, Msg}, State).
 
+% deq(Cid, Idx, State) ->
+%     apply(Idx, {checkout, {get, settled}, Cid}, State).
+
 check(Cid, Idx, State) ->
     apply(Idx, {checkout, {once, 1}, Cid}, State).
+
+check_auto(Cid, Idx, State) ->
+    apply(Idx, {checkout, {auto, 1}, Cid}, State).
 
 check(Cid, Idx, Num, State) ->
     apply(Idx, {checkout, {once, Num}, Cid}, State).
