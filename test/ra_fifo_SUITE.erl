@@ -106,7 +106,7 @@ ra_fifo_client_basics(Config) ->
                 {internal, _, _FState7} ->
                     ct:pal("unexpected event ~p~n", [E]),
                     exit({unexpected_internal_event, E});
-                {{delivery, _, [{_, two}]}, _FState7} -> ok
+                {{delivery, _, [{_, {_, two}}]}, _FState7} -> ok
             end
     after 2000 ->
               exit(await_msg_timeout)
@@ -281,10 +281,10 @@ checkout_get_returns_value(Config) ->
     {ok, {get, empty}, NodeId} = ra:send_and_await_consensus(
                                    NodeId, {checkout, {get, settled}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
-    {ok, {get, {0, msg1}}, NodeId} = ra:send_and_await_consensus(
+    {ok, {get, {0, {_, msg1}}}, NodeId} = ra:send_and_await_consensus(
                                        NodeId, {checkout, {get, settled}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),
-    {ok, {get, {0, msg2}}, NodeId} = ra:send_and_await_consensus(
+    {ok, {get, {0, {_, msg2}}}, NodeId} = ra:send_and_await_consensus(
                                        NodeId, {checkout, {get, unsettled}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, 0, CId}),
     ok.
@@ -305,9 +305,9 @@ ra_fifo_client_dequeue(Config) ->
     F1 = ra_fifo_client:init([NodeId]),
     {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
     {ok, 0, F2} = ra_fifo_client:enqueue(msg1, F1b),
-    {ok, {0, msg1}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
+    {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
     {ok, 1, F4} = ra_fifo_client:enqueue(msg2, F3),
-    {ok, {MsgId, msg2}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
+    {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
     {ok, _, F6} = ra_fifo_client:settle(Tag, MsgId, F5),
     ct:pal("F6 ~p~n", [F6]),
     ok.

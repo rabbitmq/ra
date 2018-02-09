@@ -69,7 +69,7 @@ enqueue(Msg, State0) ->
 %% @returns `{ok, IdMsg, State}' or `{error | timeout, term()}'
 -spec dequeue(ra_fifo:customer_tag(),
               Settlement :: settled | unsettled, state()) ->
-    {ok, ra_fifo:id_msg() | empty, state()} | {error | timeout, term()}.
+    {ok, ra_fifo:delivery_msg() | empty, state()} | {error | timeout, term()}.
 dequeue(CustomerTag, Settlement, State0) ->
     Node = pick_node(State0),
     CustomerId = {CustomerTag, self()},
@@ -144,8 +144,8 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %%     {ra_event, Evt} ->
 %%         case ra_fifo_client:handle_ra_event(Evt, State0) of
 %%             {internal, _Seq, State} -> State;
-%%             {{delivery, _CustomerTag, IdMsgs}, State} ->
-%%                  handle_messages(IdMsgs),
+%%             {{delivery, _CustomerTag, Msgs}, State} ->
+%%                  handle_messages(Msgs),
 %%                  ...
 %%         end
 %%  end
@@ -164,7 +164,7 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %%
 %% The type of `ra_fifo' client messages that can be received are:
 %%
-%% `{delivery, CustomerTag, [{MsgId, Msg}]}'
+%% `{delivery, CustomerTag, [{MsgId, {MsgHeader, Msg}}]}'
 %%
 %% <li>`CustomerTag' the binary tag passed to {@link checkout/3.}</li>
 %% <li>`MsgId' is a customer scoped monotonically incrementing id that can be used
