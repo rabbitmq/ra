@@ -20,7 +20,9 @@ all_tests() ->
      follower_takes_over_monitor,
      node_is_deleted,
      node_restart_after_application_restart,
-     restarted_node_does_not_reissue_side_effects
+     restarted_node_does_not_reissue_side_effects,
+     checkout_get_returns_value,
+     ra_fifo_client_dequeue
     ].
 
 groups() ->
@@ -260,6 +262,54 @@ restarted_node_does_not_reissue_side_effects(Config) ->
               ok
     end,
     ok = ra:stop_node(UId),
+    ok.
+
+checkout_get_returns_value(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    CId = {UId, self()},
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    % nothing on queue yet
+    {ok, {get, empty}, NodeId} = ra:send_and_await_consensus(
+                                   NodeId, {checkout, {get, settled}, CId}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    {ok, {get, {0, msg1}}, NodeId} = ra:send_and_await_consensus(
+                                       NodeId, {checkout, {get, settled}, CId}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),
+    {ok, {get, {0, msg2}}, NodeId} = ra:send_and_await_consensus(
+                                       NodeId, {checkout, {get, unsettled}, CId}),
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, 0, CId}),
+    ok.
+
+ra_fifo_client_dequeue(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Tag = UId,
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    F1 = ra_fifo_client:init([NodeId]),
+    {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
+    {ok, 0, F2} = ra_fifo_client:enqueue(msg1, F1b),
+    {ok, {0, msg1}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
+    {ok, 1, F4} = ra_fifo_client:enqueue(msg2, F3),
+    {ok, {MsgId, msg2}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
+    {ok, _, F6} = ra_fifo_client:settle(Tag, MsgId, F5),
+    ct:pal("F6 ~p~n", [F6]),
     ok.
 
 conf(UId, NodeId, Dir, Peers) ->

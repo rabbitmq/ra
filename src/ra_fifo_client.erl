@@ -8,6 +8,7 @@
          init/1,
          checkout/3,
          enqueue/2,
+         dequeue/3,
          settle/3,
          handle_ra_event/2
          ]).
@@ -55,6 +56,31 @@ enqueue(Msg, State0) ->
     ok = ra:send_and_notify(Node, {enqueue, Msg}, Seq),
     {ok, Seq, State}.
 
+%% @doc Dequeue a message from the queue.
+%%
+%% This is a syncronous call. I.e. the call will block until the command
+%% has been accepted by the ra process or it times out.
+%%
+%% @param CustomerTag a unique tag to identify this particular customer.
+%% @param Settlement either `settled' or `unsettled'. When `settled' no
+%% further settlement needs to be done.
+%% @param State The {@module} state.
+%%
+%% @returns `{ok, IdMsg, State}' or `{error | timeout, term()}'
+-spec dequeue(ra_fifo:customer_tag(),
+              Settlement :: settled | unsettled, state()) ->
+    {ok, ra_fifo:id_msg() | empty, state()} | {error | timeout, term()}.
+dequeue(CustomerTag, Settlement, State0) ->
+    Node = pick_node(State0),
+    CustomerId = {CustomerTag, self()},
+    case ra:send_and_await_consensus(Node, {checkout, {get, Settlement},
+                                            CustomerId}) of
+        {ok, {get, Reply}, Leader} ->
+            {ok, Reply, State0#state{leader = Leader}};
+        Err ->
+            Err
+    end.
+
 %% @doc Settle a message. Permanently removes message from the queue.
 %% @param CustomerTag the tag uniquely identifying the customer.
 %% @param MsgId the message id received with the {@link ra_fifo:delivery/0.}
@@ -98,7 +124,7 @@ checkout(CustomerTag, NumUnsettled, State) ->
     case ra:send_and_await_consensus(Node, {checkout, {auto, NumUnsettled},
                                             CustomerId}) of
         {ok, _, Leader} ->
-            {ok, #state{leader = Leader}};
+            {ok, State#state{leader = Leader}};
         Err ->
             Err
     end.

@@ -56,7 +56,7 @@
                                     {error, term()} |
                                     {timeout, ra_node_id()}.
 
--type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm()).
+-type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm() | term()).
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 

@@ -38,28 +38,36 @@
 
 -type effects() :: [effect()].
 
+-type reply() :: term().
+%% an arbitrary term that can be returned to the caller, _if_ the caller
+%% used {@link ra:send_and_await_consensus/2} or
+%% {@link ra:send_and_await_consensus/3}
+
 -export_type([machine/0,
               effect/0,
               effects/0,
+              reply/0,
               builtin_command/0]).
 
 
 -callback init(Name :: atom()) -> {state(), effects()}.
 
+%% Applies each entry to the state machine.
+%% returns the new updated state and a list of effects
 -callback 'apply'(Index :: ra_index(), command(), state()) ->
-    {state(), effects()}.
+    {state(), effects()} | {state(), effects(), reply()}.
+%% Applies each entry to the state machine.
 
-% called when a node becomes leader, use this to return any effects that should
-% be applied only to a leader, such as monitors
+%% called when a node becomes leader, use this to return any effects that should
+%% be applied only to a leader, such as monitors
 -callback leader_effects(state()) -> effects().
 
-% called periodically
-% suitable for returning granular metrics or other
-% periodic actions
+%% Called periodically
+%% suitable for returning granular metrics or other periodic actions
 -callback tick(TimeMs :: milliseconds(),
                state()) -> effects().
 
-% a map of overview information - needs to be efficient
+%% a map of overview information - needs to be efficient
 -callback overview(state()) -> map().
 
 -spec init(machine(), atom()) -> {state(), effects()}.
@@ -69,7 +77,7 @@ init({simple, _Fun, InitialState}, _Name) ->
     {InitialState, []}.
 
 -spec apply(machine(), ra_index(), command(), state()) ->
-    {state(), effects()}.
+    {state(), effects()} | {state(), effects(), reply()}.
 apply({module, Mod}, Idx, Cmd, State) ->
     Mod:apply(Idx, Cmd, State);
 apply({simple, Fun, _InitialState}, _Idx, Cmd, State) ->

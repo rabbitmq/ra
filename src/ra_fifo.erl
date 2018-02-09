@@ -37,7 +37,8 @@
 -type customer_id() :: {customer_tag(), pid()}.
 %% The entity that receives messages. Uniquely identifies a customer.
 
--type checkout_spec() :: {once | auto, Num :: non_neg_integer()} | get.
+-type checkout_spec() :: {once | auto, Num :: non_neg_integer()} |
+                         {get, settled | unsettled}.
 
 -type protocol() ::
     {enqueue, Msg :: msg()} |
@@ -100,6 +101,7 @@
               customer_id/0,
               customer_tag/0,
               client_msg/0,
+              id_msg/0,
               state/0]).
 
 -spec init(atom()) -> {state(), ra_machine:effects()}.
@@ -150,15 +152,24 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
         _ ->
             {State, []}
     end;
-apply(_RaftIdx, {checkout, get, {Tag, Pid}}, #state{messages = M} = State0)
-  when map_size(M) == 0 ->
+apply(_RaftIdx, {checkout, {get, _}, {_Tag, _Pid}},
+      #state{messages = M} = State0) when map_size(M) == 0 ->
     %% TODO do we need metric visibility of empty get requests?
-    {State0, [{send_msg, Pid, {delivery, Tag, [{undefined, empty}]}}]};
-apply(_RaftIdx, {checkout, get, {_Tag, Pid} = Customer}, State0) ->
+    {State0, [], {get, empty}};
+apply(RaftIdx, {checkout, {get, settled}, CustomerId}, State0) ->
+    % TODO: this clause could probably be optimised
+    State1 = update_customer(CustomerId, {once, 1}, State0),
+    % turn send msg effect into reply
+    {State2, [{send_msg, _, {_, _, [{MsgId, _} = M]}}]} = checkout_one(State1),
+    State3 = incr_metrics(State2, {0, 1, 0, 0}),
+    % immediately settle
+    {State, Effects} = apply(RaftIdx, {settle, MsgId, CustomerId}, State3),
+    {State, Effects, {get, M}};
+apply(_RaftIdx, {checkout, {get, unsettled}, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
-    {State2, Effects, Num} = checkout(State1, []),
-    State = incr_metrics(State2, {0, Num, 0, 0}),
-    {State, [{monitor, process, Pid} | Effects]};
+    {State2, [{send_msg, _, {_, _, [M]}}]} = checkout_one(State1),
+    State = incr_metrics(State2, {0, 1, 0, 0}),
+    {State, [{monitor, process, Pid}], {get, M}};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -471,22 +482,26 @@ enq_enq_checkout_get_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
     {State1, _} = enq(1, first, element(1, init(test))),
     {State2, _} = enq(2, second, State1),
-    {_State3, Effects} =
-        apply(3, {checkout, get, Cid}, State2),
-    ?assertEffect({send_msg, _,
-                   {delivery, <<"enq_enq_checkout_get_test">>, [{0, first}]}},
-                  Effects),
+    % get returns a reply value
+    {_State3, [{monitor, _, _}], {get, {0, first}}} =
+        apply(3, {checkout, {get, unsettled}, Cid}, State2),
     ok.
 
+enq_enq_checkout_get_settled_test() ->
+    ensure_ets(),
+    Cid = {<<"enq_enq_checkout_get_test">>, self()},
+    {State1, _} = enq(1, first, element(1, init(test))),
+    % get returns a reply value
+    {State2, Effects, {get, {0, first}}} =
+        apply(3, {checkout, {get, settled}, Cid}, State1),
+    ?debugFmt("State3 post settled get ~p~nEffects~p~n", [State2, Effects]),
+    ok.
 checkout_get_empty_test() ->
     ensure_ets(),
     Cid = {<<"checkout_get_empty_test">>, self()},
     State = element(1, init(test)),
-    {_State2, Effects} =
-        apply(1, {checkout, get, Cid}, State),
-    ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_get_empty_test">>, [{undefined, empty}]}},
-                  Effects),
+    {_State2, [], {get, empty}} =
+        apply(1, {checkout, {get, unsettled}, Cid}, State),
     ok.
 
 release_cursor_test() ->
