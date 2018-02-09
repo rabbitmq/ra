@@ -17,14 +17,14 @@ init_per_testcase(TestCase, Config) ->
     Nodes = erlang_nodes(5),
     erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
     tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0),
-    {_, Node} = NodeId = setup_ra_cluster(TestCase, Nodes),
+    {_, Node} = NodeId = setup_ra_cluster(TestCase, Nodes, Config),
     ok = ra:trigger_election(NodeId),
     Config1 = [{node_id, NodeId}, {nodes, Nodes} | Config0].
 
 end_per_testcase(TestCase, Config) ->
     Nodes = ?config(nodes, Config),
     erlang_node_helpers:stop_erlang_nodes(Nodes),
-    {ok, Cwd} = file:get_cwd(),
+    Cwd = ?config(priv_dir, Config),
     Dir = filename:join(Cwd, "partitions_SUITE"),
     os:cmd("rm -rf " ++ Dir).
 
@@ -144,12 +144,12 @@ restart_random_node(Name, NodeId, Nodes, Config) ->
     ct_rpc:call(RestartNode, init, stop, []),
     erlang_node_helpers:wait_for_stop(RestartNode, 100),
     erlang_node_helpers:start_erlang_node(RestartNode, Config),
-    setup_ra_cluster(Name, [RestartNode]).
+    setup_ra_cluster(Name, [RestartNode], Config).
 
-setup_ra_cluster(Name, Nodes) ->
-    {ok, Cwd} = file:get_cwd(),
+setup_ra_cluster(Name, Nodes, Config) ->
+    Cwd = ?config(priv_dir, Config),
     filelib:ensure_dir(filename:join(Cwd, "partitions_SUITE")),
-    start_ra_cluster(Name, Nodes),
+    start_ra_cluster(Name, Nodes, Config),
     NodeId = {Name, hd(Nodes)}.
 
 print_metrics(Nodes) ->
@@ -211,8 +211,8 @@ customer_id() ->  {<<"cid">>, self()}.
 %% ==================================
 %% RA cluster setup
 
-start_ra_cluster(Name, Nodes) ->
-    {ok, Cwd} = file:get_cwd(),
+start_ra_cluster(Name, Nodes, Config) ->
+    Cwd = ?config(priv_dir, Config),
     Configs = lists:map(fun(Node) ->
         ct:pal("Start app on ~p~n", [Node]),
         NodeConfig = make_node_ra_config(Name, Nodes, Node, Cwd),

@@ -5,8 +5,8 @@
 
 all() -> [
  publish_ack_inet_tcp_proxy
- ,
- publish_ack_iptables
+ % ,
+% publish_ack_iptables
 ].
 
 init_per_testcase(TestCase, Config0) ->
@@ -33,7 +33,7 @@ end_per_testcase(_, Config) ->
     Nodes = ?config(nodes, Config),
     erlang_node_helpers:stop_erlang_nodes(Nodes),
     ct:pal("Stopped nodes ~p~n", [Nodes]),
-    Dir = data_dir(),
+    Dir = data_dir(Config),
     os:cmd("rm -rf " ++ Dir).
 
 publish_ack_inet_tcp_proxy(Config) -> publish_ack(Config).
@@ -47,8 +47,8 @@ publish_ack(Config) ->
     PublisherNode = get_random_node(Nodes),
     ConsumerNode = get_random_node(Nodes),
 
-    Publisher = spawn_publisher(PublisherNode, NodeId, 1000, self()),
-    Consumer = spawn_consumer(ConsumerNode, NodeId, 1000, self()),
+    Publisher = spawn_publisher(PublisherNode, NodeId, 1000, self(), 30000),
+    Consumer = spawn_consumer(ConsumerNode, NodeId, 1000, self(), 20000),
     Nemesis = ?config(nemesis, Config),
     start_delayed(Publisher),
     start_delayed(Consumer),
@@ -61,17 +61,23 @@ wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
     ok;
 wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished) ->
     receive
-        {consumed, Consumed} ->
-            ct:log(" Consumed ~p~n", [Consumed]),
+        {consumed, Consumed, Acked, Nacked} ->
+            ct:log("Consume end Delivered ~p ~p~n Acked settle ~p ~p~n Nacked settle ~p ~p~n",
+                   [length(Consumed), Consumed, length(Acked), Acked, length(Nacked), Nacked]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, true);
         {published, Sent, Acked, Nacked} ->
-            ct:log(" Sent ~p~n Acked ~p~n Nacked ~p~n", [Sent, Acked, Nacked]),
+            ct:pal("Publish end Sent ~p~n Acked ~p~n Nacked ~p~n",
+                   [length(Sent), length(Acked), length(Nacked)]),
+            ct:log("Publish end Sent ~p ~p~n Acked ~p ~p~n Nacked ~p ~p~n",
+                  [length(Sent), Sent, length(Acked), Acked, length(Nacked), Nacked]),
+            %% Do not wait for nacked messages on consumers
+            Consumer ! {publish_end, length(Acked)},
             wait_for_publisher_and_consumer(Publisher, Consumer, true, ConsumerFinished);
         {publisher_in_progress, Sent, Acked, Nacked} ->
             ct:pal("Still waiting on publisher~n Sent ~p~n Acked ~p~n Nacked ~p~n", [length(Sent), length(Acked), length(Nacked)]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished);
-        {consumer_in_progress, Delivered, Applied, Rejected} ->
-            ct:pal("Still waiting on consumer.~n Delivered ~p~n Applied ~p~n Rejected ~p~n", [length(Delivered), length(Applied), length(Rejected)]),
+        {consumer_in_progress, Delivered, Applied, Rejected, MsgCount} ->
+            ct:pal("Still waiting on consumer.~n Delivered ~p~n Applied ~p~n Rejected ~p~n MsgCount ~p~n", [length(Delivered), length(Applied), length(Rejected), MsgCount]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished)
     end.
 
@@ -87,16 +93,19 @@ erlang_nodes(5) ->
 client_id() ->
      {<<"consumer">>, self()}.
 
-spawn_consumer(Node, NodeId, MessageCount, Pid) ->
+spawn_consumer(Node, NodeId, MessageCount, Pid, TimeToWaitForAcks0) ->
     spawn_delayed(Node,
         fun
         Consumer({init, Leader}) ->
             ct:pal("Init consumer"),
             Cid = client_id(),
             {ok, _Result, NewLeader} = ra:send_and_await_consensus(Leader, {checkout, {auto, 50}, Cid}, infinity),
-            Consumer({NewLeader, [], [], []});
-        Consumer({Leader, Delivered, Applied, Rejected}) ->
+            Consumer({[], [], [], MessageCount, false, TimeToWaitForAcks0});
+        Consumer({Delivered, Applied, Rejected, MsgCount, PublishEnded, TimeToWaitForAcks}) ->
             receive
+            {publish_end, NewMsgCount} ->
+                ct:pal("Updating message count to ~p~n", [NewMsgCount]),
+                Consumer({Delivered, Applied, Rejected, NewMsgCount, true, TimeToWaitForAcks});
             {ra_fifo, NewLeader, {delivery, _ClientTag, MsgId, N}} ->
             % {ra_event, NewLeader, machine, {msg, MsgId, N}} ->
                 Ref = case length([D || D <- Delivered, D == N]) of
@@ -110,32 +119,43 @@ spawn_consumer(Node, NodeId, MessageCount, Pid) ->
                 %% Assuming client id does not change.
                 Cid = client_id(),
                 ok = ra:send_and_notify(NewLeader, {settle, MsgId, Cid}, Ref),
-                Consumer({NewLeader, [N | Delivered], Applied, Rejected});
+                Consumer({[N | Delivered], Applied, Rejected, MsgCount, PublishEnded, TimeToWaitForAcks});
             {ra_event, {applied, NewLeader, Ref}} ->
             % {ra_event, NewLeader, applied, Ref} ->
-                Consumer({NewLeader, Delivered, [Ref | Applied], Rejected});
+                Consumer({Delivered, [Ref | Applied], Rejected, MsgCount, PublishEnded, TimeToWaitForAcks});
             {ra_event, {rejected, NewLeader, Ref}} ->
             % {ra_event, NewLeader, rejected, Ref} ->
-                Consumer({NewLeader, Delivered, Applied, [Ref | Rejected]})
-            after 10000 ->
+                Consumer({Delivered, Applied, [Ref | Rejected], MsgCount, PublishEnded, TimeToWaitForAcks})
+            after 1000 ->
                 case length(Applied) + length(Rejected) of
-                    MessageCount ->
-                        Pid ! {consumed, Delivered},
+                    MsgCount ->
+                        Pid ! {consumed, Delivered, Applied, Rejected},
                         ok;
                     Other ->
-                        ct:pal("Still waiting on consumer ~p~n", [Other]),
-                        Pid ! {consumer_in_progress, Delivered, Applied, Rejected},
-                        % print_metrics(erlang_nodes(5)),
-                        %% Keep waiting
-                        Consumer({Leader, Delivered, Applied, Rejected})
+                        case TimeToWaitForAcks =< 0 of
+                            true ->
+                                ct:pal("Timeout waiting for consumer"),
+                                Pid ! {consumed, Delivered, Applied, Rejected},
+                                ok;
+                            false ->
+                                Pid ! {consumer_in_progress, Delivered, Applied, Rejected, MsgCount},
+                                print_metrics(erlang_nodes(5)),
+                                %%
+                                NewTimeToWaitForAcks = case PublishEnded of
+                                    false -> TimeToWaitForAcks;
+                                    true  -> TimeToWaitForAcks - 1000
+                                end,
+                                % ct:pal("NewTimeToWaitForAcks ~p~n Delivered ~p~n MsgCount ~p~n", [NewTimeToWaitForAcks, Delivered, MsgCount]),
+                                Consumer({Delivered, Applied, Rejected, MsgCount, PublishEnded, NewTimeToWaitForAcks})
+                        end
                 end
             end
         end,
         {init, NodeId}).
 
-spawn_publisher(Node, NodeId, MessageCount, Pid) ->
+spawn_publisher(Node, NodeId, MessageCount, Pid, TimeToWaitForAcks0) ->
     spawn_delayed(Node,
-        fun Publisher({Leader, N, Sent, Acked, Nacked}) ->
+        fun Publisher({Leader, N, Sent, Acked, Nacked, TimeToWaitForAcks}) ->
             {Sent1, N1, Wait} = case N-1 of
                 MessageCount -> {Sent, N, 1000};
                 _            ->
@@ -147,11 +167,15 @@ spawn_publisher(Node, NodeId, MessageCount, Pid) ->
                 {ra_event, {applied, NewLeader, Ref}} ->
                 % {ra_event, NewLeader, applied, Ref} ->
                     Acked1 = [Ref | Acked],
-                    Publisher({NewLeader, N1, Sent1, Acked1, Nacked});
-                {ra_event, {rejected, NewLeader, Ref}} ->
+                    Publisher({NewLeader, N1, Sent1, Acked1, Nacked, TimeToWaitForAcks});
+                {ra_event, {rejected, _Leader, {not_leader, NewLeader, _} = Ref}} when NewLeader =/= undefined ->
                 % {ra_event, NewLeader, rejected, Ref} ->
                     Nacked1 = [Ref | Nacked],
-                    Publisher({NewLeader, N1, Sent1, Acked, Nacked1})
+                    Publisher({NewLeader, N1, Sent1, Acked, Nacked1, TimeToWaitForAcks});
+                {ra_event, {rejected, _Leader, Ref}} ->
+                % {ra_event, NewLeader, rejected, Ref} ->
+                    Nacked1 = [Ref | Nacked],
+                    Publisher({Leader, N1, Sent1, Acked, Nacked1, TimeToWaitForAcks})
             after Wait ->
                     case length(Acked) + length(Nacked) of
                         MessageCount ->
@@ -160,15 +184,27 @@ spawn_publisher(Node, NodeId, MessageCount, Pid) ->
                             Pid ! {published, Sent1, Acked, Nacked},
                             ok;
                         Other ->
-                            ct:pal("Still waiting on publisher ~p~n", [Other]),
-                            Pid ! {publisher_in_progress, Sent, Acked, Nacked},
-                            % print_metrics(erlang_nodes(5)),
-                            %% Keep waiting for acks and nacks
-                            Publisher({Leader, N1, Sent1, Acked, Nacked})
+                            case TimeToWaitForAcks =< 0 of
+                                true ->
+                                    ct:pal("Timeout waiting for publisher."),
+                                    Pid ! {published, Sent1, Acked, Nacked},
+                                    ok;
+                                false ->
+                                    case Sent1 of
+                                        MessageCount ->
+                                            ct:pal("Still waiting on publisher ~p~n", [Other]),
+                                            Pid ! {publisher_in_progress, Sent1, Acked, Nacked},
+                                            print_metrics(erlang_nodes(5)),
+                                            %% Keep waiting for acks and nacks
+                                            Publisher({Leader, N1, Sent1, Acked, Nacked, TimeToWaitForAcks - Wait});
+                                        _ ->
+                                            Publisher({Leader, N1, Sent1, Acked, Nacked, TimeToWaitForAcks})
+                                    end
+                            end
                     end
             end
         end,
-        {NodeId, 1, [], [], []}).
+        {NodeId, 1, [], [], [], TimeToWaitForAcks0}).
 
 
 -type wait_time() :: (Exactly :: integer() | infinity)
@@ -236,13 +272,12 @@ prepare_erlang_cluster(Config) ->
 setup_ra_cluster(Config) ->
     Nodes = ?config(nodes, Config),
     Name = ?config(name, Config),
-    {ok, Cwd} = file:get_cwd(),
-    DataDir = data_dir(),
+    DataDir = data_dir(Config),
     filelib:ensure_dir(DataDir),
 
     Configs = lists:map(fun(Node) ->
         ct:pal("Start app on ~p~n", [Node]),
-        NodeConfig = make_node_ra_config(Name, Nodes, Node, Cwd),
+        NodeConfig = make_node_ra_config(Name, Nodes, Node, DataDir),
         ok = ct_rpc:call(Node, application, load, [ra]),
         ok = ct_rpc:call(Node, application, set_env, [ra, data_dir, filename:join([DataDir, atom_to_list(Node)])]),
         {ok, _} = ct_rpc:call(Node, application, ensure_all_started, [ra]),
@@ -264,13 +299,13 @@ setup_ra_cluster(Config) ->
     ok = ra:trigger_election(NodeId),
     NodeId.
 
-make_node_ra_config(Name, Nodes, Node, Cwd) ->
+make_node_ra_config(Name, Nodes, Node, DataDir) ->
     #{ id => {Name, Node},
        uid => atom_to_binary(Name, utf8),
        initial_nodes => [{Name, N} || N <- Nodes],
        log_module => ra_log_file,
        log_init_args =>
-            #{data_dir => filename:join([data_dir(), atom_to_list(Node)]),
+            #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
               uid => atom_to_binary(Name, utf8)},
        machine => {module, ra_fifo}
        }.
@@ -399,6 +434,6 @@ get_random_node(Exceptions, Nodes) ->
     get_random_node(PossibleNodes).
 
 
-data_dir() ->
-    {ok, Cwd} = file:get_cwd(),
+data_dir(Config) ->
+    Cwd = ?config(priv_dir, Config),
     filename:join(Cwd, "jepsen_like_partitions_SUITE").
