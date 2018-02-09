@@ -35,14 +35,14 @@ publish_ack(Config) ->
     PublisherNode = get_random_node(Nodes),
     ConsumerNode = get_random_node(Nodes),
 
-    Publisher = spawn_publisher(PublisherNode, NodeId, 10000, self()),
-    Consumer = spawn_consumer(ConsumerNode, NodeId, 10000, self()),
+    Publisher = spawn_publisher(PublisherNode, NodeId, 100000, self()),
+    Consumer = spawn_consumer(ConsumerNode, NodeId, 100000, self()),
     Nemesis = ?config(nemesis, Config),
     start_delayed(Publisher),
     start_delayed(Consumer),
 
     start_delayed(Nemesis),
-
+timer:sleep(10000000),
     wait_for_publisher_and_consumer(Publisher, Consumer, false, false).
 
 wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
@@ -166,9 +166,9 @@ spawn_publisher(Node, NodeId, MessageCount, Pid) ->
 spawn_nemesis(Nodes, Partition, TimeForPartition, TimeForHeal) ->
     spawn_delayed(
         fun Nemesis(ok) ->
-            unblock_inet_tcp_proxy(Nodes),
+            unblock_iptables(Nodes),
             wait(TimeForHeal),
-            block_random_partition_inet_tcp_proxy(Partition, Nodes),
+            block_random_partition_iptables(Partition, Nodes),
             wait(TimeForPartition),
             Nemesis(ok)
         end,
@@ -262,21 +262,30 @@ block_random_partition_iptables(Partition, Nodes) ->
     block_random_partition(Partition, Nodes, fun block_traffic_with_iptables/2).
 
 block_traffic_with_iptables(Node1, Node2) ->
-    DestPort1 = tcp_inet_proxy_helpers:get_dist_port(Node1),
-    DestPort2 = tcp_inet_proxy_helpers:get_dist_port(Node2),
+    DestPort1 = rpc:call(Node1, tcp_inet_proxy_helpers, get_dist_port, []),
+    DestPort2 = rpc:call(Node2, tcp_inet_proxy_helpers, get_dist_port, []),
     SourcePort1 = get_outgoing_port(Node1, Node2, DestPort2),
     SourcePort2 = get_outgoing_port(Node2, Node1, DestPort1),
+ct:pal(" DestPort1 ~p~n DestPort2 ~p~n SourcePort1 ~p~n SourcePort2 ~p~n", [DestPort1, DestPort2, SourcePort1, SourcePort2]),
+
     block_ports_iptables(DestPort1, SourcePort2),
-    block_ports_iptables(DestPort2, SourcePort1).
+    block_ports_iptables(DestPort2, SourcePort1),
+timer:sleep(10000000),
+    tcp_inet_proxy_helpers:wait_for_blocked(Node1, Node2, 100).
 
 block_ports_iptables(DestPort, SourcePort) ->
     ensure_iptables_chain(),
     iptables_cmd("-A partitions_test -p tcp -j DROP"
                  " --destination-port " ++ integer_to_list(DestPort) ++
-                 " --source-port " ++ integer_to_list(SourcePort)).
+                 " --source-port " ++ integer_to_list(SourcePort)),
+    iptables_cmd("-A partitions_test -p tcp -j DROP"
+                 " --destination-port " ++ integer_to_list(SourcePort) ++
+                 " --source-port " ++ integer_to_list(DestPort)).
+
 
 ensure_iptables_chain() ->
-    iptables_cmd("-N partitions_test").
+    iptables_cmd("-N partitions_test"),
+    iptables_cmd("-A INPUT -j partitions_test").
 
 iptables_cmd(Cmd) ->
     ct:pal("Running iptables " ++ Cmd),
@@ -286,10 +295,10 @@ iptables_cmd(Cmd) ->
 get_outgoing_port(Node1, Node2, DestPort) ->
     rpc:call(Node1, jepsen_like_partitions_SUITE, get_outgoing_port, [Node2, DestPort]).
 
-get_outgoing_port(Node, DestPort) ->
+get_outgoing_port(Node, _DestPort) ->
     %% Ensure there is a connection.
-    rpc:call(Node, erlang, self, []),
-    DistributionSocket = lists:filter(fun(Port) ->
+    DistPort = rpc:call(Node, tcp_inet_proxy_helpers, get_dist_port, []),
+    [DistributionSocket | _] = lists:filter(fun(Port) ->
         case erlang:port_info(Port, name) of
             {name, "tcp_inet"} ->
                 case inet:peername(Port) of

@@ -7,7 +7,7 @@
          block_traffic_between/2,
          allow_traffic_between/2]).
 -export([get_dist_port/0]).
-
+-export([wait_for_blocked/3]).
 enable_dist_proxy_manager(Config) ->
     inet_tcp_proxy_manager:start(),
     rabbit_ct_helpers:set_config(Config,
