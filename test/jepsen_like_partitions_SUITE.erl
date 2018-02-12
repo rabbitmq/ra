@@ -69,8 +69,8 @@ publish_ack(Config) ->
         local   -> node()
     end,
 
-    Publisher = spawn_publisher(PublisherNode, NodeIds, 1000, self(), 30000),
-    Consumer = spawn_consumer(ConsumerNode, NodeIds, 1000, self(), 20000),
+    Publisher = spawn_publisher(PublisherNode, NodeIds, 1000, self(), 50000),
+    Consumer = spawn_consumer(ConsumerNode, NodeIds, 1000, self(), 50000),
     Nemesis = ?config(nemesis, Config),
     start_delayed(Publisher),
     start_delayed(Consumer),
