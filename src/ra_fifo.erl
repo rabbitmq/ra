@@ -14,8 +14,8 @@
          overview/1,
          shadow_copy/1,
          size_test/2,
-         perf_test/2,
-         profile/1
+         perf_test/2
+         % profile/1
         ]).
 
 -type raw_msg() :: term().
@@ -459,20 +459,20 @@ perf_test(NumMsg, NumCust) ->
                      ok
              end).
 
-profile(File) ->
-    GzFile = atom_to_list(File) ++ ".gz",
-    lg:trace([ra_fifo, maps, queue, ra_fifo_index], lg_file_tracer,
-             GzFile, #{running => false, mode => profile}),
-    NumMsg = 10000,
-    NumCust = 500,
-    EnqGen = fun(N) -> {N, {enqueue, N}} end,
-    Pid = spawn(fun() -> ok end),
-    CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
-    SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-    S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
-    S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
-    _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
-    lg:stop().
+% profile(File) ->
+%     GzFile = atom_to_list(File) ++ ".gz",
+%     lg:trace([ra_fifo, maps, queue, ra_fifo_index], lg_file_tracer,
+%              GzFile, #{running => false, mode => profile}),
+%     NumMsg = 10000,
+%     NumCust = 500,
+%     EnqGen = fun(N) -> {N, {enqueue, N}} end,
+%     Pid = spawn(fun() -> ok end),
+%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
+%     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
+%     S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
+%     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+%     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
+%     lg:stop().
 
 
 run_log(Num, Num, _Gen, State) ->
