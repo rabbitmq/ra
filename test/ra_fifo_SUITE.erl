@@ -64,7 +64,7 @@ ra_fifo_client_basics(Config) ->
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     FState0 = ra_fifo_client:init([NodeId]),
-    {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 10, FState0),
+    {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 1, FState0),
     % _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
 
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -107,8 +107,7 @@ ra_fifo_client_basics(Config) ->
                     ct:pal("unexpected event ~p~n", [E]),
                     exit({unexpected_internal_event, E});
                 {{delivery, Ctag, [{Mid, {_, two}}]}, FState7} ->
-                    {ok, _, _S} = ra_fifo_client:return(Ctag, [Mid],
-                                                        FState7),
+                    {ok, _, _S} = ra_fifo_client:return(Ctag, [Mid], FState7),
                     ok
             end
     after 2000 ->

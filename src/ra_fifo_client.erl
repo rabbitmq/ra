@@ -16,17 +16,20 @@
 
 -include("ra.hrl").
 
+-type seq() :: non_neg_integer().
+
 -record(state, {nodes = [] :: [ra_node_id()],
                 leader :: maybe(ra_node_id()),
-                next_seq = 0 :: non_neg_integer(),
+                next_seq = 0 :: seq(),
+                pending = #{} :: #{seq() => ra_fifo:command()},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
-                                               non_neg_integer()}}).
+                                               seq()}}).
 
 -opaque state() :: #state{}.
 
 -export_type([
               state/0
-              ]).
+             ]).
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
@@ -53,8 +56,8 @@ init(Nodes) ->
     {ok, Seq :: non_neg_integer(), state()} | {error, stop_sending}.
 enqueue(Msg, State0) ->
     Node = pick_node(State0),
-    {Seq, State} = next_seq(State0),
-    ok = ra:send_and_notify(Node, {enqueue, Msg}, Seq),
+    Cmd = {enqueue, Msg},
+    {[Seq], State} = send_command(Node, Cmd, [], State0),
     {ok, Seq, State}.
 
 %% @doc Dequeue a message from the queue.
@@ -73,7 +76,7 @@ enqueue(Msg, State0) ->
     {ok, ra_fifo:delivery_msg() | empty, state()} | {error | timeout, term()}.
 dequeue(CustomerTag, Settlement, State0) ->
     Node = pick_node(State0),
-    CustomerId = {CustomerTag, self()},
+    CustomerId = customer_id(CustomerTag),
     case ra:send_and_await_consensus(Node, {checkout, {get, Settlement},
                                             CustomerId}) of
         {ok, {get, Reply}, Leader} ->
@@ -103,10 +106,8 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
     % TODO: make ra_fifo settle support lists of message ids
     {Seqs, State} = lists:foldl(
                      fun (MsgId, {Seqs, S0}) ->
-                             {Seq, S} = next_seq(S0),
-                             ok = ra:send_and_notify(
-                                    Node, {settle, MsgId, CustomerTag}, Seq),
-                             {[Seq | Seqs], S}
+                             Cmd = {settle, MsgId, customer_id(CustomerTag)},
+                             send_command(Node, Cmd, Seqs, S0)
                      end, {[], State0}, MsgIds),
     {ok, lists:reverse(Seqs), State}.
 
@@ -132,10 +133,8 @@ return(CustomerTag, [_|_] = MsgIds, State0) ->
     % TODO: make ra_fifo settle support lists of message ids
     {Seqs, State} = lists:foldl(
                      fun (MsgId, {Seqs, S0}) ->
-                             {Seq, S} = next_seq(S0),
-                             ok = ra:send_and_notify(
-                                    Node, {return, MsgId, CustomerTag}, Seq),
-                             {[Seq | Seqs], S}
+                             Cmd = {return, MsgId, customer_id(CustomerTag)},
+                             send_command(Node, Cmd, Seqs, S0)
                      end, {[], State0}, MsgIds),
     {ok, lists:reverse(Seqs), State}.
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
@@ -202,9 +201,9 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %% `{delivery, CustomerTag, [{MsgId, {MsgHeader, Msg}}]}'
 %%
 %% <li>`CustomerTag' the binary tag passed to {@link checkout/3.}</li>
-%% <li>`MsgId' is a customer scoped monotonically incrementing id that can be used
-%% to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished with
-%% them.</li>
+%% <li>`MsgId' is a customer scoped monotonically incrementing id that can be
+%% used to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished
+%% with them.</li>
 -spec handle_ra_event(ra_node_proc:ra_event_body(), state()) ->
     {internal, AppliedSeqs :: [non_neg_integer()], state()} |
     {ra_fifo:client_msg(), state()}.
@@ -249,6 +248,15 @@ pick_node(#state{leader = Leader}) ->
 
 next_seq(#state{next_seq = Seq} = State) ->
     {Seq, State#state{next_seq = Seq + 1}}.
+
+customer_id(CustomerTag) ->
+    {CustomerTag, self()}.
+
+send_command(Node, Command, Seqs, #state{pending = Pending} = State0) ->
+    {Seq, State} = next_seq(State0),
+    ok = ra:send_and_notify(Node, Command, Seq),
+    {[Seq | Seqs],
+     State#state{pending = Pending#{Seq => Command}}}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
