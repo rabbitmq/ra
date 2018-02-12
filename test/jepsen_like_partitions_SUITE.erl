@@ -16,7 +16,7 @@ init_per_testcase(TestCase, Config0) ->
         publish_ack_inet_tcp_proxy -> inet_tcp_proxy;
         publish_ack_iptables -> iptables
     end,
-    Nemesis = spawn_nemesis(Nodes, 2, 5000, 10000, NemesisType),
+    Nemesis = spawn_nemesis(Nodes, 2, 5000, 20000, NemesisType),
     Config1 = [{nodes, Nodes}, {name, publish_ack}, {nemesis, Nemesis}, {nemesis_type, NemesisType} | Config0 ],
     Config2 = prepare_erlang_cluster(Config1),
     NodeId = setup_ra_cluster(Config2),
@@ -41,14 +41,15 @@ publish_ack_inet_tcp_proxy(Config) -> publish_ack(Config).
 publish_ack_iptables(Config) -> publish_ack(Config).
 
 publish_ack(Config) ->
-    NodeId = ?config(node_id, Config),
+    {Name, _} = NodeId = ?config(node_id, Config),
     Nodes = ?config(nodes, Config),
 
+    NodeIds = [{Name, N} || N <- Nodes],
     PublisherNode = get_random_node(Nodes),
     ConsumerNode = get_random_node(Nodes),
 
-    Publisher = spawn_publisher(PublisherNode, NodeId, 1000, self(), 30000),
-    Consumer = spawn_consumer(ConsumerNode, NodeId, 1000, self(), 20000),
+    Publisher = spawn_publisher(PublisherNode, NodeIds, 1000, self(), 30000),
+    Consumer = spawn_consumer(ConsumerNode, NodeIds, 1000, self(), 20000),
     Nemesis = ?config(nemesis, Config),
     start_delayed(Publisher),
     start_delayed(Consumer),
@@ -61,23 +62,24 @@ wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
     ok;
 wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished) ->
     receive
-        {consumed, Consumed, Acked, Nacked} ->
-            ct:log("Consume end Delivered ~p ~p~n Acked settle ~p ~p~n Nacked settle ~p ~p~n",
-                   [length(Consumed), Consumed, length(Acked), Acked, length(Nacked), Nacked]),
+        {consumed, UniqDelivered, Delivered, Applied, Settled, State} ->
+            ct:log("Consume end Delivered ~p ~p~n Applied settle ~p ~p~n Ok settle ~p ~p~n",
+                   [UniqDelivered, Delivered, length(Applied), Applied, length(Settled), Settled]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, true);
-        {published, Sent, Acked, Nacked} ->
-            ct:pal("Publish end Sent ~p~n Acked ~p~n Nacked ~p~n",
-                   [length(Sent), length(Acked), length(Nacked)]),
-            ct:log("Publish end Sent ~p ~p~n Acked ~p ~p~n Nacked ~p ~p~n",
-                  [length(Sent), Sent, length(Acked), Acked, length(Nacked), Nacked]),
+        {published, Sent, Acked, State} ->
+            ct:pal("Publish end Sent ~p~n Acked ~p~n ",
+                   [length(Sent), length(Acked)]),
+            ct:log("Publish end Sent ~p ~p~n Acked ~p ~p~n State ~p~n",
+                  [length(Sent), Sent, length(Acked), Acked, State]),
             %% Do not wait for nacked messages on consumers
             Consumer ! {publish_end, length(Acked)},
             wait_for_publisher_and_consumer(Publisher, Consumer, true, ConsumerFinished);
-        {publisher_in_progress, Sent, Acked, Nacked} ->
-            ct:pal("Still waiting on publisher~n Sent ~p~n Acked ~p~n Nacked ~p~n", [length(Sent), length(Acked), length(Nacked)]),
+        {publisher_in_progress, Sent, Acked, State} ->
+            ct:pal("Still waiting on publisher~n Sent ~p~n Acked ~p~n", [length(Sent), length(Acked)]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished);
-        {consumer_in_progress, Delivered, Applied, Rejected, MsgCount} ->
-            ct:pal("Still waiting on consumer.~n Delivered ~p~n Applied ~p~n Rejected ~p~n MsgCount ~p~n", [length(Delivered), length(Applied), length(Rejected), MsgCount]),
+        {consumer_in_progress, UniqDelivered, Delivered, Applied, Settled, MsgCount} ->
+            ct:pal("Still waiting on consumer.~n Delivered ~p ~p~n Applied ~p~n Settles sent ~p~n MsgCount ~p~n",
+                   [UniqDelivered, length(Delivered), length(Applied), length(Settled), MsgCount]),
             wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished)
     end.
 
@@ -93,52 +95,60 @@ erlang_nodes(5) ->
 client_id() ->
      {<<"consumer">>, self()}.
 
-spawn_consumer(Node, NodeId, MessageCount, Pid, TimeToWaitForAcks0) ->
+spawn_consumer(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
     spawn_delayed(Node,
         fun
-        Consumer({init, Leader}) ->
+        Consumer(init) ->
             ct:pal("Init consumer"),
-            Cid = client_id(),
-            {ok, _Result, NewLeader} = ra:send_and_await_consensus(Leader, {checkout, {auto, 50}, Cid}, infinity),
-            Consumer({[], [], [], MessageCount, false, TimeToWaitForAcks0});
-        Consumer({Delivered, Applied, Rejected, MsgCount, PublishEnded, TimeToWaitForAcks}) ->
+            Tag = <<"consumer_tag">>,
+            State = ra_fifo_client:init(NodeIds),
+            {ok, State1} = ra_fifo_client:checkout(Tag, 50, State),
+            Consumer({State1, 0, [], [], [], MessageCount, false, TimeToWaitForAcks0});
+
+        Consumer({State, UniqDelivered, Delivered, Applied, Settled, MsgCount, PublishEnded, TimeToWaitForAcks}) ->
             receive
             {publish_end, NewMsgCount} ->
                 ct:pal("Updating message count to ~p~n", [NewMsgCount]),
-                Consumer({Delivered, Applied, Rejected, NewMsgCount, true, TimeToWaitForAcks});
-            {ra_fifo, NewLeader, {delivery, _ClientTag, MsgId, N}} ->
-            % {ra_event, NewLeader, machine, {msg, MsgId, N}} ->
-                Ref = case length([D || D <- Delivered, D == N]) of
-                    0 ->
-                        {ack, N, 0};
-                    Duplicates ->
-                        ct:pal("Duplicate delivery ~p~n", [N]),
-                        {ack, N, Duplicates}
-                end,
-                timer:sleep(100),
-                %% Assuming client id does not change.
-                Cid = client_id(),
-                ok = ra:send_and_notify(NewLeader, {settle, MsgId, Cid}, Ref),
-                Consumer({[N | Delivered], Applied, Rejected, MsgCount, PublishEnded, TimeToWaitForAcks});
-            {ra_event, {applied, NewLeader, Ref}} ->
-            % {ra_event, NewLeader, applied, Ref} ->
-                Consumer({Delivered, [Ref | Applied], Rejected, MsgCount, PublishEnded, TimeToWaitForAcks});
-            {ra_event, {rejected, NewLeader, Ref}} ->
-            % {ra_event, NewLeader, rejected, Ref} ->
-                Consumer({Delivered, Applied, [Ref | Rejected], MsgCount, PublishEnded, TimeToWaitForAcks})
+                Consumer({State, UniqDelivered, Delivered, Applied, Settled, NewMsgCount, true, TimeToWaitForAcks});
+            {ra_event, Event} ->
+                case ra_fifo_client:handle_ra_event(Event, State) of
+                    {internal, AppliedSN, State1} ->
+                        Consumer({State1, UniqDelivered, Delivered, Applied ++ AppliedSN, Settled, MsgCount, PublishEnded, TimeToWaitForAcks});
+                    {{delivery, CustomerTag, Msgs}, State1} ->
+                        timer:sleep(10),
+                        MsgIds = [MsgId || {MsgId, _} <- Msgs],
+                        {ok, SettledSN, State2} = ra_fifo_client:settle(CustomerTag, MsgIds, State1),
+
+                        {UniqDelivered1, Delivered1} =
+                            lists:foldl(fun({MsgId, {MsgHeader, Msg}}, {UniqDelivered0, Delivered0}) ->
+                                DeliveryCount = maps:get(delivery_count, MsgHeader, 0),
+                                case proplists:get_value(Msg, Delivered0) of
+                                    undefined ->
+                                        {UniqDelivered0 + 1,
+                                         [{Msg, [{MsgId, DeliveryCount}]} | Delivered0]};
+                                    Old ->
+                                        ct:pal("Duplicate delivery ~p~n", [Msg]),
+                                        {UniqDelivered0,
+                                         [{Msg, [{MsgId, DeliveryCount}]} | Delivered0]}
+                                end
+                            end,
+                            {UniqDelivered, Delivered},
+                            Msgs),
+                        Consumer({State2, UniqDelivered1, Delivered1, Applied, Settled ++ SettledSN, MsgCount, PublishEnded, TimeToWaitForAcks})
+                end
             after 1000 ->
-                case length(Applied) + length(Rejected) of
-                    MsgCount ->
-                        Pid ! {consumed, Delivered, Applied, Rejected},
+                case UniqDelivered == MsgCount andalso length(Applied) == length(Settled) of
+                    true ->
+                        Pid ! {consumed, UniqDelivered, Delivered, Applied, Settled, State},
                         ok;
                     Other ->
                         case TimeToWaitForAcks =< 0 of
                             true ->
                                 ct:pal("Timeout waiting for consumer"),
-                                Pid ! {consumed, Delivered, Applied, Rejected},
+                                Pid ! {consumed, UniqDelivered, Delivered, Applied, Settled, State},
                                 ok;
                             false ->
-                                Pid ! {consumer_in_progress, Delivered, Applied, Rejected, MsgCount},
+                                Pid ! {consumer_in_progress, UniqDelivered, Delivered, Applied, Settled, MsgCount},
                                 print_metrics(erlang_nodes(5)),
                                 %%
                                 NewTimeToWaitForAcks = case PublishEnded of
@@ -146,65 +156,63 @@ spawn_consumer(Node, NodeId, MessageCount, Pid, TimeToWaitForAcks0) ->
                                     true  -> TimeToWaitForAcks - 1000
                                 end,
                                 % ct:pal("NewTimeToWaitForAcks ~p~n Delivered ~p~n MsgCount ~p~n", [NewTimeToWaitForAcks, Delivered, MsgCount]),
-                                Consumer({Delivered, Applied, Rejected, MsgCount, PublishEnded, NewTimeToWaitForAcks})
+                                Consumer({State, UniqDelivered, Delivered, Applied, Settled, MsgCount, PublishEnded, NewTimeToWaitForAcks})
                         end
                 end
             end
         end,
-        {init, NodeId}).
+        init).
 
-spawn_publisher(Node, NodeId, MessageCount, Pid, TimeToWaitForAcks0) ->
+spawn_publisher(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
     spawn_delayed(Node,
-        fun Publisher({Leader, N, Sent, Acked, Nacked, TimeToWaitForAcks}) ->
-            {Sent1, N1, Wait} = case N-1 of
+        fun
+	Publisher(init) ->
+	    State = ra_fifo_client:init(NodeIds),
+	    Publisher({State, 1, [], [], TimeToWaitForAcks0});
+	Publisher({State, N, Sent, Acked, TimeToWaitForAcks}) ->
+
+	    {Sent1, N1, Wait, State1} = case N-1 of
                 MessageCount -> {Sent, N, 1000};
                 _            ->
                     timer:sleep(100),
-                    ok = ra:send_and_notify(Leader, {enqueue, N}, N),
-                    {[N | Sent], N+1, 0}
+                    {ok, SeqNo, NewState} = ra_fifo_client:enqueue(N, State),
+                    {[SeqNo | Sent], N+1, 0, NewState}
             end,
             receive
-                {ra_event, {applied, NewLeader, Ref}} ->
-                % {ra_event, NewLeader, applied, Ref} ->
-                    Acked1 = [Ref | Acked],
-                    Publisher({NewLeader, N1, Sent1, Acked1, Nacked, TimeToWaitForAcks});
-                {ra_event, {rejected, _Leader, {not_leader, NewLeader, _} = Ref}} when NewLeader =/= undefined ->
-                % {ra_event, NewLeader, rejected, Ref} ->
-                    Nacked1 = [Ref | Nacked],
-                    Publisher({NewLeader, N1, Sent1, Acked, Nacked1, TimeToWaitForAcks});
-                {ra_event, {rejected, _Leader, Ref}} ->
-                % {ra_event, NewLeader, rejected, Ref} ->
-                    Nacked1 = [Ref | Nacked],
-                    Publisher({Leader, N1, Sent1, Acked, Nacked1, TimeToWaitForAcks})
+                {ra_event, Event} ->
+                    case ra_fifo_client:handle_ra_event(Event, State1) of
+                        {internal, AppliedSN, State2} ->
+                             Publisher({State2, N1, Sent1, Acked ++ AppliedSN, TimeToWaitForAcks})
+                    end
             after Wait ->
-                    case length(Acked) + length(Nacked) of
+                    case length(Acked) of
                         MessageCount ->
                             %% All messages are received
                             % ct:pal("Published ~p~n~p~n~p~n", [Sent1, Acked, Nacked]),
-                            Pid ! {published, Sent1, Acked, Nacked},
+                            Pid ! {published, Sent1, Acked, State1},
                             ok;
                         Other ->
                             case TimeToWaitForAcks =< 0 of
                                 true ->
                                     ct:pal("Timeout waiting for publisher."),
-                                    Pid ! {published, Sent1, Acked, Nacked},
+                                    Pid ! {published, Sent1, Acked, State1},
                                     ok;
                                 false ->
-                                    case Sent1 of
+                                    case length(Sent1) of
                                         MessageCount ->
                                             ct:pal("Still waiting on publisher ~p~n", [Other]),
-                                            Pid ! {publisher_in_progress, Sent1, Acked, Nacked},
+                                            Pid ! {publisher_in_progress, Sent1, Acked, State},
                                             print_metrics(erlang_nodes(5)),
                                             %% Keep waiting for acks and nacks
-                                            Publisher({Leader, N1, Sent1, Acked, Nacked, TimeToWaitForAcks - Wait});
+                                            Publisher({State1, N1, Sent1, Acked, TimeToWaitForAcks - Wait});
                                         _ ->
-                                            Publisher({Leader, N1, Sent1, Acked, Nacked, TimeToWaitForAcks})
+                                            Publisher({State1, N1, Sent1, Acked, TimeToWaitForAcks})
                                     end
                             end
                     end
             end
         end,
-        {NodeId, 1, [], [], [], TimeToWaitForAcks0}).
+        init).
 
 
 -type wait_time() :: (Exactly :: integer() | infinity)
