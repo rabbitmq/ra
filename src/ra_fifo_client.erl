@@ -221,7 +221,7 @@ handle_ra_event({rejected, _From, {not_leader, Leader, Seq}},
     % NB: this does not handle ordering
     Command = maps:get(Seq, Pending),
     ok = ra:send_and_notify(Leader, Command, Seq),
-    {internal, [], State};
+    {internal, [], State#state{leader = Leader}};
 handle_ra_event({machine, Leader, {delivery, _, _} = Del}, State0) ->
     State = record_delivery(Leader, Del, State0),
     {Del, State}.
