@@ -4,10 +4,24 @@
 -include_lib("common_test/include/ct.hrl").
 
 all() -> [
- publish_ack_inet_tcp_proxy
- % ,
-% publish_ack_iptables
+ {group, client_local},
+ {group, client_on_cluster}
 ].
+
+groups() ->
+    Tests =
+        [publish_ack_inet_tcp_proxy
+         % ,
+        % publish_ack_iptables
+        ],
+    [{client_local, [], Tests}, {client_on_cluster, [], Tests}].
+
+init_per_group(client_local, Config) ->
+    [{client_on, local} | Config];
+init_per_group(client_on_cluster, Config) ->
+    [{client_on, cluster} | Config].
+
+end_per_group(_, Config) -> ok.
 
 init_per_testcase(TestCase, Config0) ->
     error_logger:tty(false),
@@ -45,8 +59,15 @@ publish_ack(Config) ->
     Nodes = ?config(nodes, Config),
 
     NodeIds = [{Name, N} || N <- Nodes],
-    PublisherNode = get_random_node(Nodes),
-    ConsumerNode = get_random_node(Nodes),
+
+    PublisherNode = case ?config(client_on, Config) of
+        cluster -> get_random_node(Nodes);
+        local   -> node()
+    end,
+    ConsumerNode = case ?config(client_on, Config) of
+        cluster -> get_random_node(Nodes);
+        local   -> node()
+    end,
 
     Publisher = spawn_publisher(PublisherNode, NodeIds, 1000, self(), 30000),
     Consumer = spawn_consumer(ConsumerNode, NodeIds, 1000, self(), 20000),
@@ -56,16 +77,21 @@ publish_ack(Config) ->
 
     start_delayed(Nemesis),
  %timer:sleep(10000000),
-    wait_for_publisher_and_consumer(Publisher, Consumer, false, false).
+    wait_for_publisher_and_consumer(Publisher, Consumer, false, false, Nemesis).
 
-wait_for_publisher_and_consumer(Publisher, Consumer, true, true) ->
+wait_for_publisher_and_consumer(Publisher, Consumer, true, true, Nemesis) ->
     ok;
-wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished) ->
+wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished, Nemesis) ->
     receive
+        % finish_send ->
+        %     Nemesis ! finish_send,
+        %     wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished, Nemesis);
         {consumed, UniqDelivered, Delivered, Applied, Settled, State} ->
-            ct:log("Consume end Delivered ~p ~p~n Applied settle ~p ~p~n Ok settle ~p ~p~n",
-                   [UniqDelivered, Delivered, length(Applied), Applied, length(Settled), Settled]),
-            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, true);
+            ct:pal("Consume end Delivered ~p~n Settle ~p~n Applied settle ~p~n",
+                   [UniqDelivered, length(Settled), length(Applied)]),
+            ct:log("Consume end Delivered ~p ~p~n Settle ~p ~p~n Applied settle ~p ~p~n",
+                   [UniqDelivered, Delivered, length(Settled), Settled, length(Applied), Applied]),
+            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, true, Nemesis);
         {published, Sent, Acked, State} ->
             ct:pal("Publish end Sent ~p~n Acked ~p~n ",
                    [length(Sent), length(Acked)]),
@@ -73,14 +99,14 @@ wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, Consumer
                   [length(Sent), Sent, length(Acked), Acked, State]),
             %% Do not wait for nacked messages on consumers
             Consumer ! {publish_end, length(Acked)},
-            wait_for_publisher_and_consumer(Publisher, Consumer, true, ConsumerFinished);
+            wait_for_publisher_and_consumer(Publisher, Consumer, true, ConsumerFinished, Nemesis);
         {publisher_in_progress, Sent, Acked, State} ->
             ct:pal("Still waiting on publisher~n Sent ~p~n Acked ~p~n", [length(Sent), length(Acked)]),
-            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished);
+            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished, Nemesis);
         {consumer_in_progress, UniqDelivered, Delivered, Applied, Settled, MsgCount} ->
-            ct:pal("Still waiting on consumer.~n Delivered ~p ~p~n Applied ~p~n Settles sent ~p~n MsgCount ~p~n",
+            ct:pal("Still waiting on consumer.~n Delivered unique ~p~n Delivered total ~p~n Applied ~p~n Settles sent ~p~n MsgCount ~p~n",
                    [UniqDelivered, length(Delivered), length(Applied), length(Settled), MsgCount]),
-            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished)
+            wait_for_publisher_and_consumer(Publisher, Consumer, PublisherFinished, ConsumerFinished, Nemesis)
     end.
 
 erlang_nodes(5) ->
@@ -170,12 +196,13 @@ spawn_publisher(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
 	    State = ra_fifo_client:init(NodeIds),
 	    Publisher({State, 1, [], [], TimeToWaitForAcks0});
 	Publisher({State, N, Sent, Acked, TimeToWaitForAcks}) ->
-
 	    {Sent1, N1, Wait, State1} = case N-1 of
-                MessageCount -> {Sent, N, 1000};
+                MessageCount ->
+                    % Pid ! finish_send,
+                    {Sent, N, 1000, State};
                 _            ->
                     timer:sleep(100),
-                    {ok, SeqNo, NewState} = ra_fifo_client:enqueue(N, State),
+                    {ok, SeqNo, NewState} = ra_fifo_client:enqueue({foo, N}, State),
                     {[SeqNo | Sent], N+1, 0, NewState}
             end,
             receive
@@ -201,7 +228,7 @@ spawn_publisher(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
                                     case length(Sent1) of
                                         MessageCount ->
                                             ct:pal("Still waiting on publisher ~p~n", [Other]),
-                                            Pid ! {publisher_in_progress, Sent1, Acked, State},
+                                            Pid ! {publisher_in_progress, Sent1, Acked, State1},
                                             print_metrics(erlang_nodes(5)),
                                             %% Keep waiting for acks and nacks
                                             Publisher({State1, N1, Sent1, Acked, TimeToWaitForAcks - Wait});
@@ -231,10 +258,13 @@ spawn_nemesis(Nodes, Partition, TimeForPartition, TimeForHeal, NemesisType) ->
     spawn_delayed(
         fun Nemesis(ok) ->
             UnblockFun(Nodes),
-            wait(TimeForHeal),
-            BlockFun(Partition, Nodes),
-            wait(TimeForPartition),
-            Nemesis(ok)
+            % receive finish_send -> ok
+            % after 0 ->
+                wait(TimeForHeal),
+                BlockFun(Partition, Nodes),
+                wait(TimeForPartition),
+                Nemesis(ok)
+            % end
         end,
         ok).
 
