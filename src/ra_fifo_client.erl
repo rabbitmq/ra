@@ -207,14 +207,21 @@ checkout(CustomerTag, NumUnsettled, State) ->
 -spec handle_ra_event(ra_node_proc:ra_event_body(), state()) ->
     {internal, AppliedSeqs :: [non_neg_integer()], state()} |
     {ra_fifo:client_msg(), state()}.
-handle_ra_event({applied, _From, Seq}, State) ->
+handle_ra_event({applied, _From, Seq},
+                #state{pending = Pending} = State) ->
     % applied notifications should arrive in order
     % here we can detect if a sequence number was missed and resend it
     % TODO: bookkeeping
-    {internal, [Seq], State};
-handle_ra_event({rejected, _From, {not_leader, _Leader, _Seq} = Det}, _State) ->
-    % need to resend to leader if not undefined
-    exit({rejected_not_impl, Det});
+    {internal, [Seq], State#state{pending = maps:remove(Seq, Pending)}};
+handle_ra_event({rejected, _From, {not_leader, undefined, _Seq}}, State0) ->
+    % TODO: how should these be handled? re-sent on timer or try random
+    {internal, [], State0};
+handle_ra_event({rejected, _From, {not_leader, Leader, Seq}},
+                #state{pending = Pending} = State) ->
+    % NB: this does not handle ordering
+    Command = maps:get(Seq, Pending),
+    ok = ra:send_and_notify(Leader, Command, Seq),
+    {internal, [], State};
 handle_ra_event({machine, Leader, {delivery, _, _} = Del}, State0) ->
     State = record_delivery(Leader, Del, State0),
     {Del, State}.

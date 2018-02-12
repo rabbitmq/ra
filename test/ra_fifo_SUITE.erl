@@ -16,6 +16,7 @@ all() ->
 all_tests() ->
     [
      ra_fifo_client_basics,
+     ra_fifo_client_handles_reject_notification,
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
@@ -99,7 +100,7 @@ ra_fifo_client_basics(Config) ->
     {ok, _, FState6} = ra_fifo_client:enqueue(two, FState5b),
     % process applied event
     FState6b = process_ra_event(FState6, 250),
-    % _ = ra:send_and_await_consensus(NodeId, {enqueue, two}),
+
     receive
         {ra_event, E} ->
             case ra_fifo_client:handle_ra_event(E, FState6b) of
@@ -114,6 +115,31 @@ ra_fifo_client_basics(Config) ->
               exit(await_msg_timeout)
     end,
     ra:stop_node(NodeId),
+    ok.
+
+ra_fifo_client_handles_reject_notification(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId1 = ?config(node_id, Config),
+    NodeId2 = ?config(node_id2, Config),
+    UId1 = ?config(uid, Config),
+    CId = {UId1, self()},
+    UId2 = ?config(uid2, Config),
+    Conf1 = conf(UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
+    Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
+    _ = ra:start_node(Conf1),
+    _ = ra:start_node(Conf2),
+    ok = ra:trigger_election(NodeId1),
+    _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
+    % reverse order - should try the first node in the list first
+    F0 = ra_fifo_client:init([NodeId2, NodeId1]),
+    {ok, _Seq, F1} = ra_fifo_client:enqueue(one, F0),
+
+    timer:sleep(500),
+
+    % the applied notification
+    _F2 = process_ra_event(F1, 250),
+    ra:stop_node(NodeId1),
+    ra:stop_node(NodeId2),
     ok.
 
 leader_monitors_customer(Config) ->
