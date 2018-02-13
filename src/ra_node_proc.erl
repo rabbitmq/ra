@@ -587,8 +587,7 @@ send_rpc(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
 send_ra_event(To, Msg, EvtType, State) ->
-    Id = id(State),
-    send(To, {ra_event, {EvtType, Id, Msg}}).
+    send(To, {ra_event, id(State), {EvtType, Msg}}).
 
 id(#state{node_state = NodeState}) ->
     ra_node:id(NodeState).

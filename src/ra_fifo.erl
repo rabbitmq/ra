@@ -108,7 +108,7 @@
 
 -export_type([protocol/0,
               delivery/0,
-              customer_id/0,
+              command/0,
               customer_tag/0,
               client_msg/0,
               msg/0,

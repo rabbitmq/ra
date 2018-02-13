@@ -11,7 +11,7 @@
          dequeue/3,
          settle/3,
          return/3,
-         handle_ra_event/2
+         handle_ra_event/3
          ]).
 
 -include("ra.hrl").
@@ -175,8 +175,8 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %%
 %% ```
 %%  receive
-%%     {ra_event, Evt} ->
-%%         case ra_fifo_client:handle_ra_event(Evt, State0) of
+%%     {ra_event, From, Evt} ->
+%%         case ra_fifo_client:handle_ra_event(From, Evt, State0) of
 %%             {internal, _Seq, State} -> State;
 %%             {{delivery, _CustomerTag, Msgs}, State} ->
 %%                  handle_messages(Msgs),
@@ -185,6 +185,7 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %%  end
 %% '''
 %%
+%% @param From the {@link ra_node_id().} of the sending process.
 %% @param Event the body of the `ra_event'.
 %% @param State the current {@module} state.
 %%
@@ -204,25 +205,26 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %% <li>`MsgId' is a customer scoped monotonically incrementing id that can be
 %% used to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished
 %% with them.</li>
--spec handle_ra_event(ra_node_proc:ra_event_body(), state()) ->
+-spec handle_ra_event(ra_node_proc:ra_event_body(), ra_node_id(), state()) ->
     {internal, AppliedSeqs :: [non_neg_integer()], state()} |
     {ra_fifo:client_msg(), state()}.
-handle_ra_event({applied, _From, Seq},
+handle_ra_event(From, {applied, Seq},
                 #state{pending = Pending} = State) ->
     % applied notifications should arrive in order
     % here we can detect if a sequence number was missed and resend it
     % TODO: bookkeeping
-    {internal, [Seq], State#state{pending = maps:remove(Seq, Pending)}};
-handle_ra_event({rejected, _From, {not_leader, undefined, _Seq}}, State0) ->
+    {internal, [Seq], State#state{pending = maps:remove(Seq, Pending),
+                                  leader = From}};
+handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
     % TODO: how should these be handled? re-sent on timer or try random
     {internal, [], State0};
-handle_ra_event({rejected, _From, {not_leader, Leader, Seq}},
+handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}},
                 #state{pending = Pending} = State) ->
     % NB: this does not handle ordering
     Command = maps:get(Seq, Pending),
     ok = ra:send_and_notify(Leader, Command, Seq),
     {internal, [], State#state{leader = Leader}};
-handle_ra_event({machine, Leader, {delivery, _, _} = Del}, State0) ->
+handle_ra_event(Leader, {machine, {delivery, _, _} = Del}, State0) ->
     State = record_delivery(Leader, Del, State0),
     {Del, State}.
 

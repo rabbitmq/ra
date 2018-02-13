@@ -77,8 +77,8 @@ ra_fifo_client_basics(Config) ->
     FState3 = process_ra_event(FState2, 250),
 
     FState5 = receive
-                  {ra_event, Evt} ->
-                      case ra_fifo_client:handle_ra_event(Evt, FState3) of
+                  {ra_event, From, Evt} ->
+                      case ra_fifo_client:handle_ra_event(From, Evt, FState3) of
                           {internal, _AcceptedSeqs, _FState4} ->
                               exit(unexpected_internal_event);
                           {{delivery, C, [{MsgId, _Msg}]}, FState4} ->
@@ -102,8 +102,8 @@ ra_fifo_client_basics(Config) ->
     FState6b = process_ra_event(FState6, 250),
 
     receive
-        {ra_event, E} ->
-            case ra_fifo_client:handle_ra_event(E, FState6b) of
+        {ra_event, Frm, E} ->
+            case ra_fifo_client:handle_ra_event(Frm, E, FState6b) of
                 {internal, _, _FState7} ->
                     ct:pal("unexpected event ~p~n", [E]),
                     exit({unexpected_internal_event, E});
@@ -224,7 +224,7 @@ node_is_deleted(Config) ->
     {ok, _, _} = ra:send_and_await_consensus(NodeId,
                                              {checkout, {auto, 10}, CId}),
     receive
-        {ra_fifo, _, Evt} ->
+        {ra_event, _, Evt} ->
             exit({unexpected_machine_event, Evt})
     after 500 -> ok
     end,
@@ -272,7 +272,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, CId}),
     {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     receive
-        {ra_event, {machine, _, {delivery, C, [{MsgId, _}]}}} ->
+        {ra_event, _, {machine, {delivery, C, [{MsgId, _}]}}} ->
             {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
     after 2000 ->
               exit(ra_fifo_event_timeout)
@@ -284,7 +284,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
 
     %  check message isn't received again
     receive
-        {ra_event, {machine, _, {delivery, _, _}}} ->
+        {ra_event, _, {machine, {delivery, _, _}}} ->
             exit(unexpected_ra_fifo_event)
     after 1000 ->
               ok
@@ -350,9 +350,9 @@ conf(UId, NodeId, Dir, Peers) ->
 
 process_ra_event(State, Wait) ->
     receive
-        {ra_event, Evt} ->
+        {ra_event, From, Evt} ->
             ct:pal("processed ra event ~p~n", [Evt]),
-            {internal, _, S} = ra_fifo_client:handle_ra_event(Evt, State),
+            {internal, _, S} = ra_fifo_client:handle_ra_event(From, Evt, State),
             S
     after Wait ->
               exit(ra_event_timeout)
@@ -360,8 +360,8 @@ process_ra_event(State, Wait) ->
 
 process_ra_events(State0, Wait) ->
     receive
-        {ra_event, Evt} ->
-            {internal, _, State} = ra_fifo_client:handle_ra_event(Evt, State0),
+        {ra_event, From, Evt} ->
+            {internal, _, State} = ra_fifo_client:handle_ra_event(From, Evt, State0),
             process_ra_event(State, Wait)
     after Wait ->
               State0
