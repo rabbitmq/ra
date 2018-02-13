@@ -57,11 +57,18 @@ return(Key, Value, #state{data = Data} = State)
     State#state{data = maps:put(Key, Value, Data)}.
 
 -spec delete(integer(), state()) -> state().
-delete(Smallest, #state{data = Data,
+delete(Smallest, #state{data = Data0,
                         largest = Largest,
                         smallest = Smallest} = State) ->
-    State#state{data = maps:remove(Smallest, Data),
-                smallest = find_next(Smallest+1, Largest, Data)};
+    Data = maps:remove(Smallest, Data0),
+    case find_next(Smallest + 1, Largest, Data) of
+        undefined ->
+            State#state{data = Data,
+                        smallest = undefined,
+                        largest = undefined};
+        Next ->
+            State#state{data = Data, smallest = Next}
+    end;
 delete(Smallest, #state{data = Data} = State) ->
     State#state{data = maps:remove(Smallest, Data)}.
 
@@ -139,7 +146,6 @@ append_test() ->
     2 = size(S4),
     {1, one} = smallest(S4),
     S5 = delete(2, delete(1, S4)),
-    ?debugFmt("S5 ~p~n", [S5]),
     undefined = smallest(S5),
     0 = size(S0),
     ok.

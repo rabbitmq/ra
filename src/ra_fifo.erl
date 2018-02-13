@@ -21,10 +21,19 @@
 -type raw_msg() :: term().
 %% The raw message. It is opaque to ra_fifo.
 
+-type msg_in_id() :: non_neg_integer().
+% a queue scoped monotonically incrementing integer used to enforce order
+% in the unassigned messages map
+
 -type msg_id() :: non_neg_integer().
 %% A customer-scoped monotonically incrementing integer included with a
-%% {@link delivery/0.}. Used to settle deliveris using
+%% {@link delivery/0.}. Used to settle deliveries using
 %% {@link ra_fifo_client:settle/3.}
+
+-type msg_seqno() :: non_neg_integer().
+%% A sender process scoped monotonically incrementing integer included
+%% in enqueue messages. Used to ensure ordering of messages send from the
+%% same process
 
 -type msg_header() :: #{delivery_count => non_neg_integer()}.
 %% The message header map:
@@ -33,6 +42,8 @@
 
 -type msg() :: {msg_header(), raw_msg()}.
 %% message with a header map.
+
+-type indexed_msg() :: {ra_index(), msg()}.
 
 -type delivery_msg() :: {msg_id(), msg()}.
 %% A tuple consisting of the message id and the headered message.
@@ -51,12 +62,14 @@
                          {get, settled | unsettled}.
 
 -type protocol() ::
-    {enqueue, Msg :: raw_msg()} |
+    {enqueue, Sender :: pid(), MsgSeq :: msg_seqno(), Msg :: raw_msg()} |
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgId :: msg_id(), Customer :: customer_id()} |
     {return, MsgId :: msg_id(), Customer :: customer_id()}.
 
 -type command() :: protocol() | ra_machine:builtin_command().
+%% all the command types suppored by ra fifo
+
 -type metrics() :: {Name :: atom(),
                     Enqueued :: non_neg_integer(),
                     CheckedOut :: non_neg_integer(),
@@ -72,7 +85,7 @@
 % {Key, Enqueues, Checkouts, Settlements, Returns}
 
 -record(customer,
-        {checked_out = #{} :: #{msg_id() => {ra_index(), msg()}},
+        {checked_out = #{} :: #{msg_id() => {msg_in_id(), indexed_msg()}},
          next_msg_id = 0 :: msg_id(), % part of snapshot data
          num = 0 :: non_neg_integer(), % part of snapshot data
          % number of allocated messages
@@ -80,29 +93,43 @@
          seen = 0 :: non_neg_integer(),
          lifetime = once :: once | auto}).
 
--record(state, {name :: atom(),
-                % unassigned messages
-                messages = #{} :: #{ra_index() => msg()},
-                enqueue_count = 0 :: non_neg_integer(),
-                % master index of all enqueue raft indexes
-                % ra_fifo_index so that can take the smallest
-                % gb_trees were too slow for insert heavy workloads
-                % ra_fifo_index can also be slow when calculating the smallest
-                % index when there are large gaps
-                ra_indexes = ra_fifo_index:empty() :: ra_fifo_index:state(),
-                % defines the lowest index available in the messages map
-                low_index :: ra_index() | undefined,
-                % the raft index of the first enqueue operation that
-                % contribute to the current state
-                first_enqueue_raft_index :: ra_index() | undefined,
-                % customers need to reflect customer state at time of snapshot
-                % needs to be part of snapshot
-                customers = #{} :: #{customer_id() => #customer{}},
-                % customers that require further service are queued here
-                % needs to be part of snapshot
-                service_queue = queue:new() :: queue:queue(customer_id()),
-                metrics :: metrics()
-               }).
+-record(enqueuer,
+        {next_seqno = 1 :: msg_seqno(),
+         % out of order enqueues - sorted list
+         pending = [] :: [{msg_seqno(), ra_index(), raw_msg()}]
+        }).
+
+-record(state,
+        {name :: atom(),
+         % unassigned messages
+         messages = #{} :: #{msg_in_id() => indexed_msg()},
+         % defines the lowest message in id available in the messages map
+         low_msg_num :: msg_in_id() | undefined,
+         % defines the next message in id to be added to the messages map
+         next_msg_num = 1 :: msg_in_id(),
+         % a counter of enqueues - used to trigger shadow copy points
+         enqueue_count = 0 :: non_neg_integer(),
+         % a map containing all the live processes that have ever enqueued
+         % a message to this queue as well as a cached value of the smallest
+         % ra_index of all pending enqueues
+         enqueuers = #{} :: #{pid() => #enqueuer{}},
+         % master index of all enqueue raft indexes including pending
+         % enqueues
+         % ra_fifo_index can be slow when calculating the smallest
+         % index when there are large gaps but should be faster than gb_trees
+         % for normal appending operations - backed by a map
+         ra_indexes = ra_fifo_index:empty() :: ra_fifo_index:state(),
+         % the raft index of the first enqueue operation that
+         % contribute to the current state
+         smallest_enqueue_raft_index :: ra_index() | undefined,
+         % customers need to reflect customer state at time of snapshot
+         % needs to be part of snapshot
+         customers = #{} :: #{customer_id() => #customer{}},
+         % customers that require further service are queued here
+         % needs to be part of snapshot
+         service_queue = queue:new() :: queue:queue(customer_id()),
+         metrics :: metrics()
+        }).
 
 -opaque state() :: #state{}.
 
@@ -113,6 +140,7 @@
               client_msg/0,
               msg/0,
               msg_id/0,
+              msg_seqno/0,
               delivery_msg/0,
               state/0]).
 
@@ -129,22 +157,70 @@ incr_enqueue_count(#state{enqueue_count = C} = State)
 incr_enqueue_count(#state{enqueue_count = C} = State) ->
     {State#state{enqueue_count = C + 1}, undefined}.
 
+enqueue(RaftIdx, RawMsg, #state{messages = Messages,
+                                low_msg_num = LowMsgNum,
+                                next_msg_num = NextMsgNum} = State0) ->
+    Msg = {RaftIdx, {#{}, RawMsg}}, % indexed message with header map
+    State0#state{messages = Messages#{NextMsgNum => Msg},
+                 low_msg_num = min(LowMsgNum, NextMsgNum),
+                 next_msg_num = NextMsgNum + 1}.
+
+append_to_master_index(RaftIdx,
+                       #state{smallest_enqueue_raft_index = SmallestEnqueueIdx,
+                              ra_indexes = Indexes0} = State0) ->
+    {State, Shadow} = incr_enqueue_count(State0),
+    Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
+    State#state{ra_indexes = Indexes,
+                smallest_enqueue_raft_index = min(RaftIdx,
+                                                  SmallestEnqueueIdx)}.
+
+enqueue_pending(From,
+                #enqueuer{next_seqno = Next,
+                          pending = [{Next, RaftIdx, RawMsg} | Pending]} = Enq0,
+                State0) ->
+            State = enqueue(RaftIdx, RawMsg, State0),
+            Enq = Enq0#enqueuer{next_seqno = Next + 1, pending = Pending},
+            enqueue_pending(From, Enq, State);
+enqueue_pending(From, Enq, #state{enqueuers = Enqueuers0} = State) ->
+    State#state{enqueuers = Enqueuers0#{From => Enq}}.
+
+maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
+              #state{enqueuers = Enqueuers0} = State0) ->
+    case maps:get(From, Enqueuers0, undefined) of
+        undefined ->
+            State1 = State0#state{enqueuers = Enqueuers0#{From => #enqueuer{}}},
+            {State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
+                                             RawMsg, State1),
+            {State, [{monitor, process, From} | Effects]};
+        #enqueuer{next_seqno = MsgSeqNo,
+                  pending = _Pending} = Enq0 ->
+            % it is the next expected seqno
+            State1 = enqueue(RaftIdx, RawMsg, State0),
+            Enq = Enq0#enqueuer{next_seqno = MsgSeqNo + 1},
+            State = enqueue_pending(From, Enq, State1),
+            {State, []};
+        #enqueuer{next_seqno = Next,
+                  pending = Pending0} = Enq0
+          when MsgSeqNo > Next ->
+            % out of order delivery
+            Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
+            Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
+            {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
+        #enqueuer{next_seqno = Next,
+                  pending = _Pending} = _Enq0
+          when MsgSeqNo =< Next ->
+            % duplicate delivery
+            exit(dupe_delivery_not_impl)
+    end.
+
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
 -spec apply(ra_index(), command(), state()) ->
     {state(), ra_machine:effects()}.
-apply(RaftIdx, {enqueue, RawMsg}, #state{ra_indexes = Indexes0,
-                                      messages = Messages,
-                                      first_enqueue_raft_index = FirstEnqueueIdx,
-                                      low_index = Low} = State00) ->
-    Msg = {#{}, RawMsg}, % msg with header map
-    {State0, Shadow} = incr_enqueue_count(State00),
-    Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
-    State1 = State0#state{ra_indexes = Indexes,
-                          messages = Messages#{RaftIdx => Msg},
-                          first_enqueue_raft_index = min(RaftIdx, FirstEnqueueIdx),
-                          low_index = min(RaftIdx, Low)},
-    {State2, Effects, Num} = checkout(State1, []),
+apply(RaftIdx, {enqueue, From, Seq, RawMsg}, State00) ->
+    State0 = append_to_master_index(RaftIdx, State00),
+    {State1, Effects0} = maybe_enqueue(RaftIdx, From, Seq, RawMsg, State0),
+    {State2, Effects, Num} = checkout(State1, Effects0),
     State = incr_metrics(State2, {1, Num, 0, 0}),
     {State, Effects};
 apply(RaftIdx, {settle, MsgId, CustomerId},
@@ -157,8 +233,9 @@ apply(RaftIdx, {settle, MsgId, CustomerId},
                     % we must be recovering after a snapshot
                     % in this case it should not have any effect on the final
                     % state
-                    {State, []};
-                {{MsgRaftIdx, _}, Checked} ->
+                    % still need to increment metrics
+                    {incr_metrics(State, {0, 0, 1, 0}), []};
+                {{_MsgNum, {MsgRaftIdx, _}}, Checked} ->
                     settle(RaftIdx, CustomerId, MsgRaftIdx,
                            Cust0, Checked, State)
             end;
@@ -199,8 +276,8 @@ apply(_RaftId, {return, MsgId, CustomerId},
                     % in this case it should not have any effect on the final
                     % state
                     {State, []};
-                {{MsgRaftIdx, Msg}, Checked} ->
-                    return(CustomerId, MsgRaftIdx, Msg,
+                {{MsgNum, Msg}, Checked} ->
+                    return(CustomerId, MsgNum, Msg,
                            Cust0, Checked, State)
             end;
         _ ->
@@ -218,8 +295,8 @@ apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
               fun(CustomerId, S0) ->
                       case maps:take(CustomerId, Custs0) of
                           {#customer{checked_out = Checked0}, Custs} ->
-                              S1 = maps:fold(fun (_MsgId, {RaftId, Msg}, S) ->
-                                                     return_one(RaftId, Msg, S)
+                              S1 = maps:fold(fun (_MsgId, {MsgNum, Msg}, S) ->
+                                                     return_one(MsgNum, Msg, S)
                                              end, S0, Checked0),
                               S = incr_metrics(S1, {0, 0, 0,
                                                     maps:size(Checked0)}),
@@ -254,16 +331,15 @@ overview(#state{customers = Custs,
 incr_metrics(#state{metrics = {N, E0, C0, S0, R0}} = State, {E, C, S, R}) ->
     State#state{metrics = {N, E0 + E, C0 + C, S0 + S, R0 + R}}.
 
-return(CustomerId, MsgRaftIdx, Msg, Cust0, Checked,
+return(CustomerId, MsgNum, Msg, Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0} = State0) ->
     Cust = Cust0#customer{checked_out = Checked,
                           seen = Cust0#customer.seen - 1},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
-    State1 = return_one(MsgRaftIdx, Msg, State0),
-    {State2, Effects, NumChecked} =
-        checkout(State1#state{customers = Custs,
-                              service_queue = SQ},
-                 Effects0),
+    State1 = return_one(MsgNum, Msg, State0),
+    {State2, Effects, NumChecked} = checkout(State1#state{customers = Custs,
+                                                          service_queue = SQ},
+                                             Effects0),
     State = incr_metrics(State2, {0, NumChecked, 0, 1}),
     {State, Effects}.
 
@@ -279,48 +355,50 @@ settle(IncomingRaftIdx, CustomerId, MsgRaftIdx, Cust0, Checked,
                               service_queue = SQ},
                  Effects0),
     State = incr_metrics(State1, {0, NumChecked, 1, 0}),
-    update_first_enqueue_raft_index(IncomingRaftIdx,
-                                    MsgRaftIdx, Effects,
-                                    State).
+    update_smallest_enqueue_raft_index(IncomingRaftIdx,
+                                       MsgRaftIdx, Effects,
+                                       State).
 
-update_first_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
-                                #state{first_enqueue_raft_index = First,
-                                       ra_indexes = Indexes} = State) ->
+update_smallest_enqueue_raft_index(IncomingRaftIdx, MsgRaftIdx, Effects,
+                                   #state{smallest_enqueue_raft_index = SERI,
+                                          ra_indexes = Indexes} = State) ->
     case ra_fifo_index:size(Indexes) of
         0 ->
-            % there are no messages on queue anymore
+            % there are no messages on queue anymore and no pending enqueues
             % we can forward release_cursor all the way until
             % the last received command
-            {State#state{first_enqueue_raft_index = undefined},
+            {State#state{smallest_enqueue_raft_index = undefined},
              [{release_cursor, IncomingRaftIdx, shadow_copy(State)} | Effects]};
-        _ when First =:= MsgRaftIdx ->
-            % the first_enqueue_raft_index can be fowarded to next
+        _ when SERI =:= MsgRaftIdx->
+            % the smallest_enqueue_raft_index can be forwarded to next
             % available message
             case ra_fifo_index:smallest(Indexes) of
                  {Smallest, undefined} ->
-                    % no shadow taken, no release cursor increase
-                    {State#state{first_enqueue_raft_index = Smallest},
+                    % no shadow taken for this index,
+                    % no release cursor increase
+                    {State#state{smallest_enqueue_raft_index = Smallest},
                      Effects};
                  {Smallest, Shadow} ->
                     % we emit the last index _not_ to contribute to the
                     % current state - hence the -1
-                    {State#state{first_enqueue_raft_index = Smallest},
+                    {State#state{smallest_enqueue_raft_index = Smallest},
                      [{release_cursor, Smallest - 1, Shadow} | Effects]}
             end;
         _ ->
-            % first_enqueue_raft_index  cannot be forwarded
+            % smallest_enqueue_raft_index cannot be forwarded
             {State, Effects}
     end.
 
-return_one(RaftId, {Header0, RawMsg}, #state{messages = Messages,
-                               low_index = Low0} = State0) ->
+return_one(MsgNum, {RaftId, {Header0, RawMsg}},
+           #state{messages = Messages, low_msg_num = Low0} = State0) ->
 
     Header = maps:update_with(delivery_count,
                               fun (C) -> C+1 end,
                               1, Header0),
+    Msg = {RaftId, {Header, RawMsg}},
     % this should not affect the release cursor in any way
-    State0#state{messages = maps:put(RaftId, {Header, RawMsg}, Messages),
-                 low_index = min(RaftId, Low0)}.
+    State0#state{messages = maps:put(MsgNum, Msg, Messages),
+                 low_msg_num = min(MsgNum, Low0)}.
 
 
 checkout(State, Effects) ->
@@ -332,13 +410,13 @@ checkout0({State, Efxs}, Effects, Num) ->
     checkout0(checkout_one(State), Efxs ++ Effects, Num + 1).
 
 checkout_one(#state{messages = Messages0,
-                    low_index = LowIdx,
-                    ra_indexes = Indexes,
+                    low_msg_num = Low0,
+                    next_msg_num = NextMsgNum,
                     service_queue = SQ0,
                     customers = Custs0} = State0) ->
     % messages are available
-    case maps:take(LowIdx, Messages0) of
-        {Msg, Messages} ->
+    case maps:take(Low0, Messages0) of
+        {{_, Msg} = IdxMsg, Messages} ->
             % there are customers waiting to be serviced
             case queue:out(SQ0) of
                 {{value, {CTag, CPid} = CustomerId}, SQ1} ->
@@ -347,14 +425,15 @@ checkout_one(#state{messages = Messages0,
                         #customer{checked_out = Checked0,
                                   next_msg_id = Next,
                                   seen = Seen} = Cust0 ->
-                            Checked = maps:put(Next, {LowIdx, Msg}, Checked0),
+                            Checked = maps:put(Next, {Low0, IdxMsg}, Checked0),
                             Cust = Cust0#customer{checked_out = Checked,
                                                   next_msg_id = Next+1,
                                                   seen = Seen+1},
                             {Custs, SQ, []} = % we expect no effects
                                 update_or_remove_sub(CustomerId, Cust, Custs0, SQ1),
+                            Low = new_low(Low0, NextMsgNum, Messages),
                             State = State0#state{service_queue = SQ,
-                                                 low_index = ra_fifo_index:next_key_after(LowIdx, Indexes),
+                                                 low_msg_num = Low, %/ra_fifo_index:next_key_after(LowIdx, Indexes),
                                                  messages = Messages,
                                                  customers = Custs},
                             {State, [{send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}]};
@@ -368,6 +447,23 @@ checkout_one(#state{messages = Messages0,
         error ->
             {State0, []}
     end.
+
+new_low(_Prev, _Max, Messages) when map_size(Messages) =:= 0 ->
+    undefined;
+new_low(_Prev, _Max, Messages) when map_size(Messages) < 100 ->
+    % guesstimate value - needs measuring
+    lists:min(maps:keys(Messages));
+new_low(Prev, Max, Messages) ->
+    walk_map(Prev+1, Max, Messages).
+
+walk_map(N, Max, Map) when N =< Max ->
+    case maps:is_key(N, Map) of
+        true -> N;
+        false ->
+            walk_map(N+1, Max, Map)
+    end;
+walk_map(_, _, _) ->
+    undefined.
 
 
 update_or_remove_sub(CustomerId, #customer{lifetime = once,
@@ -444,19 +540,21 @@ size_test(NumMsg, NumCust) ->
     CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
     S0 = run_log(1, NumMsg, EnqGen, init(size_test)),
     S = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
-    S2 = S#state{ra_indexes = ra_fifo_index:map(fun(_, _) -> undefined end, S#state.ra_indexes)},
+    S2 = S#state{ra_indexes = ra_fifo_index:map(fun(_, _) -> undefined end,
+                                                S#state.ra_indexes)},
     {erts_debug:size(S), erts_debug:size(S2)}.
 
 perf_test(NumMsg, NumCust) ->
-    timer:tc(fun () ->
-                     EnqGen = fun(N) -> {N, {enqueue, N}} end,
-                     Pid = spawn(fun() -> ok end),
-                     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
-                     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-                     S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
-                     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
-                     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
-                     ok
+    timer:tc(
+      fun () ->
+              EnqGen = fun(N) -> {N, {enqueue, self(), N, N}} end,
+              Pid = spawn(fun() -> ok end),
+              CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
+              SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
+              S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
+              S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
+              _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
+              ok
              end).
 
 % profile(File) ->
@@ -481,19 +579,24 @@ run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
     run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
 
-shadow_copy(#state{customers = Customers} = State) ->
+shadow_copy(#state{customers = Customers,
+                   enqueuers = Enqueuers0} = State) ->
+    Enqueuers = maps:map(fun (_, E) -> E#enqueuer{pending = []}
+                         end, Enqueuers0),
     % creates a copy of the current state suitable for snapshotting
     State#state{messages = #{},
                 ra_indexes = ra_fifo_index:empty(),
-                low_index = undefined,
-                first_enqueue_raft_index = undefined,
+                low_msg_num = undefined,
+                smallest_enqueue_raft_index = undefined,
                 % TODO: optimise
                 % this is inefficient (from a memory use point of view)
                 % as it creates a new tuple for every customer
                 % even if they haven't changed instead we could just update a copy
                 % of the last dehydrated state with the difference
-                customers = maps:map(fun (_, V) -> V#customer{checked_out = #{}} end,
-                                     Customers)
+                customers = maps:map(fun (_, V) ->
+                                             V#customer{checked_out = #{}}
+                                     end, Customers),
+                enqueuers = Enqueuers
                }.
 
 
@@ -503,6 +606,11 @@ shadow_copy(#state{customers = Customers} = State) ->
 -define(assertEffect(EfxPat, Effects),
     ?assert(lists:any(fun (EfxPat) -> true;
                           (_) -> false
+                      end, Effects))).
+
+-define(assertNoEffect(EfxPat, Effects),
+    ?assert(not lists:any(fun (EfxPat) -> false;
+                          (_) -> true
                       end, Effects))).
 
 ensure_ets() ->
@@ -516,8 +624,8 @@ ensure_ets() ->
 
 enq_enq_checkout_test() ->
     Cid = {<<"enq_enq_checkout_test">>, self()},
-    {State1, _} = enq(1, first, element(1, init(test))),
-    {State2, _} = enq(2, second, State1),
+    {State1, _} = enq(1, 1, first, element(1, init(test))),
+    {State2, _} = enq(2, 2, second, State1),
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, Cid}, State2),
     ?assertEffect({monitor, _, _}, Effects),
@@ -527,8 +635,8 @@ enq_enq_checkout_test() ->
 enq_enq_checkout_get_test() ->
     ensure_ets(),
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
-    {State1, _} = enq(1, first, element(1, init(test))),
-    {State2, _} = enq(2, second, State1),
+    {State1, _} = enq(1, 1, first, element(1, init(test))),
+    {State2, _} = enq(2, 2, second, State1),
     % get returns a reply value
     {_State3, [{monitor, _, _}], {get, {0, {_, first}}}} =
         apply(3, {checkout, {get, unsettled}, Cid}, State2),
@@ -537,11 +645,10 @@ enq_enq_checkout_get_test() ->
 enq_enq_checkout_get_settled_test() ->
     ensure_ets(),
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
-    {State1, _} = enq(1, first, element(1, init(test))),
+    {State1, _} = enq(1, 1, first, element(1, init(test))),
     % get returns a reply value
-    {State2, Effects, {get, {0, {_, first}}}} =
+    {_State2, _Effects, {get, {0, {_, first}}}} =
         apply(3, {checkout, {get, settled}, Cid}, State1),
-    ?debugFmt("State3 post settled get ~p~nEffects~p~n", [State2, Effects]),
     ok.
 
 checkout_get_empty_test() ->
@@ -555,8 +662,8 @@ checkout_get_empty_test() ->
 release_cursor_test() ->
     ensure_ets(),
     Cid = {<<"release_cursor_test">>, self()},
-    {State1, _} = enq(1, first, element(1, init(test))),
-    {State2, _} = enq(2, second, State1),
+    {State1, _} = enq(1, 1, first, element(1, init(test))),
+    {State2, _} = enq(2, 2, second, State1),
     {State3, _} = check(Cid, 3, 10, State2),
     % no release cursor effect at this point
     {State4, []} = settle(Cid, 4, 1, State3),
@@ -569,28 +676,56 @@ checkout_enq_settle_test() ->
     ensure_ets(),
     Cid = {<<"checkout_enq_settle_test">>, self()},
     {State1, [{monitor, _, _}]} = check(Cid, 1, element(1, init(test))),
-    {State2, Effects0} = enq(2, first, State1),
+    {State2, Effects0} = enq(2, 1,  first, State1),
     ?assertEffect({send_msg, _,
                    {delivery, <<"checkout_enq_settle_test">>,
                     [{0, {_, first}}]}},
                   Effects0),
-    {State3, []} = enq(3, second, State2),
+    {State3, []} = enq(3, 2, second, State2),
     {_, _Effects} = settle(Cid, 4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
     % ?assertEffect({release_cursor, 2, _}, Effects),
     ok.
 
+out_of_order_enqueue_test() ->
+    Cid = {<<"out_of_order_enqueue_test">>, self()},
+    {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, element(1, init(test))),
+    {State2, Effects2} = enq(2, 1, first, State1),
+    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
+    % assert monitor was set up
+    ?assertEffect({monitor, _, _}, Effects2),
+    % enqueue seq num 3 and 4 before 2
+    {State3, Effects3} = enq(3, 3, third, State2),
+    ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects3),
+    {State4, Effects4} = enq(4, 4, fourth, State3),
+    % assert no further deliveries where made
+    ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects4),
+    {_State5, Effects5} = enq(5, 2, second, State4),
+    % assert two deliveries were now made
+    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, second}}]}}, Effects5),
+    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, third}}]}}, Effects5),
+    % assert order of deliviers
+    Deliveries = lists:filtermap(
+                   fun({send_msg, _, {delivery,_, [{_, {_, M}}]}}) ->
+                           {true, M};
+                      (_) ->
+                           false
+                   end, Effects5),
+    [second, third, fourth] = Deliveries,
+
+    ok.
+
 return_non_existent_test() ->
     Cid = {<<"cid">>, self()},
-    {State0, []} = enq(1, second, element(1, init(test))),
+    {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     % return non-existent
     {_State2, []} = apply(3, {return, 99, Cid}, State0),
     ok.
 
 return_checked_out_test() ->
     Cid = {<<"cid">>, self()},
-    {State0, []} = enq(1, first, element(1, init(test))),
+    {State0, [_]} = enq(1, 1, first, element(1, init(test))),
     {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
         check(Cid, 2, State0),
     % return
@@ -600,13 +735,12 @@ return_checked_out_test() ->
 
 return_auto_checked_out_test() ->
     Cid = {<<"cid">>, self()},
-    {State00, []} = enq(1, first, element(1, init(test))),
-    {State0, []} = enq(2, second, State00),
+    {State00, [_]} = enq(1, 1, first, element(1, init(test))),
+    {State0, []} = enq(2, 2, second, State00),
     {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
         check_auto(Cid, 2, State0),
     % return should include another delivery
     {_State2, Effects} = apply(3, {return, MsgId, Cid}, State1),
-    ?debugFmt("Effects ~p~n", [Effects]),
     ?assertEffect({send_msg, _,
                    {delivery, _, [{_, {#{delivery_count := 1}, first}}]}},
                   Effects),
@@ -615,7 +749,7 @@ return_auto_checked_out_test() ->
 down_customer_returns_unsettled_test() ->
     ensure_ets(),
     Cid = {<<"down_customer_returns_unsettled_test">>, self()},
-    {State0, []} = enq(1, second, element(1, init(test))),
+    {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     {State1, [{monitor, process, Pid}, _Del]} = check(Cid, 2, State0),
     {State2, []} = apply(3, {down, Pid}, State1),
     {_State, Effects} = check(Cid, 4, State2),
@@ -625,7 +759,7 @@ down_customer_returns_unsettled_test() ->
 completed_customer_yields_demonitor_effect_test() ->
     ensure_ets(),
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
-    {State0, []} = enq(1, second, element(1, init(test))),
+    {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     {State1, [{monitor, process, _}, _Msg]} = check(Cid, 2, State0),
     {_, Effects} = settle(Cid, 3, 0, State1),
     ?assertEffect({demonitor, _}, Effects),
@@ -635,7 +769,7 @@ completed_customer_yields_demonitor_effect_test() ->
 
 tick_test() ->
     ensure_ets(),
-    {State0, []} = enq(1, second, element(1, init(test))),
+    {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 0, 0}]}] =
         tick(1, State0),
     ok.
@@ -645,23 +779,25 @@ release_cursor_snapshot_state_test() ->
     Tag = <<"release_cursor_snapshot_state_test">>,
     Cid = {Tag, self()},
     OthPid = spawn(fun () -> ok end),
+    Oth = {<<"oth">>, OthPid},
     Commands = [
                 {checkout, {auto, 5}, Cid},
-                {enqueue, 0},
-                {enqueue, 1},
+                {enqueue, self(), 1, 0},
+                {enqueue, self(), 2, 1},
                 {settle, 0, Cid},
-                {enqueue, 2},
+                {enqueue, self(), 3, 2},
                 {settle, 1, Cid},
-                {checkout, {auto, 4}, {<<"oth">>, OthPid}},
-                {enqueue, 3},
-                {enqueue, 4},
+                {checkout, {auto, 4}, Oth},
+                {enqueue, self(), 4, 3},
+                {enqueue, self(), 5, 4},
                 {settle, 2, Cid},
                 {settle, 3, Cid},
-                {enqueue, 5},
-                {settle, 0, <<"oth">>},
-                {enqueue, 6},
-                {settle, 4, <<"oth">>},
-                {checkout, {once, 0}, {<<"oth">>, OthPid}}
+                {enqueue, self(), 6, 5},
+                {settle, 0, Oth},
+                {enqueue, self(), 7, 6},
+                {settle, 1, Oth},
+                {settle, 4, Cid},
+                {checkout, {once, 0}, Oth}
               ],
     Indexes = lists:seq(1, length(Commands)),
     Entries = lists:zip(Indexes, Commands),
@@ -673,7 +809,7 @@ release_cursor_snapshot_state_test() ->
                                     end, Entries),
          {S, _} = run_log(SnapState, Filtered),
          % assert log can be restored from any release cursor index
-         ?assert(S =:= State)
+         ?assertMatch(S, State)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
 
@@ -686,11 +822,14 @@ performance_test() ->
               [Taken / 1000, NumMsgs]),
     ok.
 
-enq(Idx, Msg, State) ->
-    apply(Idx, {enqueue, Msg}, State).
+enq(Idx, MsgSeq, Msg, State) ->
+    apply(Idx, {enqueue, self(), MsgSeq, Msg}, State).
 
 % deq(Cid, Idx, State) ->
 %     apply(Idx, {checkout, {get, settled}, Cid}, State).
+
+check_n(Cid, Idx, N, State) ->
+    apply(Idx, {checkout, {auto, N}, Cid}, State).
 
 check(Cid, Idx, State) ->
     apply(Idx, {checkout, {once, 1}, Cid}, State).
