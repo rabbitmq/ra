@@ -136,8 +136,8 @@ spawn_consumer(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
             {publish_end, NewMsgCount} ->
                 ct:pal("Updating message count to ~p~n", [NewMsgCount]),
                 Consumer({State, UniqDelivered, Delivered, Applied, Settled, NewMsgCount, true, TimeToWaitForAcks});
-            {ra_event, Event} ->
-                case ra_fifo_client:handle_ra_event(Event, State) of
+            {ra_event, From, Event} ->
+                case ra_fifo_client:handle_ra_event(From, Event, State) of
                     {internal, AppliedSN, State1} ->
                         Consumer({State1, UniqDelivered, Delivered, Applied ++ AppliedSN, Settled, MsgCount, PublishEnded, TimeToWaitForAcks});
                     {{delivery, CustomerTag, Msgs}, State1} ->
@@ -161,7 +161,9 @@ spawn_consumer(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
                             {UniqDelivered, Delivered},
                             Msgs),
                         Consumer({State2, UniqDelivered1, Delivered1, Applied, Settled ++ SettledSN, MsgCount, PublishEnded, TimeToWaitForAcks})
-                end
+                end;
+            Other ->
+                error({unexpected_message_on_publisher, Other})
             after 1000 ->
                 case UniqDelivered == MsgCount andalso length(Applied) == length(Settled) of
                     true ->
@@ -206,11 +208,13 @@ spawn_publisher(Node, NodeIds, MessageCount, Pid, TimeToWaitForAcks0) ->
                     {[SeqNo | Sent], N+1, 0, NewState}
             end,
             receive
-                {ra_event, Event} ->
-                    case ra_fifo_client:handle_ra_event(Event, State1) of
+                {ra_event, From, Event} ->
+                    case ra_fifo_client:handle_ra_event(From, Event, State1) of
                         {internal, AppliedSN, State2} ->
                              Publisher({State2, N1, Sent1, Acked ++ AppliedSN, TimeToWaitForAcks})
-                    end
+                    end;
+                Other ->
+                    error({unexpected_message_on_publisher, Other})
             after Wait ->
                     case length(Acked) of
                         MessageCount ->
