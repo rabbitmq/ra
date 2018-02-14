@@ -181,30 +181,39 @@ publish_n_messages(MsgCount, NodeId, EveryN, EveryFun) ->
 
 wait_for_consumption(MsgCount, NodeId, EveryN, EveryFun) ->
     ExpectedMessages = lists:seq(1, MsgCount),
-    ReceivedMessages = lists:foldl(fun(N, Received) ->
+    {_, Received} = lists:foldl(fun(_N, {State, Received0}) ->
         receive
-        {ra_fifo, _Leader, {delivery, Cid, MsgId, {msg, Msg}}} ->
-        % {ra_event, Leader, machine, {msg, MsgId, {msg, Msg}}} ->
-            case N rem EveryN of
+        {ra_event, From, Event} ->
+            case length(Received0) rem EveryN of
                 0 -> EveryFun();
                 _ -> ok
             end,
-            ct:pal("Leader is ~p~n", [_Leader]),
-            ct:pal("Awaiting consensus on: ~p~n with message ~p message Id ~p~n", [_Leader, Msg, MsgId]),
-            {ok, _Term, _NewLeader} = R =
-                ra:send_and_await_consensus(_Leader, {settle, MsgId, {Cid, self()}}, infinity),
-            ct:pal("Got consensus ~p~n", [R]),
-            [Msg | Received]
-        after 100000000 ->
-                  error(ra_event_timeout)
+            case ra_fifo_client:handle_ra_event(From, Event, State) of
+                {{delivery, CustomerTag, Msgs}, State1} ->
+                    ct:pal("Leader is ~p~n", [From]),
+
+                    [begin
+                        ct:pal("Awaiting consensus on: ~p~n with message ~p message Id ~p~n", [From, Msg, MsgId]),
+                        {ok, _, _} = R = ra:send_and_await_consensus(From, {settle, MsgId, {CustomerTag, self()}}, 50000),
+                        ct:pal("Got consensus ~p~n", [R])
+                     end
+                     || {MsgId, Msg} <- Msgs],
+                     {State1, Msgs ++ Received0};
+                Other ->
+                    error({unexpected_message, Other})
+            end
+        after 100000 ->
+            {State, Received0}
         end
     end,
-    [],
+    {ra_fifo_client:init(erlang_nodes(5)), []},
     ExpectedMessages),
-    ct:pal("Received ~p~n", [ReceivedMessages]),
+    ReceivedMsgs = [ Msg || {_, {_, {msg, Msg}}} <- Received ],
+    ct:pal("Received ~p~n", [ReceivedMsgs]),
     ct:pal("Expected ~p~n", [ExpectedMessages]),
-    [] = ReceivedMessages -- ExpectedMessages,
-    [] = ExpectedMessages -- ReceivedMessages.
+
+    [] = ReceivedMsgs -- ExpectedMessages,
+    [] = ExpectedMessages -- ReceivedMsgs.
 
 customer_id() ->  {<<"cid">>, self()}.
 
