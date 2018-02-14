@@ -8,6 +8,7 @@
          init/1,
          checkout/3,
          enqueue/2,
+         enqueue/3,
          dequeue/3,
          settle/3,
          return/3,
@@ -21,7 +22,9 @@
 -record(state, {nodes = [] :: [ra_node_id()],
                 leader :: maybe(ra_node_id()),
                 next_seq = 0 :: seq(),
-                pending = #{} :: #{seq() => ra_fifo:command()},
+                next_enqueue_seq = 1 :: seq(),
+                last_applied :: maybe(seq()),
+                pending = #{} :: #{seq() => {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()}}).
 
@@ -30,6 +33,8 @@
 -export_type([
               state/0
              ]).
+
+-define(MAX_PENDING, 1024).
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
@@ -40,10 +45,35 @@ init(Nodes) ->
     #state{nodes = Nodes}.
 
 %% @doc Enqueues a message.
+%% @param Correlation an arbitrary erlang term used to correlate this
+%% command when it has been applied.
 %% @param Msg an arbitrary erlang term representing the message.
 %% @param State the current {@module} state.
 %% @returns
-%% `{ok, SequenceNumber, State}' if the command was successfully sent.
+%% `{ok, State}' if the command was successfully sent.
+%% {@module} assigns a sequence number to every raft command it issues. The
+%% SequenceNumber can be correlated to the applied sequence numbers returned
+%% by the {@link handle_ra_event/2. handle_ra_event/2} function.
+%%
+%% `{error, stop_sending}' if the number of message not yet known to
+%% have been successfully applied by ra has reached the maximum limit.
+%% If this happens the caller should either discard or cache the requested
+%% enqueue until at least one <code>ra_event</code> has been processes.
+-spec enqueue(Correlation :: term(), Msg :: term(), State :: state()) ->
+    {ok, state()} | {error, stop_sending}.
+enqueue(Correlation, Msg, State0) ->
+    Node = pick_node(State0),
+    {Next, State1} = next_enqueue_seq(State0),
+    % by default there is no correlation id
+    Cmd = {enqueue, self(), Next, Msg},
+    State = send_command(Node, Correlation, Cmd, State1),
+    {ok, State}.
+
+%% @doc Enqueues a message.
+%% @param Msg an arbitrary erlang term representing the message.
+%% @param State the current {@module} state.
+%% @returns
+%% `{ok, State}' if the command was successfully sent.
 %% {@module} assigns a sequence number to every raft command it issues. The
 %% SequenceNumber can be correlated to the applied sequence numbers returned
 %% by the {@link handle_ra_event/2. handle_ra_event/2} function.
@@ -53,12 +83,9 @@ init(Nodes) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec enqueue(Msg :: term(), State :: state()) ->
-    {ok, Seq :: non_neg_integer(), state()} | {error, stop_sending}.
-enqueue(Msg, State0) ->
-    Node = pick_node(State0),
-    Cmd = {enqueue, Msg},
-    {[Seq], State} = send_command(Node, Cmd, [], State0),
-    {ok, Seq, State}.
+    {ok, state()} | {error, stop_sending}.
+enqueue(Msg, State) ->
+    enqueue(undefined, Msg, State).
 
 %% @doc Dequeue a message from the queue.
 %%
@@ -90,26 +117,23 @@ dequeue(CustomerTag, Settlement, State0) ->
 %% @param MsgIds the message ids received with the {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, SequenceNumbers, State}' if the command was successfully sent.
-%% {@module} assigns a sequence number to every raft command it issues. The
-%% SequenceNumbers can be correlated to the applied sequence numbers returned
-%% by the {@link handle_ra_event/2. handle_ra_event/2} function.
+%% `{ok, State}' if the command was successfully sent.
 %%
 %% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec settle(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok, MsgIds :: [non_neg_integer()], state()} | {error, stop_sending}.
+    {ok, state()} | {error, stop_sending}.
 settle(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo settle support lists of message ids
-    {Seqs, State} = lists:foldl(
-                     fun (MsgId, {Seqs, S0}) ->
-                             Cmd = {settle, MsgId, customer_id(CustomerTag)},
-                             send_command(Node, Cmd, Seqs, S0)
-                     end, {[], State0}, MsgIds),
-    {ok, lists:reverse(Seqs), State}.
+    State = lists:foldl(
+              fun (MsgId, S0) ->
+                      Cmd = {settle, MsgId, customer_id(CustomerTag)},
+                      send_command(Node, undefined, Cmd, S0)
+              end, State0, MsgIds),
+    {ok, State}.
 
 %% @doc Return a message to the queue.
 %% @param CustomerTag the tag uniquely identifying the customer.
@@ -117,26 +141,24 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
 %% from {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, SequenceNumbers, State}' if the command was successfully sent.
-%% {@module} assigns a sequence number to every raft command it issues. The
-%% SequenceNumbers can be correlated to the applied sequence numbers returned
-%% by the {@link handle_ra_event/2. handle_ra_event/2} function.
+%% `{ok, State}' if the command was successfully sent.
 %%
 %% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec return(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok, MsgIds :: [non_neg_integer()], state()} | {error, stop_sending}.
+    {ok, state()} | {error, stop_sending}.
 return(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
-    % TODO: make ra_fifo settle support lists of message ids
-    {Seqs, State} = lists:foldl(
-                     fun (MsgId, {Seqs, S0}) ->
-                             Cmd = {return, MsgId, customer_id(CustomerTag)},
-                             send_command(Node, Cmd, Seqs, S0)
-                     end, {[], State0}, MsgIds),
-    {ok, lists:reverse(Seqs), State}.
+    % TODO: make ra_fifo return support lists of message ids
+    State = lists:foldl(
+              fun (MsgId, S0) ->
+                      Cmd = {return, MsgId, customer_id(CustomerTag)},
+                      send_command(Node, undefined, Cmd, S0)
+              end, State0, MsgIds),
+    {ok, State}.
+
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
 %%
@@ -190,9 +212,10 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %% @param State the current {@module} state.
 %%
 %% @returns
-%% `{internal, AppliedSeqs, State}' if the event contained an internally
-%% handled event such as a notification confirming that a sequence number
-%% has been applied to the `ra_fifo' state machine.
+%% `{internal, AppliedCorrelations, State}' if the event contained an internally
+%% handled event such as a notification and a correlation was included with
+%% the command (e.g. in a call to `enqueue/3' the correlation terms are returned
+%% here.
 %%
 %% `{RaFifoEvent, State}' if the event contained a client message generated by
 %% the `ra_fifo' state machine such as a delivery.
@@ -205,30 +228,55 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %% <li>`MsgId' is a customer scoped monotonically incrementing id that can be
 %% used to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished
 %% with them.</li>
--spec handle_ra_event(ra_node_proc:ra_event_body(), ra_node_id(), state()) ->
-    {internal, AppliedSeqs :: [non_neg_integer()], state()} |
+-spec handle_ra_event(ra_node_id(), ra_node_proc:ra_event_body(), state()) ->
+    {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()}.
 handle_ra_event(From, {applied, Seq},
-                #state{pending = Pending} = State) ->
+                #state{pending = Pending0,
+                       last_applied = Last} = State0) ->
     % applied notifications should arrive in order
     % here we can detect if a sequence number was missed and resend it
-    % TODO: bookkeeping
-    {internal, [Seq], State#state{pending = maps:remove(Seq, Pending),
-                                  leader = From}};
+    State = case Last of
+                undefined ->
+                    State0#state{leader = From};
+                _ ->
+                    do_resends(Last+1, Seq-1, State0#state{leader = From})
+            end,
+    case maps:take(Seq, Pending0) of
+        {{undefined, _}, Pending} ->
+            {internal, [], State#state{pending = Pending,
+                                       last_applied = Seq}};
+        {{Corr, _}, Pending} ->
+            {internal, [Corr], State#state{pending = Pending,
+                                           last_applied = Seq}};
+        error ->
+            % must have already been resent or removed for some other reason
+            {internal, [], State}
+    end;
 handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
     % TODO: how should these be handled? re-sent on timer or try random
     {internal, [], State0};
-handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}},
-                #state{pending = Pending} = State) ->
-    % NB: this does not handle ordering
-    Command = maps:get(Seq, Pending),
-    ok = ra:send_and_notify(Leader, Command, Seq),
-    {internal, [], State#state{leader = Leader}};
+handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}}, State0) ->
+    State1 = State0#state{leader = Leader},
+    State = resend(Seq, State1),
+    {internal, [], State};
 handle_ra_event(Leader, {machine, {delivery, _, _} = Del}, State0) ->
     State = record_delivery(Leader, Del, State0),
     {Del, State}.
 
-%% internal
+%% Internal
+
+do_resends(From, To, State) ->
+    lists:foldl(fun resend/2, State, lists:seq(From, To)).
+
+% resends a command with a new sequence number
+resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->
+    case maps:take(OldSeq, Pending0) of
+        {{Corr, Cmd}, Pending} ->
+            send_command(Leader, Corr, Cmd, State#state{pending = Pending});
+        error ->
+            State
+    end.
 
 record_delivery(Leader, {delivery, CustomerTag, IdMsgs},
                 #state{customer_deliveries = CDels} = State0) ->
@@ -258,14 +306,16 @@ pick_node(#state{leader = Leader}) ->
 next_seq(#state{next_seq = Seq} = State) ->
     {Seq, State#state{next_seq = Seq + 1}}.
 
+next_enqueue_seq(#state{next_enqueue_seq = Seq} = State) ->
+    {Seq, State#state{next_enqueue_seq = Seq + 1}}.
+
 customer_id(CustomerTag) ->
     {CustomerTag, self()}.
 
-send_command(Node, Command, Seqs, #state{pending = Pending} = State0) ->
+send_command(Node, Correlation, Command, #state{pending = Pending} = State0) ->
     {Seq, State} = next_seq(State0),
     ok = ra:send_and_notify(Node, Command, Seq),
-    {[Seq | Seqs],
-     State#state{pending = Pending#{Seq => Command}}}.
+    State#state{pending = Pending#{Seq => {Correlation, Command}}}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

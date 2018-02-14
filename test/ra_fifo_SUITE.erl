@@ -16,13 +16,15 @@ all() ->
 all_tests() ->
     [
      ra_fifo_client_basics,
+     ra_fifo_client_returns_correlation,
+     ra_fifo_client_resends_lost_command,
+     ra_fifo_client_resends_after_lost_applied,
      ra_fifo_client_handles_reject_notification,
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
      node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects,
-     checkout_get_returns_value,
      ra_fifo_client_dequeue
     ].
 
@@ -72,7 +74,7 @@ ra_fifo_client_basics(Config) ->
     % create segment the segment will trigger a snapshot
     timer:sleep(1000),
 
-    {ok, _Seq, FState2} = ra_fifo_client:enqueue(one, FState1),
+    {ok, FState2} = ra_fifo_client:enqueue(one, FState1),
     % process ra events
     FState3 = process_ra_event(FState2, 250),
 
@@ -82,8 +84,8 @@ ra_fifo_client_basics(Config) ->
                           {internal, _AcceptedSeqs, _FState4} ->
                               exit(unexpected_internal_event);
                           {{delivery, C, [{MsgId, _Msg}]}, FState4} ->
-                              {ok, _, S} = ra_fifo_client:settle(C, [MsgId],
-                                                                 FState4),
+                              {ok, S} = ra_fifo_client:settle(C, [MsgId],
+                                                              FState4),
                               S
                       end
               after 5000 ->
@@ -97,7 +99,7 @@ ra_fifo_client_basics(Config) ->
 
     % give time to become leader
     timer:sleep(500),
-    {ok, _, FState6} = ra_fifo_client:enqueue(two, FState5b),
+    {ok, FState6} = ra_fifo_client:enqueue(two, FState5b),
     % process applied event
     FState6b = process_ra_event(FState6, 250),
 
@@ -108,13 +110,92 @@ ra_fifo_client_basics(Config) ->
                     ct:pal("unexpected event ~p~n", [E]),
                     exit({unexpected_internal_event, E});
                 {{delivery, Ctag, [{Mid, {_, two}}]}, FState7} ->
-                    {ok, _, _S} = ra_fifo_client:return(Ctag, [Mid], FState7),
+                    {ok, _S} = ra_fifo_client:return(Ctag, [Mid], FState7),
                     ok
             end
     after 2000 ->
               exit(await_msg_timeout)
     end,
     ra:stop_node(NodeId),
+    ok.
+
+ra_fifo_client_returns_correlation(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(corr1, msg1, F0),
+    receive
+        {ra_event, Frm, E} ->
+            case ra_fifo_client:handle_ra_event(Frm, E, F1) of
+                {internal, [corr1], _F2} ->
+                    ok;
+                {Del, _} ->
+                    exit({unexpected, Del})
+            end
+    after 2000 ->
+              exit(await_msg_timeout)
+    end,
+    ok.
+
+ra_fifo_client_resends_lost_command(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    ok = meck:new(ra, [passthrough]),
+
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    % lose the enqueue
+    meck:expect(ra, send_and_notify, fun (_, _, _) -> ok end),
+    {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
+    meck:unload(ra),
+    {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
+    F4 = process_ra_events(F3, 500),
+    {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
+    {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
+    {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
+    ok.
+
+ra_fifo_client_resends_after_lost_applied(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    F0 = ra_fifo_client:init([NodeId]),
+    F1 = process_ra_events(element(2, ra_fifo_client:enqueue(msg1, F0)),
+                           500),
+    {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
+    % lose an applied event
+    receive
+        {ra_event, _, {applied, _}} ->
+            ok
+    after 500 ->
+              exit(await_ra_event_timeout)
+    end,
+    % send another message
+    {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
+    F4 = process_ra_events(F3, 500),
+    {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
+    {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
+    {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
     ok.
 
 ra_fifo_client_handles_reject_notification(Config) ->
@@ -132,7 +213,7 @@ ra_fifo_client_handles_reject_notification(Config) ->
     _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
     % reverse order - should try the first node in the list first
     F0 = ra_fifo_client:init([NodeId2, NodeId1]),
-    {ok, _Seq, F1} = ra_fifo_client:enqueue(one, F0),
+    {ok, F1} = ra_fifo_client:enqueue(one, F0),
 
     timer:sleep(500),
 
@@ -146,7 +227,7 @@ leader_monitors_customer(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Cid = {UId, self()},
+    Tag = UId,
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
@@ -156,14 +237,16 @@ leader_monitors_customer(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
+    F0 =  ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
     ra:stop_node(UId),
     _ = ra:restart_node(Conf),
     % check monitors are re-applied after restart
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
-    {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
+    {ok, _F3} = ra_fifo_client:checkout(Tag, 5, F1),
+    {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
+                                                             monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
     ra:stop_node(NodeId),
     ok.
@@ -173,21 +256,26 @@ follower_takes_over_monitor(Config) ->
     {Name1, _} = NodeId1 = ?config(node_id, Config),
     {Name2, _} = NodeId2 = ?config(node_id2, Config),
     UId1 = ?config(uid, Config),
-    CId = {UId1, self()},
+    Tag = UId1,
     UId2 = ?config(uid2, Config),
     Conf1 = conf(UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
     Conf2 = conf(UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
     _ = ra:start_node(Conf1),
     _ = ra:start_node(Conf2),
     ok = ra:trigger_election(NodeId1),
-    _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
-    timer:sleep(500),
+    F0 =  ra_fifo_client:init([NodeId1, NodeId2]),
+    {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
+    % _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
+    % timer:sleep(500),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name1)),
 
     ok = ra:trigger_election(NodeId2),
-    {ok, _, NodeId2} = ra:send_and_await_consensus(NodeId2,
-                                                   {enqueue, msg1}),
+    % give the election process a bit of time before issuing a command
+    timer:sleep(100),
+
+    {ok, _F2} = ra_fifo_client:checkout(Tag, 10, F1),
+    % {ok, _, NodeId2} = ra:send_and_await_consensus(NodeId2, {enqueue, msg1}),
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name2)),
@@ -199,7 +287,6 @@ node_is_deleted(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    CId = {UId, self()},
     Conf = #{id => NodeId,
              uid => UId,
              log_module => ra_log_file,
@@ -208,7 +295,10 @@ node_is_deleted(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    _ = process_ra_event(F1, 250),
+    % {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     % force roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     ok = ra:delete_node(NodeId),
@@ -221,8 +311,10 @@ node_is_deleted(Config) ->
                              log_init_args => #{data_dir => PrivDir,
                                                 uid => UId2}}),
     ok = ra:trigger_election(NodeId),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId,
-                                             {checkout, {auto, 10}, CId}),
+    F = ra_fifo_client:init([NodeId]),
+    {ok, _} = ra_fifo_client:checkout(<<"tag">>, 10, F),
+    % {ok, _, _} = ra:send_and_await_consensus(NodeId,
+    %                                          {checkout, {auto, 10}, CId}),
     receive
         {ra_event, _, Evt} ->
             exit({unexpected_machine_event, Evt})
@@ -243,12 +335,13 @@ node_restart_after_application_restart(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     application:stop(ra),
     application:start(ra),
     % restart node
     ok = ra:restart_node(Conf),
-    {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),
+    {ok, _} = ra_fifo_client:checkout(<<"tag2">>, 10, F1),
     ok = ra:stop_node(NodeId),
     ok.
 
@@ -259,7 +352,6 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    CId = {UId, self()},
     Name = element(1, NodeId),
     Conf = #{id => NodeId,
              uid => UId,
@@ -269,11 +361,18 @@ restarted_node_does_not_reissue_side_effects(Config) ->
              machine => {module, ra_fifo}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, CId}),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
+    {ok, F2} = ra_fifo_client:enqueue(<<"msg">>, F1),
+    F3 = process_ra_event(F2, 100),
     receive
-        {ra_event, _, {machine, {delivery, C, [{MsgId, _}]}}} ->
-            {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, MsgId, C})
+        {ra_event, From, Evt = {machine, {delivery, C, [{MsgId, _}]}}} ->
+            case ra_fifo_client:handle_ra_event(From, Evt, F3) of
+                {internal, _, _} ->
+                    exit(unexpected_internal);
+                {{delivery, C, [{MsgId, _}]}, F4} ->
+                    _ = ra_fifo_client:settle(C, [MsgId], F4)
+            end
     after 2000 ->
               exit(ra_fifo_event_timeout)
     end,
@@ -292,31 +391,6 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ok = ra:stop_node(UId),
     ok.
 
-checkout_get_returns_value(Config) ->
-    PrivDir = ?config(priv_dir, Config),
-    NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    CId = {UId, self()},
-    Conf = #{id => NodeId,
-             uid => UId,
-             log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, uid => UId},
-             initial_nodes => [],
-             machine => {module, ra_fifo}},
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    % nothing on queue yet
-    {ok, {get, empty}, NodeId} = ra:send_and_await_consensus(
-                                   NodeId, {checkout, {get, settled}, CId}),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
-    {ok, {get, {0, {_, msg1}}}, NodeId} = ra:send_and_await_consensus(
-                                       NodeId, {checkout, {get, settled}, CId}),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {enqueue, msg2}),
-    {ok, {get, {0, {_, msg2}}}, NodeId} = ra:send_and_await_consensus(
-                                       NodeId, {checkout, {get, unsettled}, CId}),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId, {settle, 0, CId}),
-    ok.
-
 ra_fifo_client_dequeue(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
@@ -332,11 +406,11 @@ ra_fifo_client_dequeue(Config) ->
     ok = ra:trigger_election(NodeId),
     F1 = ra_fifo_client:init([NodeId]),
     {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
-    {ok, 0, F2} = ra_fifo_client:enqueue(msg1, F1b),
+    {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
     {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
-    {ok, 1, F4} = ra_fifo_client:enqueue(msg2, F3),
+    {ok, F4} = ra_fifo_client:enqueue(msg2, F3),
     {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
-    {ok, _, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
+    {ok, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
     ct:pal("F6 ~p~n", [F6]),
     ok.
 
@@ -362,7 +436,7 @@ process_ra_events(State0, Wait) ->
     receive
         {ra_event, From, Evt} ->
             {internal, _, State} = ra_fifo_client:handle_ra_event(From, Evt, State0),
-            process_ra_event(State, Wait)
+            process_ra_events(State, Wait)
     after Wait ->
               State0
     end.

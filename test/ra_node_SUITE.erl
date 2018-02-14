@@ -512,8 +512,8 @@ candidate_handles_append_entries_rpc(_Config) ->
                                   leader_commit = 3},
     % Lower term
     {candidate, _,
-     [{reply, #append_entries_reply{term = 5, success = false,
-                                    last_index = 3, last_term = 5}}]}
+     [{cast, n1, {n1, #append_entries_reply{term = 5, success = false,
+                                            last_index = 3, last_term = 5}}}]}
     = ra_node:handle_candidate(EmptyAE, State),
     ok.
 

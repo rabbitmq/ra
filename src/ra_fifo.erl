@@ -206,11 +206,10 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
             Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
             Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
             {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
-        #enqueuer{next_seqno = Next,
-                  pending = _Pending} = _Enq0
+        #enqueuer{next_seqno = Next, pending = _Pending} = _Enq0
           when MsgSeqNo =< Next ->
             % duplicate delivery
-            exit(dupe_delivery_not_impl)
+            {State0, []}
     end.
 
 % msg_ids are scoped per customer
@@ -714,6 +713,15 @@ out_of_order_enqueue_test() ->
                    end, Effects5),
     [second, third, fourth] = Deliveries,
 
+    ok.
+
+duplicate_enqueue_test() ->
+    Cid = {<<"duplicate_enqueue_test">>, self()},
+    {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, element(1, init(test))),
+    {State2, Effects2} = enq(2, 1, first, State1),
+    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
+    {_State3, Effects3} = enq(3, 1, first, State2),
+    ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects3),
     ok.
 
 return_non_existent_test() ->

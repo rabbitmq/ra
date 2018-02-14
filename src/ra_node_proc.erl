@@ -39,7 +39,7 @@
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 
--type correlation() :: term().
+-type correlation() :: non_neg_integer().
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
@@ -71,10 +71,10 @@
 -type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
     % sent using ra:send_and_notify
-    {applied, ra_node_id(), correlation()} |
-    {rejected, ra_node_id(), ra_event_reject_detail()} |
+    {applied, correlation()} |
+    {rejected, ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
-    {machine, ra_node_id(), term()}.
+    {machine, term()}.
 
 -type ra_event() :: {ra_event, ra_event_body()}.
 
@@ -514,8 +514,8 @@ handle_effect({reply, _From, _Reply} = Action, _EvtType, State, Actions) ->
     {State, [Action | Actions]};
 handle_effect({reply, Reply}, {call, From}, State, Actions) ->
     {State, [{reply, From, Reply} | Actions]};
-handle_effect({reply, _Reply}, _, _State, _Actions) ->
-    exit(undefined_reply);
+handle_effect({reply, Reply}, _, _State, _Actions) ->
+    exit({undefined_reply, Reply});
 handle_effect({send_vote_requests, VoteRequests}, _EvtType, State, Actions) ->
     % transient election processes
     T = {dirty_timeout, 500},

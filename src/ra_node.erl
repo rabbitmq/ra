@@ -422,11 +422,11 @@ handle_candidate(#append_entries_rpc{term = Term} = Msg,
     State = update_meta([{current_term, Term}, {voted_for, undefined}],
                         State0),
     {follower, State, [{next_event, Msg}]};
-handle_candidate(#append_entries_rpc{},
+handle_candidate(#append_entries_rpc{leader_id = LeaderId},
                  State = #{current_term := CurTerm}) ->
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
-    {candidate, State, [{reply, Reply}]};
+    {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
