@@ -1072,7 +1072,7 @@ add_reply(undefined, _IdxTerm, {notify_on_consensus, Corr, Pid}, Effects) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
     % own bookkeeping
-    [{notify, Pid, Corr} | Effects];
+    Effects ++ [{notify, Pid, Corr}];
 add_reply(_From, _Reply, _Mode, Effects) ->
     Effects.
 

@@ -20,6 +20,7 @@ all_tests() ->
      ra_fifo_client_resends_lost_command,
      ra_fifo_client_resends_after_lost_applied,
      ra_fifo_client_handles_reject_notification,
+     ra_fifo_client_two_quick_enqueues,
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
@@ -168,6 +169,21 @@ ra_fifo_client_resends_lost_command(Config) ->
     {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
     {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
     {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
+    ok.
+
+ra_fifo_client_two_quick_enqueues(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    F0 = ra_fifo_client:init([NodeId]),
+    F1 = element(2, ra_fifo_client:enqueue(msg1, F0)),
+    {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
+    _ = process_ra_events(F2, 500),
     ok.
 
 ra_fifo_client_resends_after_lost_applied(Config) ->
