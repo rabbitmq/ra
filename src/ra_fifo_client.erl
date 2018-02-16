@@ -260,9 +260,8 @@ handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}}, State0) ->
     State1 = State0#state{leader = Leader},
     State = resend(Seq, State1),
     {internal, [], State};
-handle_ra_event(Leader, {machine, {delivery, _, _} = Del}, State0) ->
-    State = record_delivery(Leader, Del, State0),
-    {Del, State}.
+handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
+    handle_delivery(Leader, Del, State0).
 
 %% Internal
 
@@ -278,25 +277,65 @@ resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->
             State
     end.
 
-record_delivery(Leader, {delivery, CustomerTag, IdMsgs},
-                #state{customer_deliveries = CDels} = State0) ->
-    lists:foldl(
-      fun ({MsgId, _}, S) ->
-              case CDels of
-                  #{CustomerTag := Last} when MsgId =:= Last+1 ->
-                      S#state{customer_deliveries =
-                              maps:put(CustomerTag, MsgId, CDels)};
-                  #{CustomerTag := Last} when MsgId =:= Last+1 ->
-                      % TODO for now just exit if we get an out of order
-                      % delivery in the future we need to be perform something
-                      % akin to selective ARQ or simply reset the subscription
-                      exit({ra_fifo_client, out_of_order_delivery, MsgId,
-                            State0});
-                  _ ->
-                      S#state{customer_deliveries =
-                              maps:put(CustomerTag, MsgId, CDels)}
-              end
-      end, State0#state{leader = Leader}, IdMsgs).
+handle_delivery(Leader, {delivery, Tag, [{FstId, _} | _] = IdMsgs} = Del0,
+                #state{customer_deliveries = CDels0} = State0) ->
+    {LastId, _} = lists:last(IdMsgs),
+    case CDels0 of
+        #{Tag := Last} when FstId =:= Last+1 ->
+            {Del0, State0#state{customer_deliveries =
+                                maps:put(Tag, LastId, CDels0)}};
+        #{Tag := Last} when FstId > Last+1 ->
+            Missing = get_missing_deliveries(Leader, Last+1, FstId-1, Tag),
+            Del = {delivery, Tag, Missing ++ IdMsgs},
+            {Del, State0#state{customer_deliveries =
+                               maps:put(Tag, LastId, CDels0)}};
+        #{Tag := Last} when FstId =< Last ->
+            exit(duplicate_delivery_not_impl);
+        _ when FstId =:= 0 ->
+            % the very first delivery
+            {Del0, State0#state{customer_deliveries =
+                                maps:put(Tag, LastId, CDels0)}};
+        _ ->
+            % not seen before and not initial msg id
+            Missing = get_missing_deliveries(Leader, 0, FstId-1, Tag),
+            Del = {delivery, Tag, Missing ++ IdMsgs},
+            {Del, State0#state{customer_deliveries =
+                               maps:put(Tag, LastId, CDels0)}}
+
+    end.
+
+get_missing_deliveries(Leader, From, To, CustomerTag) ->
+    CustomerId = customer_id(CustomerTag),
+    Query = fun (State) ->
+                    ra_fifo:get_checked_out(CustomerId,
+                                            From, To, State)
+            end,
+    {ok, {_, Missing}, _} = ra:dirty_query(Leader, Query),
+    Missing.
+
+% handle_delivery(Leader, {delivery, CustomerTag, IdMsgs} = Del,
+%                 #state{customer_deliveries = CDels} = State0) ->
+%     lists:foldl(
+%       fun ({MsgId, _}, S) ->
+%               case CDels of
+%                   #{CustomerTag := Last} when MsgId =:= Last+1 ->
+%                       S#state{customer_deliveries =
+%                               maps:put(CustomerTag, MsgId, CDels)};
+%                   #{CustomerTag := Last} when MsgId > Last+1 ->
+%                       % query leader for missing deliveries
+%                       Query = fun (State) ->
+%                                       ra_fifo:get_checked_out(customer_id(CustomerTag),
+%                                                               Last+1, MsgId-1, State)
+%                               end,
+%                       {ok, {_, Missing}, _} = ra:dirty_query(Leader, Query),
+%                       S#state{customer_deliveries =
+%                               maps:put(CustomerTag, MsgId, CDels)};
+%                   _ when MsgId =:= 0 ->
+%                       % it is the first delivery
+%                       S#state{customer_deliveries =
+%                               maps:put(CustomerTag, MsgId, CDels)}
+%               end
+%       end, State0#state{leader = Leader}, IdMsgs).
 
 pick_node(#state{leader = undefined, nodes = [N | _]}) ->
     N;

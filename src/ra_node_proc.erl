@@ -304,7 +304,7 @@ candidate(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 candidate({call, From}, {dirty_query, QueryFun},
-         #state{node_state = NodeState} = State) ->
+          #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->

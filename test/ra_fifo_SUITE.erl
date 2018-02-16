@@ -21,6 +21,7 @@ all_tests() ->
      ra_fifo_client_resends_after_lost_applied,
      ra_fifo_client_handles_reject_notification,
      ra_fifo_client_two_quick_enqueues,
+     ra_fifo_client_detects_lost_delivery,
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
@@ -165,7 +166,7 @@ ra_fifo_client_resends_lost_command(Config) ->
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
     meck:unload(ra),
     {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
-    F4 = process_ra_events(F3, 500),
+    {_, F4} = process_ra_events(F3, 500),
     {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
     {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
     {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
@@ -186,6 +187,32 @@ ra_fifo_client_two_quick_enqueues(Config) ->
     _ = process_ra_events(F2, 500),
     ok.
 
+ra_fifo_client_detects_lost_delivery(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    F00 = ra_fifo_client:init([NodeId]),
+    {ok, F0} = ra_fifo_client:checkout(<<"tag">>, 10, F00),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
+    {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
+    % lose first delivery
+    receive
+        {ra_event, _, {machine, {delivery, _, [{_, {_, msg1}}]}}} ->
+            ok
+    after 250 ->
+              exit(await_delivery_timeout)
+    end,
+
+    % assert three deliveries were received
+    {[_, _, _], _} = process_ra_events(F3, 500),
+    ok.
+
 ra_fifo_client_resends_after_lost_applied(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
@@ -196,7 +223,7 @@ ra_fifo_client_resends_after_lost_applied(Config) ->
     timer:sleep(100),
 
     F0 = ra_fifo_client:init([NodeId]),
-    F1 = process_ra_events(element(2, ra_fifo_client:enqueue(msg1, F0)),
+    {_, F1} = process_ra_events(element(2, ra_fifo_client:enqueue(msg1, F0)),
                            500),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
     % lose an applied event
@@ -208,7 +235,7 @@ ra_fifo_client_resends_after_lost_applied(Config) ->
     end,
     % send another message
     {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
-    F4 = process_ra_events(F3, 500),
+    {_, F4} = process_ra_events(F3, 500),
     {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
     {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
     {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
@@ -449,10 +476,19 @@ process_ra_event(State, Wait) ->
     end.
 
 process_ra_events(State0, Wait) ->
+    process_ra_events(State0, [], Wait).
+
+process_ra_events(State0, Acc, Wait) ->
     receive
         {ra_event, From, Evt} ->
-            {internal, _, State} = ra_fifo_client:handle_ra_event(From, Evt, State0),
-            process_ra_events(State, Wait)
+            case ra_fifo_client:handle_ra_event(From, Evt, State0) of
+                {internal, _, State} ->
+                    process_ra_events(State, Acc, Wait);
+                {{delivery, MsgId, Msgs}, State1} ->
+                    {ok, State} = ra_fifo_client:settle(<<"tag">>, [MsgId], State1),
+                    process_ra_events(State, Acc ++ Msgs, Wait)
+            end
     after Wait ->
-              State0
+              {Acc, State0}
     end.
+

@@ -12,6 +12,7 @@
          leader_effects/1,
          tick/2,
          overview/1,
+         get_checked_out/4,
          shadow_copy/1,
          size_test/2,
          perf_test/2
@@ -304,8 +305,9 @@ apply(_RaftId, {down, CustomerPid, noconnection},
 apply(_RaftId, {down, Pid, _Info},
       #state{customers = Custs0,
              enqueuers = Enqs0} = State0) ->
-    % remove any enqueuers for the same pid
-    % TODO: if there are any pending enqueuers these will be lost!
+    % remove any enqueuer for the same pid
+    % TODO: if there are any pending enqueuers these should be enqueued
+    % This should be ok as we won't see any more enqueues from this pid
     State1 = case maps:take(Pid, Enqs0) of
                  {_E, Enqs} ->
                     State0#state{enqueuers = Enqs};
@@ -367,7 +369,20 @@ overview(#state{customers = Custs,
       num_customers => maps:size(Custs),
       num_messages => ra_fifo_index:size(Indexes)}.
 
+-spec get_checked_out(customer_id(), msg_id(), msg_id(), state()) ->
+    [delivery_msg()].
+get_checked_out(Cid, From, To, #state{customers = Customers}) ->
+    case Customers of
+        #{Cid := #customer{checked_out = Checked}} ->
+            [{K, snd(snd(maps:get(K, Checked)))} || K <- lists:seq(From, To)];
+        _ ->
+            []
+    end.
+
 %%% Internal
+
+snd(T) ->
+    element(2, T).
 
 incr_metrics(#state{metrics = {N, E0, C0, S0, R0}} = State, {E, C, S, R}) ->
     State#state{metrics = {N, E0 + E, C0 + C, S0 + S, R0 + R}}.
@@ -903,6 +918,24 @@ release_cursor_snapshot_state_test() ->
          % assert log can be restored from any release cursor index
          ?assertMatch(S, State)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
+    ok.
+
+delivery_query_returns_deliveries_test() ->
+    Tag = <<"release_cursor_snapshot_state_test">>,
+    Cid = {Tag, self()},
+    Commands = [
+                {checkout, {auto, 5}, Cid},
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {enqueue, self(), 3, tre},
+                {enqueue, self(), 4, for}
+              ],
+    Indexes = lists:seq(1, length(Commands)),
+    Entries = lists:zip(Indexes, Commands),
+    {State, _Effects} = run_log(element(1, init(help)), Entries),
+    % 3 deliveries are returned
+    [{0, {#{}, one}}] = get_checked_out(Cid, 0, 0, State),
+    [_, _, _] = get_checked_out(Cid, 1, 3, State),
     ok.
 
 performance_test() ->
