@@ -22,12 +22,14 @@
 
 -type milliseconds() :: non_neg_integer().
 
--type builtin_command() :: {down, pid()}.
+-type builtin_command() :: {down, pid(), term()} |
+                           {nodeup | nodedown, node()}.
 
 -type effect() ::
     {send_msg, pid() | atom() | {atom(), atom()}, term()} |
     {mod_call, module(), atom(), [term()]} |
     {monitor, process, pid()} |
+    {monitor, node, node()} |
     {demonitor, pid()} |
     % indicates that none of the preceeding entries contribute to the
     % current machine state

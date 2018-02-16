@@ -1023,6 +1023,7 @@ apply_with(_Id, Machine,
            {State, MacSt, Effects0}) ->
     case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
         {NextMacSt, Efx} ->
+
             % apply returned no reply so use IdxTerm as reply value
             Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
             {State, NextMacSt, Effects ++ Efx};

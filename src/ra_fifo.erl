@@ -91,12 +91,15 @@
          % number of allocated messages
          % part of snapshot data
          seen = 0 :: non_neg_integer(),
-         lifetime = once :: once | auto}).
+         lifetime = once :: once | auto,
+         suspected_down = false :: boolean()
+        }).
 
 -record(enqueuer,
         {next_seqno = 1 :: msg_seqno(),
          % out of order enqueues - sorted list
-         pending = [] :: [{msg_seqno(), ra_index(), raw_msg()}]
+         pending = [] :: [{msg_seqno(), ra_index(), raw_msg()}],
+         suspected_down = false :: boolean()
         }).
 
 -record(state,
@@ -282,17 +285,40 @@ apply(_RaftId, {return, MsgId, CustomerId},
         _ ->
             {State, []}
     end;
-apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
+apply(_RaftId, {down, CustomerPid, noconnection},
+      #state{customers = Custs0,
+             enqueuers = Enqs0} = State0) ->
+    Node = node(CustomerPid),
+    % mark all customers and enqueuers as suspect
+    % and monitor the node
+    Custs = maps:map(fun({_, P}, C) when node(P) =:= Node ->
+                             C#customer{suspected_down = true};
+                        (_, C) -> C
+                     end, Custs0),
+    Enqs = maps:map(fun(P, E) when node(P) =:= Node ->
+                            E#enqueuer{suspected_down = true};
+                       (_, E) -> E
+                    end, Enqs0),
+    {State0#state{customers = Custs,
+                  enqueuers = Enqs}, [{monitor, node, Node}]};
+apply(_RaftId, {down, Pid, _Info},
+      #state{customers = Custs0,
+             enqueuers = Enqs0} = State0) ->
+    % remove any enqueuers for the same pid
+    % TODO: if there are any pending enqueuers these will be lost!
+    State1 = case maps:take(Pid, Enqs0) of
+                 {_E, Enqs} ->
+                    State0#state{enqueuers = Enqs};
+                 error ->
+                     State0
+             end,
     % return checked out messages to main queue
     % Find the customers for the down pid
-    DownCustomers = maps:keys(maps:filter(fun({_, P}, _)
-                                                when P =:= CustomerPid ->
-                                                  true;
-                                             (_, _) -> false
-                                          end, Custs0)),
+    DownCustomers = maps:keys(
+                      maps:filter(fun({_, P}, _) -> P =:= Pid end, Custs0)),
     State = lists:foldl(
-              fun(CustomerId, S0) ->
-                      case maps:take(CustomerId, Custs0) of
+              fun(CustomerId, #state{customers = C0} = S0) ->
+                      case maps:take(CustomerId, C0) of
                           {#customer{checked_out = Checked0}, Custs} ->
                               S1 = maps:fold(fun (_MsgId, {MsgNum, Msg}, S) ->
                                                      return_one(MsgNum, Msg, S)
@@ -304,8 +330,24 @@ apply(_RaftId, {down, CustomerPid}, #state{customers = Custs0} = State0) ->
                               % already removed - do nothing
                               S0
                       end
-              end, State0, DownCustomers),
-    {State, []}.
+              end, State1, DownCustomers),
+    {State, []};
+apply(_RaftId, {nodeup, Node},
+      #state{customers = Custs0,
+             enqueuers = Enqs0} = State0) ->
+    Custs = maps:fold(fun({_, P}, #customer{suspected_down = true}, Acc)
+                            when node(P) =:= Node ->
+                              [P | Acc];
+                         (_, _, Acc) -> Acc
+                      end, [], Custs0),
+    Enqs = maps:fold(fun(P, #enqueuer{suspected_down = true}, Acc)
+                           when node(P) =:= Node ->
+                             [P | Acc];
+                        (_, _, Acc) -> Acc
+                     end, [], Enqs0),
+    Monitors = [{monitor, process, P} || P <- Custs ++ Enqs],
+    % TODO: should we unsuspect these processes here?
+    {State0, Monitors}.
 
 
 
@@ -603,13 +645,16 @@ shadow_copy(#state{customers = Customers,
 -include_lib("eunit/include/eunit.hrl").
 
 -define(assertEffect(EfxPat, Effects),
-    ?assert(lists:any(fun (EfxPat) -> true;
+        ?assertEffect(EfxPat, true, Effects)).
+
+-define(assertEffect(EfxPat, Guard, Effects),
+    ?assert(lists:any(fun (EfxPat) when Guard -> true;
                           (_) -> false
                       end, Effects))).
 
 -define(assertNoEffect(EfxPat, Effects),
-    ?assert(not lists:any(fun (EfxPat) -> false;
-                          (_) -> true
+    ?assert(not lists:any(fun (EfxPat) -> true;
+                          (_) -> false
                       end, Effects))).
 
 ensure_ets() ->
@@ -715,6 +760,15 @@ out_of_order_enqueue_test() ->
 
     ok.
 
+out_of_order_first_enqueue_test() ->
+    Cid = {<<"out_of_order_enqueue_test">>, self()},
+    {State1, _} = check_n(Cid, 5, 5, element(1, init(test))),
+    {_State2, Effects2} = enq(2, 10, first, State1),
+    ?debugFmt("Effects2 ~p~n", [Effects2]),
+    ?assertEffect({monitor, process, _}, Effects2),
+    ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
+    ok.
+
 duplicate_enqueue_test() ->
     Cid = {<<"duplicate_enqueue_test">>, self()},
     {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, element(1, init(test))),
@@ -754,18 +808,49 @@ return_auto_checked_out_test() ->
                   Effects),
     ok.
 
-down_customer_returns_unsettled_test() ->
-    ensure_ets(),
+down_with_noproc_customer_returns_unsettled_test() ->
     Cid = {<<"down_customer_returns_unsettled_test">>, self()},
     {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     {State1, [{monitor, process, Pid}, _Del]} = check(Cid, 2, State0),
-    {State2, []} = apply(3, {down, Pid}, State1),
+    {State2, []} = apply(3, {down, Pid, noproc}, State1),
     {_State, Effects} = check(Cid, 4, State2),
     ?assertEffect({monitor, process, _}, Effects),
     ok.
 
+down_with_noconnection_marks_suspect_and_node_is_monitored_test() ->
+    Pid = spawn(fun() -> ok end),
+    Cid = {<<"down_with_noconnect">>, Pid},
+    Self = self(),
+    Node = node(Pid),
+    {State0, Effects0} = enq(1, 1, second, element(1, init(test))),
+    ?assertEffect({monitor, process, P}, P =:= Self, Effects0),
+    {State1, Effects1} = check(Cid, 2, State0),
+    ?assertEffect({monitor, process, P}, P =:= Pid, Effects1),
+    % monitor both enqueuer and customer
+    % because we received a noconnection we now need to monitor the node
+    {State2a, _Effects2a} = apply(3, {down, Pid, noconnection}, State1),
+    {State2, Effects2} = apply(3, {down, Self, noconnection}, State2a),
+    ?assertEffect({monitor, node, _}, Effects2),
+    ?assertNoEffect({demonitor, process, _}, Effects2),
+    % when the node comes up we need to retry the process monitors for the
+    % disconnected processes
+    {_State3, Effects3} = apply(3, {nodeup, Node}, State2),
+    % try to re-monitor the suspect processes
+    ?assertEffect({monitor, process, P}, P =:= Pid, Effects3),
+    ?assertEffect({monitor, process, P}, P =:= Self, Effects3),
+    ok.
+
+down_with_noproc_enqueuer_is_cleaned_up_test() ->
+    State00 = element(1, init(test)),
+    Pid = spawn(fun() -> ok end),
+    {State0, Effects0} = apply(1, {enqueue, Pid, 1, first}, State00),
+    ?assertEffect({monitor, process, _}, Effects0),
+    {State1, _Effects1} = apply(3, {down, Pid, noproc}, State0),
+    % ensure there are no enqueuers
+    ?assert(0 =:= maps:size(State1#state.enqueuers)),
+    ok.
+
 completed_customer_yields_demonitor_effect_test() ->
-    ensure_ets(),
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
     {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     {State1, [{monitor, process, _}, _Msg]} = check(Cid, 2, State0),
@@ -776,7 +861,6 @@ completed_customer_yields_demonitor_effect_test() ->
     ok.
 
 tick_test() ->
-    ensure_ets(),
     {State0, [_]} = enq(1, 1, second, element(1, init(test))),
     [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 0, 0}]}] =
         tick(1, State0),

@@ -89,7 +89,7 @@
                 name :: atom(),
                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
                 tick_timeout :: non_neg_integer(),
-                monitors = #{} :: #{pid() => reference()},
+                monitors = #{} :: #{pid() | node() => maybe(reference())},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer()}).
@@ -229,18 +229,18 @@ leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
-leader(info, {'DOWN', MRef, process, Pid, _Info},
+leader(info, {'DOWN', MRef, process, Pid, Info},
        #state{monitors = Monitors0,
               node_state = NodeState0} = State0) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
-            % there is a monitor for the ref - create next_event action
+            % there is a monitor for the ref
             {leader, NodeState, Effects} =
-                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid},
+                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid, Info},
                                                  after_log_append}},
                                       NodeState0),
             {State, Actions0} =
-                handle_effects(Effects, call,
+                handle_effects(Effects, cast,
                                State0#state{node_state = NodeState,
                                             monitors = Monitors}),
             % remove replies
@@ -251,6 +251,25 @@ leader(info, {'DOWN', MRef, process, Pid, _Info},
                                    end, Actions0),
             {keep_state, State, Actions};
         error ->
+            {keep_state, State0, []}
+    end;
+leader(info, {NodeEvt, Node},
+       #state{monitors = Monitors0,
+              node_state = NodeState0} = State0)
+  when NodeEvt =:= nodedown orelse NodeEvt =:= nodeup->
+    case Monitors0 of
+        #{Node := _} ->
+            % there is a monitor for the node
+            {leader, NodeState, Effects} =
+                ra_node:handle_leader({command,
+                                       {'$usr', self(), {NodeEvt, Node},
+                                        after_log_append}},
+                                      NodeState0),
+            {State, Actions} =
+                handle_effects(Effects, cast,
+                               State0#state{node_state = NodeState}),
+            {keep_state, State, Actions};
+        _ ->
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
@@ -545,6 +564,16 @@ handle_effect({monitor, process, Pid}, _EvtType,
         _ ->
             MRef = erlang:monitor(process, Pid),
             {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
+    end;
+handle_effect({monitor, node, Node}, _EvtType,
+              #state{monitors = Monitors} = State, Actions) ->
+    case Monitors of
+        #{Node := _} ->
+            % monitor is already in place - do nothing
+            {State, Actions};
+        _ ->
+            true = erlang:monitor_node(Node, true),
+            {State#state{monitors = Monitors#{Node => undefined}}, Actions}
     end;
 handle_effect({demonitor, Pid}, _EvtType,
               #state{monitors = Monitors0} = State, Actions) ->
