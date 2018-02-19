@@ -417,7 +417,7 @@ return(CustomerId, MsgNumMsgs, Cust0, Checked,
     Cust = Cust0#customer{checked_out = Checked,
                           seen = Cust0#customer.seen - Num},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
-    State1 = lists:foldl(fun({MsgNum, Msg}, S0) -> 
+    State1 = lists:foldl(fun({MsgNum, Msg}, S0) ->
                                  return_one(MsgNum, Msg, S0)
                          end, State0, MsgNumMsgs),
     {State2, Effects, NumChecked} = checkout(State1#state{customers = Custs,
