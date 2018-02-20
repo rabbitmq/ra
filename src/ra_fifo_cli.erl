@@ -90,9 +90,6 @@ stop_ra_cluster(Opts) ->
     end,
     [ok = rpc:call(Node, ra, stop_node, [{Name, Node}]) || {Name, Node} <- Nodes].
 
-start_distribution(Node) ->
-    net_kernel:start([Node, shortnames]).
-
 print_help(_) ->
     io:format("Use ra_fifo to enqueue/dequeue messages.~n~n"
               "Usage: ~n"
@@ -208,3 +205,10 @@ fail(Msg) ->
 fail(Msg, Args) ->
     io:format(standard_error, Msg ++ "~n", Args),
     halt(1).
+
+start_distribution(Node) ->
+    ensure_epmd(),
+    net_kernel:start([Node, shortnames]).
+
+ensure_epmd() ->
+    os:cmd("epmd -daemon").
