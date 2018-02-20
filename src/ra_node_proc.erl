@@ -726,7 +726,7 @@ handle_leader_down(#state{leader_monitor = Mon} = State) ->
 maybe_redirect(From, Msg, #state{pending_commands = Pending} = State) ->
     case leader_id(State) of
         undefined ->
-            ?WARN("~p leader call - leader not known. "
+            ?WARN("~w leader call - leader not known. "
                   "Command will be forwarded once leader is known.~n",
                   [id(State)]),
             {keep_state,
@@ -738,7 +738,7 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending} = State) ->
 
 reject_command(Pid, Corr, State) ->
     LeaderId = leader_id(State),
-    ?INFO("~p follower received leader command - rejecting to ~p ~n",
+    ?INFO("~w: follower received leader command - rejecting to ~w ~n",
           [id(State), LeaderId]),
     send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected,
                        State).

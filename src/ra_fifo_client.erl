@@ -22,8 +22,8 @@
 -record(state, {nodes = [] :: [ra_node_id()],
                 leader :: maybe(ra_node_id()),
                 next_seq = 0 :: seq(),
-                next_enqueue_seq = 1 :: seq(),
                 last_applied :: maybe(seq()),
+                next_enqueue_seq = 1 :: seq(),
                 pending = #{} :: #{seq() => {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()}}).
@@ -232,8 +232,8 @@ checkout(CustomerTag, NumUnsettled, State) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()}.
 handle_ra_event(From, {applied, Seq},
-                #state{pending = Pending0,
-                       last_applied = Last} = State0) ->
+                #state{last_applied = Last} = State0)
+  when Seq > Last orelse Last =:= undefined ->
     % applied notifications should arrive in order
     % here we can detect if a sequence number was missed and resend it
     State = case Last of
@@ -242,7 +242,7 @@ handle_ra_event(From, {applied, Seq},
                 _ ->
                     do_resends(Last+1, Seq-1, State0#state{leader = From})
             end,
-    case maps:take(Seq, Pending0) of
+    case maps:take(Seq, State#state.pending) of
         {{undefined, _}, Pending} ->
             {internal, [], State#state{pending = Pending,
                                        last_applied = Seq}};
@@ -253,6 +253,10 @@ handle_ra_event(From, {applied, Seq},
             % must have already been resent or removed for some other reason
             {internal, [], State}
     end;
+handle_ra_event(_From, {applied, _Seq}, State) ->
+    % duplicate applied notification - simply ignore  don't update leader
+    % in case this is a stale event
+    {internal, [], State};
 handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
     % TODO: how should these be handled? re-sent on timer or try random
     {internal, [], State0};

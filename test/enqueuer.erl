@@ -1,0 +1,115 @@
+-module(enqueuer).
+
+-behaviour(gen_server).
+
+%% API functions
+-export([start_link/1,
+         wait/2]).
+
+%% gen_server callbacks
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
+
+-include("ra.hrl").
+
+-type config() :: #{nodes := [ra_node_id()],
+                    num_messages := non_neg_integer(),
+                    spec := {Interval :: non_neg_integer(), Tag :: atom()}
+                    }.
+
+-record(state, {state :: ra_fifo_client:state(),
+                next = 1 :: pos_integer(),
+                max = 10 :: non_neg_integer(),
+                tag :: atom(),
+                applied = [] :: [non_neg_integer()],
+                interval :: non_neg_integer(),
+                waiting :: term()}).
+
+
+%%%===================================================================
+%%% API functions
+%%%===================================================================
+
+-spec start_link(config()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(Config) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Config], []).
+
+wait(Pid, Timeout) ->
+    gen_server:call(Pid, wait, Timeout).
+
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
+
+init([#{spec := {Interval, Tag},
+        num_messages := Max,
+        nodes := Nodes}]) ->
+    erlang:send_after(Interval, self(), enqueue),
+    F = ra_fifo_client:init(Nodes),
+    {ok, #state{state = F,
+                max = Max,
+                interval = Interval,
+                tag = Tag}}.
+
+handle_call(wait, _From, #state{next = N, max = N,
+                                applied = Appd,
+                                state = F} = State) ->
+    {reply, {applied, Appd, F}, State};
+handle_call(wait, From, State) ->
+    {noreply, State#state{waiting = From}}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(enqueue, #state{tag = Tag, next = Next0,
+                            max = Max,
+                            interval = Interval,
+                            state = F0} = State0) ->
+    Msg = {Tag, Next0},
+    Next = Next0 + 1,
+    case ra_fifo_client:enqueue(Next0, Msg, F0) of
+        {ok, F} ->
+            ?INFO("Enqueuer: enqueued ~p~n", [Next0]),
+            case Max of
+                Next0 ->
+                    State = State0#state{state = F},
+                    erlang:send_after(Interval, self(), reply),
+                    {noreply, State};
+                _ ->
+                    State = State0#state{next = Next,
+                                         state = F},
+                    erlang:send_after(Interval, self(), enqueue),
+                    {noreply, State}
+            end;
+        Err ->
+            ?WARN("Enqueuer: error enqueue ~p~n", [Err]),
+            {noreply, State0}
+    end;
+handle_info({ra_event, From, Evt}, #state{state = F0,
+                                          applied = Appd} = State0) ->
+    {internal, Applied, F} = ra_fifo_client:handle_ra_event(From, Evt, F0),
+    ?INFO("Enqueuer: applied ~p~n", [Applied]),
+    {noreply, State0#state{state = F, applied = Appd ++ Applied}};
+handle_info(reply, #state{waiting = undefined} = State0) ->
+    {noreply, State0};
+handle_info(reply, #state{state = F, waiting = From,
+                          applied = Applied} = State0) ->
+    gen_server:reply(From, {applied, Applied, F}),
+    {noreply, State0}.
+
+
+
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================

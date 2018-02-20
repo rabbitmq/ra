@@ -11,6 +11,7 @@ all() ->
      init,
      init_restores_cluster_changes,
      election_timeout,
+     follower_aer_term_mismatch,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
      append_entries_reply_success,
@@ -346,6 +347,25 @@ follower_aer_4(_Config) ->
     % AER with index [5], commit_index = 10 -> last_applied = 4, commit_index = 5
     ok.
 
+follower_aer_term_mismatch(_Config) ->
+    State = (base_state(3))#{commit_index => 2},
+    AE = #append_entries_rpc{term = 6,
+                             leader_id = n1,
+                             prev_log_index = 3,
+                             prev_log_term = 6, % higher log term
+                             leader_commit = 3},
+
+    % term mismatch scenario follower has index 3 but for different term
+    % rewinds back to commit index + 1 as next index and entres await condition
+    {await_condition, #{condition := _},
+     [{_, _, {_, Reply}} | _]} = ra_node:handle_follower(AE, State),
+    ?assertMatch(#append_entries_reply{term = 6,
+                                       success = false,
+                                       next_index = 3,
+                                       last_index = 2,
+                                       last_term = 3}, Reply),
+                 ok.
+
 follower_handles_append_entries_rpc(_Config) ->
     Self = self(),
     State = (base_state(3))#{commit_index => 1},
@@ -376,7 +396,8 @@ follower_handles_append_entries_rpc(_Config) ->
     {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{prev_log_index = 4},
                                   State),
-    {follower, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    % there is an entry but not with a macthing term
+    {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
         = ra_node:handle_follower(EmptyAE#append_entries_rpc{prev_log_term = 4},
                                   State),
 
@@ -441,8 +462,9 @@ follower_catchup_condition(_Config) ->
                                                          prev_log_index = 4}, State),
 
     % append entry when prev log index exists but the term is different should
-    % not enter await condition
-    {follower, _, [_]}
+    % not also enter await condition as it then rewinds and request resends
+    % of all log entries since last known commit index
+    {await_condition, _, [_]}
     = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6,
                                                          prev_log_term = 4,
                                                          prev_log_index = 3}, State),

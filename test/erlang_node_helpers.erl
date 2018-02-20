@@ -10,15 +10,17 @@ start_erlang_nodes(Nodes, Config) ->
 start_erlang_node(Node, Config) ->
     DistMod = ?config(erlang_dist_module, Config),
     StartArgs = case DistMod of
-        undefined ->
-            "";
-        _ ->
-            DistModS = atom_to_list(DistMod),
-            DistModPath = filename:absname(
-              filename:dirname(code:where_is_file(DistModS ++ ".beam"))),
-            DistArg = re:replace(DistModS, "_dist$", "", [{return, list}]),
-            "-pa \"" ++ DistModPath ++ "\" -proto_dist " ++ DistArg
-    end,
+                    undefined ->
+                        "";
+                    _ ->
+                        DistModS = atom_to_list(DistMod),
+                        DistModPath = filename:absname(
+                                        filename:dirname(
+                                          code:where_is_file(DistModS ++ ".beam"))),
+                        DistArg = re:replace(DistModS, "_dist$", "",
+                                             [{return, list}]),
+                        "-pa \"" ++ DistModPath ++ "\" -proto_dist " ++ DistArg
+                end,
     ct_slave:start(Node, [{erl_flags, StartArgs}]),
     wait_for_distribution(Node, 50),
     add_lib_dir(Node),
@@ -31,11 +33,11 @@ wait_for_distribution(Node, 0) ->
     error({distribution_failed_for, Node, no_more_attempts});
 wait_for_distribution(Node, Attempts) ->
     ct:pal("Waiting for node ~p~n", [Node]),
-    case ct_rpc:call(Node, erlang, node, []) of
-        Node -> ok;
+    case ct_rpc:call(Node, net_kernel, set_net_ticktime, [15]) of
         {badrpc, nodedown} ->
             timer:sleep(100),
-            wait_for_distribution(Node, Attempts - 1)
+            wait_for_distribution(Node, Attempts - 1);
+        _ -> ok
     end.
 
 stop_erlang_nodes(Nodes) ->

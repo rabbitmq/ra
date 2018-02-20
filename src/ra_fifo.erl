@@ -349,7 +349,9 @@ apply(_RaftId, {nodeup, Node},
                      end, [], Enqs0),
     Monitors = [{monitor, process, P} || P <- Custs ++ Enqs],
     % TODO: should we unsuspect these processes here?
-    {State0, Monitors}.
+    {State0, Monitors};
+apply(_RaftId, {nodedown, _Node}, State) ->
+    {State, []}.
 
 
 
