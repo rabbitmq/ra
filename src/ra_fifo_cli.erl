@@ -54,8 +54,14 @@ start_ra_cluster(Opts) ->
         [] -> fail("--nodes should contain a list of nodes");
         _  -> ok
     end,
+    io:format("Starting ra cluster on nodes ~p~n", [Nodes]),
     lists:foreach(fun({Name, Node}) ->
         DataDir = rpc:call(Node, application, get_env, [ra, data_dir, none]),
+        case ra:members({Name, Node}) of
+            {error,noproc} -> continue;
+            {ok, Nodes, _} -> fail("Cluster is already started");
+            {ok, _, _} -> fail("Other cluster configuration is started")
+        end,
         case DataDir of
             none -> fail("Data should be set on node start ~n");
             _ -> ok
@@ -69,6 +75,7 @@ start_ra_cluster(Opts) ->
                           uid => atom_to_binary(Name, utf8)},
                     machine => {module, ra_fifo}
                     },
+        io:format("Starting ra node ~p~n", [{Name, Node}]),
         ok = ct_rpc:call(Node, ra, start_node, [Config])
     end,
     Nodes),
