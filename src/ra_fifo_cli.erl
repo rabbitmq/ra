@@ -211,4 +211,4 @@ start_distribution(Node) ->
     net_kernel:start([Node, shortnames]).
 
 ensure_epmd() ->
-    os:cmd("epmd -daemon").
+    os:cmd("erl -sname epmd_starter -noshell -eval 'halt().'").
