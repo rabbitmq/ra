@@ -17,7 +17,8 @@
 -include("ra.hrl").
 
 -type scenario() :: [{wait, non_neg_integer()} |
-                     {block, non_neg_integer()} | heal].
+                     {part, {[node()], [node()]}, non_neg_integer()} |
+                     heal].
 
 -type config() :: #{nodes := [ra_node_id()],
                     scenario := scenario()}.
@@ -86,74 +87,46 @@ code_change(_OldVsn, State, _Extra) ->
 handle_step(#state{steps = [{wait, Time} | Rem]} = State) ->
     erlang:send_after(Time, self(), next_step),
     State#state{steps = Rem};
-handle_step(#state{steps = [{block, Time} | Rem]} = State) ->
-    erlang:send_after(Time, self(), next_step),
-    block(State#state.nodes),
+handle_step(#state{steps = [{part, Partitions, Time} | Rem]} = State) ->
+    _ = erlang:send_after(Time, self(), next_step),
+    ok = partition(Partitions),
     State#state{steps = Rem};
 handle_step(#state{steps = [heal | Rem]} = State) ->
-    unblock_inet_tcp_proxy(State#state.nodes),
+    heal(State#state.nodes),
     handle_step(State#state{steps = Rem});
 handle_step(#state{steps = []} = _State) ->
     done.
 
-unblock_inet_tcp_proxy(Nodes) ->
-    ct:pal("Rejoining all nodes"),
-    [ tcp_inet_proxy_helpers:allow_traffic_between(Node, OtherNode)
-      || OtherNode <- Nodes,
-         Node <- Nodes,
-         OtherNode =/= Node ].
 
-% block_random_partition_inet_tcp_proxy(Partition, Nodes) ->
-%     block_random_partition(Partition, Nodes,
-%                            fun tcp_inet_proxy_helpers:block_traffic_between/2).
+partition(Partitions) ->
+    partition(Partitions, fun tcp_inet_proxy_helpers:block_traffic_between/2).
 
-get_random_node(Nodes) ->
-    lists:nth(rand:uniform(length(Nodes)), Nodes).
-
-get_random_node(Exceptions, Nodes) ->
-    PossibleNodes = Nodes -- Exceptions,
-    get_random_node(PossibleNodes).
-
-block(Nodes) ->
-    N = trunc(length(Nodes) / 2),
-    block_random_partition(N, Nodes,
-                           fun tcp_inet_proxy_helpers:block_traffic_between/2).
-
-block_random_partition(PartitionSpec, Nodes, PartitionFun) ->
-    Partition1 = case PartitionSpec of
-                     PartitionSize when is_integer(PartitionSpec) ->
-                         lists:foldl(fun(_, SelectedNodes) ->
-                                             Node = get_random_node(SelectedNodes, Nodes),
-                                             [Node | SelectedNodes]
-                                     end,
-                                     [],
-                                     lists:seq(1, PartitionSize))
-                     % PartitionNodes when is_list(PartitionNodes) ->
-                     %     PartitionNodes
-                 end,
-
-    ct:pal("Cutting off nodes: ~p from the rest of the cluster",
-           [Partition1]),
-
-    Partition2 = Nodes -- Partition1,
+partition({Partition1, Partition2}, PartitionFun) ->
     lists:foreach(
       fun(Node) ->
-              [ PartitionFun(Node, OtherNode)
-                || OtherNode <- Partition2 ]
+              [PartitionFun(Node, OtherNode) || OtherNode <- Partition2]
       end,
-      Partition1).
+      Partition1),
+    ok.
 
-% unblock_iptables(_Nodes) ->
+heal(Nodes) ->
+    ct:pal("Rejoining all nodes"),
+    [tcp_inet_proxy_helpers:allow_traffic_between(Node, OtherNode)
+     || OtherNode <- Nodes,
+        Node <- Nodes,
+        OtherNode =/= Node].
+
+% unpart_iptables(_Nodes) ->
 %     ct:pal("Rejoining all nodes"),
 %     iptables_cmd("-D INPUT -j partitions_test"),
 %     iptables_cmd("-F partitions_test"),
 %     iptables_cmd("-X partitions_test").
 
-% block_random_partition_iptables(Partition, Nodes) ->
+% part_random_partition_iptables(Partition, Nodes) ->
 %     ensure_iptables_chain(),
-%     block_random_partition(Partition, Nodes, fun block_traffic_with_iptables/2).
+%     part_random_partition(Partition, Nodes, fun part_traffic_with_iptables/2).
 
-% block_traffic_with_iptables(Node1, Node2) ->
+% part_traffic_with_iptables(Node1, Node2) ->
 %     DestPort1 = tcp_inet_proxy_helpers:get_dist_port(Node1),
 %     DestPort2 = tcp_inet_proxy_helpers:get_dist_port(Node2),
 %     SourcePort1 = get_outgoing_port(Node1, Node2, DestPort2),
@@ -162,17 +135,17 @@ block_random_partition(PartitionSpec, Nodes, PartitionFun) ->
 %     case SourcePort1 of
 %         undefined -> ok;
 %         _ ->
-%             block_ports_iptables(DestPort2, SourcePort1)
+%             part_ports_iptables(DestPort2, SourcePort1)
 %     end,
 %     case SourcePort2 of
 %         undefined -> ok;
 %         _ ->
-%             block_ports_iptables(DestPort1, SourcePort2)
+%             part_ports_iptables(DestPort1, SourcePort2)
 %     end,
 % % timer:sleep(10000000),
-%     tcp_inet_proxy_helpers:wait_for_blocked(Node1, Node2, 100).
+%     tcp_inet_proxy_helpers:wait_for_parted(Node1, Node2, 100).
 
-% block_ports_iptables(DestPort, SourcePort) ->
+% part_ports_iptables(DestPort, SourcePort) ->
 % ct:pal("Cutting port ~p and ~p~n", [DestPort, SourcePort]),
 %     iptables_cmd("-A partitions_test -p tcp -j DROP"
 %                  " --destination-port " ++ integer_to_list(DestPort) ++

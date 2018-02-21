@@ -39,10 +39,10 @@ enq_drain(Config) ->
     Nodes = ?config(nodes, Config),
     RaNodes = ?config(ra_nodes, Config),
     Scenario = [{wait, 5000},
-                {block, 5000},
+                {part, select_nodes(Nodes), 5000},
                 heal,
                 {wait, 5000},
-                {block, 16000},
+                {part, select_nodes(Nodes), 20000},
                 heal,
                 {wait, 5000}],
     NemConf = #{nodes => Nodes,
@@ -51,7 +51,6 @@ enq_drain(Config) ->
     {ok, Nem} = nemesis:start_link(NemConf),
     EnqInterval = 1000,
     NumMessages = abs(erlang:trunc((ScenarioTime - 5000) / EnqInterval)),
-    ct:pal("NumMessages ~p~n", [NumMessages]),
     EnqConf = #{nodes => RaNodes,
                 num_messages => NumMessages,
                 spec => {EnqInterval, custard}},
@@ -61,19 +60,32 @@ enq_drain(Config) ->
     {applied, Applied, _} = enqueuer:wait(Enq, ScenarioTime),
     ct:pal("enqueuer:wait ~p ~n", [Applied]),
     Received = drain(RaNodes),
-    ct:pal("Expected ~p~nApplied ~p~nReceived~p~n",
-           [NumMessages, Applied, Received]),
+    ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p~n",
+           [NumMessages, Applied, Received, Scenario]),
     % assert no messages were lost
     Remaining = Applied -- Received,
-    ct:pal("Remaining~p~n", [Remaining]),
+    ct:pal("Remaining ~p~n", [Remaining]),
     Remaining = [],
     ok.
+
+select_nodes(Nodes) ->
+    N = trunc(length(Nodes) / 2),
+    lists:foldl(fun (_, {Selected, Rem0}) ->
+                        {S, Rem} = random_element(Rem0),
+                        {[S | Selected], Rem}
+                end, {[], Nodes}, lists:seq(1, N)).
+
+random_element(Nodes) ->
+    Selected = lists:nth(rand:uniform(length(Nodes)), Nodes),
+    {Selected, lists:delete(Selected, Nodes)}.
 
 scenario_time([], Acc) ->
     Acc;
 scenario_time([heal | Rest], Acc) ->
     scenario_time(Rest, Acc);
 scenario_time([{_, T} | Rest], Acc) ->
+    scenario_time(Rest, Acc + T);
+scenario_time([{_, _, T} | Rest], Acc) ->
     scenario_time(Rest, Acc + T).
 
 
