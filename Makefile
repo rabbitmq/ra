@@ -10,7 +10,7 @@ define PROJECT_ENV
 endef
 
 ESCRIPT_NAME = ra_fifo_cli
-ESCRIPT_EMU_ARGS = -noinput
+ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
 dep_aten = git https://github.com/rabbitmq/aten.git master
 DEPS = aten
