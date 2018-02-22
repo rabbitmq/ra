@@ -127,9 +127,6 @@
          % index when there are large gaps but should be faster than gb_trees
          % for normal appending operations - backed by a map
          ra_indexes = ra_fifo_index:empty() :: ra_fifo_index:state(),
-         % the raft index of the first enqueue operation that
-         % contribute to the current state
-         smallest_enqueue_raft_index :: ra_index() | undefined,
          % customers need to reflect customer state at time of snapshot
          % needs to be part of snapshot
          customers = #{} :: #{customer_id() => #customer{}},
@@ -181,13 +178,10 @@ enqueue(RaftIdx, RawMsg, #state{messages = Messages,
                  next_msg_num = NextMsgNum + 1}.
 
 append_to_master_index(RaftIdx,
-                       #state{smallest_enqueue_raft_index = SmallestEnqueueIdx,
-                              ra_indexes = Indexes0} = State0) ->
+                       #state{ra_indexes = Indexes0} = State0) ->
     {State, Shadow} = incr_enqueue_count(State0),
     Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
-    State#state{ra_indexes = Indexes,
-                smallest_enqueue_raft_index = min(RaftIdx,
-                                                  SmallestEnqueueIdx)}.
+    State#state{ra_indexes = Indexes}.
 
 enqueue_pending(From,
                 #enqueuer{next_seqno = Next,
@@ -437,10 +431,11 @@ complete(IncomingRaftIdx, CustomerId, MsgRaftIdxs, Cust0, Checked,
     % settle metrics are incremented separately
     State = incr_metrics(State1, {0, NumChecked, 0, 0}),
     % TODO this could probably be made more efficient
-    lists:foldl(
-      fun (MsgRaftIdx, Acc) ->
-              update_smallest_raft_index(IncomingRaftIdx, MsgRaftIdx, Acc)
-      end, {State, Effects}, MsgRaftIdxs).
+    update_smallest_raft_index(IncomingRaftIdx, {State, Effects}).
+    % lists:foldl(
+    %   fun (MsgRaftIdx, Acc) ->
+    %           update_smallest_raft_index(IncomingRaftIdx, MsgRaftIdx, Acc)
+    %   end, {State, Effects}, MsgRaftIdxs).
 
 dead_letter_effects(_Discarded,
                     #state{dead_letter_handler = undefined},
@@ -454,36 +449,28 @@ dead_letter_effects(Discarded,
               end, [], Discarded),
     [{mod_call, Mod, Fun, Args ++ [DeadLetters]} | Effects].
 
-update_smallest_raft_index(IncomingRaftIdx, MsgRaftIdx,
-                           {#state{smallest_enqueue_raft_index = SERI,
-                                   ra_indexes = Indexes} = State, Effects}) ->
+update_smallest_raft_index(IncomingRaftIdx,
+                           {#state{ra_indexes = Indexes} = State, Effects}) ->
     case ra_fifo_index:size(Indexes) of
         0 ->
             % there are no messages on queue anymore and no pending enqueues
             % we can forward release_cursor all the way until
             % the last received command
-            {State#state{smallest_enqueue_raft_index = undefined},
+            {State,
              [{release_cursor, IncomingRaftIdx, shadow_copy(State)} | Effects]};
-        _ when SERI =:= MsgRaftIdx ->
-            % the smallest_enqueue_raft_index can be forwarded to next
-            % available message
+        _ ->
             % TODO: for simplicity can we just always take the smallest here?
             % Then we won't need the MsgRaftIdx
             case ra_fifo_index:smallest(Indexes) of
-                 {Smallest, undefined} ->
+                 {_Smallest, undefined} ->
                     % no shadow taken for this index,
                     % no release cursor increase
-                    {State#state{smallest_enqueue_raft_index = Smallest},
-                     Effects};
+                    {State, Effects};
                  {Smallest, Shadow} ->
                     % we emit the last index _not_ to contribute to the
                     % current state - hence the -1
-                    {State#state{smallest_enqueue_raft_index = Smallest},
-                     [{release_cursor, Smallest - 1, Shadow} | Effects]}
-            end;
-        _ ->
-            % smallest_enqueue_raft_index cannot be forwarded
-            {State, Effects}
+                    {State, [{release_cursor, Smallest - 1, Shadow} | Effects]}
+            end
     end.
 
 return_one(MsgNum, {RaftId, {Header0, RawMsg}},
@@ -685,7 +672,6 @@ shadow_copy(#state{customers = Customers,
     State#state{messages = #{},
                 ra_indexes = ra_fifo_index:empty(),
                 low_msg_num = undefined,
-                smallest_enqueue_raft_index = undefined,
                 % TODO: optimise
                 % this is inefficient (from a memory use point of view)
                 % as it creates a new tuple for every customer
