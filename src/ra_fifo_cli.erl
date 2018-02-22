@@ -208,7 +208,20 @@ fail(Msg, Args) ->
 
 start_distribution(Node) ->
     ensure_epmd(),
-    net_kernel:start([Node, shortnames]).
+    case Node of
+        cli ->
+            RandNumber = rand:uniform(10000),
+            RandNodeStr = "cli-" ++ integer_to_list(RandNumber),
+            {ok, Names} = net_adm:names(net_adm:localhost()),
+            case proplists:get_value(RandNodeStr, Names, undefined) of
+                undefined ->
+                    net_kernel:start([list_to_atom(RandNodeStr), shortnames]);
+                _ ->
+                    start_distribution(cli)
+            end;
+        _ ->
+            net_kernel:start([Node, shortnames])
+    end.
 
 ensure_epmd() ->
     os:cmd("erl -sname epmd_starter -noshell -eval 'halt().'").
