@@ -18,7 +18,7 @@
 -type apply_fun() :: fun((command(), state()) -> state()).
 
 -type machine() :: {simple, apply_fun(), Initial :: state()} |
-                   {module, module()}.
+                   {module, module(), AddInitArgs :: #{atom() => term()}}.
 
 -type milliseconds() :: non_neg_integer().
 
@@ -45,6 +45,11 @@
 %% used {@link ra:send_and_await_consensus/2} or
 %% {@link ra:send_and_await_consensus/3}
 
+-type machine_init_args() :: #{name := atom(),
+                               atom() => term()}.
+%% the configuration passed to the init callback
+
+
 -export_type([machine/0,
               effect/0,
               effects/0,
@@ -52,7 +57,7 @@
               builtin_command/0]).
 
 
--callback init(Name :: atom()) -> {state(), effects()}.
+-callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
 %% Applies each entry to the state machine.
 %% returns the new updated state and a list of effects
@@ -73,37 +78,37 @@
 -callback overview(state()) -> map().
 
 -spec init(machine(), atom()) -> {state(), effects()}.
-init({module, Mod}, Name) ->
-    Mod:init(Name);
+init({module, Mod, Args}, Name) ->
+    Mod:init(Args#{name => Name});
 init({simple, _Fun, InitialState}, _Name) ->
     {InitialState, []}.
 
 -spec apply(machine(), ra_index(), command(), state()) ->
     {state(), effects()} | {state(), effects(), reply()}.
-apply({module, Mod}, Idx, Cmd, State) ->
+apply({module, Mod, _}, Idx, Cmd, State) ->
     Mod:apply(Idx, Cmd, State);
 apply({simple, Fun, _InitialState}, _Idx, Cmd, State) ->
     {Fun(Cmd, State), []}.
 
 -spec leader_effects(machine(), state()) -> effects().
-leader_effects({module, Mod}, State) ->
+leader_effects({module, Mod, _}, State) ->
     Mod:leader_effects(State);
 leader_effects({simple, _, _}, _State) ->
     [].
 
 -spec tick(machine(), milliseconds(), state()) -> effects().
-tick({module, Mod}, TimeMs, State) ->
+tick({module, Mod, _}, TimeMs, State) ->
     Mod:tick(TimeMs, State);
 tick({simple, _, _}, _TimeMs, _State) ->
     [].
 
 -spec overview(machine(), state()) -> map().
-overview({module, Mod}, State) ->
+overview({module, Mod, _}, State) ->
     Mod:overview(State);
 overview({simple, _, _}, _State) ->
     #{type => simple}.
 
 -spec module(machine()) -> undefined | module().
-module({module, Mod}) -> Mod;
+module({module, Mod, _}) -> Mod;
 module(_) -> undefined.
 

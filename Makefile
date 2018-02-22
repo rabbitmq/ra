@@ -16,14 +16,14 @@ TEST_DEPS = proper meck eunit_formatters looking_glass rabbitmq_ct_helpers
 
 BUILD_DEPS = elvis_mk
 
-LOCAL_DEPS = sasl crypto
+LOCAL_DEPS = sasl crypto rabbitmq_ct_helpers
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master
 dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
 dep_rabbitmq_ct_helpers = git https://github.com/rabbitmq/rabbitmq-ct-helpers
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten
+PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten looking_glass
 
 DIALYZER_OPTS += --src -r test
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}

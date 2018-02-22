@@ -69,8 +69,8 @@ delete(Smallest, #state{data = Data0,
         Next ->
             State#state{data = Data, smallest = Next}
     end;
-delete(Smallest, #state{data = Data} = State) ->
-    State#state{data = maps:remove(Smallest, Data)}.
+delete(Key, #state{data = Data} = State) ->
+    State#state{data = maps:remove(Key, Data)}.
 
 -spec size(state()) -> non_neg_integer().
 size(#state{data = Data}) ->

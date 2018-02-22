@@ -1008,7 +1008,7 @@ quorum(_Config) ->
 
 follower_installs_snapshot(_Config) ->
     #{n3 := {_, FState = #{cluster := Config}, _}}
-    = init_nodes([n1, n2, n3], {module, ra_queue}),
+    = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -1027,7 +1027,7 @@ follower_installs_snapshot(_Config) ->
 
 snapshotted_follower_received_append_entries(_Config) ->
     #{n3 := {_, FState0 = #{cluster := Config}, _}} =
-        init_nodes([n1, n2, n3], {module, ra_queue}),
+        init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
@@ -1139,7 +1139,7 @@ leader_receives_install_snapshot_result(_Config) ->
 %%%
 take_snapshot(_Config) ->
     % * takes snapshot in response to state machine release_cursor effect
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -1161,7 +1161,7 @@ take_snapshot(_Config) ->
     ok.
 
 send_snapshot(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [
@@ -1192,7 +1192,7 @@ send_snapshot(_Config) ->
     ok.
 
 past_leader_overwrites_entry(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue}),
+    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
     Nodes = lists:foldl(fun (F, S) -> F(S) end,
                         InitNodes,
                         [

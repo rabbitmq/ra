@@ -360,8 +360,8 @@ node_catches_up(Config) ->
     %%TODO look into cluster changes WITH INVALID NAMES!!!
 
     % start two nodes
-    ok = StartNode(N1, InitialNodes, {module, ra_queue}),
-    ok = StartNode(N2, InitialNodes, {module, ra_queue}),
+    ok = StartNode(N1, InitialNodes, {module, ra_queue, #{}}),
+    ok = StartNode(N2, InitialNodes, {module, ra_queue, #{}}),
     ok = ra:trigger_election(N1),
     DecSink = spawn(fun () -> receive marker_pattern -> ok end end),
     {ok, {_, Term}, Leader} = ra:send(N1, {enq, banana}),
@@ -369,7 +369,7 @@ node_catches_up(Config) ->
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(Leader, {enq, apple},
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
 
-    ok = StartNode(N3, InitialNodes, {module, ra_queue}),
+    ok = StartNode(N3, InitialNodes, {module, ra_queue, #{}}),
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point the node should be caught up
@@ -404,7 +404,7 @@ stop_leader_and_wait_for_elections(Config) ->
 queue_example(Config) ->
     Self = self(),
     [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
-                                                {module, ra_queue}, Config),
+                                                {module, ra_queue, #{}}, Config),
 
     {ok, {_, Term}, Leader} = ra:send(A, {enq, test_msg}),
     {ok, {_, Term}, Leader} = ra:send(Leader, {deq, Self}),

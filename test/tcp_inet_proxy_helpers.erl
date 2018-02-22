@@ -10,8 +10,7 @@
 -export([wait_for_blocked/3]).
 enable_dist_proxy_manager(Config) ->
     inet_tcp_proxy_manager:start(),
-    rabbit_ct_helpers:set_config(Config,
-      {erlang_dist_module, inet_proxy_dist}).
+    [{erlang_dist_module, inet_proxy_dist} | Config].
 
 enable_dist_proxy(Nodes, Config) ->
     ManagerNode = node(),
@@ -26,7 +25,7 @@ enable_dist_proxy(Nodes, Config) ->
     %% it to be enabled.
     Map = lists:map(
       fun(Node) ->
-          {DistPort, ProxyPort} = ct_rpc:call(Node, ?MODULE, start_dist_proxy_on_node, [ManagerNode])
+          _ = ct_rpc:call(Node, ?MODULE, start_dist_proxy_on_node, [ManagerNode])
       end, Nodes),
     ok = lists:foreach(fun(Node) ->
         ok = ct_rpc:call(Node, application, set_env, [kernel, dist_and_proxy_ports_map, Map])

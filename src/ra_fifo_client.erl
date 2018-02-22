@@ -12,6 +12,7 @@
          dequeue/3,
          settle/3,
          return/3,
+         discard/3,
          handle_ra_event/3
          ]).
 
@@ -128,11 +129,8 @@ dequeue(CustomerTag, Settlement, State0) ->
 settle(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo settle support lists of message ids
-    State = lists:foldl(
-              fun (MsgId, S0) ->
-                      Cmd = {settle, MsgId, customer_id(CustomerTag)},
-                      send_command(Node, undefined, Cmd, S0)
-              end, State0, MsgIds),
+    Cmd = {settle, MsgIds, customer_id(CustomerTag)},
+    State = send_command(Node, undefined, Cmd, State0),
     {ok, State}.
 
 %% @doc Return a message to the queue.
@@ -152,11 +150,29 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
 return(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
-    State = lists:foldl(
-              fun (MsgId, S0) ->
-                      Cmd = {return, MsgId, customer_id(CustomerTag)},
-                      send_command(Node, undefined, Cmd, S0)
-              end, State0, MsgIds),
+    Cmd = {return, MsgIds, customer_id(CustomerTag)},
+    State = send_command(Node, undefined, Cmd, State0),
+    {ok, State}.
+
+%% @doc Discards a checked out message.
+%% If the queue has a dead_letter_handler configured this will be called.
+%% @param CustomerTag the tag uniquely identifying the customer.
+%% @param MsgIds the message ids to discard
+%% from {@link ra_fifo:delivery/0.}
+%% @param State the {@module} state
+%% @returns
+%% `{ok, State}' if the command was successfully sent.
+%%
+%% `{error, stop_sending}' if the number of commands not yet known to
+%% have been successfully applied by ra has reached the maximum limit.
+%% If this happens the caller should either discard or cache the requested
+%% enqueue until at least one <code>ra_event</code> has been processes.
+-spec discard(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
+    {ok, state()} | {error, stop_sending}.
+discard(CustomerTag, [_|_] = MsgIds, State0) ->
+    Node = pick_node(State0),
+    Cmd = {discard, MsgIds, customer_id(CustomerTag)},
+    State = send_command(Node, undefined, Cmd, State0),
     {ok, State}.
 
 %% @doc Register with the ra_fifo queue to "checkout" messages as they

@@ -172,7 +172,7 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    ?INFO("~p ra_node_proc:init/1:~n~p~n",
+    ?INFO("~w ra_node_proc:init/1:~n~p~n",
           [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
     % New cluster starts should be coordinated and elections triggered
@@ -182,7 +182,7 @@ init(Config0) when is_map(Config0) ->
                   true ->
                       Actions0;
                   false ->
-                      ?INFO("~p: is not new, setting election timeout.~n",
+                      ?INFO("~w: is not new, setting election timeout.~n",
                             [Id]),
                       [election_timeout_action(follower, State) | Actions0]
               end,
@@ -327,7 +327,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p candidate -> follower term: ~p~n",
+            ?INFO("~w candidate -> follower term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
@@ -337,7 +337,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              [election_timeout_action(candidate, State) | Actions]};
         {leader, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p candidate -> leader term: ~p~n",
+            ?INFO("~w candidate -> leader term: ~b~n",
                   [id(State), current_term(State)]),
             % inject a bunch of command events to be processed when node
             % becomes leader
@@ -392,7 +392,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {keep_state, State, maybe_set_election_timeout(State, Actions)};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p follower -> candidate term: ~p~n",
+            ?INFO("~w follower -> candidate term: ~b~n",
                   [id(State), current_term(State)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
@@ -400,7 +400,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
         {await_condition, State1, Effects} ->
             {State2, Actions} = handle_effects(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
-            ?INFO("~p follower -> await_condition term: ~p~n",
+            ?INFO("~w follower -> await_condition term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout} | Actions]}
@@ -436,14 +436,14 @@ await_condition(EventType, Msg, State0 = #state{node_state = NState,
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
-            ?INFO("~p await_condition -> follower term: ~p~n",
+            ?INFO("~w await_condition -> follower term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, follower, NewState,
              [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~p follower -> candidate term: ~p~n",
+            ?INFO("~w follower -> candidate term: ~b~n",
                   [ra_node:id(NState), current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, candidate, State#state{leader_monitor = undefined},
@@ -663,7 +663,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             OldLeaderNode = ra_lib:ra_node_id_node(OldLeader),
             ok = aten:unregister(OldLeaderNode),
             % leader has either changed or just been set
-            ?INFO("~p detected a new leader ~p in term ~p~n",
+            ?INFO("~w detected a new leader ~w in term ~b~n",
                   [id(New), NewLeader, current_term(New)]),
             [ok = gen_statem:reply(From, {redirect, NewLeader})
              || {From, _Data} <- Pending],
@@ -716,7 +716,7 @@ handle_leader_down(#state{leader_monitor = Mon} = State) ->
              State#state{leader_monitor = monitor(process, Leader)},
              []};
         PingRes ->
-            ?INFO("~p: Leader ~p appears down. Ping returned: ~p~n"
+            ?INFO("~w: Leader ~w appears down. Ping returned: ~w~n"
                   " Setting election timeout~n",
                   [id(State), Leader, PingRes]),
             {keep_state, State#state{leader_monitor = undefined},

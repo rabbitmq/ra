@@ -27,7 +27,8 @@ all_tests() ->
      node_is_deleted,
      node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects,
-     ra_fifo_client_dequeue
+     ra_fifo_client_dequeue,
+     ra_fifo_client_discard
     ].
 
 groups() ->
@@ -65,7 +66,7 @@ ra_fifo_client_basics(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     FState0 = ra_fifo_client:init([NodeId]),
@@ -130,7 +131,7 @@ ra_fifo_client_returns_correlation(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 = ra_fifo_client:init([NodeId]),
@@ -266,6 +267,63 @@ ra_fifo_client_handles_reject_notification(Config) ->
     ra:stop_node(NodeId2),
     ok.
 
+ra_fifo_client_discard(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo,
+                         #{dead_letter_handler =>
+                           {?MODULE, dead_letter_handler, [self()]}}}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    F0 = ra_fifo_client:init([NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
+    {ok, F2} = ra_fifo_client:enqueue(msg1, F1),
+    F3 = discard_next_delivery(F2, 500),
+    {ok, empty, _F4} = ra_fifo_client:dequeue(<<"tag1">>, settled, F3),
+    receive
+        {dead_letter, Letters} ->
+            ct:pal("dead letters ~p~n", [Letters]),
+            [{_, msg1}] = Letters,
+            ok
+    after 500 ->
+              exit(dead_letter_timeout)
+    end,
+    ok.
+
+dead_letter_handler(Pid, Msgs) ->
+    Pid ! {dead_letter, Msgs}.
+
+ra_fifo_client_dequeue(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Tag = UId,
+    Conf = #{id => NodeId,
+             uid => UId,
+             log_module => ra_log_file,
+             log_init_args => #{data_dir => PrivDir, uid => UId},
+             initial_nodes => [],
+             machine => {module, ra_fifo, #{}}},
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    F1 = ra_fifo_client:init([NodeId]),
+    {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
+    {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
+    {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
+    {ok, F4} = ra_fifo_client:enqueue(msg2, F3),
+    {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
+    {ok, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
+    ct:pal("F6 ~p~n", [F6]),
+    ok.
+
 leader_monitors_customer(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
@@ -277,7 +335,7 @@ leader_monitors_customer(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 =  ra_fifo_client:init([NodeId]),
@@ -335,7 +393,7 @@ node_is_deleted(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 = ra_fifo_client:init([NodeId]),
@@ -375,7 +433,7 @@ node_restart_after_application_restart(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 = ra_fifo_client:init([NodeId]),
@@ -401,7 +459,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
              log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
-             machine => {module, ra_fifo}},
+             machine => {module, ra_fifo, #{}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 = ra_fifo_client:init([NodeId]),
@@ -434,36 +492,13 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ok = ra:stop_node(UId),
     ok.
 
-ra_fifo_client_dequeue(Config) ->
-    PrivDir = ?config(priv_dir, Config),
-    NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Tag = UId,
-    Conf = #{id => NodeId,
-             uid => UId,
-             log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, uid => UId},
-             initial_nodes => [],
-             machine => {module, ra_fifo}},
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    F1 = ra_fifo_client:init([NodeId]),
-    {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
-    {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
-    {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
-    {ok, F4} = ra_fifo_client:enqueue(msg2, F3),
-    {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
-    {ok, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
-    ct:pal("F6 ~p~n", [F6]),
-    ok.
-
 conf(UId, NodeId, Dir, Peers) ->
     #{id => NodeId,
       uid => UId,
       log_module => ra_log_file,
       log_init_args => #{data_dir => Dir, uid => UId},
       initial_nodes => Peers,
-      machine => {module, ra_fifo}}.
+      machine => {module, ra_fifo, #{}}}.
 
 process_ra_event(State, Wait) ->
     receive
@@ -484,11 +519,28 @@ process_ra_events(State0, Acc, Wait) ->
             case ra_fifo_client:handle_ra_event(From, Evt, State0) of
                 {internal, _, State} ->
                     process_ra_events(State, Acc, Wait);
-                {{delivery, MsgId, Msgs}, State1} ->
-                    {ok, State} = ra_fifo_client:settle(<<"tag">>, [MsgId], State1),
+                {{delivery, Tag, Msgs}, State1} ->
+                    MsgIds = [element(1, M) || M <- Msgs],
+                    {ok, State} = ra_fifo_client:settle(Tag, MsgIds, State1),
                     process_ra_events(State, Acc ++ Msgs, Wait)
             end
     after Wait ->
               {Acc, State0}
     end.
 
+discard_next_delivery(State0, Wait) ->
+    receive
+        {ra_event, From, Evt} ->
+            case ra_fifo_client:handle_ra_event(From, Evt, State0) of
+                {internal, _, State} ->
+                    discard_next_delivery(State, Wait);
+                {{delivery, Tag, Msgs}, State1} ->
+                    MsgIds = [element(1, M) || M <- Msgs],
+                    ct:pal("discarding ~p", [Msgs]),
+                    {ok, State} = ra_fifo_client:discard(Tag, MsgIds,
+                                                         State1),
+                    State
+            end
+    after Wait ->
+              State0
+    end.
