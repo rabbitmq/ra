@@ -149,8 +149,8 @@ dequeue(Opts) ->
     case ra_fifo_client:dequeue(<<"consumer_once">>, settled, State) of
         {timeout, _} -> fail("Timeout");
         {error, Err} -> fail("Error: ~p", [Err]);
-        {ok, empty, _State1} -> fail("Empty queue");
-        {ok, {_MsgId, {_, Msg}}, _State1} -> io:format("Got message ~p~n", [Msg])
+        {ok, empty, _State1} -> io:format("Empty queue ~n");
+        {ok, {_MsgId, {_, Msg}}, _State1} -> io:format("Got message: ~n~p~n", [Msg])
     end.
 
 parse_args(Args) ->
