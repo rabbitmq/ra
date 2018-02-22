@@ -1027,55 +1027,62 @@ apply_to(ApplyTo, #{id := Id,
         {[], State} ->
             {State, [], 0};
         {Entries, State1} ->
-            {State, MacState, NewEffects} =
+            {State, MacState, NewEffects, Notifys} =
                 lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
-                            {State1, MacState0, []}, Entries),
+                            {State1, MacState0, [], #{}}, Entries),
+            NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
 
             {State#{last_applied => AppliedTo,
-                    machine_state => MacState}, NewEffects,
+                    machine_state => MacState}, NotifyEffects ++ NewEffects,
              AppliedTo - LastApplied}
     end;
 apply_to(_ApplyTo, State) ->
     {State, [], 0}.
 
+make_notify_effects(Nots) ->
+    [{notify, Pid, lists:reverse(Corrs)}
+     || {Pid, Corrs} <- maps:to_list(Nots)].
 
 apply_with(_Id, Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},
-           {State, MacSt, Effects0}) ->
+           {State, MacSt, Effects0, Notifys0}) ->
     case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
         {NextMacSt, Efx} ->
 
             % apply returned no reply so use IdxTerm as reply value
-            Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
-            {State, NextMacSt, Effects ++ Efx};
+            {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
+                                           Effects0, Notifys0),
+            {State, NextMacSt, Effects ++ Efx, Notifys};
         {NextMacSt, Efx, Reply} ->
             % apply returned a return value
-            Effects = add_reply(From, Reply, ReplyType, Effects0),
-            {State, NextMacSt, Effects ++ Efx}
+            {Effects, Notifys} = add_reply(From, Reply, ReplyType,
+                                           Effects0, Notifys0),
+            {State, NextMacSt, Effects ++ Efx, Notifys}
     end;
 apply_with(_Id, _Machine,
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
-           {State, MacSt, Effects0}) ->
-    Effects = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
-                        ReplyType, Effects0),
-    {State, MacSt, Effects};
+           {State, MacSt, Effects0, Notifys0}) ->
+    {Effects, Notifys} = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
+                                   ReplyType, Effects0, Notifys0),
+    {State, MacSt, Effects, Notifys};
 apply_with(Id, _Machine,
            {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
-           {State0, MacSt, Effects0}) ->
+           {State0, MacSt, Effects0, Notifys0}) ->
     ?INFO("~w: applying ra cluster change to ~w~n", [Id, maps:keys(New)]),
-    Effects = add_reply(From, {Idx, Term}, ReplyType, Effects0),
+    {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
+                                   Effects0, Notifys0),
     State = State0#{cluster_change_permitted => true},
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
-    {State1, MacSt, Effects1};
+    {State1, MacSt, Effects1, Notifys};
 apply_with(Id, _Machine,
            {_Idx, Term, noop},
-           {State0 = #{current_term := Term}, MacSt, Effects}) ->
+           {State0 = #{current_term := Term}, MacSt, Effects, Notifys}) ->
     ?INFO("~w: enabling ra cluster changes in ~b~n", [Id, Term]),
     State = State0#{cluster_change_permitted => true},
-    {State, MacSt, Effects};
+    {State, MacSt, Effects, Notifys};
 apply_with(Id, _Machine, Cmd, Acc) ->
     % TODO: uh why a catch all here? try to remove this and see if it breaks
     ?WARN("~p: apply_with: unhandled command: ~p~n", [Id, Cmd]),
@@ -1090,15 +1097,18 @@ add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
 
-add_reply(From, Reply, await_consensus, Effects) ->
-    [{reply, From, Reply} | Effects];
-add_reply(undefined, _IdxTerm, {notify_on_consensus, Corr, Pid}, Effects) ->
+add_reply(From, Reply, await_consensus, Effects, Notifys) ->
+    {[{reply, From, Reply} | Effects], Notifys};
+add_reply(undefined, _IdxTerm, {notify_on_consensus, Corr, Pid},
+          Effects, Notifys0) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
     % own bookkeeping
-    Effects ++ [{notify, Pid, Corr}];
-add_reply(_From, _Reply, _Mode, Effects) ->
-    Effects.
+    Notifys = maps:update_with(Pid, fun (T) -> [Corr | T] end,
+                               [Corr], Notifys0),
+    {Effects, Notifys};
+add_reply(_From, _Reply, _Mode, Effects, Notifys) ->
+    {Effects, Notifys}.
 
 append_log_leader({CmdTag, _, _, _} = Cmd,
                   State = #{cluster_change_permitted := false,

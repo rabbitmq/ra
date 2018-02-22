@@ -247,32 +247,10 @@ checkout(CustomerTag, NumUnsettled, State) ->
 -spec handle_ra_event(ra_node_id(), ra_node_proc:ra_event_body(), state()) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()}.
-handle_ra_event(From, {applied, Seq},
-                #state{last_applied = Last} = State0)
-  when Seq > Last orelse Last =:= undefined ->
-    % applied notifications should arrive in order
-    % here we can detect if a sequence number was missed and resend it
-    State = case Last of
-                undefined ->
-                    State0#state{leader = From};
-                _ ->
-                    do_resends(Last+1, Seq-1, State0#state{leader = From})
-            end,
-    case maps:take(Seq, State#state.pending) of
-        {{undefined, _}, Pending} ->
-            {internal, [], State#state{pending = Pending,
-                                       last_applied = Seq}};
-        {{Corr, _}, Pending} ->
-            {internal, [Corr], State#state{pending = Pending,
-                                           last_applied = Seq}};
-        error ->
-            % must have already been resent or removed for some other reason
-            {internal, [], State}
-    end;
-handle_ra_event(_From, {applied, _Seq}, State) ->
-    % duplicate applied notification - simply ignore  don't update leader
-    % in case this is a stale event
-    {internal, [], State};
+handle_ra_event(From, {applied, Seqs}, State0) ->
+    {Corrs, State} = lists:foldl(fun seq_applied/2,
+                                 {[], State0#state{leader = From}}, Seqs),
+    {internal, lists:reverse(Corrs), State};
 handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
     % TODO: how should these be handled? re-sent on timer or try random
     {internal, [], State0};
@@ -284,6 +262,28 @@ handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
     handle_delivery(Leader, Del, State0).
 
 %% Internal
+
+seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
+  when Seq > Last orelse Last =:= undefined ->
+    State = case Last of
+                undefined ->
+                    State0;
+                _ ->
+                    do_resends(Last+1, Seq-1, State0)
+            end,
+    case maps:take(Seq, State#state.pending) of
+        {{undefined, _}, Pending} ->
+            {Corrs, State#state{pending = Pending,
+                                       last_applied = Seq}};
+        {{Corr, _}, Pending} ->
+            {[Corr | Corrs], State#state{pending = Pending,
+                                           last_applied = Seq}};
+        error ->
+            % must have already been resent or removed for some other reason
+            {Corrs, State}
+    end;
+seq_applied(_Seq, Acc) ->
+    Acc.
 
 do_resends(From, To, State) ->
     lists:foldl(fun resend/2, State, lists:seq(From, To)).
@@ -332,30 +332,6 @@ get_missing_deliveries(Leader, From, To, CustomerTag) ->
             end,
     {ok, {_, Missing}, _} = ra:dirty_query(Leader, Query),
     Missing.
-
-% handle_delivery(Leader, {delivery, CustomerTag, IdMsgs} = Del,
-%                 #state{customer_deliveries = CDels} = State0) ->
-%     lists:foldl(
-%       fun ({MsgId, _}, S) ->
-%               case CDels of
-%                   #{CustomerTag := Last} when MsgId =:= Last+1 ->
-%                       S#state{customer_deliveries =
-%                               maps:put(CustomerTag, MsgId, CDels)};
-%                   #{CustomerTag := Last} when MsgId > Last+1 ->
-%                       % query leader for missing deliveries
-%                       Query = fun (State) ->
-%                                       ra_fifo:get_checked_out(customer_id(CustomerTag),
-%                                                               Last+1, MsgId-1, State)
-%                               end,
-%                       {ok, {_, Missing}, _} = ra:dirty_query(Leader, Query),
-%                       S#state{customer_deliveries =
-%                               maps:put(CustomerTag, MsgId, CDels)};
-%                   _ when MsgId =:= 0 ->
-%                       % it is the first delivery
-%                       S#state{customer_deliveries =
-%                               maps:put(CustomerTag, MsgId, CDels)}
-%               end
-%       end, State0#state{leader = Leader}, IdMsgs).
 
 pick_node(#state{leader = undefined, nodes = [N | _]}) ->
     N;

@@ -71,7 +71,7 @@
 -type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
     % sent using ra:send_and_notify
-    {applied, correlation()} |
+    {applied, [correlation()]} |
     {rejected, ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
     {machine, term()}.
@@ -523,8 +523,8 @@ handle_effect({next_event, _Type, _Evt} = Next, _EvtType, State, Actions) ->
 handle_effect({send_msg, To, Msg}, _EvtType, State, Actions) ->
     ok = send_ra_event(To, Msg, machine, State),
     {State, Actions};
-handle_effect({notify, Who, Correlation}, _EvtType, State, Actions) ->
-    ok = send_ra_event(Who, Correlation, applied, State),
+handle_effect({notify, Who, Correlations}, _EvtType, State, Actions) ->
+    ok = send_ra_event(Who, Correlations, applied, State),
     {State, Actions};
 handle_effect({cast, To, Msg}, _EvtType, State, Actions) ->
     ok = gen_server:cast(To, Msg),

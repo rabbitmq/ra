@@ -516,6 +516,7 @@ process_ra_events(State0, Wait) ->
 process_ra_events(State0, Acc, Wait) ->
     receive
         {ra_event, From, Evt} ->
+            ct:pal("processing ra event ~p~n", [Evt]),
             case ra_fifo_client:handle_ra_event(From, Evt, State0) of
                 {internal, _, State} ->
                     process_ra_events(State, Acc, Wait);
