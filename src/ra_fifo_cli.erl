@@ -150,7 +150,7 @@ dequeue(Opts) ->
         {timeout, _} -> fail("Timeout");
         {error, Err} -> fail("Error: ~p", [Err]);
         {ok, empty, _State1} -> io:format("Empty queue ~n");
-        {ok, {_MsgId, {_, Msg}}, _State1} -> io:format("Got message: ~n~p~n", [Msg])
+        {ok, {_MsgId, {_, Msg}}, _State1} -> io:format("Got message: ~n~s~n", [Msg])
     end.
 
 parse_args(Args) ->
