@@ -256,7 +256,7 @@ apply(RaftIdx, {discard, MsgIds, CustomerId},
             Discarded = maps:with(MsgIds, Checked0),
             MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
                                    <- maps:values(Discarded)],
-            State1 = incr_metrics(State0, {0, 0, 0, length(MsgIds)}),
+            State1 = incr_metrics(State0, {0, 0, length(MsgIds), 0}),
             {State, Effects} = complete(RaftIdx, CustomerId,
                                         MsgRaftIdxs, Cust0, Checked,
                                         State1),
