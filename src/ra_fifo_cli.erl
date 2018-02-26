@@ -73,7 +73,7 @@ start_ra_cluster(Opts) ->
                     log_init_args =>
                         #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
                           uid => atom_to_binary(Name, utf8)},
-                    machine => {module, ra_fifo}
+                    machine => {module, ra_fifo, #{}}
                     },
         io:format("Starting ra node ~p~n", [{Name, Node}]),
         ok = ct_rpc:call(Node, ra, start_node, [Config])
