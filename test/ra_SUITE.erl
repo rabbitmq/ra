@@ -23,6 +23,7 @@ all_tests() ->
      send_and_await_consensus,
      send_and_notify,
      send_and_notify_reject,
+     cast,
      dirty_query,
      members,
      consistent_query,
@@ -313,6 +314,18 @@ send_and_notify_reject(Config) ->
     after 2000 ->
               exit(consensus_timeout)
     end,
+    terminate_cluster(Cluster).
+
+cast(Config) ->
+    [A, B, C] = Cluster =
+        start_local_cluster(3, ?config(test_name, Config),
+                            {simple, fun erlang:'+'/2, 0}, Config),
+    % cast to each node - command should be forwarded
+    ok = ra:cast(A, 5),
+    ok = ra:cast(B, 5),
+    ok = ra:cast(C, 5),
+    timer:sleep(50),
+    {ok, {_IdxTrm, 15}, _} = ra:consistent_query(A, fun (X) -> X end),
     terminate_cluster(Cluster).
 
 dirty_query(Config) ->

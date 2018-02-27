@@ -236,8 +236,8 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
         {MRef, Monitors} ->
             % there is a monitor for the ref
             {leader, NodeState, Effects} =
-                ra_node:handle_leader({command, {'$usr', Pid, {down, Pid, Info},
-                                                 after_log_append}},
+                ra_node:handle_leader({command, {'$usr', {down, Pid, Info},
+                                                 noreply}},
                                       NodeState0),
             {State, Actions0} =
                 handle_effects(Effects, cast,
@@ -262,8 +262,7 @@ leader(info, {NodeEvt, Node},
             % there is a monitor for the node
             {leader, NodeState, Effects} =
                 ra_node:handle_leader({command,
-                                       {'$usr', self(), {NodeEvt, Node},
-                                        after_log_append}},
+                                       {'$usr', {NodeEvt, Node}, noreply}},
                                       NodeState0),
             {State, Actions} =
                 handle_effects(Effects, cast,
@@ -348,6 +347,21 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
 
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
+follower(_, {command, {_CmdType, Data, noreply}},
+         State) ->
+    Id = id(State),
+    % forward to leader
+    case leader_id(State) of
+        undefined ->
+            ?WARN("~w leader cast - leader not known. "
+                  "Command is dropped.~n", [id(State)]),
+            {keep_state, State, []};
+        LeaderId ->
+            ?INFO("~p follower leader cast - redirecting to ~w ~n",
+                  [Id, LeaderId]),
+            ok = ra:cast(LeaderId, Data),
+            {keep_state, State, []}
+    end;
 follower(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
