@@ -288,7 +288,8 @@ apply(RaftIdx, {checkout, {dequeue, settled}, CustomerId}, State0) ->
     % immediately settle
     {State, Effects} = apply(RaftIdx, {settle, [MsgId], CustomerId}, State3),
     {State, Effects, {dequeue, M}};
-apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer}, State0) ->
+apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
+      State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
     {State2, Reply} = case checkout_one(State1) of
                           {S, [{send_msg, _, {_, _, [M]}}]} ->

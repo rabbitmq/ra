@@ -239,16 +239,10 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
                 ra_node:handle_leader({command, {'$usr', {down, Pid, Info},
                                                  noreply}},
                                       NodeState0),
-            {State, Actions0} =
+            {State, Actions} =
                 handle_effects(Effects, cast,
                                State0#state{node_state = NodeState,
                                             monitors = Monitors}),
-            % remove replies
-            % TODO: make this nicer
-            Actions = lists:filter(fun({reply, _}) -> false;
-                                      ({reply, _, _}) -> false;
-                                      (_) -> true
-                                   end, Actions0),
             {keep_state, State, Actions};
         error ->
             {keep_state, State0, []}
