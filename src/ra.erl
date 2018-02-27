@@ -39,6 +39,7 @@ start_local_cluster(Num, Name, Machine) ->
     Conf0 = #{log_module => ra_log_memory,
               log_init_args => #{},
               initial_nodes => Nodes,
+              cluster_id => Name,
               machine => Machine},
     Res = [begin
                {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id,

@@ -64,10 +64,11 @@ restart_ra(DataDir) ->
 
 init_per_group(ra_log_memory, Config) ->
     restart_ra(?config(priv_dir, Config)),
-    Fun = fun (_TestCase) ->
+    Fun = fun (TestCase) ->
                   fun (Name, Nodes, Machine) ->
                           UId = atom_to_binary(Name, utf8),
-                          Conf = #{id => {Name, node()},
+                          Conf = #{cluster_id => TestCase,
+                                   id => {Name, node()},
                                    uid => UId,
                                    log_module => ra_log_memory,
                                    log_init_args => #{},
@@ -87,7 +88,8 @@ init_per_group(ra_log_file = G, Config) ->
                           UId = atom_to_binary(Name, utf8),
                           Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
-                          Conf = #{id => {Name, node()},
+                          Conf = #{cluster_id => TestCase,
+                                   id => {Name, node()},
                                    uid => UId,
                                    log_module => ra_log_file,
                                    log_init_args => #{data_dir => Dir,

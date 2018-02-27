@@ -19,15 +19,17 @@
 -type ra_idxterm() :: {ra_index(), ra_term()}.
 
 %% Sections 5.1-5.3.
-%%
-%% NB: ra nodes need to be registered as need to be reachable under the old
-%% name after restarts. Pids won't do.
+
+%% uniquely identifies the ra cluster
+-type ra_cluster_id() :: term().
 
 %% Uniquely identifies a ra node on a local erlang node
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
-% identifies a ra node
+%% Identifies a ra node in a ra cluster
+%% NB: ra nodes need to be registered as need to be reachable under the old
+%% name after restarts. Pids won't do.
 -type ra_node_id() :: atom() | {Name :: atom(), Node :: node()}.
 
 -type ra_peer_state() :: #{next_index => non_neg_integer(),

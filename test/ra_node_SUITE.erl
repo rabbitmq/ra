@@ -76,7 +76,8 @@ init(_Config) ->
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
     % ensure it is written to the log
-    InitConf = #{id => Id,
+    InitConf = #{cluster_id => init,
+                 id => Id,
                  uid => UId,
                  log_module => ra_log_memory,
                  log_init_args => #{},
@@ -104,7 +105,8 @@ init(_Config) ->
     ok.
 
 init_restores_cluster_changes(_Config) ->
-    InitConf = #{id => n1,
+    InitConf = #{cluster_id => init_restores_cluster_changes,
+                 id => n1,
                  uid => <<"n1">>,
                  log_module => ra_log_memory,
                  log_init_args => #{},
@@ -951,7 +953,8 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
 is_new(_Config) ->
     State = base_state(3),
     false = ra_node:is_new(State),
-    Args = #{id => {ra, node()},
+    Args = #{cluster_id => some_id,
+             id => {ra, node()},
              uid => <<"ra">>,
              initial_nodes => [],
              log_module => ra_log_memory,
@@ -1256,7 +1259,8 @@ run_effects_leader(Id, Nodes) ->
 
 init_nodes(NodeIds, Machine) ->
     lists:foldl(fun (NodeId, Acc) ->
-                        Args = #{id => NodeId,
+                        Args = #{cluster_id => some_id,
+                                 id => NodeId,
                                  uid => atom_to_binary(NodeId, utf8),
                                  initial_nodes => NodeIds,
                                  log_module => ra_log_memory,
@@ -1457,7 +1461,8 @@ empty_state(NumNodes, Id) ->
     Nodes = lists:foldl(fun(N, Acc) ->
                                 [list_to_atom("n" ++ integer_to_list(N)) | Acc]
                         end, [], lists:seq(1, NumNodes)),
-    ra_node_init(#{id => Id,
+    ra_node_init(#{cluster_id => someid,
+                   id => Id,
                    uid => atom_to_binary(Id, utf8),
                    initial_nodes => Nodes,
                    log_module => ra_log_memory,

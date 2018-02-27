@@ -73,12 +73,13 @@
 
 -type ra_effects() :: [ra_effect()].
 
--type ra_node_config() :: #{id => ra_node_id(),
-                            uid => ra_uid(),
-                            log_module => ra_log_memory | ra_log_file,
-                            log_init_args => ra_log:ra_log_init_args(),
-                            initial_nodes => [ra_node_id()],
-                            machine => ra_machine:machine(),
+-type ra_node_config() :: #{id := ra_node_id(),
+                            uid := ra_uid(),
+                            cluster_id := ra_cluster_id(),
+                            log_module := ra_log_memory | ra_log_file,
+                            log_init_args := ra_log:ra_log_init_args(),
+                            initial_nodes := [ra_node_id()],
+                            machine := ra_machine:machine(),
                             % TODO: review - only really used for
                             % setting election timeouts
                             broadcast_time => non_neg_integer(), % ms
