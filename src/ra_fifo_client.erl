@@ -105,9 +105,9 @@ enqueue(Msg, State) ->
 dequeue(CustomerTag, Settlement, State0) ->
     Node = pick_node(State0),
     CustomerId = customer_id(CustomerTag),
-    case ra:send_and_await_consensus(Node, {checkout, {get, Settlement},
+    case ra:send_and_await_consensus(Node, {checkout, {dequeue, Settlement},
                                             CustomerId}) of
-        {ok, {get, Reply}, Leader} ->
+        {ok, {dequeue, Reply}, Leader} ->
             {ok, Reply, State0#state{leader = Leader}};
         Err ->
             Err

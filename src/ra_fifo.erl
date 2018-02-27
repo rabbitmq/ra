@@ -60,7 +60,7 @@
 %% The entity that receives messages. Uniquely identifies a customer.
 
 -type checkout_spec() :: {once | auto, Num :: non_neg_integer()} |
-                         {get, settled | unsettled}.
+                         {dequeue, settled | unsettled}.
 
 -type protocol() ::
     {enqueue, Sender :: pid(), MsgSeq :: msg_seqno(), Msg :: raw_msg()} |
@@ -275,11 +275,11 @@ apply(_RaftId, {return, MsgIds, CustomerId},
         _ ->
             {State, []}
     end;
-apply(_RaftIdx, {checkout, {get, _}, {_Tag, _Pid}},
+apply(_RaftIdx, {checkout, {dequeue, _}, {_Tag, _Pid}},
       #state{messages = M} = State0) when map_size(M) == 0 ->
     %% TODO do we need metric visibility of empty get requests?
-    {State0, [], {get, empty}};
-apply(RaftIdx, {checkout, {get, settled}, CustomerId}, State0) ->
+    {State0, [], {dequeue, empty}};
+apply(RaftIdx, {checkout, {dequeue, settled}, CustomerId}, State0) ->
     % TODO: this clause could probably be optimised
     State1 = update_customer(CustomerId, {once, 1}, State0),
     % turn send msg effect into reply
@@ -287,12 +287,17 @@ apply(RaftIdx, {checkout, {get, settled}, CustomerId}, State0) ->
     State3 = incr_metrics(State2, {0, 1, 0, 0}),
     % immediately settle
     {State, Effects} = apply(RaftIdx, {settle, [MsgId], CustomerId}, State3),
-    {State, Effects, {get, M}};
-apply(_RaftIdx, {checkout, {get, unsettled}, {_Tag, Pid} = Customer}, State0) ->
+    {State, Effects, {dequeue, M}};
+apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
-    {State2, [{send_msg, _, {_, _, [M]}}]} = checkout_one(State1),
+    {State2, Reply} = case checkout_one(State1) of
+                          {S, [{send_msg, _, {_, _, [M]}}]} ->
+                              {S, M};
+                          {S, []} ->
+                              {S, empty}
+                      end,
     State = incr_metrics(State2, {0, 1, 0, 0}),
-    {State, [{monitor, process, Pid}], {get, M}};
+    {State, [{monitor, process, Pid}], {dequeue, Reply}};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -722,14 +727,24 @@ enq_enq_checkout_test() ->
     ?assertEffect({send_msg, _, {delivery, _, _}}, Effects),
     ok.
 
-enq_enq_checkout_get_test() ->
-    ensure_ets(),
+enq_enq_deq_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
     {State1, _} = enq(1, 1, first, test_init(test)),
     {State2, _} = enq(2, 2, second, State1),
     % get returns a reply value
-    {_State3, [{monitor, _, _}], {get, {0, {_, first}}}} =
-        apply(3, {checkout, {get, unsettled}, Cid}, State2),
+    {_State3, [{monitor, _, _}], {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, unsettled}, Cid}, State2),
+    ok.
+
+enq_enq_deq_deq_settle_test() ->
+    Cid = {<<"enq_enq_checkout_get_test">>, self()},
+    {State1, _} = enq(1, 1, first, test_init(test)),
+    {State2, _} = enq(2, 2, second, State1),
+    % get returns a reply value
+    {State3, [{monitor, _, _}], {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, unsettled}, Cid}, State2),
+    {_State4, _Effects4, {dequeue, empty}} =
+        apply(3, {checkout, {dequeue, unsettled}, Cid}, State3),
     ok.
 
 enq_enq_checkout_get_settled_test() ->
@@ -737,16 +752,16 @@ enq_enq_checkout_get_settled_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
     {State1, _} = enq(1, 1, first, test_init(test)),
     % get returns a reply value
-    {_State2, _Effects, {get, {0, {_, first}}}} =
-        apply(3, {checkout, {get, settled}, Cid}, State1),
+    {_State2, _Effects, {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, settled}, Cid}, State1),
     ok.
 
 checkout_get_empty_test() ->
     ensure_ets(),
     Cid = {<<"checkout_get_empty_test">>, self()},
     State = test_init(test),
-    {_State2, [], {get, empty}} =
-        apply(1, {checkout, {get, unsettled}, Cid}, State),
+    {_State2, [], {dequeue, empty}} =
+        apply(1, {checkout, {dequeue, unsettled}, Cid}, State),
     ok.
 
 release_cursor_test() ->
