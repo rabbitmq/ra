@@ -2,6 +2,8 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("proper/include/proper.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 all() -> [
           {group, tests}
@@ -9,7 +11,8 @@ all() -> [
 
 groups() ->
     Tests = [
-             enq_drain
+             enq_drain_basic
+             % prop_enq_drain
             ],
     [{tests, [], Tests}].
 
@@ -17,6 +20,11 @@ init_per_group(_, Config) -> Config.
 
 end_per_group(_, _Config) -> ok.
 
+init_per_testcase(print, Config0) ->
+    Nodes = erlang_nodes(5),
+    RaNodes = [{print, N} || N <- Nodes],
+    [{nodes, Nodes}, {ra_nodes, RaNodes},
+     {name, print} | Config0];
 init_per_testcase(TestCase, Config0) ->
     Nodes = erlang_nodes(5),
     RaNodes = [{TestCase, N} || N <- Nodes],
@@ -28,6 +36,8 @@ init_per_testcase(TestCase, Config0) ->
     ct:pal("Members ~p~n", [ra:members(NodeId)]),
     Config.
 
+end_per_testcase(print, Config) ->
+    Config;
 end_per_testcase(_, Config) ->
     Nodes = ?config(nodes, Config),
     ct:pal("end_per_testcase: Stopping nodes ~p~n", [Nodes]),
@@ -35,16 +45,53 @@ end_per_testcase(_, Config) ->
     ct:pal("end_per_testcase: Stopped nodes ~p~n", [Nodes]),
     ok.
 
-enq_drain(Config) ->
+-type nodes5() :: foo1@localhost |
+                  foo2@localhost |
+                  foo3@localhost |
+                  foo4@localhost |
+                  foo5@localhost.
+
+-type actions() :: {part, [nodes5()], 1000..20000} |
+                   {wait, 1000..20000}.
+
+-type wait_time() :: 1000..20000.
+
+prop_enq_drain(Config) ->
+    Nodes = ?config(nodes, Config),
+    RaNodes = ?config(ra_nodes, Config),
+    run_proper(
+      fun () ->
+              ?FORALL(S, resize(
+                           10,
+                           non_empty(
+                             list(
+                               oneof([{wait, wait_time()},
+                                      heal,
+                                      {part, vector(2, nodes5()),
+                                       wait_time()}])
+                              )
+                            )),
+                      do_enq_drain_scenario(Nodes, RaNodes,
+                                            [{wait, 5000}] ++ S ++
+                                            [heal, {wait, 5000}]))
+      end, [], 10).
+
+print_scenario(Scenario) ->
+    ct:pal("Scenario ~p~n", [Scenario]),
+    true.
+
+enq_drain_basic(Config) ->
     Nodes = ?config(nodes, Config),
     RaNodes = ?config(ra_nodes, Config),
     Scenario = [{wait, 5000},
                 {part, select_nodes(Nodes), 5000},
-                heal,
                 {wait, 5000},
                 {part, select_nodes(Nodes), 20000},
-                heal,
                 {wait, 5000}],
+    true = do_enq_drain_scenario(Nodes, RaNodes, Scenario).
+
+do_enq_drain_scenario(Nodes, RaNodes, Scenario) ->
+    ct:pal("Running ~p~n", [Scenario]),
     NemConf = #{nodes => Nodes,
                 scenario => Scenario},
     ScenarioTime = scenario_time(Scenario, 5000),
@@ -56,24 +103,27 @@ enq_drain(Config) ->
                 spec => {EnqInterval, custard}},
     {ok, Enq} = enqueuer:start_link(EnqConf),
     ct:pal("enqueue_checkout wait_on_scenario ~n", []),
-    ok = nemesis:wait_on_scenario(Nem, ScenarioTime),
-    {applied, Applied, _} = enqueuer:wait(Enq, ScenarioTime),
+    ok = nemesis:wait_on_scenario(Nem, ScenarioTime * 2),
+    {applied, Applied, _} = enqueuer:wait(Enq, ScenarioTime * 2),
     ct:pal("enqueuer:wait ~p ~n", [Applied]),
+    proc_lib:stop(Nem),
+    proc_lib:stop(Enq),
     Received = drain(RaNodes),
     ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p~n",
            [NumMessages, Applied, Received, Scenario]),
     % assert no messages were lost
     Remaining = Applied -- Received,
     ct:pal("Remaining ~p~n", [Remaining]),
-    Remaining = [],
-    ok.
+    MaxReceived = lists:max(Received),
+    Remaining =:= [] andalso NumMessages =:= MaxReceived.
 
 select_nodes(Nodes) ->
     N = trunc(length(Nodes) / 2),
-    lists:foldl(fun (_, {Selected, Rem0}) ->
-                        {S, Rem} = random_element(Rem0),
-                        {[S | Selected], Rem}
-                end, {[], Nodes}, lists:seq(1, N)).
+    element(1,
+            lists:foldl(fun (_, {Selected, Rem0}) ->
+                                {S, Rem} = random_element(Rem0),
+                                {[S | Selected], Rem}
+                        end, {[], Nodes}, lists:seq(1, N))).
 
 random_element(Nodes) ->
     Selected = lists:nth(rand:uniform(length(Nodes)), Nodes),
@@ -173,3 +223,12 @@ make_node_ra_config(Name, Nodes, Node, DataDir) ->
               uid => atom_to_binary(Name, utf8)},
        machine => {module, ra_fifo, #{}}
        }.
+
+run_proper(Fun, Args, NumTests) ->
+    ?assertEqual(
+       true,
+       proper:counterexample(erlang:apply(Fun, Args),
+			     [{numtests, NumTests},
+                  noshrink,
+			      {on_output, fun(".", _) -> ok; % don't print the '.'s on new lines
+					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).

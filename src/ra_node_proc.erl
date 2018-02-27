@@ -256,7 +256,7 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
 leader(info, {NodeEvt, Node},
        #state{monitors = Monitors0,
               node_state = NodeState0} = State0)
-  when NodeEvt =:= nodedown orelse NodeEvt =:= nodeup->
+  when NodeEvt =:= nodedown orelse NodeEvt =:= nodeup ->
     case Monitors0 of
         #{Node := _} ->
             % there is a monitor for the node
@@ -757,3 +757,4 @@ send(To, Msg) ->
             % but probably best not from a performance point of view
             ok
     end.
+

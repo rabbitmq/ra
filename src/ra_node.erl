@@ -565,10 +565,10 @@ handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                           voted_for := VotedFor})
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
-    ?INFO("~w: follower request_vote_rpc for ~w already voted for ~b in ~b",
+    ?INFO("~w: follower request_vote_rpc for ~w already voted for ~w in ~b",
           [Id, Cand, VotedFor, Term]),
     Reply = #request_vote_result{term = Term, vote_granted = false},
-    {follower, maps:without([leader_id], State), [{reply, Reply}]};
+    {follower, State, [{reply, Reply}]};
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
@@ -1244,7 +1244,7 @@ agreed_commit(Indexes) ->
     lists:nth(Nth, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{id := Id}) ->
-    ?WARN("~w ~w received unhandled msg: ~W~n", [Id, RaState, Msg, 3]).
+    ?WARN("~w ~w received unhandled msg: ~W~n", [Id, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, 5, Log0) of
