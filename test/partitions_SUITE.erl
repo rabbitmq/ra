@@ -23,13 +23,15 @@ end_per_group(_, _Config) -> ok.
 init_per_testcase(print, Config0) ->
     Nodes = erlang_nodes(5),
     RaNodes = [{print, N} || N <- Nodes],
-    [{nodes, Nodes}, {ra_nodes, RaNodes},
+    [{cluster_id, print},
+     {nodes, Nodes}, {ra_nodes, RaNodes},
      {name, print} | Config0];
 init_per_testcase(TestCase, Config0) ->
     Nodes = erlang_nodes(5),
     RaNodes = [{TestCase, N} || N <- Nodes],
     Config1 = prepare_erlang_cluster(Config0, Nodes),
-    Config = [{nodes, Nodes}, {ra_nodes, RaNodes},
+    Config = [{cluster_id, TestCase},
+              {nodes, Nodes}, {ra_nodes, RaNodes},
               {name, TestCase} | Config1],
     NodeId = setup_ra_cluster(Config),
     %% Make sure nodes are synchronised
@@ -57,6 +59,7 @@ end_per_testcase(_, Config) ->
 -type wait_time() :: 1000..20000.
 
 prop_enq_drain(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     Nodes = ?config(nodes, Config),
     RaNodes = ?config(ra_nodes, Config),
     run_proper(
@@ -71,7 +74,8 @@ prop_enq_drain(Config) ->
                                        wait_time()}])
                               )
                             )),
-                      do_enq_drain_scenario(Nodes, RaNodes,
+                      do_enq_drain_scenario(ClusterId,
+                                            Nodes, RaNodes,
                                             [{wait, 5000}] ++ S ++
                                             [heal, {wait, 5000}]))
       end, [], 10).
@@ -81,6 +85,7 @@ print_scenario(Scenario) ->
     true.
 
 enq_drain_basic(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     Nodes = ?config(nodes, Config),
     RaNodes = ?config(ra_nodes, Config),
     Scenario = [{wait, 5000},
@@ -88,9 +93,9 @@ enq_drain_basic(Config) ->
                 {wait, 5000},
                 {part, select_nodes(Nodes), 20000},
                 {wait, 5000}],
-    true = do_enq_drain_scenario(Nodes, RaNodes, Scenario).
+    true = do_enq_drain_scenario(ClusterId, Nodes, RaNodes, Scenario).
 
-do_enq_drain_scenario(Nodes, RaNodes, Scenario) ->
+do_enq_drain_scenario(ClusterId, Nodes, RaNodes, Scenario) ->
     ct:pal("Running ~p~n", [Scenario]),
     NemConf = #{nodes => Nodes,
                 scenario => Scenario},
@@ -98,7 +103,8 @@ do_enq_drain_scenario(Nodes, RaNodes, Scenario) ->
     {ok, Nem} = nemesis:start_link(NemConf),
     EnqInterval = 1000,
     NumMessages = abs(erlang:trunc((ScenarioTime - 5000) / EnqInterval)),
-    EnqConf = #{nodes => RaNodes,
+    EnqConf = #{cluster_id => ClusterId,
+                nodes => RaNodes,
                 num_messages => NumMessages,
                 spec => {EnqInterval, custard}},
     {ok, Enq} = enqueuer:start_link(EnqConf),
@@ -108,7 +114,7 @@ do_enq_drain_scenario(Nodes, RaNodes, Scenario) ->
     ct:pal("enqueuer:wait ~p ~n", [Applied]),
     proc_lib:stop(Nem),
     proc_lib:stop(Enq),
-    Received = drain(RaNodes),
+    Received = drain(ClusterId, RaNodes),
     ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p~n",
            [NumMessages, Applied, Received, Scenario]),
     % assert no messages were lost
@@ -139,8 +145,8 @@ scenario_time([{_, _, T} | Rest], Acc) ->
     scenario_time(Rest, Acc + T).
 
 
-drain(Nodes) ->
-    F = ra_fifo_client:init(Nodes),
+drain(ClusterId, Nodes) ->
+    F = ra_fifo_client:init(ClusterId, Nodes),
     drain0(F, []).
 
 drain0(S0, Acc) ->

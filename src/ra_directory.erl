@@ -66,7 +66,7 @@ registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
             UId
     end.
 
--spec send(binary(), term()) -> pid().
+-spec send(ra_uid(), term()) -> pid().
 send(Name, Msg) ->
     case whereis_name(Name) of
         undefined ->

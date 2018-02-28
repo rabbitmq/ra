@@ -45,13 +45,42 @@ which has two major shortcomings:
  * Replication algorithm is linear
  * Failure recovery procedure requires expensive topology changes
 
-## Design
+## Internals
 
-TBD
+
+### Identity
+
+Identity is a somewhat convoluted topic in `ra` consisting of multiple parts used for different aspects of the system.
+
+1. Cluster Id
+
+    Each `ra` cluster is assigned an id that needs to be unique within the erlang cluster it is running on.
+
+2. Node Id
+
+    The node id is a tuple of a `ra` node's locally registered name and the erlang node it resides on. This is the primary id used for membership in ra and needs to be a persistent addressable (can be used to send messages) id. A `pid()` would not work as it isn't persisted across process restarts. Although typically each `ra` node within a `ra` cluster is started on a separate erlang node `ra` supports nodes within the same cluster sharing erlang nodes. Hence we cannot simply re-use the cluster id as the registered name.
+
+3. UID
+
+    Each `ra` node also needs an id that is unique to the local erlang node _and_ unique across incarnations of `ra` clusters with the same cluster id. This is used for interactions with the write ahead log, segment and snapshot writer processes who use the `ra_directory` to lookup the current `pid()` for a given id. It is also, critically, used to provide a identity for the node on disk.
+
+    This is to handle the case where a `ra` cluster with the same name is deleted and then re-created with the same cluster id and node ids shortly after. In this instance the write ahead log may contain entries from the previous incarnation which means we could be mixing entries written in the previous incarnation with ones written in the current incarnation which obviously is unacceptable. Hence providing a unique local identity is critical for correct operation. We suggest using a combination of the locally registered name combined with a time stamp of some sort.
+
+
+Example config:
+
+
+```
+Config = #{cluster_id => <<"ra-cluster-1">>,
+           node_id => {ra_cluster_1, ra1@snowman},
+           uid => <<"ra_cluster_1_1519808362841">>
+           ...},
+
+```
 
 ### Raft Extensions and Deviations
 
-`ra` aims to fit well within the erlang enviroment as well as provide good adaptive throughput. Therefore it has deviated from the original Raft protocol in certain areas.
+`ra` aims to fit well within the erlang environment as well as provide good adaptive throughput. Therefore it has deviated from the original Raft protocol in certain areas.
 
 #### Replication
 

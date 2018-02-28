@@ -5,7 +5,7 @@
 -module(ra_fifo_client).
 
 -export([
-         init/1,
+         init/2,
          checkout/3,
          enqueue/2,
          enqueue/3,
@@ -20,7 +20,8 @@
 
 -type seq() :: non_neg_integer().
 
--record(state, {nodes = [] :: [ra_node_id()],
+-record(state, {cluster_id :: ra_cluster_id(),
+                nodes = [] :: [ra_node_id()],
                 leader :: maybe(ra_node_id()),
                 next_seq = 0 :: seq(),
                 last_applied :: maybe(seq()),
@@ -39,11 +40,12 @@
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
+%% @param ClusterId the id of the cluster to interact with
 %% @param Nodes The known nodes of the queue. If the current leader is known
 %% ensure the leader node is at the head of the list.
--spec init([ra_node_id()]) -> state().
-init(Nodes) ->
-    #state{nodes = Nodes}.
+-spec init(ra_cluster_id(), [ra_node_id()]) -> state().
+init(ClusterId, Nodes) ->
+    #state{cluster_id = ClusterId, nodes = Nodes}.
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this

@@ -58,14 +58,15 @@ init_per_testcase(TestCase, Config) ->
      | Config].
 
 ra_fifo_client_basics(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     CustomerTag = UId,
-    Conf = conf(?config(cluster_id, Config), UId, NodeId, PrivDir, []),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    FState0 = ra_fifo_client:init([NodeId]),
+    FState0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 1, FState0),
     % _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
 
@@ -126,7 +127,7 @@ ra_fifo_client_returns_correlation(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(corr1, msg1, F0),
     receive
         {ra_event, Frm, E} ->
@@ -142,17 +143,18 @@ ra_fifo_client_returns_correlation(Config) ->
     ok.
 
 ra_fifo_client_resends_lost_command(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(?config(cluster_id, Config), UId, NodeId, PrivDir, []),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     timer:sleep(100),
 
     ok = meck:new(ra, [passthrough]),
 
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
     % lose the enqueue
     meck:expect(ra, send_and_notify, fun (_, _, _) -> ok end),
@@ -166,30 +168,32 @@ ra_fifo_client_resends_lost_command(Config) ->
     ok.
 
 ra_fifo_client_two_quick_enqueues(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(?config(cluster_id, Config), UId, NodeId, PrivDir, []),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     timer:sleep(100),
 
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     F1 = element(2, ra_fifo_client:enqueue(msg1, F0)),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
     _ = process_ra_events(F2, 500),
     ok.
 
 ra_fifo_client_detects_lost_delivery(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(?config(cluster_id, Config), UId, NodeId, PrivDir, []),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     timer:sleep(100),
 
-    F00 = ra_fifo_client:init([NodeId]),
+    F00 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F0} = ra_fifo_client:checkout(<<"tag">>, 10, F00),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
@@ -207,15 +211,16 @@ ra_fifo_client_detects_lost_delivery(Config) ->
     ok.
 
 ra_fifo_client_resends_after_lost_applied(Config) ->
+    ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(?config(cluster_id, Config), UId, NodeId, PrivDir, []),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     timer:sleep(100),
 
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {_, F1} = process_ra_events(element(2, ra_fifo_client:enqueue(msg1, F0)),
                            500),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
@@ -249,7 +254,7 @@ ra_fifo_client_handles_reject_notification(Config) ->
     ok = ra:trigger_election(NodeId1),
     _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
     % reverse order - should try the first node in the list first
-    F0 = ra_fifo_client:init([NodeId2, NodeId1]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId2, NodeId1]),
     {ok, F1} = ra_fifo_client:enqueue(one, F0),
 
     timer:sleep(500),
@@ -264,7 +269,8 @@ ra_fifo_client_discard(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
-    Conf = #{cluster_id => ?config(cluster_id, Config),
+    ClusterId = ?config(cluster_id, Config),
+    Conf = #{cluster_id => ClusterId,
              id => NodeId,
              uid => UId,
              log_module => ra_log_file,
@@ -277,7 +283,7 @@ ra_fifo_client_discard(Config) ->
     ok = ra:trigger_election(NodeId),
     timer:sleep(100),
 
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     {ok, F2} = ra_fifo_client:enqueue(msg1, F1),
     F3 = discard_next_delivery(F2, 500),
@@ -304,7 +310,7 @@ ra_fifo_client_dequeue(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F1 = ra_fifo_client:init([NodeId]),
+    F1 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
     {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
     {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
@@ -324,7 +330,7 @@ leader_monitors_customer(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F0 =  ra_fifo_client:init([NodeId]),
+    F0 =  ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
@@ -351,7 +357,7 @@ follower_takes_over_monitor(Config) ->
     _ = ra:start_node(Conf1),
     _ = ra:start_node(Conf2),
     ok = ra:trigger_election(NodeId1),
-    F0 =  ra_fifo_client:init([NodeId1, NodeId2]),
+    F0 =  ra_fifo_client:init(ClusterId, [NodeId1, NodeId2]),
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
     % _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
     % timer:sleep(500),
@@ -379,7 +385,7 @@ node_is_deleted(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
     _ = process_ra_event(F1, 250),
     % {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
@@ -395,7 +401,7 @@ node_is_deleted(Config) ->
                              log_init_args => #{data_dir => PrivDir,
                                                 uid => UId2}}),
     ok = ra:trigger_election(NodeId),
-    F = ra_fifo_client:init([NodeId]),
+    F = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, _} = ra_fifo_client:checkout(<<"tag">>, 10, F),
     % {ok, _, _} = ra:send_and_await_consensus(NodeId,
     %                                          {checkout, {auto, 10}, CId}),
@@ -415,7 +421,7 @@ node_restart_after_application_restart(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     application:stop(ra),
     application:start(ra),
@@ -437,7 +443,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    F0 = ra_fifo_client:init([NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     {ok, F2} = ra_fifo_client:enqueue(<<"msg">>, F1),
     F3 = process_ra_event(F2, 100),

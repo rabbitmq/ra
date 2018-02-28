@@ -42,8 +42,9 @@ start_local_cluster(Num, Name, Machine) ->
               cluster_id => Name,
               machine => Machine},
     Res = [begin
+               UId = atom_to_binary(element(1, Id), utf8),
                {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id,
-                                                           uid => atom_to_binary(element(1, Id), utf8)}),
+                                                           uid => UId}),
                Id
            end || Id <- Nodes],
     ok = ra:trigger_election(Node1),
@@ -87,7 +88,8 @@ add_node(ServerRef, NodeId) ->
 
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
-    ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append}, 2000).
+    ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append},
+                         ?DEFAULT_TIMEOUT).
 
 -spec trigger_election(ra_node_id()) -> ok.
 trigger_election(Id) ->
