@@ -13,7 +13,8 @@
          settle/3,
          return/3,
          discard/3,
-         handle_ra_event/3
+         handle_ra_event/3,
+         untracked_enqueue/3
          ]).
 
 -include("ra.hrl").
@@ -262,6 +263,27 @@ handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}}, State0) ->
     {internal, [], State};
 handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
     handle_delivery(Leader, Del, State0).
+
+%% @doc Attempts to enqueue a message using cast semantics. This provides no
+%% guarantees or retries if the message fails to achieve consensus or if the
+%% nodes sent to happens not to be available. If the message is sent to a
+%% follower it will attempt the deliver it to the leader, if known. Else it will
+%% drop the messages.
+%%
+%% NB: only use this for non-critical enqueues where a full ra_fifo_client state
+%% cannot be maintained.
+%%
+%% @param CusterId  the cluster id.
+%% @param Nodes the known nodes in the cluster.
+%% @param Msg the message to enqueue.
+%%
+%% @returns `ok'
+-spec untracked_enqueue(ra_cluster_id(), [ra_node_id()], term()) ->
+    ok.
+untracked_enqueue(_ClusterId, [Node | _], Msg) ->
+    Cmd = {enqueue, undefined, undefined, Msg},
+    ok = ra:cast(Node, Cmd),
+    ok.
 
 %% Internal
 

@@ -163,63 +163,6 @@ init(#{name := Name} = Conf) ->
      [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0, 0}}]}.
 
 
-incr_enqueue_count(#state{enqueue_count = C} = State)
- when C =:= ?SHADOW_COPY_INTERVAL ->
-    {State#state{enqueue_count = 1}, shadow_copy(State)};
-incr_enqueue_count(#state{enqueue_count = C} = State) ->
-    {State#state{enqueue_count = C + 1}, undefined}.
-
-enqueue(RaftIdx, RawMsg, #state{messages = Messages,
-                                low_msg_num = LowMsgNum,
-                                next_msg_num = NextMsgNum} = State0) ->
-    Msg = {RaftIdx, {#{}, RawMsg}}, % indexed message with header map
-    State0#state{messages = Messages#{NextMsgNum => Msg},
-                 low_msg_num = min(LowMsgNum, NextMsgNum),
-                 next_msg_num = NextMsgNum + 1}.
-
-append_to_master_index(RaftIdx,
-                       #state{ra_indexes = Indexes0} = State0) ->
-    {State, Shadow} = incr_enqueue_count(State0),
-    Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
-    State#state{ra_indexes = Indexes}.
-
-enqueue_pending(From,
-                #enqueuer{next_seqno = Next,
-                          pending = [{Next, RaftIdx, RawMsg} | Pending]} = Enq0,
-                State0) ->
-            State = enqueue(RaftIdx, RawMsg, State0),
-            Enq = Enq0#enqueuer{next_seqno = Next + 1, pending = Pending},
-            enqueue_pending(From, Enq, State);
-enqueue_pending(From, Enq, #state{enqueuers = Enqueuers0} = State) ->
-    State#state{enqueuers = Enqueuers0#{From => Enq}}.
-
-maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
-              #state{enqueuers = Enqueuers0} = State0) ->
-    case maps:get(From, Enqueuers0, undefined) of
-        undefined ->
-            State1 = State0#state{enqueuers = Enqueuers0#{From => #enqueuer{}}},
-            {State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
-                                             RawMsg, State1),
-            {State, [{monitor, process, From} | Effects]};
-        #enqueuer{next_seqno = MsgSeqNo,
-                  pending = _Pending} = Enq0 ->
-            % it is the next expected seqno
-            State1 = enqueue(RaftIdx, RawMsg, State0),
-            Enq = Enq0#enqueuer{next_seqno = MsgSeqNo + 1},
-            State = enqueue_pending(From, Enq, State1),
-            {State, []};
-        #enqueuer{next_seqno = Next,
-                  pending = Pending0} = Enq0
-          when MsgSeqNo > Next ->
-            % out of order delivery
-            Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
-            Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
-            {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
-        #enqueuer{next_seqno = Next, pending = _Pending} = _Enq0
-          when MsgSeqNo =< Next ->
-            % duplicate delivery
-            {State0, []}
-    end.
 
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
@@ -401,6 +344,67 @@ get_checked_out(Cid, From, To, #state{customers = Customers}) ->
 
 %%% Internal
 
+incr_enqueue_count(#state{enqueue_count = C} = State)
+ when C =:= ?SHADOW_COPY_INTERVAL ->
+    {State#state{enqueue_count = 1}, shadow_copy(State)};
+incr_enqueue_count(#state{enqueue_count = C} = State) ->
+    {State#state{enqueue_count = C + 1}, undefined}.
+
+enqueue(RaftIdx, RawMsg, #state{messages = Messages,
+                                low_msg_num = LowMsgNum,
+                                next_msg_num = NextMsgNum} = State0) ->
+    Msg = {RaftIdx, {#{}, RawMsg}}, % indexed message with header map
+    State0#state{messages = Messages#{NextMsgNum => Msg},
+                 low_msg_num = min(LowMsgNum, NextMsgNum),
+                 next_msg_num = NextMsgNum + 1}.
+
+append_to_master_index(RaftIdx,
+                       #state{ra_indexes = Indexes0} = State0) ->
+    {State, Shadow} = incr_enqueue_count(State0),
+    Indexes = ra_fifo_index:append(RaftIdx, Shadow, Indexes0),
+    State#state{ra_indexes = Indexes}.
+
+enqueue_pending(From,
+                #enqueuer{next_seqno = Next,
+                          pending = [{Next, RaftIdx, RawMsg} | Pending]} = Enq0,
+                State0) ->
+            State = enqueue(RaftIdx, RawMsg, State0),
+            Enq = Enq0#enqueuer{next_seqno = Next + 1, pending = Pending},
+            enqueue_pending(From, Enq, State);
+enqueue_pending(From, Enq, #state{enqueuers = Enqueuers0} = State) ->
+    State#state{enqueuers = Enqueuers0#{From => Enq}}.
+
+maybe_enqueue(RaftIdx, undefined, undefined, RawMsg,
+              State0) ->
+    % direct enqueue without tracking
+    {enqueue(RaftIdx, RawMsg, State0), []};
+maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
+              #state{enqueuers = Enqueuers0} = State0) ->
+    case maps:get(From, Enqueuers0, undefined) of
+        undefined ->
+            State1 = State0#state{enqueuers = Enqueuers0#{From => #enqueuer{}}},
+            {State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
+                                             RawMsg, State1),
+            {State, [{monitor, process, From} | Effects]};
+        #enqueuer{next_seqno = MsgSeqNo,
+                  pending = _Pending} = Enq0 ->
+            % it is the next expected seqno
+            State1 = enqueue(RaftIdx, RawMsg, State0),
+            Enq = Enq0#enqueuer{next_seqno = MsgSeqNo + 1},
+            State = enqueue_pending(From, Enq, State1),
+            {State, []};
+        #enqueuer{next_seqno = Next,
+                  pending = Pending0} = Enq0
+          when MsgSeqNo > Next ->
+            % out of order delivery
+            Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
+            Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
+            {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
+        #enqueuer{next_seqno = Next, pending = _Pending} = _Enq0
+          when MsgSeqNo =< Next ->
+            % duplicate delivery
+            {State0, []}
+    end.
 snd(T) ->
     element(2, T).
 
@@ -765,6 +769,13 @@ checkout_get_empty_test() ->
         apply(1, {checkout, {dequeue, unsettled}, Cid}, State),
     ok.
 
+untracked_enq_deq_test() ->
+    Cid = {<<"untracked_enq_deq_test">>, self()},
+    State0 = test_init(test),
+    {State1, _} = apply(1, {enqueue, undefined, undefined, first}, State0),
+    {_State2, _, {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, settled}, Cid}, State1),
+    ok.
 release_cursor_test() ->
     ensure_ets(),
     Cid = {<<"release_cursor_test">>, self()},

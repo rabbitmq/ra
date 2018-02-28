@@ -28,7 +28,8 @@ all_tests() ->
      node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects,
      ra_fifo_client_dequeue,
-     ra_fifo_client_discard
+     ra_fifo_client_discard,
+     ra_fifo_client_untracked_enqueue
     ].
 
 groups() ->
@@ -297,6 +298,22 @@ ra_fifo_client_discard(Config) ->
               exit(dead_letter_timeout)
     end,
     ok.
+
+ra_fifo_client_untracked_enqueue(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(50),
+
+    ok = ra_fifo_client:untracked_enqueue(ClusterId, [NodeId], msg1),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, {_, {_, msg1}}, _} = ra_fifo_client:dequeue(<<"tag">>, settled, F0),
+    ok.
+
 
 dead_letter_handler(Pid, Msgs) ->
     Pid ! {dead_letter, Msgs}.
