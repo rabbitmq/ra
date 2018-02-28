@@ -112,11 +112,11 @@ enqueue(Opts) ->
         undefined -> fail("--message required");
         _         -> ok
     end,
-    case Nodes of
-        [] -> fail("--nodes should contain a list of nodes");
-        _  -> ok
+    ClusterId = case Nodes of
+        []              -> fail("--nodes should contain a list of nodes");
+        [{Name,_} | _]  -> atom_to_binary(Name, utf8)
     end,
-    State = ra_fifo_client:init(Nodes),
+    State = ra_fifo_client:init(ClusterId, Nodes),
     Ref = make_ref(),
     {ok, State1} = ra_fifo_client:enqueue(Ref, Message, State),
     wait_for_ack(State1, Ref, Message, Timeout).
@@ -140,11 +140,11 @@ wait_for_ack(State, Ref, Message, Timeout) ->
 dequeue(Opts) ->
     start_distribution(cli),
     #{nodes := Nodes} = Opts,
-    case Nodes of
-        [] -> fail("--nodes should contain a list of nodes");
-        _  -> ok
+    ClusterId = case Nodes of
+        []              -> fail("--nodes should contain a list of nodes");
+        [{Name,_} | _]  -> atom_to_binary(Name, utf8)
     end,
-    State = ra_fifo_client:init(Nodes),
+    State = ra_fifo_client:init(ClusterId, Nodes),
 
     case ra_fifo_client:dequeue(<<"consumer_once">>, settled, State) of
         {timeout, _} -> fail("Timeout");
