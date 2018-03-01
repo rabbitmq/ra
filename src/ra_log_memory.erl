@@ -220,7 +220,7 @@ write_config(_Config, _Log) ->
     ok.
 
 read_config(_Log) ->
-    undefined.
+    not_found.
 
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].

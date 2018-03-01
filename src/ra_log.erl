@@ -127,8 +127,8 @@
 -callback write_config(Config :: ra_node:ra_node_config(),
                        State :: ra_log_state()) -> ok.
 
--callback read_config(State :: ra_log_state()) ->
-    maybe(ra_node:ra_node_config()).
+-callback read_config(Dir :: file:filename()) ->
+    {ok, ra_node:ra_node_config()} | not_found.
 
 %%
 %% API
@@ -311,6 +311,7 @@ write_config(Config, {Mod, Log}) ->
     ok = Mod:write_config(Config, Log),
     ok.
 
--spec read_config(State :: ra_log()) -> ra_node:ra_node_config().
+-spec read_config({module(), Dir :: file:filename()}) ->
+    {ok, ra_node:ra_node_config()} | not_found.
 read_config({Mod, Log}) ->
     Mod:read_config(Log).

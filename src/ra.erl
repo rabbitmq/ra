@@ -18,19 +18,13 @@
          start_node/1,
          restart_node/1,
          stop_node/1,
-         stop_node/2,
          delete_node/1,
-         delete_node/2,
 
          add_node/2,
          remove_node/2,
          trigger_election/1,
          leave_and_terminate/1,
-         leave_and_terminate/2,
-
-         % exposed only for rpc purposes
-         uid_from_nodeid/1,
-         delete_node_rpc/2
+         leave_and_terminate/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -61,42 +55,29 @@ start_local_cluster(Num, Name, Machine) ->
 %% Starts a ra node
 -spec start_node(ra_node:ra_node_config()) -> ok.
 start_node(Conf) ->
-    {ok, _Pid} = ra_nodes_sup:start_node(Conf),
+    % don't match on return value in case it is already running
+    _ = ra_nodes_sup:start_node(Conf),
     ok.
 
--spec restart_node(ra_node:ra_node_config()) -> ok.
-restart_node(Config) ->
-    {ok, _Pid} = ra_nodes_sup:restart_node(Config),
+-spec restart_node(ra_node_id()) -> ok.
+restart_node(NodeId) ->
+    % don't match on return value in case it is already running
+    _ = ra_nodes_sup:restart_node(NodeId),
     ok.
 
--spec stop_node(ra_node_id() | ra_uid()) -> ok.
-stop_node(UId) ->
-    stop_node(node(), UId).
-
--spec stop_node(node(), ra_node_id() | ra_uid()) -> ok | nodedown.
-stop_node(Node, UId) when is_binary(UId) ->
-    try ra_nodes_sup:stop_node(Node, UId) of
+-spec stop_node(ra_node_id()) -> ok.
+stop_node(NodeId) ->
+    try ra_nodes_sup:stop_node(NodeId) of
         ok -> ok;
         {error, not_found} -> ok
     catch
         exit:noproc -> ok;
         exit:{{nodedown, _}, _}  -> nodedown
-    end;
-stop_node(Node, RaNodeId) when Node =:= node() ->
-    stop_node(Node, uid_from_nodeid(RaNodeId));
-stop_node(Node, RaNodeId)  ->
-    UId = rpc:call(Node, ?MODULE, uid_from_nodeid, [RaNodeId]),
-    stop_node(Node, UId).
+    end.
 
 -spec delete_node(ra_node_id()) -> ok.
 delete_node(RaNodeId) ->
-    delete_node(node(), RaNodeId).
-
--spec delete_node(node(), ra_node_id()) -> ok.
-delete_node(Node, NodeId) when Node =:= node() ->
-    delete_node_rpc(Node, NodeId);
-delete_node(Node, NodeId) ->
-    rpc:call(Node, ?MODULE, delete_node_rpc, [Node, NodeId]).
+    ra_nodes_sup:delete_node(RaNodeId).
 
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
@@ -178,12 +159,3 @@ members(ServerRef) ->
 
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
-
-uid_from_nodeid(NodeId) ->
-    Name = ra_lib:ra_node_id_to_local_name(NodeId),
-    ra_directory:registered_name_from_node_name(Name).
-
-delete_node_rpc(Node, NodeId) ->
-    UId = uid_from_nodeid(NodeId),
-    {ok, DataDir} = application:get_env(ra, data_dir),
-    ra_nodes_sup:delete_node(Node, UId, DataDir).

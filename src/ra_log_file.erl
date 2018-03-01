@@ -73,6 +73,11 @@ init(#{uid := UId} = Conf) ->
                   _ ->
                       ra_env:data_dir()
               end,
+    Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
+    Meta = filename:join(Dir, "meta.dat"),
+    ok = filelib:ensure_dir(Meta),
+    Kv = ra_log_file_meta:init(Meta),
+
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
@@ -80,10 +85,6 @@ init(#{uid := UId} = Conf) ->
 
     % create subdir for log id
     % TODO: safely encode UId for use a directory name
-    Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
-    Meta = filename:join(Dir, "meta.dat"),
-    ok = filelib:ensure_dir(Meta),
-    Kv = ra_log_file_meta:init(Meta),
 
     % recover current range and any references to segments
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
@@ -504,13 +505,14 @@ write_config(Config, #state{directory = Dir}) ->
                          list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
-read_config(#state{directory = Dir}) ->
+read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
     case filelib:is_file(ConfigPath) of
         true ->
-            file:consult(ConfigPath);
+            {ok, [C]} =  file:consult(ConfigPath),
+            {ok, C};
         false ->
-            undefined
+            not_found
     end.
 
 %%% Local functions

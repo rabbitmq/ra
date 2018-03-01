@@ -49,9 +49,14 @@ register_name(UId, Pid, RaNodeName) ->
 
 -spec unregister_name(ra_uid()) -> ra_uid().
 unregister_name(UId) ->
-    [{_, _, NodeName}] = ets:take(?MODULE, UId),
-    ok = dets:delete(?REVERSE_TBL, NodeName),
-    UId.
+    case ets:take(?MODULE, UId) of
+        [{_, _, NodeName}] ->
+            ets:take(?MODULE, UId),
+            ok = dets:delete(?REVERSE_TBL, NodeName),
+            UId;
+        [] ->
+            UId
+    end.
 
 -spec whereis_name(ra_uid()) -> pid() | undefined.
 whereis_name(UId) ->

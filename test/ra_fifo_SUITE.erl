@@ -95,8 +95,8 @@ ra_fifo_client_basics(Config) ->
 
     % process settle applied notificaiton
     FState5b = process_ra_event(FState5, 250),
-    _ = ra:stop_node(UId),
-    _ = ra:restart_node(Conf),
+    _ = ra:stop_node(NodeId),
+    _ = ra:restart_node(NodeId),
 
     % give time to become leader
     timer:sleep(500),
@@ -351,8 +351,8 @@ leader_monitors_customer(Config) ->
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
-    ra:stop_node(UId),
-    _ = ra:restart_node(Conf),
+    ra:stop_node(NodeId),
+    _ = ra:restart_node(NodeId),
     % check monitors are re-applied after restart
     {ok, _F3} = ra_fifo_client:checkout(Tag, 5, F1),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
@@ -443,7 +443,7 @@ node_restart_after_application_restart(Config) ->
     application:stop(ra),
     application:start(ra),
     % restart node
-    ok = ra:restart_node(Conf),
+    ok = ra:restart_node(NodeId),
     {ok, _} = ra_fifo_client:checkout(<<"tag2">>, 10, F1),
     ok = ra:stop_node(NodeId),
     ok.
@@ -487,7 +487,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     after 1000 ->
               ok
     end,
-    ok = ra:stop_node(UId),
+    ok = ra:stop_node(NodeId),
     ok.
 
 conf(ClusterId, UId, NodeId, Dir, Peers) ->
