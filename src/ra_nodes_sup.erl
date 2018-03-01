@@ -6,8 +6,8 @@
 %% API functions
 -export([start_node/1,
          restart_node/1,
-         stop_node/1,
-         delete_node/2,
+         stop_node/2,
+         delete_node/3,
          remove_all/0,
          start_link/0]).
 
@@ -18,38 +18,43 @@
 
 -spec start_node(ra_node:ra_node_config()) ->
     supervisor:startchild_ret().
-start_node(#{uid := UId} = Config) ->
+start_node(#{uid := UId,
+             id := NodeId} = Config) ->
+    Node = ra_lib:ra_node_id_node(NodeId),
     ChildSpec = #{id => UId,
                   type => worker,
                   % needs to be transient as may shut itself down by returning
                   % {stop, normal, State}
                   restart => transient,
                   start => {ra_node_proc, start_link, [Config]}},
-    supervisor:start_child(?MODULE, ChildSpec).
+    supervisor:start_child({?MODULE, Node}, ChildSpec).
 
 -spec restart_node(ra_node:ra_node_config()) -> supervisor:startchild_ret().
-restart_node(#{uid := UId} = Config) when is_binary(UId) ->
-    case supervisor:get_childspec(?MODULE, UId) of
+restart_node(#{uid := UId,
+               id := NodeId} = Config) when is_binary(UId) ->
+    Node = ra_lib:ra_node_id_node(NodeId),
+    case supervisor:get_childspec({?MODULE, Node}, UId) of
         {ok, _} ->
-            supervisor:restart_child(?MODULE, UId);
+            supervisor:restart_child({?MODULE, Node}, UId);
         {error, _Err} ->
             start_node(Config)
     end.
 
 
--spec stop_node(UId :: ra_uid()) -> ok | {error, term()}.
-stop_node(UId) when is_binary(UId) ->
-    supervisor:terminate_child(?MODULE, UId).
+-spec stop_node(Node :: node(), UId :: ra_uid()) -> ok | {error, term()}.
+stop_node(Node, UId) when is_binary(UId) ->
+    supervisor:terminate_child({?MODULE, Node}, UId).
 
--spec delete_node(UId :: ra_uid(), DataDir :: file:name()) -> ok.
-delete_node(UId, DataDir) ->
+-spec delete_node(Node :: node(), UId :: ra_uid(),
+                  DataDir :: file:name()) -> ok.
+delete_node(Node, UId, DataDir) ->
     ?INFO("Deleting node ~p and it's data.~n", [UId]),
     % TODO: resolve actual segment writer in use rather than
     % assuming it has a registered name
     ok = ra_log_file_segment_writer:release_segments(
            ra_log_file_segment_writer, UId),
-    _ = stop_node(UId),
-    supervisor:delete_child(?MODULE, UId),
+    _ = stop_node(Node, UId),
+    supervisor:delete_child({?MODULE, Node}, UId),
     Dir = filename:join(DataDir, binary_to_list(UId)),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of
@@ -79,6 +84,3 @@ start_link() ->
 init([]) ->
     SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
     {ok, {SupFlags, []}}.
-
-
-

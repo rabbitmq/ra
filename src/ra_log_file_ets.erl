@@ -33,13 +33,15 @@ give_away(Tid) ->
 %%%===================================================================
 
 init([]) ->
+    process_flag(trap_exit, true),
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
     _ = ets:new(ra_log_open_mem_tables,
                 [set, named_table, {read_concurrency, true}, public]),
     _ = ets:new(ra_log_closed_mem_tables,
                 [bag, named_table, {read_concurrency, true}, public]),
-    ra_directory:init(),
+    DataDir = ra_env:data_dir(),
+    ra_directory:init(DataDir),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -54,6 +56,7 @@ handle_info(Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
+    ok = ra_directory:deinit(),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

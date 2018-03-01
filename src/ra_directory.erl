@@ -1,7 +1,8 @@
 -module(ra_directory).
 
 -export([
-         init/0,
+         init/1,
+         deinit/0,
          register_name/3,
          unregister_name/1,
          whereis_name/1,
@@ -19,30 +20,37 @@
 
 % registry for a ra node's locally unique name
 
--spec init() -> ok.
-init() ->
+-spec init(file:filename()) -> ok.
+init(Dir) ->
     _ = ets:new(?MODULE, [named_table,
                           public,
                           {read_concurrency, true},
                           {write_concurrency, true}
                          ]),
-    _ = ets:new(?REVERSE_TBL, [named_table,
-                               public,
-                               {read_concurrency, true},
-                               {write_concurrency, true}
-                              ]),
+    Dets = filename:join(Dir, "names.dets"),
+    ok = filelib:ensure_dir(Dets),
+    {ok, ?REVERSE_TBL} = dets:open_file(?REVERSE_TBL,
+                                        [{file, Dets},
+                                         {auto_save, 5000},
+                                         {access, read_write}]),
+    ok.
+
+-spec deinit() -> ok.
+deinit() ->
+    _ = ets:delete(?MODULE),
+    _ = dets:close(?REVERSE_TBL),
     ok.
 
 -spec register_name(ra_uid(), file:filename(), atom()) -> yes | no.
 register_name(UId, Pid, RaNodeName) ->
     true = ets:insert(?MODULE, {UId, Pid, RaNodeName}),
-    true = ets:insert(?REVERSE_TBL, {RaNodeName, UId}),
+    ok = dets:insert(?REVERSE_TBL, {RaNodeName, UId}),
     yes.
 
--spec unregister_name(ra_uid()) -> atom().
+-spec unregister_name(ra_uid()) -> ra_uid().
 unregister_name(UId) ->
     [{_, _, NodeName}] = ets:take(?MODULE, UId),
-    true = ets:delete(?REVERSE_TBL, NodeName),
+    ok = dets:delete(?REVERSE_TBL, NodeName),
     UId.
 
 -spec whereis_name(ra_uid()) -> pid() | undefined.
@@ -60,7 +68,7 @@ what_node(UId) ->
     end.
 
 registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
-    case ets:lookup(?REVERSE_TBL, NodeName) of
+    case dets:lookup(?REVERSE_TBL, NodeName) of
         [] -> undefined;
         [{_, UId}] ->
             UId
@@ -72,32 +80,6 @@ send(Name, Msg) ->
         undefined ->
             exit({badarg, {Name, Msg}});
         Pid ->
-            erlang:send(Pid, Msg)
+            _ = erlang:send(Pid, Msg),
+            Pid
     end.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-basic_test() ->
-    ok = init(),
-    Name = <<"test1">>,
-    Self = self(),
-    yes = register_name(Name, Self, test1),
-    % registrations should always succeed - no negative test
-    % no = register_name(Name, spawn(fun() -> ok end), test1),
-    Self = whereis_name(Name),
-    Name = registered_name_from_node_name(test1),
-    test1 = what_node(Name),
-    hi_Name = send(Name, hi_Name),
-    receive
-        hi_Name -> ok
-    after 100 ->
-              exit(await_msg_timeout)
-    end,
-    Name = unregister_name(Name),
-    undefined = whereis_name(Name),
-    undefined = what_node(Name),
-    undefined = registered_name_from_node_name(test1),
-    ok.
-
--endif.

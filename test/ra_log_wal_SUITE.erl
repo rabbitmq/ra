@@ -36,7 +36,7 @@ groups() ->
 
 init_per_group(Group, Config) ->
     application:ensure_all_started(sasl),
-    ra_directory:init(),
+    ra_directory:init(?config(priv_dir, Config)),
     % application:ensure_all_started(lg),
     [{write_strategy, Group} | Config].
 

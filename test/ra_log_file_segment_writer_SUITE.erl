@@ -38,7 +38,7 @@ end_per_group(tests, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
-    ra_directory:init(),
+    ra_directory:init(PrivDir),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     file:make_dir(Dir),

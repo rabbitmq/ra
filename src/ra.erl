@@ -14,15 +14,23 @@
          dirty_query/2,
          members/1,
          consistent_query/2,
+         % cluster management
          start_node/1,
          restart_node/1,
          stop_node/1,
+         stop_node/2,
          delete_node/1,
+         delete_node/2,
+
          add_node/2,
          remove_node/2,
          trigger_election/1,
          leave_and_terminate/1,
-         leave_and_terminate/2
+         leave_and_terminate/2,
+
+         % exposed only for rpc purposes
+         uid_from_nodeid/1,
+         delete_node_rpc/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -62,23 +70,34 @@ restart_node(Config) ->
     ok.
 
 -spec stop_node(ra_node_id() | ra_uid()) -> ok.
-stop_node(UId) when is_binary(UId) ->
-    try ra_nodes_sup:stop_node(UId) of
+stop_node(UId) ->
+    stop_node(node(), UId).
+
+-spec stop_node(node(), ra_node_id() | ra_uid()) -> ok | nodedown.
+stop_node(Node, UId) when is_binary(UId) ->
+    try ra_nodes_sup:stop_node(Node, UId) of
         ok -> ok;
         {error, not_found} -> ok
     catch
         exit:noproc -> ok;
-        % TODO: should not be possible unless we pass a node() around
-        exit:{{nodedown, _}, _}  -> ok
+        exit:{{nodedown, _}, _}  -> nodedown
     end;
-stop_node(NodeId) ->
-    stop_node(uid_from_nodeid(NodeId)).
+stop_node(Node, RaNodeId) when Node =:= node() ->
+    stop_node(Node, uid_from_nodeid(RaNodeId));
+stop_node(Node, RaNodeId)  ->
+    UId = rpc:call(Node, ?MODULE, uid_from_nodeid, [RaNodeId]),
+    stop_node(Node, UId).
 
 -spec delete_node(ra_node_id()) -> ok.
-delete_node(NodeId) ->
-    UId = uid_from_nodeid(NodeId),
-    {ok, DataDir} = application:get_env(ra, data_dir),
-    ra_nodes_sup:delete_node(UId, DataDir).
+delete_node(RaNodeId) ->
+    delete_node(node(), RaNodeId).
+
+-spec delete_node(node(), ra_node_id()) -> ok.
+delete_node(Node, NodeId) when Node =:= node() ->
+    delete_node_rpc(Node, NodeId);
+delete_node(Node, NodeId) ->
+    rpc:call(Node, ?MODULE, delete_node_rpc, [Node, NodeId]).
+
 
 -spec add_node(ra_node_id(), ra_node_id()) ->
     ra_cmd_ret().
@@ -164,3 +183,7 @@ uid_from_nodeid(NodeId) ->
     Name = ra_lib:ra_node_id_to_local_name(NodeId),
     ra_directory:registered_name_from_node_name(Name).
 
+delete_node_rpc(Node, NodeId) ->
+    UId = uid_from_nodeid(NodeId),
+    {ok, DataDir} = application:get_env(ra, data_dir),
+    ra_nodes_sup:delete_node(Node, UId, DataDir).

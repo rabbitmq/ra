@@ -59,12 +59,20 @@
 -type ra_log_file_state() :: #state{}.
 
 -type ra_log_file_init_args() :: #{data_dir => string(),
-                                   uid => ra_uid(),
+                                   uid := ra_uid(),
                                    wal => atom(),
                                    resend_window => integer()}.
 
 -spec init(ra_log_file_init_args()) -> ra_log_file_state().
-init(#{data_dir := BaseDir, uid := UId} = Conf) ->
+init(#{uid := UId} = Conf) ->
+    %% overriding the data_dir is only here for test compatibility
+    %% as it needs to match what the segment writer has it makes no real
+    %% sense to make it independently configurable
+    BaseDir = case Conf of
+                  #{data_dir := D} -> D;
+                  _ ->
+                      ra_env:data_dir()
+              end,
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),

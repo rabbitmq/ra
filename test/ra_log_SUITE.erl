@@ -48,7 +48,7 @@ init_per_group(ra_log_file, Config) ->
     ok = application:set_env(ra, data_dir, PrivDir),
     application:ensure_all_started(ra),
     InitFun = fun (TestCase) ->
-                      try ra_directory:init() of
+                      try ra_directory:init(PrivDir) of
                           _ -> ok
                       catch
                           _:_ ->

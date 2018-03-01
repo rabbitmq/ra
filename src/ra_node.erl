@@ -105,6 +105,7 @@ name(ClusterId, UniqueSuffix) ->
 -spec init(ra_node_config()) -> {ra_node_state(), ra_effects()}.
 init(#{id := Id,
        uid := UId,
+       cluster_id := _ClusterId,
        initial_nodes := InitialNodes,
        log_module := LogMod,
        log_init_args := LogInitArgs,
