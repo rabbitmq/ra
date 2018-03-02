@@ -6,6 +6,7 @@
 
 -export([
          init/2,
+         init/3,
          checkout/3,
          enqueue/2,
          enqueue/3,
@@ -19,6 +20,9 @@
 
 -include("ra.hrl").
 
+-define(MAX_PENDING, 1024).
+-define(SOFT_LIMIT_PENDING, 768).
+
 -type seq() :: non_neg_integer().
 
 -record(state, {cluster_id :: ra_cluster_id(),
@@ -27,6 +31,8 @@
                 next_seq = 0 :: seq(),
                 last_applied :: maybe(seq()),
                 next_enqueue_seq = 1 :: seq(),
+                max_pending = ?MAX_PENDING :: non_neg_integer(),
+                soft_limit_pending = ?SOFT_LIMIT_PENDING :: non_neg_integer(),
                 pending = #{} :: #{seq() => {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()}}).
@@ -37,7 +43,6 @@
               state/0
              ]).
 
--define(MAX_PENDING, 1024).
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
@@ -46,7 +51,19 @@
 %% ensure the leader node is at the head of the list.
 -spec init(ra_cluster_id(), [ra_node_id()]) -> state().
 init(ClusterId, Nodes) ->
-    #state{cluster_id = ClusterId, nodes = Nodes}.
+    init(ClusterId, Nodes, ?MAX_PENDING).
+
+%% @doc Create the initial state for a new ra_fifo sessions. A state is needed
+%% to interact with a ra_fifo queue using @module.
+%% @param ClusterId the id of the cluster to interact with
+%% @param Nodes The known nodes of the queue. If the current leader is known
+%% ensure the leader node is at the head of the list.
+%% @param MaxPending size defining the max number of pending commands.
+-spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer()) -> state().
+init(ClusterId, Nodes, MaxPending) ->
+    #state{cluster_id = ClusterId, nodes = Nodes,
+           soft_limit_pending = trunc(MaxPending * 0.75),
+           max_pending = MaxPending}.
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this
@@ -64,14 +81,13 @@ init(ClusterId, Nodes) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec enqueue(Correlation :: term(), Msg :: term(), State :: state()) ->
-    {ok, state()} | {error, stop_sending}.
+    {ok | slow, state()} | {error, stop_sending}.
 enqueue(Correlation, Msg, State0) ->
     Node = pick_node(State0),
     {Next, State1} = next_enqueue_seq(State0),
     % by default there is no correlation id
     Cmd = {enqueue, self(), Next, Msg},
-    State = send_command(Node, Correlation, Cmd, State1),
-    {ok, State}.
+    send_command(Node, Correlation, Cmd, State1).
 
 %% @doc Enqueues a message.
 %% @param Msg an arbitrary erlang term representing the message.
@@ -87,7 +103,7 @@ enqueue(Correlation, Msg, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec enqueue(Msg :: term(), State :: state()) ->
-    {ok, state()} | {error, stop_sending}.
+    {ok | slow, state()} | {error, stop_sending}.
 enqueue(Msg, State) ->
     enqueue(undefined, Msg, State).
 
@@ -128,13 +144,12 @@ dequeue(CustomerTag, Settlement, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec settle(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok, state()} | {error, stop_sending}.
+    {ok | slow, state()} | {error, stop_sending}.
 settle(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo settle support lists of message ids
     Cmd = {settle, MsgIds, customer_id(CustomerTag)},
-    State = send_command(Node, undefined, Cmd, State0),
-    {ok, State}.
+    send_command(Node, undefined, Cmd, State0).
 
 %% @doc Return a message to the queue.
 %% @param CustomerTag the tag uniquely identifying the customer.
@@ -149,13 +164,12 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec return(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok, state()} | {error, stop_sending}.
+    {ok | slow, state()} | {error, stop_sending}.
 return(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
     Cmd = {return, MsgIds, customer_id(CustomerTag)},
-    State = send_command(Node, undefined, Cmd, State0),
-    {ok, State}.
+    send_command(Node, undefined, Cmd, State0).
 
 %% @doc Discards a checked out message.
 %% If the queue has a dead_letter_handler configured this will be called.
@@ -171,12 +185,11 @@ return(CustomerTag, [_|_] = MsgIds, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec discard(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok, state()} | {error, stop_sending}.
+    {ok | slow, state()} | {error, stop_sending}.
 discard(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     Cmd = {discard, MsgIds, customer_id(CustomerTag)},
-    State = send_command(Node, undefined, Cmd, State0),
-    {ok, State}.
+    send_command(Node, undefined, Cmd, State0).
 
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
@@ -316,7 +329,8 @@ do_resends(From, To, State) ->
 resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->
     case maps:take(OldSeq, Pending0) of
         {{Corr, Cmd}, Pending} ->
-            send_command(Leader, Corr, Cmd, State#state{pending = Pending});
+            %% resends aren't subject to flow control here
+            resend_command(Leader, Corr, Cmd, State#state{pending = Pending});
         error ->
             State
     end.
@@ -371,7 +385,24 @@ next_enqueue_seq(#state{next_enqueue_seq = Seq} = State) ->
 customer_id(CustomerTag) ->
     {CustomerTag, self()}.
 
-send_command(Node, Correlation, Command, #state{pending = Pending} = State0) ->
+send_command(_Node, _Correlation, _Command,
+             #state{pending = Pending,
+                    max_pending = Max})
+  when map_size(Pending) =:= Max ->
+    {error, stop_sending};
+send_command(Node, Correlation, Command,
+             #state{pending = Pending,
+                    soft_limit_pending = SftLmt} = State0) ->
+    {Seq, State} = next_seq(State0),
+    ok = ra:send_and_notify(Node, Command, Seq),
+    Tag = case maps:size(Pending) >= SftLmt of
+              true -> slow;
+              false -> ok
+          end,
+    {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}}}}.
+
+resend_command(Node, Correlation, Command,
+             #state{pending = Pending} = State0) ->
     {Seq, State} = next_seq(State0),
     ok = ra:send_and_notify(Node, Command, Seq),
     State#state{pending = Pending#{Seq => {Correlation, Command}}}.

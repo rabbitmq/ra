@@ -185,7 +185,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
               State0 = #{current_term := Term, id := Id}) ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~p saw command from unknown peer ~p~n", [Id, PeerId]),
+            ?WARN("~w saw command from unknown peer ~w~n", [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
             % TODO: strictly speaking we should not need to take a max here?
@@ -254,15 +254,15 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           % non-persistent.
                           % should they turn-into non-voters when this sitution
                           % is detected
-                          ?ERR("~p: leader saw peer return last_index [~b in ~b]"
+                          ?ERR("~w: leader saw peer return last_index [~b in ~b]"
                                " lower than recorded match index [~b]."
                                 "Resetting peer's state to last_index.~n",
                                [Id, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
                       {EntryTerm, L} ->
-                          ?INFO("~w: leader received last_index from ~p with "
-                                "different term ~p~n",
+                          ?INFO("~w: leader received last_index from ~w with "
+                                "different term ~b~n",
                                 [Id, PeerId, EntryTerm]),
                           % last_index has a different term or entry does not
                           % exist
@@ -365,8 +365,8 @@ handle_leader(#append_entries_rpc{term = Term} = Msg,
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
                                                   id := Id}) ->
-    ?ERR("~p leader saw append_entries_rpc for same term ~p"
-         " this should not happen: ~p!~n", [Id, Term]),
+    ?ERR("~w leader saw append_entries_rpc for same term ~b"
+         " this should not happen!~n", [Id, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
 % TODO: reply to append_entries_rpcs that have lower term?
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
@@ -412,8 +412,8 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
 handle_candidate(#request_vote_result{term = Term},
                  State0 = #{current_term := CurTerm, id := Id})
   when Term > CurTerm ->
-    ?INFO("~p: candidate request_vote_result with higher term"
-          " received ~p -> ~p", [Id, CurTerm, Term]),
+    ?INFO("~w: candidate request_vote_result with higher term"
+          " received ~b -> ~b", [Id, CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}],
                         State0),
     {follower, State, []};
@@ -1087,7 +1087,7 @@ apply_with(Id, _Machine,
     {State, MacSt, Effects, Notifys};
 apply_with(Id, _Machine, Cmd, Acc) ->
     % TODO: uh why a catch all here? try to remove this and see if it breaks
-    ?WARN("~p: apply_with: unhandled command: ~p~n", [Id, Cmd]),
+    ?WARN("~p: apply_with: unhandled command: ~W~n", [Id, Cmd, 8]),
     Acc.
 
 add_next_cluster_change(Effects,

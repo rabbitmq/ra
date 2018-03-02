@@ -29,7 +29,8 @@ all_tests() ->
      restarted_node_does_not_reissue_side_effects,
      ra_fifo_client_dequeue,
      ra_fifo_client_discard,
-     ra_fifo_client_untracked_enqueue
+     ra_fifo_client_untracked_enqueue,
+     ra_fifo_client_flow
     ].
 
 groups() ->
@@ -141,6 +142,7 @@ ra_fifo_client_returns_correlation(Config) ->
     after 2000 ->
               exit(await_msg_timeout)
     end,
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_resends_lost_command(Config) ->
@@ -166,6 +168,7 @@ ra_fifo_client_resends_lost_command(Config) ->
     {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
     {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
     {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_two_quick_enqueues(Config) ->
@@ -182,6 +185,7 @@ ra_fifo_client_two_quick_enqueues(Config) ->
     F1 = element(2, ra_fifo_client:enqueue(msg1, F0)),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
     _ = process_ra_events(F2, 500),
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_detects_lost_delivery(Config) ->
@@ -209,6 +213,7 @@ ra_fifo_client_detects_lost_delivery(Config) ->
 
     % assert three deliveries were received
     {[_, _, _], _} = process_ra_events(F3, 500),
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_resends_after_lost_applied(Config) ->
@@ -238,6 +243,7 @@ ra_fifo_client_resends_after_lost_applied(Config) ->
     {ok, {_, {_, msg1}}, F5} = ra_fifo_client:dequeue(<<"tag">>, settled, F4),
     {ok, {_, {_, msg2}}, F6} = ra_fifo_client:dequeue(<<"tag">>, settled, F5),
     {ok, {_, {_, msg3}}, _F7} = ra_fifo_client:dequeue(<<"tag">>, settled, F6),
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_handles_reject_notification(Config) ->
@@ -297,6 +303,7 @@ ra_fifo_client_discard(Config) ->
     after 500 ->
               exit(dead_letter_timeout)
     end,
+    ra:stop_node(NodeId),
     ok.
 
 ra_fifo_client_untracked_enqueue(Config) ->
@@ -312,8 +319,28 @@ ra_fifo_client_untracked_enqueue(Config) ->
     ok = ra_fifo_client:untracked_enqueue(ClusterId, [NodeId], msg1),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, {_, {_, msg1}}, _} = ra_fifo_client:dequeue(<<"tag">>, settled, F0),
+    ra:stop_node(NodeId),
     ok.
 
+ra_fifo_client_flow(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(50),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
+    {ok, F1} = ra_fifo_client:enqueue(m1, F0),
+    {ok, F2} = ra_fifo_client:enqueue(m2, F1),
+    {ok, F3} = ra_fifo_client:enqueue(m3, F2),
+    {slow, F4} = ra_fifo_client:enqueue(m4, F3),
+    {error, stop_sending} = ra_fifo_client:enqueue(m5, F4),
+    {_, F5} = process_ra_events(F4, 500),
+    {ok, _} = ra_fifo_client:enqueue(m5, F5),
+    ra:stop_node(NodeId),
+    ok.
 
 dead_letter_handler(Pid, Msgs) ->
     Pid ! {dead_letter, Msgs}.
@@ -333,8 +360,8 @@ ra_fifo_client_dequeue(Config) ->
     {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
     {ok, F4} = ra_fifo_client:enqueue(msg2, F3),
     {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
-    {ok, F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
-    ct:pal("F6 ~p~n", [F6]),
+    {ok, _F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
+    ra:stop_node(NodeId),
     ok.
 
 leader_monitors_customer(Config) ->
@@ -490,12 +517,12 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ok = ra:stop_node(NodeId),
     ok.
 
-conf(ClusterId, UId, NodeId, Dir, Peers) ->
+conf(ClusterId, UId, NodeId, _Dir, Peers) ->
     #{cluster_id => ClusterId,
       id => NodeId,
       uid => UId,
       log_module => ra_log_file,
-      log_init_args => #{data_dir => Dir, uid => UId},
+      log_init_args => #{uid => UId},
       initial_nodes => Peers,
       machine => {module, ra_fifo, #{}}}.
 

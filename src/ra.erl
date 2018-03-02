@@ -53,26 +53,32 @@ start_local_cluster(Num, Name, Machine) ->
     Res.
 
 %% Starts a ra node
--spec start_node(ra_node:ra_node_config()) -> ok.
+-spec start_node(ra_node:ra_node_config()) -> ok | {error, term()}.
 start_node(Conf) ->
     % don't match on return value in case it is already running
-    _ = ra_nodes_sup:start_node(Conf),
-    ok.
+    case ra_nodes_sup:start_node(Conf) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        {error, _} = Err -> Err
+    end.
 
--spec restart_node(ra_node_id()) -> ok.
+-spec restart_node(ra_node_id()) -> ok | {error, term()}.
 restart_node(NodeId) ->
     % don't match on return value in case it is already running
-    _ = ra_nodes_sup:restart_node(NodeId),
-    ok.
+    case ra_nodes_sup:restart_node(NodeId) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        {error, _} = Err -> Err
+    end.
 
--spec stop_node(ra_node_id()) -> ok.
+-spec stop_node(ra_node_id()) -> ok | {error, nodedown}.
 stop_node(NodeId) ->
     try ra_nodes_sup:stop_node(NodeId) of
         ok -> ok;
         {error, not_found} -> ok
     catch
         exit:noproc -> ok;
-        exit:{{nodedown, _}, _}  -> nodedown
+        exit:{{nodedown, _}, _} -> {error, nodedown}
     end.
 
 -spec delete_node(ra_node_id()) -> ok.

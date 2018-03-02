@@ -133,7 +133,7 @@ stop_node_idemp(Config) ->
     ok = ra:stop_node({N1, node()}),
     % should not raise exception
     ok = ra:stop_node({N1, node()}),
-    nodedown = ra:stop_node({N1, randomnode@bananas}),
+    {error, nodedown} = ra:stop_node({N1, randomnode@bananas}),
     ok.
 
 leader_steps_down_after_replicating_new_cluster(Config) ->

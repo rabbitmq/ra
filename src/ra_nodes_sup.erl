@@ -61,16 +61,19 @@ stop_node(RaName) ->
     UId = ra_directory:registered_name_from_node_name(RaName),
     supervisor:terminate_child(?MODULE, UId).
 
--spec delete_node(NodeId :: ra_node_id()) -> ok.
+-spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
 delete_node(NodeId) ->
     Node = ra_lib:ra_node_id_node(NodeId),
     Name = ra_lib:ra_node_id_to_local_name(NodeId),
     ?INFO("Deleting node ~p and it's data.~n", [NodeId]),
-    _ = stop_node(NodeId),
-    ok = rpc:call(Node, ?MODULE, delete_node_rpc, [Name]),
-    ok.
+    case stop_node(NodeId) of
+        ok ->
+            rpc:call(Node, ?MODULE, delete_node_rpc, [Name]);
+        {error, _} = Err -> Err
+    end.
 
 delete_node_rpc(RaName) ->
+    %% TODO: better handle and report errors
     UId = ra_directory:registered_name_from_node_name(RaName),
     Dir = ra_env:data_dir(UId),
     ok = ra_log_file_segment_writer:release_segments(

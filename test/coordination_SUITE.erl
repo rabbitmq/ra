@@ -69,17 +69,17 @@ start_stop_restart_delete_on_remote(Config) ->
     ok = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     % idempotency
-    ok = ra:start_node(Conf),
+    {error, {already_started, _}} = ra:start_node(Conf),
     ok = ra:stop_node(NodeId),
     ok = ra:restart_node(NodeId),
     % idempotency
-    ok = ra:restart_node(NodeId),
+    {error, running} = ra:restart_node(NodeId),
     ok = ra:stop_node(NodeId),
     % idempotency
     ok = ra:stop_node(NodeId),
     ok = ra:delete_node(NodeId),
     % idempotency
-    ok = ra:delete_node(NodeId),
+    {error, not_found} = ra:delete_node(NodeId),
     timer:sleep(500),
     ok.
 
