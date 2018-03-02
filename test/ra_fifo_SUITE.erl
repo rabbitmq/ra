@@ -18,6 +18,7 @@ all_tests() ->
      ra_fifo_client_basics,
      ra_fifo_client_returns_correlation,
      ra_fifo_client_resends_lost_command,
+     ra_fifo_client_returns_after_down,
      ra_fifo_client_resends_after_lost_applied,
      ra_fifo_client_handles_reject_notification,
      ra_fifo_client_two_quick_enqueues,
@@ -213,6 +214,33 @@ ra_fifo_client_detects_lost_delivery(Config) ->
 
     % assert three deliveries were received
     {[_, _, _], _} = process_ra_events(F3, 500),
+    ra:stop_node(NodeId),
+    ok.
+
+ra_fifo_client_returns_after_down(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    {_, F2} = process_ra_events(F1, 500),
+    % start a customer in a separate processes
+    % that exits after checkout
+    Self = self(),
+    _Pid = spawn(fun () ->
+                         F = ra_fifo_client:init(ClusterId, [NodeId]),
+                         {ok, _} = ra_fifo_client:checkout(<<"tag">>, 10, F),
+                         Self ! checkout_done
+                 end),
+    receive checkout_done -> ok after 1000 -> exit(checkout_done_timeout) end,
+    % message should be available for dequeue
+    {ok, {_, {_, msg1}}, _} = ra_fifo_client:dequeue(<<"tag">>, settled, F2),
     ra:stop_node(NodeId),
     ok.
 

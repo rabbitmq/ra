@@ -236,8 +236,8 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
         {MRef, Monitors} ->
             % there is a monitor for the ref
             {leader, NodeState, Effects} =
-                ra_node:handle_leader({command, {'$usr', {down, Pid, Info},
-                                                 noreply}},
+                ra_node:handle_leader({command, {'$usr', undefined,
+                                                 {down, Pid, Info}, noreply}},
                                       NodeState0),
             {State, Actions} =
                 handle_effects(Effects, cast,
@@ -256,7 +256,8 @@ leader(info, {NodeEvt, Node},
             % there is a monitor for the node
             {leader, NodeState, Effects} =
                 ra_node:handle_leader({command,
-                                       {'$usr', {NodeEvt, Node}, noreply}},
+                                       {'$usr', undefined,
+                                        {NodeEvt, Node}, noreply}},
                                       NodeState0),
             {State, Actions} =
                 handle_effects(Effects, cast,
