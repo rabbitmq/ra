@@ -71,7 +71,9 @@ init(ClusterId, Nodes, MaxPending) ->
 %% @param Msg an arbitrary erlang term representing the message.
 %% @param State the current {@module} state.
 %% @returns
-%% `{ok, State}' if the command was successfully sent.
+%% `{ok | slow, State}' if the command was successfully sent. If the return
+%% tag is `slow' it means the limit is approaching and it is time to slow down
+%% the sending rate.
 %% {@module} assigns a sequence number to every raft command it issues. The
 %% SequenceNumber can be correlated to the applied sequence numbers returned
 %% by the {@link handle_ra_event/2. handle_ra_event/2} function.
@@ -93,7 +95,9 @@ enqueue(Correlation, Msg, State0) ->
 %% @param Msg an arbitrary erlang term representing the message.
 %% @param State the current {@module} state.
 %% @returns
-%% `{ok, State}' if the command was successfully sent.
+%% `{ok | slow, State}' if the command was successfully sent. If the return
+%% tag is `slow' it means the limit is approaching and it is time to slow down
+%% the sending rate.
 %% {@module} assigns a sequence number to every raft command it issues. The
 %% SequenceNumber can be correlated to the applied sequence numbers returned
 %% by the {@link handle_ra_event/2. handle_ra_event/2} function.
@@ -137,7 +141,9 @@ dequeue(CustomerTag, Settlement, State0) ->
 %% @param MsgIds the message ids received with the {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, State}' if the command was successfully sent.
+%% `{ok | slow, State}' if the command was successfully sent. If the return
+%% tag is `slow' it means the limit is approaching and it is time to slow down
+%% the sending rate.
 %%
 %% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
@@ -157,7 +163,9 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
 %% from {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, State}' if the command was successfully sent.
+%% `{ok | slow, State}' if the command was successfully sent. If the return
+%% tag is `slow' it means the limit is approaching and it is time to slow down
+%% the sending rate.
 %%
 %% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
@@ -178,7 +186,9 @@ return(CustomerTag, [_|_] = MsgIds, State0) ->
 %% from {@link ra_fifo:delivery/0.}
 %% @param State the {@module} state
 %% @returns
-%% `{ok, State}' if the command was successfully sent.
+%% `{ok | slow, State}' if the command was successfully sent. If the return
+%% tag is `slow' it means the limit is approaching and it is time to slow down
+%% the sending rate.
 %%
 %% `{error, stop_sending}' if the number of commands not yet known to
 %% have been successfully applied by ra has reached the maximum limit.
