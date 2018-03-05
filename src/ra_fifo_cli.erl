@@ -68,6 +68,7 @@ start_ra_cluster(Opts) ->
         end,
         Config = #{ id => {Name, Node},
                     uid => atom_to_binary(Name, utf8),
+                    cluster_id => atom_to_binary(Name, utf8),
                     initial_nodes => Nodes,
                     log_module => ra_log_file,
                     log_init_args =>
