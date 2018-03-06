@@ -39,3 +39,5 @@ shell: app
 
 check-rabbitmq-components.mk:
 	true
+
+all:: escript
