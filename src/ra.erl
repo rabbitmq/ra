@@ -81,7 +81,7 @@ stop_node(NodeId) ->
         exit:{{nodedown, _}, _} -> {error, nodedown}
     end.
 
--spec delete_node(ra_node_id()) -> ok.
+-spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
 delete_node(RaNodeId) ->
     ra_nodes_sup:delete_node(RaNodeId).
 

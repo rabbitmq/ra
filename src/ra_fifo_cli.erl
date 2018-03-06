@@ -200,6 +200,7 @@ parse_nodes(Nodes) ->
     {ok, Term} = erl_parse:parse_term(Tokens),
     Term.
 
+-spec fail(term()) -> no_return().
 fail(Msg) ->
     fail(Msg, []).
 
