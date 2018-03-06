@@ -134,36 +134,18 @@ print_help(_) ->
 enqueue(Opts) ->
     start_distribution(cli),
     #{message := Message,
-      nodes := Nodes,
-      timeout := Timeout} = Opts,
+      nodes := Nodes} = Opts,
     case Message of
         undefined -> fail("--message required");
         _         -> ok
     end,
-    ClusterId = case Nodes of
-        []              -> fail("--nodes should contain a list of nodes");
-        [{Name,_} | _]  -> atom_to_binary(Name, utf8)
-    end,
-    State = ra_fifo_client:init(ClusterId, Nodes),
-    Ref = make_ref(),
-    {ok, State1} = ra_fifo_client:enqueue(Ref, Message, State),
-    wait_for_ack(State1, Ref, Message, Timeout).
-
-wait_for_ack(State, Ref, Message, Timeout) ->
-    receive
-        {ra_event, From, Event} ->
-            case ra_fifo_client:handle_ra_event(From, Event, State) of
-                {internal, [], State2} ->
-                    io:format("Empty return ~n", []),
-                    wait_for_ack(State2, Ref, Message, Timeout);
-                {internal, [Ref], _State2} ->
-                    io:format("Enqueued ~p with ref ~p~n", [Message, Ref])
-            end;
-        Other ->
-            fail("Unexpected message on publisher ~p", [Other])
-    after Timeout ->
-        fail("Timeout waiting for ack ~p", [Timeout])
-    end.
+    NodeId = case Nodes of
+                    [] -> fail("--nodes should contain a list of nodes");
+                    [N | _]  -> N
+                end,
+    Cmd = {enqueue, undefined, undefined, Message},
+    {ok, _, _} = ra:send_and_await_consensus(NodeId, Cmd),
+    ok.
 
 dequeue(Opts) ->
     start_distribution(cli),
