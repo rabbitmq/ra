@@ -122,7 +122,8 @@ query(ServerRef, QueryFun, consistent) ->
 
 
 %% used to query the raft state rather than the machine state
--spec state_query(ra_node_id(), all | members) ->  ra_leader_call_ret(term()).
+-spec state_query(ra_node_id(), all | members | machine) ->
+    ra_leader_call_ret(term()).
 state_query(ServerRef, Spec) ->
     leader_call(ServerRef, {state_query, Spec}, ?DEFAULT_TIMEOUT).
 
@@ -703,6 +704,8 @@ gen_statem_safe_call(ServerRef, Msg, Timeout) ->
     end.
 
 do_state_query(all, State) -> State;
+do_state_query(machine, #{machine_state := MacState}) ->
+    MacState;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster).
 

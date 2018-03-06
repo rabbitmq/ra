@@ -10,9 +10,11 @@ main(Args) ->
         dequeue -> dequeue(Opts);
         help    -> print_help(Opts);
         start_ra_cluster -> start_ra_cluster(Opts);
+        restart_ra_cluster -> restart_ra_cluster(Opts);
         stop_ra_cluster  -> stop_ra_cluster(Opts);
         start_erlang -> start_erlang(Opts);
         stop_erlang  -> stop_erlang(Opts);
+        print_machine_state -> print_machine_state(Opts);
         none    -> fail("Command required")
     end.
 
@@ -29,13 +31,10 @@ start_erlang(Opts) ->
     {ok, _} = start_distribution(Node),
     io:format("Starting node ~p~n", [node()]),
     ok = application:load(ra),
-    ok = application:set_env(ra, data_dir, filename:join([DataDir, atom_to_list(node())])),
+    ok = application:set_env(ra, data_dir,
+                             filename:join([DataDir, atom_to_list(node())])),
     {ok, _} = application:ensure_all_started(ra),
-    spawn(fun() ->
-        ets:new(ra_fifo_metrics, [public, named_table, {write_concurrency, true}]),
-        receive stop -> ok end
-    end),
-    register(ra_control, self()),
+    true = register(ra_control, self()),
     receive stop -> ok
     end.
 
@@ -47,9 +46,8 @@ stop_erlang(Opts) ->
     #{node := Node} = Opts,
     rpc:call(Node, ra_fifo_cli, stop, []).
 
-start_ra_cluster(Opts) ->
+start_ra_cluster(#{nodes := Nodes}) ->
     start_distribution(cli),
-    #{nodes := Nodes} = Opts,
     case Nodes of
         [] -> fail("--nodes should contain a list of nodes");
         _  -> ok
@@ -66,21 +64,48 @@ start_ra_cluster(Opts) ->
             none -> fail("Data should be set on node start ~n");
             _ -> ok
         end,
-        Config = #{ id => {Name, Node},
-                    uid => atom_to_binary(Name, utf8),
-                    cluster_id => atom_to_binary(Name, utf8),
-                    initial_nodes => Nodes,
-                    log_module => ra_log_file,
-                    log_init_args =>
-                        #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
-                          uid => atom_to_binary(Name, utf8)},
-                    machine => {module, ra_fifo, #{}}
-                    },
+        UId = atom_to_binary(Name, utf8),
+        Config = #{id => {Name, Node},
+                   uid => UId,
+                   cluster_id => Name,
+                   initial_nodes => Nodes,
+                   log_module => ra_log_file,
+                   log_init_args => #{uid => UId},
+                   machine => {module, ra_fifo, #{}}},
         io:format("Starting ra node ~p~n", [{Name, Node}]),
         ok = ct_rpc:call(Node, ra, start_node, [Config])
     end,
     Nodes),
     ok = ra:trigger_election(hd(Nodes)).
+
+restart_ra_cluster(#{nodes := Nodes}) ->
+    start_distribution(cli),
+    case Nodes of
+        [] -> fail("--nodes should contain a list of nodes");
+        _  -> ok
+    end,
+    io:format("Starting ra cluster on nodes ~w~n", [Nodes]),
+    lists:foreach(fun(NodeId) ->
+        io:format("Restarting ra node ~w~n", [NodeId]),
+        ok = ct_rpc:call(element(2, NodeId), ra, restart_node, [NodeId])
+    end,
+    Nodes),
+    ok.
+
+print_machine_state(#{nodes := Nodes}) ->
+    start_distribution(cli),
+    case Nodes of
+        [] -> fail("--nodes should contain a list of nodes");
+        _  -> ok
+    end,
+    io:format("Starting ra cluster on nodes ~w~n", [Nodes]),
+    [begin
+         {ok, {IdxTerm, MacState}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+         io:format("Machine state of node ~w at ~w:~n~p~n",
+                   [NodeId, IdxTerm, MacState])
+     end
+     || NodeId <- Nodes],
+    ok.
 
 stop_ra_cluster(Opts) ->
     start_distribution(cli),
@@ -99,7 +124,9 @@ print_help(_) ->
               "ra_fifo_cli start_erlang --node <node_name> --data-dir <dir>~n"
               "ra_fifo_cli stop_erlang --node <node_name>~n"
               "ra_fifo_cli start_ra_cluster --nodes <nodes_config>~n"
+              "ra_fifo_cli restart_ra_cluster --nodes <nodes_config>~n"
               "ra_fifo_cli stop_ra_cluster --nodes <nodes_config>~n"
+              "ra_fifo_cli print_machine_state --nodes <nodes_config>~n"
               "~nWhere nodes_config is an erlang term representation of a list~n"
               "of ra nodes. E.g. '[{foo,foo@localhost},{foo,bar@localhost}]'~n"
               "Spaces in message bodies and node config are not supported~n").
@@ -179,8 +206,12 @@ parse_args(["stop_erlang" | Other], Opts) ->
 
 parse_args(["start_ra_cluster" | Other], Opts) ->
     parse_args(Other, Opts#{op := start_ra_cluster});
+parse_args(["restart_ra_cluster" | Other], Opts) ->
+    parse_args(Other, Opts#{op := restart_ra_cluster});
 parse_args(["stop_ra_cluster" | Other], Opts) ->
     parse_args(Other, Opts#{op := stop_ra_cluster});
+parse_args(["print_machine_state" | Other], Opts) ->
+    parse_args(Other, Opts#{op := print_machine_state});
 
 parse_args(["--help" | Other], Opts) ->
     parse_args(Other, Opts#{op := help});
