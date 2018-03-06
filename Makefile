@@ -28,6 +28,9 @@ DEP_PLUGINS = elvis_mk
 
 PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten looking_glass
 
+escript-zip::
+	mkdir -p $(DEPS_DIR)/elvis_mk/ebin
+
 DIALYZER_OPTS += --src -r test
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 include erlang.mk
