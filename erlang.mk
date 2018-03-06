@@ -17,7 +17,7 @@
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 export ERLANG_MK_FILENAME
 
-ERLANG_MK_VERSION = 2017.08.28-25-g75e9daa
+ERLANG_MK_VERSION = 2018.03.01
 ERLANG_MK_WITHOUT = 
 
 # Make 3.81 and 3.82 are deprecated.
@@ -4685,7 +4685,10 @@ define dep_autopatch_appsrc_script.erl
 	Bindings0 = erl_eval:new_bindings(),
 	Bindings1 = erl_eval:add_binding('CONFIG', Conf0, Bindings0),
 	Bindings = erl_eval:add_binding('SCRIPT', AppSrcScript, Bindings1),
-	{ok, [Conf]} = file:script(AppSrcScript, Bindings),
+	Conf = case file:script(AppSrcScript, Bindings) of
+		{ok, [C]} -> C;
+		{ok, C} -> C
+	end,
 	ok = file:write_file(AppSrc, io_lib:format("~p.~n", [Conf])),
 	halt()
 endef
@@ -4740,7 +4743,7 @@ endef
 define dep_fetch_hex
 	mkdir -p $(ERLANG_MK_TMP)/hex $(DEPS_DIR)/$1; \
 	$(call core_http_get,$(ERLANG_MK_TMP)/hex/$1.tar,\
-		https://s3.amazonaws.com/s3.hex.pm/tarballs/$1-$(strip $(word 2,$(dep_$1))).tar); \
+		https://repo.hex.pm/tarballs/$1-$(strip $(word 2,$(dep_$1))).tar); \
 	tar -xOf $(ERLANG_MK_TMP)/hex/$1.tar contents.tar.gz | tar -C $(DEPS_DIR)/$1 -xzf -;
 endef
 
