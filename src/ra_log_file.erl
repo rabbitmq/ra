@@ -222,7 +222,7 @@ write([{Idx, _, _} | _], #state{uid = UId, last_index = LastIdx}) ->
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
 take(Start, Num, #state{uid = UId, first_index = FirstIdx,
-                                 last_index = LastIdx} = State)
+                        last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx ->
     % 0. Check that the request isn't outside of first_index and last_index
     % 1. Check the local cache for any unflushed entries, carry reminders
