@@ -768,6 +768,8 @@ verify_entries(Idx, Tail) ->
                         [Tail, Idx+1]),
     {error, {integrity_error, lists:flatten(Msg)}}.
 
+write_entries([], State) ->
+    State;
 write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
     case verify_entries(FstIdx, Rest) of
         ok ->
