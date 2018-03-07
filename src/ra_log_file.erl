@@ -769,7 +769,7 @@ verify_entries(Idx, Tail) ->
     {error, {integrity_error, lists:flatten(Msg)}}.
 
 write_entries([], State) ->
-    State;
+    {queued, State};
 write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
     case verify_entries(FstIdx, Rest) of
         ok ->
