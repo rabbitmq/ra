@@ -462,8 +462,8 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     % flushed to persistent tables asynchronously
     [begin
          % In order to ensure that reads are done in the correct causal order
-         % we need to append a monotonically increasing value for readers to sort
-         % by
+         % we need to append a monotonically increasing value for readers to
+         % sort by
          M = erlang:unique_integer([monotonic, positive]),
          _ = ets:insert(ra_log_closed_mem_tables,
                         erlang:insert_element(2, T, M))

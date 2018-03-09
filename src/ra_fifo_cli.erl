@@ -73,10 +73,10 @@ start_ra_cluster(#{nodes := Nodes}) ->
                    log_init_args => #{uid => UId},
                    machine => {module, ra_fifo, #{}}},
         io:format("Starting ra node ~p~n", [{Name, Node}]),
-        ok = ct_rpc:call(Node, ra, start_node, [Config])
-    end,
-    Nodes),
-    ok = ra:trigger_election(hd(Nodes)).
+        ok = rpc:call(Node, ra, start_node, [Config])
+    end, Nodes),
+    Leader = hd(Nodes),
+    ok = ra:trigger_election(Leader).
 
 restart_ra_cluster(#{nodes := Nodes}) ->
     start_distribution(cli),

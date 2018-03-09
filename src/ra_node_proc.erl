@@ -129,7 +129,7 @@ state_query(ServerRef, Spec) ->
 
 -spec trigger_election(ra_node_id()) -> ok.
 trigger_election(ServerRef) ->
-    gen_statem:cast(ServerRef, trigger_election).
+    gen_statem:call(ServerRef, trigger_election, ?DEFAULT_TIMEOUT).
 
 -spec ping(ra_node_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerRef, Timeout) ->
@@ -353,7 +353,7 @@ follower(_, {command, {_CmdType, Data, noreply}},
                   "Command is dropped.~n", [id(State)]),
             {keep_state, State, []};
         LeaderId ->
-            ?INFO("~p follower leader cast - redirecting to ~w ~n",
+            ?INFO("~w follower leader cast - redirecting to ~w ~n",
                   [Id, LeaderId]),
             ok = ra:cast(LeaderId, Data),
             {keep_state, State, []}
@@ -366,8 +366,10 @@ follower({call, From}, {dirty_query, QueryFun},
          #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
-follower(_Type, trigger_election, State) ->
-    {keep_state, State, [{next_event, cast, election_timeout}]};
+follower({call, From}, trigger_election, State) ->
+    ?INFO("~w: election triggered by ~w", [id(State), element(2, From)]),
+    {keep_state, State, [{reply, From, ok},
+                         {next_event, cast, election_timeout}]};
 follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
@@ -376,8 +378,8 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
         noconnection ->
             handle_leader_down(State);
         _ ->
-            ?WARN("~p: Leader monitor down with ~p, setting election timeout~n",
-                  [id(State), Info]),
+            ?WARN("~w: Leader monitor down with ~W, setting election timeout~n",
+                  [id(State), Info, 8]),
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(follower, State)]}
     end;
@@ -424,8 +426,9 @@ await_condition({call, From}, {dirty_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
-await_condition(_Type, trigger_election, State) ->
-    {keep_state, State, [{next_event, cast, election_timeout}]};
+await_condition({call, From}, trigger_election, State) ->
+    {keep_state, State, [{reply, From ,ok},
+                         {next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
                 State = #state{leader_monitor = MRef, name = Name}) ->
     ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
