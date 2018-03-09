@@ -272,6 +272,8 @@ leader(_, tick_timeout, State0) ->
     Effects = ra_node:tick(State1#state.node_state),
     {State, Actions} = handle_effects(Effects, cast, State1),
     {keep_state, State, set_tick_timer(State, Actions)};
+leader({call, From}, trigger_election, State) ->
+    {keep_state, State, [{reply, From, ok}]};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -309,6 +311,8 @@ candidate(info, {node_event, _Node, _Evt}, State) ->
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
     {keep_state, State, set_tick_timer(State, [])};
+candidate({call, From}, trigger_election, State) ->
+    {keep_state, State, [{reply, From, ok}]};
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
