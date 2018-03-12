@@ -9,8 +9,7 @@
 
 all() ->
     [
-     % {group, ra_log_memory},
-     {group, ra_log_file}
+     {group, tests}
     ].
 
 all_tests() ->
@@ -40,8 +39,7 @@ all_tests() ->
 
 groups() ->
     [
-     % {ra_log_memory, [], all_tests()},
-     {ra_log_file, [], all_tests()}
+     {tests, [], all_tests()}
     ].
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -62,31 +60,15 @@ restart_ra(DataDir) ->
     application:ensure_all_started(sasl),
     ok.
 
-init_per_group(ra_log_memory, Config) ->
-    restart_ra(?config(priv_dir, Config)),
-    Fun = fun (TestCase) ->
-                  fun (Name, Nodes, Machine) ->
-                          UId = atom_to_binary(Name, utf8),
-                          Conf = #{cluster_id => TestCase,
-                                   id => {Name, node()},
-                                   uid => UId,
-                                   log_module => ra_log_memory,
-                                   log_init_args => #{},
-                                   initial_nodes => Nodes,
-                                   machine => Machine,
-                                   await_condition_timeout => 5000},
-                          ra:start_node(Conf)
-                  end
-          end,
-   [{start_node_fun, Fun} | Config];
-init_per_group(ra_log_file = G, Config) ->
+init_per_group(_G, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    DataDir = filename:join([PrivDir, G, "data"]),
+    DataDir = filename:join([PrivDir, "data"]),
     ok = restart_ra(DataDir),
     Fun = fun (TestCase) ->
                   fun (Name, Nodes, Machine) ->
                           UId = atom_to_binary(Name, utf8),
-                          Dir = filename:join([PrivDir, G, TestCase, ra_lib:to_list(Name)]),
+                          Dir = filename:join([PrivDir, TestCase,
+                                               ra_lib:to_list(Name)]),
                           ok = filelib:ensure_dir(Dir),
                           Conf = #{cluster_id => TestCase,
                                    id => {Name, node()},

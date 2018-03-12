@@ -217,14 +217,19 @@ discard(CustomerTag, [_|_] = MsgIds, State0) ->
 -spec checkout(ra_fifo:customer_tag(), NumUnsettled :: non_neg_integer(),
                state()) -> {ok, state()} | {error | timeout, term()}.
 checkout(CustomerTag, NumUnsettled, State) ->
-    Node = pick_node(State),
+    Nodes = sorted_nodes(State),
     CustomerId = {CustomerTag, self()},
-    case ra:send_and_await_consensus(Node, {checkout, {auto, NumUnsettled},
-                                            CustomerId}) of
+    Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
+    try_send_and_await_consensus(Nodes, Cmd, State).
+
+try_send_and_await_consensus([Node | Rem], Cmd, State) ->
+    case ra:send_and_await_consensus(Node, Cmd) of
         {ok, _, Leader} ->
             {ok, State#state{leader = Leader}};
-        Err ->
-            Err
+        Err when length(Rem) =:= 0 ->
+            Err;
+        _ ->
+            try_send_and_await_consensus(Rem, Cmd, State)
     end.
 
 %% @doc Handles incoming `ra_events'. Events carry both internal "bookeeping"
@@ -385,6 +390,12 @@ pick_node(#state{leader = undefined, nodes = [N | _]}) ->
     N;
 pick_node(#state{leader = Leader}) ->
     Leader.
+
+% nodes sorted by last known leader
+sorted_nodes(#state{leader = undefined, nodes = Nodes}) ->
+    Nodes;
+sorted_nodes(#state{leader = Leader, nodes = Nodes}) ->
+    [Leader | lists:delete(Leader, Nodes)].
 
 next_seq(#state{next_seq = Seq} = State) ->
     {Seq, State#state{next_seq = Seq + 1}}.

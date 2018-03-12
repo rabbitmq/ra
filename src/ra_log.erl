@@ -28,7 +28,8 @@
          exists/2,
          overview/1,
          write_config/2,
-         read_config/1
+         read_config/1,
+         delete_everything/1
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -129,6 +130,9 @@
 
 -callback read_config(Dir :: file:filename()) ->
     {ok, ra_node:ra_node_config()} | not_found.
+
+-callback delete_everything(State :: ra_log_state()) ->
+    ok.
 
 %%
 %% API
@@ -315,3 +319,8 @@ write_config(Config, {Mod, Log}) ->
     {ok, ra_node:ra_node_config()} | not_found.
 read_config({Mod, Log}) ->
     Mod:read_config(Log).
+
+-spec delete_everything({module(), Dir :: file:filename()}) ->
+    ok.
+delete_everything({Mod, Log}) ->
+    Mod:delete_everything(Log).

@@ -24,7 +24,8 @@
          can_write/1,
          overview/1,
          write_config/2,
-         read_config/1
+         read_config/1,
+         delete_everything/1
         ]).
 
 -include("ra.hrl").
@@ -514,6 +515,17 @@ read_config(Dir) ->
         false ->
             not_found
     end.
+
+delete_everything(#state{directory = Dir} = Log) ->
+    _ = close(Log),
+    try ra_lib:recursive_delete(Dir) of
+        ok -> ok
+    catch
+        _:_ = Err ->
+            ?WARN("ra_log_file:delete_everything/1 failed to delete "
+                  "directory ~s~n Error: ~p~n", [Dir, Err])
+    end,
+    ok.
 
 %%% Local functions
 

@@ -73,13 +73,13 @@ start_stop_restart_delete_on_remote(Config) ->
     ok = ra:stop_node(NodeId),
     ok = ra:restart_node(NodeId),
     % idempotency
-    {error, running} = ra:restart_node(NodeId),
+    {error, {already_started, _}} = ra:restart_node(NodeId),
     ok = ra:stop_node(NodeId),
     % idempotency
     ok = ra:stop_node(NodeId),
     ok = ra:delete_node(NodeId),
     % idempotency
-    {error, not_found} = ra:delete_node(NodeId),
+    {error, _} = ra:delete_node(NodeId),
     timer:sleep(500),
     ok.
 

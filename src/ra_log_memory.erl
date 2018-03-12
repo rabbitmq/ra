@@ -23,6 +23,7 @@
          overview/1,
          write_config/2,
          read_config/1,
+         delete_everything/1,
          to_list/1
         ]).
 
@@ -221,6 +222,8 @@ write_config(_Config, _Log) ->
 
 read_config(_Log) ->
     not_found.
+
+delete_everything(_Log) -> ok.
 
 to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].

@@ -77,6 +77,16 @@
         {term :: ra_term(),
          vote_granted :: boolean()}).
 
+%% pre-vote extension
+-record(pre_vote_rpc,
+        {term :: ra_term(),
+         candidate_id :: ra_node_id(),
+         last_log_index :: ra_index(),
+         last_log_term :: ra_index()}).
+
+-record(pre_vote_result,
+        {term :: ra_term(),
+         vote_granted :: boolean()}).
 
 -record(install_snapshot_rpc,
         {term :: ra_term(), % the leaders term

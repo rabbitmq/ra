@@ -16,11 +16,16 @@ all() ->
      candidate_handles_append_entries_rpc,
      append_entries_reply_success,
      append_entries_reply_no_success,
-     follower_vote,
+     follower_request_vote,
+     follower_pre_vote,
+     pre_vote_receives_pre_vote,
      request_vote_rpc_with_lower_term,
      leader_does_not_abdicate_to_unknown_peer,
      higher_term_detected,
-     quorum,
+     pre_vote_election,
+     pre_vote_election_reverts,
+     leader_receives_pre_vote,
+     candidate_election,
      is_new,
      command,
      consistent_query,
@@ -139,15 +144,29 @@ init_restores_cluster_changes(_Config) ->
 election_timeout(_Config) ->
     State = base_state(3),
     Msg = election_timeout,
-    Term = 6,
-    VoteRpc = #request_vote_rpc{term = Term, candidate_id = n1, last_log_index = 3,
-                                last_log_term = 5},
-    VoteForSelfEvent = {next_event, cast,
-                        #request_vote_result{term = Term, vote_granted = true}},
-    {candidate, #{current_term := Term, votes := 0},
-     [VoteForSelfEvent, {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}]} =
+
+    % follower
+    PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
+                               last_log_index = 3, last_log_term = 5},
+    PreVoteForSelfEvent = {next_event, cast,
+                           #pre_vote_result{term = 5, vote_granted = true}},
+    {pre_vote, #{current_term := 5, votes := 0},
+     [PreVoteForSelfEvent, {send_vote_requests, [{n2, PreVoteRpc},
+                                                 {n3, PreVoteRpc}]}]} =
         ra_node:handle_follower(Msg, State),
-    {candidate, #{current_term := Term, votes := 0},
+
+    % pre_vote
+    {pre_vote, #{current_term := 5, votes := 0},
+     [PreVoteForSelfEvent, {send_vote_requests, [{n2, PreVoteRpc},
+                                                 {n3, PreVoteRpc}]}]} =
+        ra_node:handle_pre_vote(Msg, State),
+
+    % candidate
+    VoteRpc = #request_vote_rpc{term = 6, candidate_id = n1,
+                                last_log_index = 3, last_log_term = 5},
+    VoteForSelfEvent = {next_event, cast,
+                        #request_vote_result{term = 6, vote_granted = true}},
+    {candidate, #{current_term := 6, votes := 0},
      [VoteForSelfEvent, {send_vote_requests, [{n2, VoteRpc}, {n3, VoteRpc}]}]} =
         ra_node:handle_candidate(Msg, State),
     ok.
@@ -498,7 +517,7 @@ follower_catchup_condition(_Config) ->
                                                          next_index = 4}}}]}
     = ra_node:handle_await_condition(await_condition_timeout, State),
 
-    {candidate, _, _} = ra_node:handle_await_condition(election_timeout, State).
+    {pre_vote, _, _} = ra_node:handle_await_condition(election_timeout, State).
 
 
 wal_down_condition(_Config) ->
@@ -554,7 +573,7 @@ append_entries_reply_success(_Config) ->
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
     ExpectedEffects =
-        {send_rpcs, true,
+        {send_rpcs,
          [{n3, #append_entries_rpc{term = 5, leader_id = n1,
                                    prev_log_index = 1,
                                    prev_log_term = 1,
@@ -600,7 +619,7 @@ append_entries_reply_no_success(_Config) ->
                              leader_commit = 1,
                              entries = [{2, 3, usr(<<"hi2">>)},
                                         {3, 5, usr(<<"hi3">>)}]},
-    ExpectedEffects = [{send_rpcs, true, [{n3, AE}, {n2, AE}]}],
+    ExpectedEffects = [{send_rpcs, [{n3, AE}, {n2, AE}]}],
     % new peers state is updated
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 1}},
                commit_index := 1,
@@ -609,7 +628,7 @@ append_entries_reply_no_success(_Config) ->
         ra_node:handle_leader(Msg, State),
     ok.
 
-follower_vote(_Config) ->
+follower_request_vote(_Config) ->
     State = base_state(3),
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
@@ -653,6 +672,49 @@ follower_vote(_Config) ->
                             State),
      ok.
 
+follower_pre_vote(_Config) ->
+    State = base_state(3),
+    Term = 5,
+    Msg = #pre_vote_rpc{candidate_id = n2, term = Term, last_log_index = 3,
+                        last_log_term = 5},
+    % success
+    {follower, #{current_term := Term},
+     [{reply, #pre_vote_result{term = Term, vote_granted = true}}]} =
+        ra_node:handle_follower(Msg, State),
+
+    % fail due to lower term
+    {follower, #{current_term := 5},
+     [{reply, #pre_vote_result{term = 5, vote_granted = false}}]} =
+    ra_node:handle_follower(Msg#pre_vote_rpc{term = 4}, State),
+
+     % reject when candidate last log entry has a lower term
+     % still update current term if incoming is higher
+    {follower, #{current_term := 6},
+     [{reply, #pre_vote_result{term = 6, vote_granted = false}}]} =
+    ra_node:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
+                                             term = 6},
+                            State),
+
+    % grant vote when candidate last log entry has same term but is longer
+    {follower, #{current_term := 5},
+     [{reply, #pre_vote_result{term = 5, vote_granted = true}}]} =
+    ra_node:handle_follower(Msg#pre_vote_rpc{last_log_index = 4},
+                            State),
+     ok.
+
+pre_vote_receives_pre_vote(_Config) ->
+    State = base_state(3),
+    Term = 5,
+    Msg = #pre_vote_rpc{candidate_id = n2, term = Term, last_log_index = 3,
+                        last_log_term = 5},
+    % success - pre vote still returns other pre vote requests
+    % else we could have a dead-lock with a two process cluster with
+    % both peers in pre-vote state
+    {pre_vote, #{current_term := Term},
+     [{reply, #pre_vote_result{term = Term, vote_granted = true}}]} =
+        ra_node:handle_pre_vote(Msg, State),
+    ok.
+
 request_vote_rpc_with_lower_term(_Config) ->
     State = (base_state(3))#{current_term => 6,
                              voted_for => n1},
@@ -661,11 +723,11 @@ request_vote_rpc_with_lower_term(_Config) ->
     % term is lower than candidate term
     {candidate, #{voted_for := n1, current_term := 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
-     ra_node:handle_candidate(Msg, State),
+         ra_node:handle_candidate(Msg, State),
     % term is lower than candidate term
     {leader, #{current_term := 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
-     ra_node:handle_leader(Msg, State).
+         ra_node:handle_leader(Msg, State).
 
 leader_does_not_abdicate_to_unknown_peer(_Config) ->
     State = base_state(3),
@@ -771,7 +833,7 @@ leader_node_join(_Config) ->
         ra_node:handle_leader({command, {'$ra_join', self(),
                                          n4, await_consensus}}, State0),
     % {leader, State, Effects} = ra_node:handle_leader({written, 4}, State1),
-    [{send_rpcs, true,
+    [{send_rpcs,
       [{n4, #append_entries_rpc{entries =
                                 [_, _, _, {4, 5, {'$ra_cluster_change', _,
                                                   #{n1 := _, n2 := _,
@@ -805,7 +867,7 @@ leader_node_leave(_Config) ->
     State = (base_state(3))#{cluster => OldCluster},
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
-     [{send_rpcs, true, [N3, N2]} | _]} =
+     [{send_rpcs, [N3, N2]} | _]} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
                               State),
     % the leaving node is no longer included
@@ -977,12 +1039,12 @@ command(_Config) ->
                              leader_commit = 3
                             },
     {leader, _, [{reply, Self, {4, 5}},
-                 {send_rpcs, true, [{n3, AE}, {n2, AE}]} |
+                 {send_rpcs, [{n3, AE}, {n2, AE}]} |
                  _]} =
         ra_node:handle_leader({command, Cmd}, State),
     ok.
 
-quorum(_Config) ->
+candidate_election(_Config) ->
     State = (base_state(5))#{current_term => 6, votes => 1},
     Reply = #request_vote_result{term = 6, vote_granted = true},
     {candidate, #{votes := 2} = State1, []}
@@ -1005,9 +1067,59 @@ quorum(_Config) ->
                             n3 := PeerState,
                             n4 := PeerState,
                             n5 := PeerState}},
-     [{send_rpcs, true, _}, {next_event, cast, {command, noop}}]}
+     [{send_rpcs, _}, {next_event, cast, {command, noop}}]}
         = ra_node:handle_candidate(Reply, State1).
 
+pre_vote_election(_Config) ->
+    State = (base_state(5))#{votes => 1},
+    Reply = #pre_vote_result{term = 5, vote_granted = true},
+    {pre_vote, #{votes := 2} = State1, []}
+        = ra_node:handle_pre_vote(Reply, State),
+
+    % denied
+    NegResult = #pre_vote_result{term = 5, vote_granted = false},
+    {pre_vote, #{votes := 2}, []}
+        = ra_node:handle_pre_vote(NegResult, State1),
+
+    % newer term should make pre_vote revert to follower
+    HighTermResult = #pre_vote_result{term = 6, vote_granted = false},
+    {follower, #{current_term := 6, votes := 0}, []}
+        = ra_node:handle_pre_vote(HighTermResult, State1),
+
+    % quorum has been achieved - pre_vote becomes candidate
+    {candidate,
+     #{current_term := 6}, _} = ra_node:handle_pre_vote(Reply, State1).
+
+pre_vote_election_reverts(_Config) ->
+    State = (base_state(5))#{votes => 1},
+    % request vote with higher term
+    VoteRpc = #request_vote_rpc{term = 6, candidate_id = n2,
+                                last_log_index = 3, last_log_term = 5},
+    {follower, #{current_term := 6, votes := 0}, [{next_event, VoteRpc}]}
+        = ra_node:handle_pre_vote(VoteRpc, State),
+    %  append entries rpc with equal term
+    AE = #append_entries_rpc{term = 5, leader_id = n2, prev_log_index = 3,
+                             prev_log_term = 5, leader_commit = 3},
+    {follower, #{current_term := 5, votes := 0}, [{next_event, AE}]}
+        = ra_node:handle_pre_vote(AE, State),
+    % and higher term
+    AETerm6 = AE#append_entries_rpc{term = 6},
+    {follower, #{current_term := 6, votes := 0}, [{next_event, AETerm6}]}
+        = ra_node:handle_pre_vote(AETerm6, State),
+    ok.
+
+leader_receives_pre_vote(_Config) ->
+    % leader should reply immediately with append entries if it receives
+    % a pre_vote
+    State = (base_state(5))#{votes => 1},
+    PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
+                               last_log_index = 3, last_log_term = 5},
+    {leader, #{}, [{send_rpcs, _}]}
+        = ra_node:handle_leader(PreVoteRpc, State),
+    % leader abdicates for higher term
+    {follower, #{current_term := 6}, _}
+        = ra_node:handle_leader(PreVoteRpc#pre_vote_rpc{term = 6}, State),
+    ok.
 
 follower_installs_snapshot(_Config) ->
     #{n3 := {_, FState = #{cluster := Config}, _}}
@@ -1087,7 +1199,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     % should decrement next_index for n2
     % ExpectedN2NextIndex = 2,
     {leader, #{cluster := #{n2 := #{next_index := 4}}},
-     [{send_rpcs, true,
+     [{send_rpcs,
        [{n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}]}
        = ra_node:handle_leader({n2, AER}, Leader0),
     ok.
@@ -1128,7 +1240,7 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
                                     next_index := 5}}},
-     [{send_rpcs, true, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
+     [{send_rpcs, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
     ?assert(lists:any(fun({n3,
                            #append_entries_rpc{entries = [{3, _, _},
                                                           {4, _, _}]}}) ->
@@ -1136,126 +1248,7 @@ leader_receives_install_snapshot_result(_Config) ->
                          (_) -> false end, Rpcs)),
     ok.
 
-
-%%%
-%%% scenario testing
-%%%
-take_snapshot(_Config) ->
-    % * takes snapshot in response to state machine release_cursor effect
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
-    Nodes = lists:foldl(fun (F, S) -> F(S) end,
-                        InitNodes,
-                        [
-                         fun (S) -> run_election(n1, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> interact(n1, usr_cmd({enq, banana}), S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> interact(n1, usr_cmd(deq), S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> run_effects_on_all(6, S) end
-                        ]),
-    % assert snapshots have been taken on all nodes
-    Assertion = fun (#{log := Log}) ->
-                        length(element(1, ra_log:take(0, 100, Log))) =:= 1
-                end,
-    assert_node_state(n1, Nodes, Assertion),
-    assert_node_state(n2, Nodes, Assertion),
-    assert_node_state(n3, Nodes, Assertion),
-    ok.
-
-send_snapshot(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
-    Nodes = lists:foldl(fun (F, S) -> F(S) end,
-                        InitNodes,
-                        [
-                         fun (S) -> run_election(n1, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> interact(n1, {command, usr({enq, banana})}, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> interact(n1, {command, usr(deq)}, S) end,
-                         fun (S) -> run_effects_on_all(2, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         % reset n3 to original state - simulates restart/new node
-                         fun (S) -> maps:update(n3, maps:get(n3, InitNodes), S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         % new enq command
-                         fun (S) -> interact(n1, {command, usr({enq, apple})}, S) end,
-                         fun (S) -> run_effects_on_all(2, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end
-                        ]),
-
-    % assert snapshots have been taken on all nodes and new nodes has seen
-    % snapshot as well as the new enqueue
-    Assertion = fun (#{log := Log}) ->
-                        length(element(1, ra_log:take(0, 100, Log))) =:= 2
-                end,
-    assert_node_state(n1, Nodes, Assertion),
-    assert_node_state(n2, Nodes, Assertion),
-    assert_node_state(n3, Nodes, Assertion),
-    ok.
-
-past_leader_overwrites_entry(_Config) ->
-    InitNodes = init_nodes([n1, n2, n3], {module, ra_queue, #{}}),
-    Nodes = lists:foldl(fun (F, S) -> F(S) end,
-                        InitNodes,
-                        [
-                         fun (S) -> run_election(n1, S) end,
-                         fun (S) -> run_effects_leader(n1, S) end,
-                         fun (S) -> interact(n1, {command, usr({enq, banana})}, S) end,
-                         % command appended to leader but not replicated
-                         % run a new election for a different peer with the
-                         % previous leader "partitioned"
-                         fun (S) -> run_election_without(n2, n1, S) end,
-                         % the noop command would have overwritten the original
-                         % {enq, banana} addint another one for good measure
-                         fun (S) ->
-                                 S1 = interact_without(n2, n1, {command, usr({enq, apple})}, S),
-                                 strip_send_rpcs_for(n2, n1, S1)
-                         end,
-                         fun (S) -> run_effects_leader(n2, S) end,
-                         % replicate
-                         fun (S) -> run_effects_leader(n2, S) end,
-                         fun (S) -> run_effects_leader(n2, S) end,
-                         fun (S) ->
-                                 % remove any rpc calls from old leader
-                                 strip_send_rpcs_for(n1, n3, strip_send_rpcs_for(n1, n2, S))
-                         end,
-                         fun (S) -> run_effects_leader(n2, S) end,
-                         fun (S) -> run_effects_on_all(10, S) end,
-                         fun (S) -> run_effects_leader(n2, S) end,
-                         fun (S) -> run_effects_on_all(10, S) end
-
-                        ]),
-    Assertion = fun (#{log := Log}) ->
-                        % ensure no node still has a banana
-                        {Entries, _} = ra_log:take(0, 100, Log),
-                        not lists:any(fun({_, _, {'$usr',_, {enq, banana}, _}}) ->
-                                              true;
-                                         (_) -> false
-                                      end, Entries)
-                end,
-    assert_node_state(n1, Nodes, Assertion),
-    assert_node_state(n2, Nodes, Assertion),
-    assert_node_state(n3, Nodes, Assertion),
-    % assert banana is not in log of anyone as it was never committed
-    ok.
-
-% TODO
-% follower receives snapshot:
-% * current index is lower, throwaway state and reset to snapshot
-% * current index is higher - ignore or reset?
-
-assert_node_state(Id, Nodes, Assert) ->
-    {_, S, _} = maps:get(Id, Nodes),
-    ?assertEqual(true, Assert(S)).
-
-% special strategy for leader that tend to generate a lot of
-% append_entry_rpcs stuff
-run_effects_leader(Id, Nodes) ->
-    % run a few effects then strip remaining append entries
-    strip_send_rpcs(Id, run_effects(5, Id, Nodes)).
-
-%%% helpers
+% %%% helpers
 
 init_nodes(NodeIds, Machine) ->
     lists:foldl(fun (NodeId, Acc) ->
@@ -1268,188 +1261,6 @@ init_nodes(NodeIds, Machine) ->
                                  machine => Machine},
                         Acc#{NodeId => {follower, ra_node_init(Args), []}}
                 end, #{}, NodeIds).
-
-run_election_without(CandId, WithoutId, Nodes0) ->
-    Without = maps:get(WithoutId, Nodes0),
-    maps:put(WithoutId, Without,
-             run_election(CandId, maps:remove(WithoutId, Nodes0))).
-
-run_election(CandidateId, Nodes0) ->
-    Nodes1 = interact(CandidateId, election_timeout, Nodes0),
-    % vote for self
-    Nodes2 = run_effect(CandidateId, Nodes1),
-    % send vote requests
-    run_effect(CandidateId, Nodes2).
-
-run_effects_on_all(Num, Nodes0) ->
-    maps:fold(fun(Id, _, Acc) ->
-                      run_effects(Num, Id, Acc)
-              end, Nodes0, Nodes0).
-
-run_all_effects(NodeId, Nodes0) ->
-    run_all_effects0(NodeId, Nodes0, run_effect(NodeId, Nodes0)).
-
-run_all_effects0(NodeId, Nodes0, Nodes) ->
-    case {Nodes0, Nodes} of
-        {#{NodeId := N}, #{NodeId := N}} ->
-            % there was no state change
-            Nodes;
-        _ ->
-            run_all_effects0(NodeId, Nodes, run_effect(NodeId, Nodes))
-    end.
-
-run_effects(0, _NodeId, Nodes) ->
-    Nodes;
-run_effects(Num, NodeId, Nodes0) ->
-    Nodes = run_effect(NodeId, Nodes0),
-    run_effects(Num-1, NodeId, Nodes).
-%
-% runs the next effect for a given NodeId
-run_effect(NodeId, Nodes0) ->
-    case next_effect(NodeId, Nodes0) of
-        {{next_event, cast, NextEvent},  Nodes} ->
-            interact(NodeId, NextEvent, Nodes);
-        {{next_event, NextEvent}, Nodes} ->
-            interact(NodeId, NextEvent, Nodes);
-        {{send_vote_requests, Requests}, Nodes} ->
-            lists:foldl(fun ({Id, VoteReq}, Acc) ->
-                                rpc_interact(Id, NodeId, VoteReq, Acc)
-                        end, Nodes, Requests);
-        {{send_rpcs, _, Entries}, Nodes} ->
-            lists:foldl(fun ({Id, AppendEntry}, Acc) ->
-                                rpc_interact(Id, NodeId, AppendEntry, Acc)
-                        end, Nodes, Entries);
-        {{release_cursor, Idx, MacState}, #{NodeId := {RaState, NodeState0, Effects}} = Nodes} ->
-            NodeState = ra_node:update_release_cursor(Idx, MacState, NodeState0),
-            Nodes#{NodeId => {RaState, NodeState, Effects}};
-        {{cast, LeaderId, {NodeId, #append_entries_reply{} = Reply}}, Nodes} ->
-            % Leader = maps:filter(fun (_, {leader, _, _}) -> true;
-            %                          (_, _) -> false
-            %                      end, Nodes),
-            % [{LeaderId, _}] = maps:to_list(Leader),
-            interact(LeaderId, {NodeId, Reply}, Nodes);
-            % assume leader reply
-        {undefined, Nodes} ->
-            Nodes;
-        {Ef, Nodes} ->
-            ct:pal("run_effect unexpected: ~p~n", [Ef]),
-            Nodes
-    end.
-
-next_effect(NodeId, Nodes) ->
-    case maps:get(NodeId, Nodes) of
-        {RaState, State, [NextEffect | Effects]} ->
-            {NextEffect, Nodes#{NodeId => {RaState, State, Effects}}};
-        {_, _, []} ->
-            {undefined, Nodes};
-        % sometime effects are not in a list
-        {RaState, State, NextEffect} ->
-            {NextEffect, Nodes#{NodeId => {RaState, State, []}}}
-    end.
-
-rpc_interact(Id, FromId, Interaction, Nodes0) ->
-    case interact(Id, Interaction, Nodes0) of
-        #{Id := {_St, _, Effects0}} = Nodes1 ->
-            Effects = list(Effects0),
-            % there should only ever be one reply really?
-            Replies = lists:filter(fun({reply, _}) -> true;
-                                      ({reply, _, _}) -> true;
-                                      (_) -> false
-                                   end, Effects),
-            Nodes2 = case Replies of
-                         [{reply, Reply} | _] ->
-                             % interact with caller
-                             interact(FromId, fixup_reply(Id, Reply), Nodes1);
-                         [{reply, _, Reply} | _] ->
-                             % interact with caller
-                             interact(FromId, fixup_reply(Id, Reply), Nodes1);
-                         _ -> Nodes1
-                     end,
-            % move next events to the top
-            NextEvents = lists:filter(fun({next_event, _}) -> true;
-                                         (_) -> false
-                                      end, Effects),
-            Effects1 = NextEvents ++ (Effects -- NextEvents),
-
-            % remove replies from remaining effects
-            maps:update_with(Id, fun (X) -> setelement(3, X, Effects1 -- Replies) end, Nodes2);
-        _ ->
-            Nodes0
-    end.
-
-% helper to remove append entry effects as they are always returned
-% in response to a result
-strip_send_rpcs(Id, Nodes) ->
-    {S, St, Effects} = maps:get(Id, Nodes),
-    Node = {S, St, lists:filter(fun ({send_rpcs, _, _}) -> false;
-                                    (_) -> true
-                                end, Effects)},
-    Nodes#{Id => Node}.
-
-strip_send_rpcs_for(Id, TargetId, Nodes) ->
-    {S, St, Effects} = maps:get(Id, Nodes),
-    Node = {S, St,
-            lists:map(fun ({send_rpcs, Urgent, AEs}) ->
-                              {send_rpcs, Urgent,
-                               lists:filter(fun({I, _}) when I =:= TargetId ->
-                                                    false;
-                                               (_) -> true
-                                            end, AEs)};
-                          (E) -> E
-                      end, Effects)},
-    Nodes#{Id => Node}.
-
-fixup_reply(ToId, #append_entries_reply{} = Reply) ->
-    {ToId, Reply};
-fixup_reply(ToId, #install_snapshot_result{} = Reply) ->
-    {ToId, Reply};
-fixup_reply(_, Reply) ->
-    Reply.
-
-drop_all_aers_but_last(Effects) ->
-    drop_all_aers_but_last0(lists:reverse(Effects), [], false).
-
-drop_all_aers_but_last0([], Result, _) ->
-    Result;
-drop_all_aers_but_last0([#append_entries_rpc{} = E | Tail], Result, false) ->
-    drop_all_aers_but_last0(Tail, [E | Result], true);
-drop_all_aers_but_last0([#append_entries_rpc{} | Tail], Result, true) ->
-    drop_all_aers_but_last0(Tail, Result, true);
-drop_all_aers_but_last0([E | Tail], Result, _) ->
-    drop_all_aers_but_last0(Tail, [E | Result], true).
-
-
-interact_without(Id, WithoutId, Interaction, Nodes0) ->
-    Without = maps:get(WithoutId, Nodes0),
-    maps:put(WithoutId, Without,
-             interact(Id, Interaction, maps:remove(WithoutId, Nodes0))).
-
-% dispatch a single command
-interact(Id, Interaction, Nodes) ->
-    case Nodes of
-        #{Id := Node} ->
-            interact(Id, Node, Interaction, Nodes);
-        _ ->
-            ct:pal("interact node ~p not found", [Id]),
-            Nodes
-    end.
-
-interact(Id, {follower, State, Effects}, Interaction, Nodes) ->
-        {NewRaState, NewState, NewEffects} =
-            ra_node:handle_follower(Interaction, State),
-        Nodes#{Id => {NewRaState, NewState,
-                      Effects ++ drop_all_aers_but_last(NewEffects)}};
-interact(Id, {candidate, State, Effects}, Interaction, Nodes) ->
-        {NewRaState, NewState, NewEffects} =
-            ra_node:handle_candidate(Interaction, State),
-        Nodes#{Id => {NewRaState, NewState,
-                      Effects ++ drop_all_aers_but_last(NewEffects)}};
-interact(Id, {leader, State, Effects}, Interaction, Nodes) ->
-        {NewRaState, NewState, NewEffects} =
-            ra_node:handle_leader(Interaction, State),
-        Nodes#{Id => {NewRaState, NewState,
-                      drop_all_aers_but_last(Effects ++ NewEffects)}}.
-
 
 list(L) when is_list(L) -> L;
 list(L) -> [L].

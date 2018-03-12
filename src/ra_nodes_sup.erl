@@ -21,53 +21,46 @@
 
 -spec start_node(ra_node:ra_node_config()) ->
     supervisor:startchild_ret().
-start_node(#{uid := UId,
-             id := NodeId} = Config) ->
+start_node(#{id := NodeId} = Config) ->
     Node = ra_lib:ra_node_id_node(NodeId),
-    ChildSpec = #{id => UId,
-                  type => worker,
-                  % needs to be transient as may shut itself down by returning
-                  % {stop, normal, State}
-                  restart => transient,
-                  start => {ra_node_proc, start_link, [Config]}},
-    supervisor:start_child({?MODULE, Node}, ChildSpec).
+    supervisor:start_child({?MODULE, Node}, [Config]).
 
 -spec restart_node(ra_node_id()) -> supervisor:startchild_ret().
 restart_node({RaName, Node}) ->
-    {ok, #{uid := UId} = Conf} = rpc:call(Node, ?MODULE,
-                                          prepare_restart_rpc,
-                                          [RaName]),
-    case supervisor:get_childspec({?MODULE, Node}, UId) of
-        {ok, _} ->
-            supervisor:restart_child({?MODULE, Node}, UId);
-        {error, _Err} ->
-            start_node(Conf)
-    end.
+    {ok, Conf} = rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]),
+    start_node(Conf).
 
 prepare_restart_rpc(RaName) ->
-    UId = ra_directory:registered_name_from_node_name(RaName),
-    Dir = ra_env:data_dir(UId),
-    % TODO this cannot work with another log implementation
-    % can it be made generic without already knowing the config state?
-    ra_log_file:read_config(Dir).
+    case ra_directory:registered_name_from_node_name(RaName) of
+        undefined ->
+            name_not_registered;
+        UId ->
+            Dir = ra_env:data_dir(UId),
+            % TODO this cannot work with another log implementation
+            % can it be made generic without already knowing the config state?
+            ra_log_file:read_config(Dir)
+    end.
 
 -spec stop_node(RaNodeId :: ra_node_id()) -> ok | {error, term()}.
 stop_node({RaName, Node}) ->
-    UId = rpc:call(Node, ra_directory,
-                   registered_name_from_node_name, [RaName]),
-    supervisor:terminate_child({?MODULE, Node}, UId);
+    Pid = rpc:call(Node, ra_directory,
+                   whereis_node_name, [RaName]),
+    supervisor:terminate_child({?MODULE, Node}, Pid);
 stop_node(RaName) ->
     % local node
-    UId = ra_directory:registered_name_from_node_name(RaName),
-    supervisor:terminate_child(?MODULE, UId).
+    case ra_directory:whereis_node_name(RaName) of
+        undefined -> ok;
+        Pid ->
+            supervisor:terminate_child(?MODULE, Pid)
+    end.
 
 -spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
 delete_node(NodeId) ->
     Node = ra_lib:ra_node_id_node(NodeId),
     Name = ra_lib:ra_node_id_to_local_name(NodeId),
-    ?INFO("Deleting node ~p and it's data.~n", [NodeId]),
     case stop_node(NodeId) of
         ok ->
+            ?INFO("Deleting node ~p and it's data.~n", [NodeId]),
             rpc:call(Node, ?MODULE, delete_node_rpc, [Name]);
         {error, _} = Err -> Err
     end.
@@ -78,7 +71,7 @@ delete_node_rpc(RaName) ->
     Dir = ra_env:data_dir(UId),
     ok = ra_log_file_segment_writer:release_segments(
            ra_log_file_segment_writer, UId),
-    supervisor:delete_child(?MODULE, UId),
+    supervisor:terminate_child(?MODULE, UId),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
@@ -92,10 +85,9 @@ delete_node_rpc(RaName) ->
 
 remove_all() ->
     [begin
-         supervisor:terminate_child(?MODULE, Id),
-         supervisor:delete_child(?MODULE, Id)
+         supervisor:terminate_child(?MODULE, Pid)
      end
-     || {Id, _, _, _} <- supervisor:which_children(?MODULE)],
+     || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],
     ok.
 
 -spec start_link() ->
@@ -104,5 +96,13 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
-    {ok, {SupFlags, []}}.
+    SupFlags = #{strategy => simple_one_for_one,
+                 intensity => 10,
+                 period => 5},
+    ChildSpec = #{id => undefined,
+                  type => worker,
+                  % needs to be transient as may shut itself down by returning
+                  % {stop, normal, State}
+                  restart => transient,
+                  start => {ra_node_proc, start_link, []}},
+    {ok, {SupFlags, [ChildSpec]}}.

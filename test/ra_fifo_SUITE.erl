@@ -26,6 +26,9 @@ all_tests() ->
      leader_monitors_customer,
      follower_takes_over_monitor,
      node_is_deleted,
+     cluster_is_deleted_with_node_down,
+     cluster_is_deleted,
+     cluster_cannot_be_deleted_in_minority,
      node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects,
      ra_fifo_client_dequeue,
@@ -52,12 +55,15 @@ end_per_group(_, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
+    NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {cluster_id, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
      {node_id, {TestCase, node()}},
      {uid2, atom_to_binary(NodeName2, utf8)},
-     {node_id2, {NodeName2, node()}}
+     {node_id2, {NodeName2, node()}},
+     {uid3, atom_to_binary(NodeName3, utf8)},
+     {node_id3, {NodeName3, node()}}
      | Config].
 
 ra_fifo_client_basics(Config) ->
@@ -421,32 +427,38 @@ follower_takes_over_monitor(Config) ->
     PrivDir = ?config(priv_dir, Config),
     {Name1, _} = NodeId1 = ?config(node_id, Config),
     {Name2, _} = NodeId2 = ?config(node_id2, Config),
+    {Name3, _} = NodeId3 = ?config(node_id3, Config),
     UId1 = ?config(uid, Config),
     Tag = UId1,
     UId2 = ?config(uid2, Config),
-    Conf1 = conf(ClusterId, UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
-    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
+    UId3 = ?config(uid3, Config),
+    Cluster = [NodeId1, NodeId2, NodeId3],
+    Conf1 = conf(ClusterId, UId1, NodeId1, PrivDir, Cluster),
+    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, Cluster),
+    Conf3 = conf(ClusterId, UId3, NodeId3, PrivDir, Cluster),
     _ = ra:start_node(Conf1),
     _ = ra:start_node(Conf2),
+    _ = ra:start_node(Conf3),
     ok = ra:trigger_election(NodeId1),
-    F0 =  ra_fifo_client:init(ClusterId, [NodeId1, NodeId2]),
+    F0 =  ra_fifo_client:init(ClusterId, [NodeId1, NodeId2, NodeId3]),
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
-    % _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
-    % timer:sleep(500),
+
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name1)),
 
-    ok = ra:trigger_election(NodeId2),
+    ok = ra:stop_node(NodeId1),
     % give the election process a bit of time before issuing a command
     timer:sleep(100),
 
     {ok, _F2} = ra_fifo_client:checkout(Tag, 10, F1),
-    % {ok, _, NodeId2} = ra:send_and_await_consensus(NodeId2, {enqueue, msg1}),
 
-    {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(), monitored_by),
-    ?assert(MonitoredByAfter =:= whereis(Name2)),
+    {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
+                                                             monitored_by),
+    ?assert((MonitoredByAfter =:= whereis(Name2)) or
+            (MonitoredByAfter =:= whereis(Name3))),
     ra:stop_node(NodeId1),
     ra:stop_node(NodeId2),
+    ra:stop_node(NodeId3),
     ok.
 
 node_is_deleted(Config) ->
@@ -485,13 +497,99 @@ node_is_deleted(Config) ->
     ok = ra:delete_node(NodeId),
     ok.
 
+cluster_is_deleted(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    ClusterId = ?config(cluster_id, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    ok = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(100),
+    ok = ra:delete_cluster([NodeId]),
+    % validate
+    ok = validate_process_down(element(1, NodeId), 10),
+    Dir = filename:join(PrivDir, UId),
+    false = filelib:is_dir(Dir),
+    [] = supervisor:which_children(ra_nodes_sup),
+    ok.
+
+cluster_is_deleted_with_node_down(Config) ->
+    %% cluster deletion is a coordingated consensus action
+    %% The leader will commit and replicate a "poison pill" message
+    %% Once each follower applies this messages it terminates and deletes all
+    %% it's data
+    %% the leader waits until the poison pill message has been replicated to
+    %% _all_ followers then terminates and deletes it's own data.
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId1 = ?config(node_id, Config),
+    NodeId2 = ?config(node_id2, Config),
+    NodeId3 = ?config(node_id3, Config),
+    Peers = [NodeId1, NodeId2, NodeId3],
+    Conf1 = conf(ClusterId, ?config(uid, Config), NodeId1, PrivDir, Peers),
+    Conf2 = conf(ClusterId, ?config(uid2, Config), NodeId2, PrivDir, Peers),
+    Conf3 = conf(ClusterId, ?config(uid3, Config), NodeId3, PrivDir, Peers),
+    ok = ra:start_node(Conf1),
+    ok = ra:start_node(Conf2),
+    ok = ra:start_node(Conf3),
+    ok = ra:trigger_election(NodeId1),
+    timer:sleep(100),
+    % check data dirs exist for all nodes
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+
+    ra:stop_node(NodeId3),
+    ok = ra:delete_cluster(Peers),
+    timer:sleep(100),
+    % start node again
+    ra:restart_node(NodeId3),
+    % validate all nodes have been shut down and terminated
+    ok = validate_process_down(element(1, NodeId1), 10),
+    ok = validate_process_down(element(1, NodeId2), 10),
+    ok = validate_process_down(element(1, NodeId3), 10),
+
+    % validate there are no data dirs anymore
+    false = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
+    false = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
+    false = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+    ok.
+
+cluster_cannot_be_deleted_in_minority(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId1 = ?config(node_id, Config),
+    NodeId2 = ?config(node_id2, Config),
+    NodeId3 = ?config(node_id3, Config),
+    Peers = [NodeId1, NodeId2, NodeId3],
+    Conf1 = conf(ClusterId, ?config(uid, Config), NodeId1, PrivDir, Peers),
+    Conf2 = conf(ClusterId, ?config(uid2, Config), NodeId2, PrivDir, Peers),
+    Conf3 = conf(ClusterId, ?config(uid3, Config), NodeId3, PrivDir, Peers),
+    ok = ra:start_node(Conf1),
+    ok = ra:start_node(Conf2),
+    ok = ra:start_node(Conf3),
+    ok = ra:trigger_election(NodeId1),
+    timer:sleep(100),
+    % check data dirs exist for all nodes
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
+    true = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+
+    ra:stop_node(NodeId2),
+    ra:stop_node(NodeId3),
+    {error, {no_more_nodes_to_try, Errs}} = ra:delete_cluster(Peers, 250),
+    ct:pal("Errs~p", [Errs]),
+    ra:stop_node(NodeId1),
+    ok.
+
 node_restart_after_application_restart(Config) ->
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     ClusterId = ?config(cluster_id, Config),
     Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
+    ok = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
@@ -599,3 +697,15 @@ discard_next_delivery(State0, Wait) ->
     after Wait ->
               State0
     end.
+
+validate_process_down(Name, 0) ->
+    exit({process_not_down, Name});
+validate_process_down(Name, Num) ->
+    case whereis(Name) of
+        undefined ->
+            ok;
+        _ ->
+            timer:sleep(100),
+            validate_process_down(Name, Num-1)
+    end.
+

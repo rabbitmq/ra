@@ -19,6 +19,8 @@
          restart_node/1,
          stop_node/1,
          delete_node/1,
+         delete_cluster/1,
+         delete_cluster/2,
 
          add_node/2,
          remove_node/2,
@@ -84,6 +86,28 @@ stop_node(NodeId) ->
 -spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
 delete_node(RaNodeId) ->
     ra_nodes_sup:delete_node(RaNodeId).
+
+-spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
+delete_cluster(NodeIds) ->
+    delete_cluster(NodeIds, ?DEFAULT_TIMEOUT).
+
+-spec delete_cluster(NodeIds :: [ra_node_id()], timeout()) ->
+    ok | {error, term()}.
+delete_cluster(NodeIds, Timeout) ->
+    delete_cluster0(NodeIds, Timeout, []).
+
+delete_cluster0([NodeId | Rem], Timeout, Errs) ->
+    DeleteCmd = {'$ra_cluster', delete, await_consensus},
+    case ra_node_proc:command(NodeId, DeleteCmd, Timeout) of
+        {ok, _, _} ->
+            ok;
+        {timeout, _} = E ->
+            delete_cluster0(Rem, Timeout, [E | Errs]);
+        {error, _} = E ->
+            delete_cluster0(Rem, Timeout, [{E, NodeId} | Errs])
+    end;
+delete_cluster0([], _, Errs) ->
+    {error, {no_more_nodes_to_try, Errs}}.
 
 
 -spec add_node(ra_node_id(), ra_node_id()) ->

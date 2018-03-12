@@ -8,6 +8,7 @@
          whereis_name/1,
          what_node/1,
          registered_name_from_node_name/1,
+         whereis_node_name/1,
          send/2
          ]).
 
@@ -77,6 +78,13 @@ registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
         [] -> undefined;
         [{_, UId}] ->
             UId
+    end.
+
+whereis_node_name(NodeName) when is_atom(NodeName) ->
+    case dets:lookup(?REVERSE_TBL, NodeName) of
+        [] -> undefined;
+        [{_, UId}] ->
+            whereis_name(UId)
     end.
 
 -spec send(ra_uid(), term()) -> pid().
