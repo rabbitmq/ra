@@ -353,32 +353,32 @@ resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->
 handle_delivery(Leader, {delivery, Tag, [{FstId, _} | _] = IdMsgs} = Del0,
                 #state{customer_deliveries = CDels0} = State0) ->
     {LastId, _} = lists:last(IdMsgs),
-    case CDels0 of
-        #{Tag := Last} when FstId =:= Last+1 ->
-            {Del0, State0#state{customer_deliveries =
-                                maps:put(Tag, LastId, CDels0)}};
-        #{Tag := Last} when FstId > Last+1 ->
-            Missing = get_missing_deliveries(Leader, Last+1, FstId-1, Tag),
+    case maps:get(Tag, CDels0, undefined) of
+        undefined ->
+            % not seen before and no initial msg id
+            Missing = get_missing_deliveries(Leader, 0, FstId-1, Tag),
             Del = {delivery, Tag, Missing ++ IdMsgs},
             {Del, State0#state{customer_deliveries =
                                maps:put(Tag, LastId, CDels0)}};
-        #{Tag := Last} when FstId =< Last ->
+        Prev when FstId =:= Prev+1 ->
+            {Del0, State0#state{customer_deliveries =
+                                maps:put(Tag, LastId, CDels0)}};
+        Prev when FstId > Prev+1 ->
+            Missing = get_missing_deliveries(Leader, Prev+1, FstId-1, Tag),
+            Del = {delivery, Tag, Missing ++ IdMsgs},
+            {Del, State0#state{customer_deliveries =
+                               maps:put(Tag, LastId, CDels0)}};
+        Prev when FstId =< Prev ->
             exit(duplicate_delivery_not_impl);
         _ when FstId =:= 0 ->
             % the very first delivery
             {Del0, State0#state{customer_deliveries =
-                                maps:put(Tag, LastId, CDels0)}};
-        _ ->
-            % not seen before and not initial msg id
-            Missing = get_missing_deliveries(Leader, 0, FstId-1, Tag),
-            Del = {delivery, Tag, Missing ++ IdMsgs},
-            {Del, State0#state{customer_deliveries =
-                               maps:put(Tag, LastId, CDels0)}}
-
+                                maps:put(Tag, LastId, CDels0)}}
     end.
 
 get_missing_deliveries(Leader, From, To, CustomerTag) ->
     CustomerId = customer_id(CustomerTag),
+    ?INFO("get_missing_deliveries for ~w", [CustomerId]),
     Query = fun (State) ->
                     ra_fifo:get_checked_out(CustomerId,
                                             From, To, State)

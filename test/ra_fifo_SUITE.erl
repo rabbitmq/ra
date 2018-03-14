@@ -16,7 +16,8 @@ all() ->
 all_tests() ->
     [
      ra_fifo_client_basics,
-     ra_fifo_client_returns_correlation,
+     ra_fifo_client_return,
+     ra_fifo_returns_correlation,
      ra_fifo_client_resends_lost_command,
      ra_fifo_client_returns_after_down,
      ra_fifo_client_resends_after_lost_applied,
@@ -54,6 +55,7 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    ra_nodes_sup:remove_all(),
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
@@ -128,7 +130,33 @@ ra_fifo_client_basics(Config) ->
     ra:stop_node(NodeId),
     ok.
 
-ra_fifo_client_returns_correlation(Config) ->
+ra_fifo_client_return(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    NodeId2 = ?config(node_id2, Config),
+    UId = ?config(uid, Config),
+    UId2 = ?config(uid2, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, [NodeId, NodeId2]),
+    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, [NodeId, NodeId2]),
+    _ = ra:start_node(Conf),
+    _ = ra:start_node(Conf2),
+    ok = ra:trigger_election(NodeId),
+    % timer:sleep(200),
+    ra:members(NodeId),
+
+    F00 = ra_fifo_client:init(ClusterId, [NodeId, NodeId2]),
+    {ok, F0} = ra_fifo_client:enqueue(1, msg1, F00),
+    {ok, F} = ra_fifo_client:enqueue(2, msg2, F0),
+    {ok, {MsgId, _}, F1} = ra_fifo_client:dequeue(<<"tag">>, unsettled, F),
+    {ok, _F2} = ra_fifo_client:return(<<"tag">>, [MsgId], F1),
+
+    % F2 = return_next_delivery(F1, 500),
+    % _F3 = discard_next_delivery(F2, 500),
+    ra:stop_node(NodeId),
+    ok.
+
+ra_fifo_returns_correlation(Config) ->
     ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
@@ -692,6 +720,23 @@ discard_next_delivery(State0, Wait) ->
                     ct:pal("discarding ~p", [Msgs]),
                     {ok, State} = ra_fifo_client:discard(Tag, MsgIds,
                                                          State1),
+                    State
+            end
+    after Wait ->
+              State0
+    end.
+
+return_next_delivery(State0, Wait) ->
+    receive
+        {ra_event, From, Evt} ->
+            case ra_fifo_client:handle_ra_event(From, Evt, State0) of
+                {internal, _, State} ->
+                    return_next_delivery(State, Wait);
+                {{delivery, Tag, Msgs}, State1} ->
+                    MsgIds = [element(1, M) || M <- Msgs],
+                    ct:pal("returning ~p", [Msgs]),
+                    {ok, State} = ra_fifo_client:return(Tag, MsgIds,
+                                                        State1),
                     State
             end
     after Wait ->
