@@ -20,7 +20,9 @@ all() ->
 
 all_tests() ->
     [
-     start_stop_restart_delete_on_remote
+     start_stop_restart_delete_on_remote,
+     start_cluster,
+     start_cluster_minority
     ].
 
 groups() ->
@@ -42,7 +44,7 @@ end_per_group(_Group, _Config) ->
 
 init_per_testcase(TestCase, Config) ->
     DataDir = filename:join(?config(priv_dir, Config), TestCase),
-    [{data_dir, DataDir} | Config].
+    [{data_dir, DataDir}, {cluster_id, TestCase} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -51,21 +53,22 @@ end_per_testcase(_TestCase, _Config) ->
 %%% Test cases
 %%%===================================================================
 
+conf({Name, _Node} = NodeId, Nodes) ->
+    UId = atom_to_binary(Name, utf8),
+    #{cluster_id => c1,
+      id => NodeId,
+      uid => UId,
+      initial_nodes => Nodes,
+      log_module => ra_log_file,
+      log_init_args => #{uid => UId},
+      machine => {module, ra_fifo, #{}}}.
+
 start_stop_restart_delete_on_remote(Config) ->
     PrivDir = ?config(data_dir, Config),
-    S1Dir = filename:join(PrivDir, s1),
-    {ok, S1} = start_slave(s1, S1Dir),
+    S1 = start_slave(s1, PrivDir),
     % ensure application is started
-    _ = rpc:call(S1, application, ensure_all_started, [ra]),
-    UId = <<"c1">>,
     NodeId = {c1, S1},
-    Conf = #{cluster_id => c1,
-             id => NodeId,
-             uid => UId,
-             initial_nodes => [{c1, S1}],
-             log_module => ra_log_file,
-             log_init_args => #{uid => UId},
-             machine => {module, ra_fifo, #{}}},
+    Conf = conf(NodeId, [NodeId]),
     ok = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     % idempotency
@@ -81,6 +84,41 @@ start_stop_restart_delete_on_remote(Config) ->
     % idempotency
     {error, _} = ra:delete_node(NodeId),
     timer:sleep(500),
+    slave:stop(S1),
+    ok.
+
+start_cluster(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ra_fifo, #{}},
+    {ok, Started, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    % assert all were said to be started
+    [] = Started -- NodeIds,
+    % assert all nodes are actually started
+    PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
+    % assert one node is leader
+    ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+start_cluster_minority(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    % s3 isn't available
+    S3 = make_node_name(s3),
+    NodeIds = NodeIds0 ++ [{ClusterId, S3}],
+    Machine = {module, ra_fifo, #{}},
+    {ok, Started, NotStarted} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    % assert  two were started
+    ?assertEqual(2,  length(Started)),
+    ?assertEqual(1,  length(NotStarted)),
+    % assert all started are actually started
+    PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- Started],
+    % assert one node is leader
+    ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    [ok = slave:stop(S) || {_, S} <- NodeIds0],
     ok.
 
 %% Utility
@@ -110,9 +148,12 @@ search_paths() ->
     lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
                  code:get_path()).
 
-start_slave(N, Dir0) ->
+start_slave(N, PrivDir) ->
+    Dir0 = filename:join(PrivDir, N),
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
     ct:pal("starting slave node with ~s~n", [Pa]),
-    slave:start_link(Host, N, Pa).
+    {ok, S} = slave:start_link(Host, N, Pa),
+    _ = rpc:call(S, application, ensure_all_started, [ra]),
+    S.

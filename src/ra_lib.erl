@@ -58,11 +58,13 @@ iter_maybe(M, F) ->
     _ = F(M),
     ok.
 
--spec to_list(atom() | binary() | list()) -> list().
+-spec to_list(atom() | binary() | list() | integer()) -> list().
 to_list(A) when is_atom(A) ->
     atom_to_list(A);
 to_list(B) when is_binary(B) ->
     binary_to_list(B);
+to_list(I) when is_integer(I) ->
+    integer_to_list(I);
 to_list(L) when is_list(L) ->
     L.
 

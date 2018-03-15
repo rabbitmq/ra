@@ -19,6 +19,8 @@
          restart_node/1,
          stop_node/1,
          delete_node/1,
+         % cluster operations
+         start_cluster/3,
          delete_cluster/1,
          delete_cluster/2,
 
@@ -58,19 +60,21 @@ start_local_cluster(Num, Name, Machine) ->
 -spec start_node(ra_node:ra_node_config()) -> ok | {error, term()}.
 start_node(Conf) ->
     % don't match on return value in case it is already running
-    case ra_nodes_sup:start_node(Conf) of
+    case catch ra_nodes_sup:start_node(Conf) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
-        {error, _} = Err -> Err
+        {error, _} = Err -> Err;
+        {'EXIT', Err} -> {error, Err}
     end.
 
 -spec restart_node(ra_node_id()) -> ok | {error, term()}.
 restart_node(NodeId) ->
     % don't match on return value in case it is already running
-    case ra_nodes_sup:restart_node(NodeId) of
+    case catch ra_nodes_sup:restart_node(NodeId) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
-        {error, _} = Err -> Err
+        {error, _} = Err -> Err;
+        {'EXIT', Err} -> {error, Err}
     end.
 
 -spec stop_node(ra_node_id()) -> ok | {error, nodedown}.
@@ -86,6 +90,39 @@ stop_node(NodeId) ->
 -spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
 delete_node(RaNodeId) ->
     ra_nodes_sup:delete_node(RaNodeId).
+
+-spec start_cluster(ra_cluster_id(), ra_machine:machine(), [ra_node_id()]) ->
+    {ok, [ra_node_id()], [ra_node_id()]} |
+    {error, [ra_node_id()], [ra_node_id()]}.
+start_cluster(ClusterId, Machine, NodeIds) ->
+    % create locally unique id
+    % as long as all nodes are on different erlang nodes we can use the same
+    % uid for all
+    % TODO: validate all nodes are on different erlang nodes
+    TS = erlang:system_time(millisecond),
+    UId = ra_lib:to_list(ClusterId) ++ ra_lib:to_list(TS),
+    Configs = [#{cluster_id => ClusterId,
+                 id => N,
+                 uid => list_to_binary(UId),
+                 initial_nodes => NodeIds,
+                 log_module => ra_log_file,
+                 log_init_args => #{uid => UId},
+                 machine => Machine}
+               || N <- NodeIds],
+    {Started0, NotStarted0} =
+        lists:partition(fun (C) -> ok =:= start_node(C) end, Configs),
+    #{id := Node} = hd(Started0),
+    ok = trigger_election(Node),
+    Started = lists:map(fun (C) -> maps:get(id, C) end, Started0),
+    NotStarted = lists:map(fun (C) -> maps:get(id, C) end, NotStarted0),
+    case members(Node) of
+        {ok, _, _} ->
+            % we have a functioning cluster
+            {ok, Started, NotStarted};
+        _ ->
+            % we do not have a functioning cluster
+            {error, Started, NotStarted}
+    end.
 
 -spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
 delete_cluster(NodeIds) ->
