@@ -22,6 +22,7 @@ all_tests() ->
     [
      start_stop_restart_delete_on_remote,
      start_cluster,
+     start_cluster_majority,
      start_cluster_minority
     ].
 
@@ -102,7 +103,7 @@ start_cluster(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
-start_cluster_minority(Config) ->
+start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterId = ?config(cluster_id, Config),
     NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
@@ -118,6 +119,21 @@ start_cluster_minority(Config) ->
     PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- Started],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    [ok = slave:stop(S) || {_, S} <- NodeIds0],
+    ok.
+
+start_cluster_minority(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    % s3 isn't available
+    S2 = make_node_name(s3),
+    S3 = make_node_name(s3),
+    NodeIds = NodeIds0 ++ [{ClusterId, S2}, {ClusterId, S3}],
+    Machine = {module, ra_fifo, #{}},
+    {error, cluster_not_formed} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    % assert none is started
+    [{error, _} = ra_node_proc:ping(N, 50) || N <- NodeIds],
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
     ok.
 

@@ -93,7 +93,7 @@ delete_node(RaNodeId) ->
 
 -spec start_cluster(ra_cluster_id(), ra_machine:machine(), [ra_node_id()]) ->
     {ok, [ra_node_id()], [ra_node_id()]} |
-    {error, [ra_node_id()], [ra_node_id()]}.
+    {error, cluster_not_formed}.
 start_cluster(ClusterId, Machine, NodeIds) ->
     % create locally unique id
     % as long as all nodes are on different erlang nodes we can use the same
@@ -120,8 +120,9 @@ start_cluster(ClusterId, Machine, NodeIds) ->
             % we have a functioning cluster
             {ok, Started, NotStarted};
         _ ->
+            [delete_node(N) || N <- Started],
             % we do not have a functioning cluster
-            {error, Started, NotStarted}
+            {error, cluster_not_formed}
     end.
 
 -spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
