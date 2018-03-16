@@ -28,6 +28,8 @@ DEP_PLUGINS = elvis_mk
 
 PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten looking_glass
 
+all::
+
 escript-zip::
 	mkdir -p $(DEPS_DIR)/elvis_mk/ebin
 
@@ -39,5 +41,3 @@ shell: app
 
 check-rabbitmq-components.mk:
 	true
-
-all:: escript
