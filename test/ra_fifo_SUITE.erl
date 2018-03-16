@@ -414,10 +414,14 @@ test_queries(Config) ->
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
     timer:sleep(50),
+    P = spawn(fun () ->
+                  F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
+                  {ok, F1} = ra_fifo_client:enqueue(m1, F0),
+                  {ok, _F2} = ra_fifo_client:enqueue(m2, F1),
+                  receive stop ->  ok end
+          end),
     F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
-    {ok, F1} = ra_fifo_client:enqueue(m1, F0),
-    {ok, F2} = ra_fifo_client:enqueue(m2, F1),
-    {ok, _F3} = ra_fifo_client:checkout(<<"tag">>, 1, F2),
+    {ok, _} = ra_fifo_client:checkout(<<"tag">>, 1, F0),
     {ok, {_, Ready}, _} = ra:dirty_query(NodeId,
                                          fun ra_fifo:query_messages_ready/1),
     ?assertEqual(1, maps:size(Ready)),
@@ -426,6 +430,11 @@ test_queries(Config) ->
                                            fun ra_fifo:query_messages_checked_out/1),
     ?assertEqual(1, maps:size(Checked)),
     ct:pal("Checked ~w~n", [Checked]),
+    {ok, {_, Processes}, _} = ra:dirty_query(NodeId,
+                                           fun ra_fifo:query_processes/1),
+    ct:pal("Processes ~w~n", [Processes]),
+    ?assertEqual(2, length(Processes)),
+    P !  stop,
     ra:stop_node(NodeId),
     ok.
 

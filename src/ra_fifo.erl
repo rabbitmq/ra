@@ -16,6 +16,7 @@
          % queries
          query_messages_ready/1,
          query_messages_checked_out/1,
+         query_processes/1,
          shadow_copy/1,
          size_test/2,
          perf_test/2
@@ -356,6 +357,10 @@ query_messages_checked_out(#state{customers = Customers}) ->
     maps:fold(fun (_, #customer{checked_out = C}, S) ->
                       maps:merge(S, maps:from_list(maps:values(C)))
               end, #{}, Customers).
+
+query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
+    Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
+    maps:keys(maps:merge(Enqs, Custs)).
 
 
 %%% Internal
