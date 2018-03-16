@@ -100,21 +100,25 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     % uid for all
     % TODO: validate all nodes are on different erlang nodes
     TS = erlang:system_time(millisecond),
-    UId = ra_lib:to_list(ClusterId) ++ ra_lib:to_list(TS),
-    Configs = [#{cluster_id => ClusterId,
-                 id => N,
-                 uid => list_to_binary(UId),
-                 initial_nodes => NodeIds,
-                 log_module => ra_log_file,
-                 log_init_args => #{uid => UId},
-                 machine => Machine}
-               || N <- NodeIds],
-    {Started0, NotStarted0} =
-        lists:partition(fun (C) -> ok =:= start_node(C) end, Configs),
-    #{id := Node} = hd(Started0),
+    ConfFun = fun (N, U) -> #{cluster_id => ClusterId,
+                              id => N,
+                              uid => U,
+                              initial_nodes => NodeIds,
+                              log_module => ra_log_file,
+                              log_init_args => #{uid => U},
+                              machine => Machine}
+              end,
+    {Started, NotStarted} =
+        lists:partition(fun (N) ->
+                                U = erlang:unique_integer(),
+                                UId = ra_lib:to_list(ClusterId)
+                                      ++ ra_lib:to_list(U)
+                                      ++ ra_lib:to_list(TS),
+                                C = ConfFun(N, list_to_binary(UId)),
+                                ok =:= start_node(C)
+                        end, NodeIds),
+    Node = hd(Started),
     ok = trigger_election(Node),
-    Started = lists:map(fun (C) -> maps:get(id, C) end, Started0),
-    NotStarted = lists:map(fun (C) -> maps:get(id, C) end, NotStarted0),
     case members(Node) of
         {ok, _, _} ->
             % we have a functioning cluster

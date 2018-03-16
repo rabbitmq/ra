@@ -71,13 +71,10 @@ init_per_testcase(TestCase, Config) ->
 
 ra_fifo_client_basics(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     CustomerTag = UId,
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     FState0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 1, FState0),
     % _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
@@ -133,18 +130,9 @@ ra_fifo_client_basics(Config) ->
 
 ra_fifo_client_return(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     NodeId2 = ?config(node_id2, Config),
-    UId = ?config(uid, Config),
-    UId2 = ?config(uid2, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, [NodeId, NodeId2]),
-    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, [NodeId, NodeId2]),
-    _ = ra:start_node(Conf),
-    _ = ra:start_node(Conf2),
-    ok = ra:trigger_election(NodeId),
-    % timer:sleep(200),
-    ra:members(NodeId),
+    ok = start_cluster(ClusterId, [NodeId, NodeId2]),
 
     F00 = ra_fifo_client:init(ClusterId, [NodeId, NodeId2]),
     {ok, F0} = ra_fifo_client:enqueue(1, msg1, F00),
@@ -159,12 +147,8 @@ ra_fifo_client_return(Config) ->
 
 ra_fifo_returns_correlation(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(corr1, msg1, F0),
     receive
@@ -183,13 +167,8 @@ ra_fifo_returns_correlation(Config) ->
 
 ra_fifo_client_resends_lost_command(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     ok = meck:new(ra, [passthrough]),
 
@@ -209,13 +188,8 @@ ra_fifo_client_resends_lost_command(Config) ->
 
 ra_fifo_client_two_quick_enqueues(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     F1 = element(2, ra_fifo_client:enqueue(msg1, F0)),
@@ -226,13 +200,8 @@ ra_fifo_client_two_quick_enqueues(Config) ->
 
 ra_fifo_client_detects_lost_delivery(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     F00 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F0} = ra_fifo_client:checkout(<<"tag">>, 10, F00),
@@ -254,13 +223,8 @@ ra_fifo_client_detects_lost_delivery(Config) ->
 
 ra_fifo_client_returns_after_down(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
@@ -281,13 +245,8 @@ ra_fifo_client_returns_after_down(Config) ->
 
 ra_fifo_client_resends_after_lost_applied(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {_, F1} = process_ra_events(element(2, ra_fifo_client:enqueue(msg1, F0)),
@@ -311,17 +270,12 @@ ra_fifo_client_resends_after_lost_applied(Config) ->
 
 ra_fifo_client_handles_reject_notification(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId1 = ?config(node_id, Config),
     NodeId2 = ?config(node_id2, Config),
     UId1 = ?config(uid, Config),
     CId = {UId1, self()},
-    UId2 = ?config(uid2, Config),
-    Conf1 = conf(ClusterId, UId1, NodeId1, PrivDir, [NodeId1, NodeId2]),
-    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, [NodeId1, NodeId2]),
-    _ = ra:start_node(Conf1),
-    _ = ra:start_node(Conf2),
-    ok = ra:trigger_election(NodeId1),
+
+    ok = start_cluster(ClusterId, [NodeId1, NodeId2]),
     _ = ra:send_and_await_consensus(NodeId1, {checkout, {auto, 10}, CId}),
     % reverse order - should try the first node in the list first
     F0 = ra_fifo_client:init(ClusterId, [NodeId2, NodeId1]),
@@ -351,7 +305,7 @@ ra_fifo_client_discard(Config) ->
                            {?MODULE, dead_letter_handler, [self()]}}}},
     _ = ra:start_node(Conf),
     ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    _ = ra:members(NodeId),
 
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
@@ -371,13 +325,8 @@ ra_fifo_client_discard(Config) ->
 
 ra_fifo_client_untracked_enqueue(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(50),
+    ok = start_cluster(ClusterId, [NodeId]),
 
     ok = ra_fifo_client:untracked_enqueue(ClusterId, [NodeId], msg1),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
@@ -385,15 +334,11 @@ ra_fifo_client_untracked_enqueue(Config) ->
     ra:stop_node(NodeId),
     ok.
 
+
 ra_fifo_client_flow(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(50),
+    ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
     {ok, F1} = ra_fifo_client:enqueue(m1, F0),
     {ok, F2} = ra_fifo_client:enqueue(m2, F1),
@@ -407,13 +352,8 @@ ra_fifo_client_flow(Config) ->
 
 test_queries(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(50),
+    ok = start_cluster(ClusterId, [NodeId]),
     P = spawn(fun () ->
                   F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
                   {ok, F1} = ra_fifo_client:enqueue(m1, F0),
@@ -443,13 +383,10 @@ dead_letter_handler(Pid, Msgs) ->
 
 ra_fifo_client_dequeue(Config) ->
     ClusterId = ?config(priv_dir, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     Tag = UId,
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     F1 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
     {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
@@ -462,14 +399,11 @@ ra_fifo_client_dequeue(Config) ->
 
 leader_monitors_customer(Config) ->
     ClusterId = ?config(priv_dir, Config),
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     Tag = UId,
     Name = element(1, NodeId),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     F0 =  ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
@@ -486,22 +420,13 @@ leader_monitors_customer(Config) ->
 
 follower_takes_over_monitor(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     {Name1, _} = NodeId1 = ?config(node_id, Config),
     {Name2, _} = NodeId2 = ?config(node_id2, Config),
     {Name3, _} = NodeId3 = ?config(node_id3, Config),
     UId1 = ?config(uid, Config),
     Tag = UId1,
-    UId2 = ?config(uid2, Config),
-    UId3 = ?config(uid3, Config),
     Cluster = [NodeId1, NodeId2, NodeId3],
-    Conf1 = conf(ClusterId, UId1, NodeId1, PrivDir, Cluster),
-    Conf2 = conf(ClusterId, UId2, NodeId2, PrivDir, Cluster),
-    Conf3 = conf(ClusterId, UId3, NodeId3, PrivDir, Cluster),
-    _ = ra:start_node(Conf1),
-    _ = ra:start_node(Conf2),
-    _ = ra:start_node(Conf3),
-    ok = ra:trigger_election(NodeId1),
+    ok = start_cluster(ClusterId, Cluster),
     F0 =  ra_fifo_client:init(ClusterId, [NodeId1, NodeId2, NodeId3]),
     {ok, F1} = ra_fifo_client:checkout(Tag, 10, F0),
 
@@ -564,13 +489,10 @@ cluster_is_deleted(Config) ->
     NodeId = ?config(node_id, Config),
     UId = ?config(uid, Config),
     ClusterId = ?config(cluster_id, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    ok = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, [NodeId]),
     ok = ra:delete_cluster([NodeId]),
     % validate
-    ok = validate_process_down(element(1, NodeId), 10),
+    ok = validate_process_down(element(1, NodeId), 50),
     Dir = filename:join(PrivDir, UId),
     false = filelib:is_dir(Dir),
     [] = supervisor:which_children(ra_nodes_sup),
@@ -589,20 +511,15 @@ cluster_is_deleted_with_node_down(Config) ->
     NodeId2 = ?config(node_id2, Config),
     NodeId3 = ?config(node_id3, Config),
     Peers = [NodeId1, NodeId2, NodeId3],
-    Conf1 = conf(ClusterId, ?config(uid, Config), NodeId1, PrivDir, Peers),
-    Conf2 = conf(ClusterId, ?config(uid2, Config), NodeId2, PrivDir, Peers),
-    Conf3 = conf(ClusterId, ?config(uid3, Config), NodeId3, PrivDir, Peers),
-    ok = ra:start_node(Conf1),
-    ok = ra:start_node(Conf2),
-    ok = ra:start_node(Conf3),
-    ok = ra:trigger_election(NodeId1),
+    ok = start_cluster(ClusterId, Peers),
     timer:sleep(100),
     % check data dirs exist for all nodes
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+    Wildcard = lists:flatten(filename:join([PrivDir,
+                                            atom_to_list(ClusterId) ++ "**"])),
+    % assert there are three matching data dirs
+    [_,_,_] = filelib:wildcard(Wildcard),
 
-    ra:stop_node(NodeId3),
+    ok = ra:stop_node(NodeId3),
     ok = ra:delete_cluster(Peers),
     timer:sleep(100),
     % start node again
@@ -613,9 +530,7 @@ cluster_is_deleted_with_node_down(Config) ->
     ok = validate_process_down(element(1, NodeId3), 10),
 
     % validate there are no data dirs anymore
-    false = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
-    false = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
-    false = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+    [] = filelib:wildcard(Wildcard),
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
@@ -625,18 +540,12 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     NodeId2 = ?config(node_id2, Config),
     NodeId3 = ?config(node_id3, Config),
     Peers = [NodeId1, NodeId2, NodeId3],
-    Conf1 = conf(ClusterId, ?config(uid, Config), NodeId1, PrivDir, Peers),
-    Conf2 = conf(ClusterId, ?config(uid2, Config), NodeId2, PrivDir, Peers),
-    Conf3 = conf(ClusterId, ?config(uid3, Config), NodeId3, PrivDir, Peers),
-    ok = ra:start_node(Conf1),
-    ok = ra:start_node(Conf2),
-    ok = ra:start_node(Conf3),
-    ok = ra:trigger_election(NodeId1),
-    timer:sleep(100),
+    ok = start_cluster(ClusterId, Peers),
     % check data dirs exist for all nodes
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid, Config))),
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid2, Config))),
-    true = filelib:is_dir(filename:join(PrivDir, ?config(uid3, Config))),
+    Wildcard = lists:flatten(filename:join([PrivDir,
+                                            atom_to_list(ClusterId) ++ "**"])),
+    % assert there are three matching data dirs
+    [_,_,_] = filelib:wildcard(Wildcard),
 
     ra:stop_node(NodeId2),
     ra:stop_node(NodeId3),
@@ -646,13 +555,9 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     ok.
 
 node_restart_after_application_restart(Config) ->
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
     ClusterId = ?config(cluster_id, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    ok = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     application:stop(ra),
@@ -667,14 +572,10 @@ node_restart_after_application_restart(Config) ->
 % NB: this is not guaranteed not to re-issue side-effects but only tests
 % that the likelyhood is small
 restarted_node_does_not_reissue_side_effects(Config) ->
-    PrivDir = ?config(priv_dir, Config),
     NodeId = ?config(node_id, Config),
-    UId = ?config(uid, Config),
     Name = element(1, NodeId),
     ClusterId = ?config(cluster_id, Config),
-    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
-    _ = ra:start_node(Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     {ok, F2} = ra_fifo_client:enqueue(<<"msg">>, F1),
@@ -705,7 +606,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ok = ra:stop_node(NodeId),
     ok.
 
-conf(ClusterId, UId, NodeId, _Dir, Peers) ->
+conf(ClusterId, UId, NodeId,_,  Peers) ->
     #{cluster_id => ClusterId,
       id => NodeId,
       uid => UId,
@@ -788,3 +689,8 @@ validate_process_down(Name, Num) ->
             validate_process_down(Name, Num-1)
     end.
 
+start_cluster(ClusterId, NodeIds) ->
+    {ok, NodeIds, _} = ra:start_cluster(ClusterId,
+                                        {module, ra_fifo, #{}},
+                                        NodeIds),
+    ok.
