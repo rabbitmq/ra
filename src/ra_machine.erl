@@ -8,6 +8,7 @@
 -export([init/2,
          apply/4,
          leader_effects/2,
+         termination_effects/2,
          tick/3,
          overview/2,
          module/1
@@ -56,6 +57,19 @@
               reply/0,
               builtin_command/0]).
 
+-optional_callbacks([leader_effects/1,
+                     tick/2,
+                     overview/1,
+                     termination_effects/1
+                     ]).
+
+-define(OPT_CALL(Call, Def),
+    try Call of
+        Res -> Res
+    catch
+        error:undef ->
+            Def
+    end).
 
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
@@ -68,6 +82,9 @@
 %% called when a node becomes leader, use this to return any effects that should
 %% be applied only to a leader, such as monitors
 -callback leader_effects(state()) -> effects().
+
+%% called when a ra cluster is deleted
+-callback termination_effects(state()) -> effects().
 
 %% Called periodically
 %% suitable for returning granular metrics or other periodic actions
@@ -92,19 +109,25 @@ apply({simple, Fun, _InitialState}, _Idx, Cmd, State) ->
 
 -spec leader_effects(machine(), state()) -> effects().
 leader_effects({module, Mod, _}, State) ->
-    Mod:leader_effects(State);
+    ?OPT_CALL(Mod:leader_effects(State), []);
 leader_effects({simple, _, _}, _State) ->
+    [].
+
+-spec termination_effects(machine(), state()) -> effects().
+termination_effects({module, Mod, _}, State) ->
+    ?OPT_CALL(Mod:termination_effects(State), []);
+termination_effects({simple, _, _}, _State) ->
     [].
 
 -spec tick(machine(), milliseconds(), state()) -> effects().
 tick({module, Mod, _}, TimeMs, State) ->
-    Mod:tick(TimeMs, State);
+    ?OPT_CALL(Mod:tick(TimeMs, State), []);
 tick({simple, _, _}, _TimeMs, _State) ->
     [].
 
 -spec overview(machine(), state()) -> map().
-overview({module, Mod, _}, State) ->
-    Mod:overview(State);
+overview({module, Mod, Ms}, State) ->
+    ?OPT_CALL(Mod:overview(State), Ms);
 overview({simple, _, _}, _State) ->
     #{type => simple}.
 
