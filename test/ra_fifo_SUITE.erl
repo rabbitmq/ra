@@ -35,7 +35,8 @@ all_tests() ->
      ra_fifo_client_dequeue,
      ra_fifo_client_discard,
      ra_fifo_client_untracked_enqueue,
-     ra_fifo_client_flow
+     ra_fifo_client_flow,
+     test_queries
     ].
 
 groups() ->
@@ -401,6 +402,30 @@ ra_fifo_client_flow(Config) ->
     {error, stop_sending} = ra_fifo_client:enqueue(m5, F4),
     {_, F5} = process_ra_events(F4, 500),
     {ok, _} = ra_fifo_client:enqueue(m5, F5),
+    ra:stop_node(NodeId),
+    ok.
+
+test_queries(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    _ = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    timer:sleep(50),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
+    {ok, F1} = ra_fifo_client:enqueue(m1, F0),
+    {ok, F2} = ra_fifo_client:enqueue(m2, F1),
+    {ok, _F3} = ra_fifo_client:checkout(<<"tag">>, 1, F2),
+    {ok, {_, Ready}, _} = ra:dirty_query(NodeId,
+                                         fun ra_fifo:query_messages_ready/1),
+    ?assertEqual(1, maps:size(Ready)),
+    ct:pal("Ready ~w~n", [Ready]),
+    {ok, {_, Checked}, _} = ra:dirty_query(NodeId,
+                                           fun ra_fifo:query_messages_checked_out/1),
+    ?assertEqual(1, maps:size(Checked)),
+    ct:pal("Checked ~w~n", [Checked]),
     ra:stop_node(NodeId),
     ok.
 

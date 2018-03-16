@@ -127,7 +127,7 @@ start_cluster_minority(Config) ->
     ClusterId = ?config(cluster_id, Config),
     NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
     % s3 isn't available
-    S2 = make_node_name(s3),
+    S2 = make_node_name(s2),
     S3 = make_node_name(s3),
     NodeIds = NodeIds0 ++ [{ClusterId, S2}, {ClusterId, S3}],
     Machine = {module, ra_fifo, #{}},

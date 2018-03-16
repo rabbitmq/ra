@@ -13,10 +13,14 @@
          tick/2,
          overview/1,
          get_checked_out/4,
+         % queries
+         query_messages_ready/1,
+         query_messages_checked_out/1,
          shadow_copy/1,
          size_test/2,
          perf_test/2
          % profile/1
+         %
         ]).
 
 -type raw_msg() :: term().
@@ -341,6 +345,18 @@ get_checked_out(Cid, From, To, #state{customers = Customers}) ->
         _ ->
             []
     end.
+
+
+%%% Queries
+
+query_messages_ready(#state{messages = M}) ->
+    M.
+
+query_messages_checked_out(#state{customers = Customers}) ->
+    maps:fold(fun (_, #customer{checked_out = C}, S) ->
+                      maps:merge(S, maps:from_list(maps:values(C)))
+              end, #{}, Customers).
+
 
 %%% Internal
 
