@@ -1228,24 +1228,27 @@ apply_with(Id, _, % Machine
     ?INFO("~w: enabling ra cluster changes in ~b~n", [Id, Term]),
     State = State0#{cluster_change_permitted => true},
     {State, MacSt, Effects, Notifys};
-apply_with(_, _, % Id, Machine
+apply_with(_, % Id
+           Machine,
            {Idx, Term, {'$ra_cluster', From, delete, ReplyType}},
            {State0, MacSt, Effects0, Notifys0}) -> % MacState
     % cluster deletion
     {Effects, Notifys} = add_reply(From, {{Idx, Term}, ok},
                                    ReplyType, Effects0, Notifys0),
     NotifyEffects = make_notify_effects(Notifys),
+    TEffects = ra_machine:eol_effects(Machine, MacSt),
+    ?INFO("termination effects ~p~n", [TEffects]),
     % non-local return to be caught by ra_node_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},
-    throw({delete_and_terminate, State, NotifyEffects ++ Effects});
+    throw({delete_and_terminate, State, NotifyEffects ++ TEffects ++ Effects});
 apply_with(Id, _Machine, Cmd, Acc) ->
     % TODO: uh why a catch all here? try to remove this and see if it breaks
     ?WARN("~p: apply_with: unhandled command: ~W~n", [Id, Cmd, 8]),
     Acc.
 
 add_next_cluster_change(Effects,
-                        State = #{pending_cluster_changes := [C | Rest]}) ->
+                        #{pending_cluster_changes := [C | Rest]} = State) ->
     {_, From , _, _} = C,
     {[{next_event, {call, From}, {command, C}} | Effects],
      State#{pending_cluster_changes => Rest}};

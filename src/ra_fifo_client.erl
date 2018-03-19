@@ -277,11 +277,13 @@ try_send_and_await_consensus([Node | Rem], Cmd, State) ->
 %% with them.</li>
 -spec handle_ra_event(ra_node_id(), ra_node_proc:ra_event_body(), state()) ->
     {internal, Correlators :: [term()], state()} |
-    {ra_fifo:client_msg(), state()}.
+    {ra_fifo:client_msg(), state()} | eol.
 handle_ra_event(From, {applied, Seqs}, State0) ->
     {Corrs, State} = lists:foldl(fun seq_applied/2,
                                  {[], State0#state{leader = From}}, Seqs),
     {internal, lists:reverse(Corrs), State};
+handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
+    handle_delivery(Leader, Del, State0);
 handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
     % TODO: how should these be handled? re-sent on timer or try random
     {internal, [], State0};
@@ -289,8 +291,8 @@ handle_ra_event(_From, {rejected, {not_leader, Leader, Seq}}, State0) ->
     State1 = State0#state{leader = Leader},
     State = resend(Seq, State1),
     {internal, [], State};
-handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
-    handle_delivery(Leader, Del, State0).
+handle_ra_event(_Leader, {machine, eol}, _State0) ->
+    eol.
 
 %% @doc Attempts to enqueue a message using cast semantics. This provides no
 %% guarantees or retries if the message fails to achieve consensus or if the

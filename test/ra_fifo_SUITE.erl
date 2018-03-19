@@ -490,12 +490,16 @@ cluster_is_deleted(Config) ->
     UId = ?config(uid, Config),
     ClusterId = ?config(cluster_id, Config),
     ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
     ok = ra:delete_cluster([NodeId]),
     % validate
     ok = validate_process_down(element(1, NodeId), 50),
     Dir = filename:join(PrivDir, UId),
     false = filelib:is_dir(Dir),
     [] = supervisor:which_children(ra_nodes_sup),
+    % validate an end of life is emitted
+    eol = process_ra_events(F1, 250),
     ok.
 
 cluster_is_deleted_with_node_down(Config) ->
@@ -517,7 +521,7 @@ cluster_is_deleted_with_node_down(Config) ->
     Wildcard = lists:flatten(filename:join([PrivDir,
                                             atom_to_list(ClusterId) ++ "**"])),
     % assert there are three matching data dirs
-    [_,_,_] = filelib:wildcard(Wildcard),
+    [_, _, _] = filelib:wildcard(Wildcard),
 
     ok = ra:stop_node(NodeId3),
     ok = ra:delete_cluster(Peers),
@@ -638,7 +642,9 @@ process_ra_events(State0, Acc, Wait) ->
                 {{delivery, Tag, Msgs}, State1} ->
                     MsgIds = [element(1, M) || M <- Msgs],
                     {ok, State} = ra_fifo_client:settle(Tag, MsgIds, State1),
-                    process_ra_events(State, Acc ++ Msgs, Wait)
+                    process_ra_events(State, Acc ++ Msgs, Wait);
+                eol ->
+                    eol
             end
     after Wait ->
               {Acc, State0}

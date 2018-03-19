@@ -8,7 +8,7 @@
 -export([init/2,
          apply/4,
          leader_effects/2,
-         termination_effects/2,
+         eol_effects/2,
          tick/3,
          overview/2,
          module/1
@@ -60,7 +60,7 @@
 -optional_callbacks([leader_effects/1,
                      tick/2,
                      overview/1,
-                     termination_effects/1
+                     eol_effects/1
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -84,7 +84,7 @@
 -callback leader_effects(state()) -> effects().
 
 %% called when a ra cluster is deleted
--callback termination_effects(state()) -> effects().
+-callback eol_effects(state()) -> effects().
 
 %% Called periodically
 %% suitable for returning granular metrics or other periodic actions
@@ -113,10 +113,10 @@ leader_effects({module, Mod, _}, State) ->
 leader_effects({simple, _, _}, _State) ->
     [].
 
--spec termination_effects(machine(), state()) -> effects().
-termination_effects({module, Mod, _}, State) ->
-    ?OPT_CALL(Mod:termination_effects(State), []);
-termination_effects({simple, _, _}, _State) ->
+-spec eol_effects(machine(), state()) -> effects().
+eol_effects({module, Mod, _}, State) ->
+    ?OPT_CALL(Mod:eol_effects(State), []);
+eol_effects({simple, _, _}, _State) ->
     [].
 
 -spec tick(machine(), milliseconds(), state()) -> effects().

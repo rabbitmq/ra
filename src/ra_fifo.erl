@@ -10,6 +10,7 @@
          init/1,
          apply/3,
          leader_effects/1,
+         eol_effects/1,
          tick/2,
          overview/1,
          get_checked_out/4,
@@ -326,6 +327,9 @@ leader_effects(#state{customers = Custs}) ->
     % return effects to monitor all current customers
     [{monitor, process, P} || {_, P} <- maps:keys(Custs)].
 
+eol_effects(#state{enqueuers = Enqs, customers = Custs0}) ->
+    Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
+    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))].
 
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
 tick(_Ts, #state{metrics = Metrics}) ->
@@ -461,12 +465,7 @@ complete(IncomingRaftIdx, CustomerId, MsgRaftIdxs, Cust0, Checked,
                  Effects0),
     % settle metrics are incremented separately
     State = incr_metrics(State1, {0, NumChecked, 0, 0}),
-    % TODO this could probably be made more efficient
     update_smallest_raft_index(IncomingRaftIdx, {State, Effects}).
-    % lists:foldl(
-    %   fun (MsgRaftIdx, Acc) ->
-    %           update_smallest_raft_index(IncomingRaftIdx, MsgRaftIdx, Acc)
-    %   end, {State, Effects}, MsgRaftIdxs).
 
 dead_letter_effects(_Discarded,
                     #state{dead_letter_handler = undefined},
@@ -493,7 +492,7 @@ update_smallest_raft_index(IncomingRaftIdx,
             % TODO: for simplicity can we just always take the smallest here?
             % Then we won't need the MsgRaftIdx
             case ra_fifo_index:smallest(Indexes) of
-                 {_Smallest, undefined} ->
+                 {_, undefined} -> % smallest
                     % no shadow taken for this index,
                     % no release cursor increase
                     {State, Effects};
@@ -563,9 +562,9 @@ checkout_one(#state{messages = Messages0,
             {State0, []}
     end.
 
-new_low(_Prev, _Max, Messages) when map_size(Messages) =:= 0 ->
+new_low(_Prev, _, Messages) when map_size(Messages) =:= 0 ->
     undefined;
-new_low(_Prev, _Max, Messages) when map_size(Messages) < 100 ->
+new_low(_Prev, _, Messages) when map_size(Messages) < 100 ->
     % guesstimate value - needs measuring
     lists:min(maps:keys(Messages));
 new_low(Prev, Max, Messages) ->
