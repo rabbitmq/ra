@@ -66,7 +66,8 @@
 %% The entity that receives messages. Uniquely identifies a customer.
 
 -type checkout_spec() :: {once | auto, Num :: non_neg_integer()} |
-                         {dequeue, settled | unsettled}.
+                         {dequeue, settled | unsettled} |
+                         cancel.
 
 -type protocol() ::
     {enqueue, Sender :: pid(), MsgSeq :: msg_seqno(), Msg :: raw_msg()} |
@@ -248,6 +249,13 @@ apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
                       end,
     State = incr_metrics(State2, {0, 1, 0, 0}),
     {State, [{monitor, process, Pid}], {dequeue, Reply}};
+apply(_RaftIdx, {checkout, cancel, CustomerId}, State0) ->
+    State1 = cancel_customer(CustomerId, State0),
+    {State2, Effects, Num} = checkout(State1, []),
+    State = incr_metrics(State2, {0, Num, 0, 0}),
+    % TODO: here we should really demonitor the pid but _only_ if it has no
+    % other customers or enqueuers.
+    {State, Effects};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -269,9 +277,8 @@ apply(_RaftId, {down, CustomerPid, noconnection},
                     end, Enqs0),
     {State0#state{customers = Custs,
                   enqueuers = Enqs}, [{monitor, node, Node}]};
-apply(_RaftId, {down, Pid, _Info},
-      #state{customers = Custs0,
-             enqueuers = Enqs0} = State0) ->
+apply(_RaftId, {down, Pid, _Info}, #state{customers = Custs0,
+                                          enqueuers = Enqs0} = State0) ->
     % remove any enqueuer for the same pid
     % TODO: if there are any pending enqueuers these should be enqueued
     % This should be ok as we won't see any more enqueues from this pid
@@ -285,22 +292,10 @@ apply(_RaftId, {down, Pid, _Info},
     % Find the customers for the down pid
     DownCustomers = maps:keys(
                       maps:filter(fun({_, P}, _) -> P =:= Pid end, Custs0)),
-    State = lists:foldl(
-              fun(CustomerId, #state{customers = C0} = S0) ->
-                      case maps:take(CustomerId, C0) of
-                          {#customer{checked_out = Checked0}, Custs} ->
-                              S1 = maps:fold(fun (_MsgId, {MsgNum, Msg}, S) ->
-                                                     return_one(MsgNum, Msg, S)
-                                             end, S0, Checked0),
-                              S = incr_metrics(S1, {0, 0, 0,
-                                                    maps:size(Checked0)}),
-                              S#state{customers = Custs};
-                          error ->
-                              % already removed - do nothing
-                              S0
-                      end
-              end, State1, DownCustomers),
-    {State, []};
+    State2 = lists:foldl(fun cancel_customer/2, State1, DownCustomers),
+    {State3, Effects, Num} = checkout(State2, []),
+    State = incr_metrics(State3, {0, Num, 0, 0}),
+    {State, Effects};
 apply(_RaftId, {nodeup, Node},
       #state{customers = Custs0,
              enqueuers = Enqs0} = State0) ->
@@ -368,6 +363,20 @@ query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
 
 
 %%% Internal
+
+cancel_customer(CustomerId, #state{customers = C0} = S0) ->
+    case maps:take(CustomerId, C0) of
+        {#customer{checked_out = Checked0}, Custs} ->
+            S1 = maps:fold(fun (_, {MsgNum, Msg}, S) ->
+                                   return_one(MsgNum, Msg, S)
+                           end, S0, Checked0),
+            S = incr_metrics(S1, {0, 0, 0,
+                                  maps:size(Checked0)}),
+            S#state{customers = Custs};
+        error ->
+            % already removed - do nothing
+            S0
+    end.
 
 incr_enqueue_count(#state{enqueue_count = C} = State)
  when C =:= ?SHADOW_COPY_INTERVAL ->
@@ -900,6 +909,21 @@ return_auto_checked_out_test() ->
                   Effects),
     ok.
 
+
+cancelled_checkout_out_test() ->
+    Cid = {<<"cid">>, self()},
+    {State00, [_]} = enq(1, 1, first, test_init(test)),
+    {State0, []} = enq(2, 2, second, State00),
+    {State1, _} = check_auto(Cid, 2, State0),
+    % cancelled checkout should return all pending messages to queue
+    {State2, _Effects} = apply(3, {checkout, cancel, Cid}, State1),
+
+    {State3, _, {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, settled}, Cid}, State2),
+    {_State, _, {dequeue, {_, {_, second}}}} =
+        apply(3, {checkout, {dequeue, settled}, Cid}, State3),
+    ok.
+
 down_with_noproc_customer_returns_unsettled_test() ->
     Cid = {<<"down_customer_returns_unsettled_test">>, self()},
     {State0, [_]} = enq(1, 1, second, test_init(test)),
@@ -1055,9 +1079,6 @@ performance_test() ->
 
 enq(Idx, MsgSeq, Msg, State) ->
     apply(Idx, {enqueue, self(), MsgSeq, Msg}, State).
-
-% deq(Cid, Idx, State) ->
-%     apply(Idx, {checkout, {get, settled}, Cid}, State).
 
 check_n(Cid, Idx, N, State) ->
     apply(Idx, {checkout, {auto, N}, Cid}, State).
