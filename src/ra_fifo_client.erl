@@ -8,6 +8,7 @@
          init/2,
          init/3,
          checkout/3,
+         cancel_checkout/2,
          enqueue/2,
          enqueue/3,
          dequeue/3,
@@ -222,15 +223,23 @@ checkout(CustomerTag, NumUnsettled, State) ->
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
     try_send_and_await_consensus(Nodes, Cmd, State).
 
-try_send_and_await_consensus([Node | Rem], Cmd, State) ->
-    case ra:send_and_await_consensus(Node, Cmd) of
-        {ok, _, Leader} ->
-            {ok, State#state{leader = Leader}};
-        Err when length(Rem) =:= 0 ->
-            Err;
-        _ ->
-            try_send_and_await_consensus(Rem, Cmd, State)
-    end.
+%% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
+%%
+%% This is a syncronous call. I.e. the call will block until the command
+%% has been accepted by the ra process or it times out.
+%%
+%% @param CustomerTag a unique tag to identify this particular customer.
+%% @param State The {@module} state.
+%%
+%% @returns `{ok, State}' or `{error | timeout, term()}'
+-spec cancel_checkout(ra_fifo:customer_tag(), state()) ->
+    {ok, state()} | {error | timeout, term()}.
+cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} =  State0) ->
+    Nodes = sorted_nodes(State0),
+    CustomerId = {CustomerTag, self()},
+    Cmd = {checkout, cancel, CustomerId},
+    State = State0#state{customer_deliveries = maps:remove(CustomerTag, CDels)},
+    try_send_and_await_consensus(Nodes, Cmd, State).
 
 %% @doc Handles incoming `ra_events'. Events carry both internal "bookeeping"
 %% events emitted by the `ra' leader as well as `ra_fifo' emitted events such
@@ -317,6 +326,16 @@ untracked_enqueue(_ClusterId, [Node | _], Msg) ->
 
 %% Internal
 
+try_send_and_await_consensus([Node | Rem], Cmd, State) ->
+    case ra:send_and_await_consensus(Node, Cmd) of
+        {ok, _, Leader} ->
+            {ok, State#state{leader = Leader}};
+        Err when length(Rem) =:= 0 ->
+            Err;
+        _ ->
+            try_send_and_await_consensus(Rem, Cmd, State)
+    end.
+
 seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
   when Seq > Last orelse Last =:= undefined ->
     State = case Last of
@@ -355,13 +374,7 @@ resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->
 handle_delivery(Leader, {delivery, Tag, [{FstId, _} | _] = IdMsgs} = Del0,
                 #state{customer_deliveries = CDels0} = State0) ->
     {LastId, _} = lists:last(IdMsgs),
-    case maps:get(Tag, CDels0, undefined) of
-        undefined ->
-            % not seen before and no initial msg id
-            Missing = get_missing_deliveries(Leader, 0, FstId-1, Tag),
-            Del = {delivery, Tag, Missing ++ IdMsgs},
-            {Del, State0#state{customer_deliveries =
-                               maps:put(Tag, LastId, CDels0)}};
+    case maps:get(Tag, CDels0, -1) of
         Prev when FstId =:= Prev+1 ->
             {Del0, State0#state{customer_deliveries =
                                 maps:put(Tag, LastId, CDels0)}};
@@ -380,10 +393,10 @@ handle_delivery(Leader, {delivery, Tag, [{FstId, _} | _] = IdMsgs} = Del0,
 
 get_missing_deliveries(Leader, From, To, CustomerTag) ->
     CustomerId = customer_id(CustomerTag),
-    ?INFO("get_missing_deliveries for ~w", [CustomerId]),
+    % ?INFO("get_missing_deliveries for ~w from ~b to ~b",
+    %       [CustomerId, From, To]),
     Query = fun (State) ->
-                    ra_fifo:get_checked_out(CustomerId,
-                                            From, To, State)
+                    ra_fifo:get_checked_out(CustomerId, From, To, State)
             end,
     {ok, {_, Missing}, _} = ra:dirty_query(Leader, Query),
     Missing.

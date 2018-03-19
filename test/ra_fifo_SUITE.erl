@@ -34,6 +34,7 @@ all_tests() ->
      restarted_node_does_not_reissue_side_effects,
      ra_fifo_client_dequeue,
      ra_fifo_client_discard,
+     ra_fifo_client_cancel_checkout,
      ra_fifo_client_untracked_enqueue,
      ra_fifo_client_flow,
      test_queries
@@ -77,7 +78,6 @@ ra_fifo_client_basics(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     FState0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, FState1} = ra_fifo_client:checkout(CustomerTag, 1, FState0),
-    % _ = ra:send_and_await_consensus(NodeId, {checkout, {auto, 10}, Cid}),
 
     ra_log_wal:force_roll_over(ra_log_wal),
     % create segment the segment will trigger a snapshot
@@ -321,6 +321,18 @@ ra_fifo_client_discard(Config) ->
               exit(dead_letter_timeout)
     end,
     ra:stop_node(NodeId),
+    ok.
+
+ra_fifo_client_cancel_checkout(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    NodeId = ?config(node_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
+    {ok, F1} = ra_fifo_client:enqueue(m1, F0),
+    {ok, F2} = ra_fifo_client:checkout(<<"tag">>, m1, F1),
+    {_, F3} = process_ra_events0(F2, [], 250, fun (_, S) -> S end),
+    {ok, F4} = ra_fifo_client:cancel_checkout(<<"tag">>, F3),
+    {ok, {_, {_, m1}}, _} = ra_fifo_client:dequeue(<<"d1">>, settled, F4),
     ok.
 
 ra_fifo_client_untracked_enqueue(Config) ->
@@ -632,17 +644,24 @@ process_ra_event(State, Wait) ->
 process_ra_events(State0, Wait) ->
     process_ra_events(State0, [], Wait).
 
-process_ra_events(State0, Acc, Wait) ->
+process_ra_events(State, Acc, Wait) ->
+    DeliveryFun = fun ({delivery, Tag, Msgs}, S) ->
+                          MsgIds = [element(1, M) || M <- Msgs],
+                          {ok, S2} = ra_fifo_client:settle(Tag, MsgIds, S),
+                          S2
+                  end,
+    process_ra_events0(State, Acc, Wait, DeliveryFun).
+
+process_ra_events0(State0, Acc, Wait, DeliveryFun) ->
     receive
         {ra_event, From, Evt} ->
             ct:pal("processing ra event ~p~n", [Evt]),
             case ra_fifo_client:handle_ra_event(From, Evt, State0) of
                 {internal, _, State} ->
-                    process_ra_events(State, Acc, Wait);
-                {{delivery, Tag, Msgs}, State1} ->
-                    MsgIds = [element(1, M) || M <- Msgs],
-                    {ok, State} = ra_fifo_client:settle(Tag, MsgIds, State1),
-                    process_ra_events(State, Acc ++ Msgs, Wait);
+                    process_ra_events0(State, Acc, Wait, DeliveryFun);
+                {{delivery, _Tag, Msgs} = Del, State1} ->
+                    State = DeliveryFun(Del, State1),
+                    process_ra_events0(State, Acc ++ Msgs, Wait, DeliveryFun);
                 eol ->
                     eol
             end

@@ -514,7 +514,6 @@ update_smallest_raft_index(IncomingRaftIdx,
 
 return_one(MsgNum, {RaftId, {Header0, RawMsg}},
            #state{messages = Messages, low_msg_num = Low0} = State0) ->
-
     Header = maps:update_with(delivery_count,
                               fun (C) -> C+1 end,
                               1, Header0),
