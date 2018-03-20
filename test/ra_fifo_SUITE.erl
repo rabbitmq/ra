@@ -622,7 +622,7 @@ restarted_node_does_not_reissue_side_effects(Config) ->
     ok = ra:stop_node(NodeId),
     ok.
 
-conf(ClusterId, UId, NodeId,_,  Peers) ->
+conf(ClusterId, UId, NodeId, _, Peers) ->
     #{cluster_id => ClusterId,
       id => NodeId,
       uid => UId,

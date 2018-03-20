@@ -187,8 +187,7 @@ apply(RaftIdx, {settle, MsgIds, CustomerId},
         #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
             Checked = maps:without(MsgIds, Checked0),
             Discarded = maps:with(MsgIds, Checked0),
-            MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
-                                   <- maps:values(Discarded)],
+            MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
             % need to increment metrics before completing as any snapshot
             % states taken need to includ them
             State = incr_metrics(State0, {0, 0, length(MsgIds), 0}),
@@ -408,8 +407,7 @@ enqueue_pending(From,
 enqueue_pending(From, Enq, #state{enqueuers = Enqueuers0} = State) ->
     State#state{enqueuers = Enqueuers0#{From => Enq}}.
 
-maybe_enqueue(RaftIdx, undefined, undefined, RawMsg,
-              State0) ->
+maybe_enqueue(RaftIdx, undefined, undefined, RawMsg, State0) ->
     % direct enqueue without tracking
     {enqueue(RaftIdx, RawMsg, State0), []};
 maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
@@ -420,8 +418,7 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
             {State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
                                              RawMsg, State1),
             {State, [{monitor, process, From} | Effects]};
-        #enqueuer{next_seqno = MsgSeqNo,
-                  pending = _Pending} = Enq0 ->
+        #enqueuer{next_seqno = MsgSeqNo} = Enq0 ->
             % it is the next expected seqno
             State1 = enqueue(RaftIdx, RawMsg, State0),
             Enq = Enq0#enqueuer{next_seqno = MsgSeqNo + 1},
@@ -434,11 +431,11 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
             Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
             Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
             {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
-        #enqueuer{next_seqno = Next, pending = _Pending} = _Enq0
-          when MsgSeqNo =< Next ->
+        #enqueuer{next_seqno = Next} when MsgSeqNo =< Next ->
             % duplicate delivery
             {State0, []}
     end.
+
 snd(T) ->
     element(2, T).
 
@@ -482,10 +479,10 @@ dead_letter_effects(_Discarded,
     Effects;
 dead_letter_effects(Discarded,
                     #state{dead_letter_handler = {Mod, Fun, Args}}, Effects) ->
-    DeadLetters = maps:fold(fun(_MsgId, {_MsgIdId, {_RaftId, {_Header, Msg}}},
-                          Acc) ->
-                      [{rejected, Msg} | Acc]
-              end, [], Discarded),
+    DeadLetters = maps:fold(fun(_, {_, {_, {_, Msg}}},
+                                % MsgId, MsgIdID, RaftId, Header
+                                Acc) -> [{rejected, Msg} | Acc]
+                            end, [], Discarded),
     [{mod_call, Mod, Fun, Args ++ [DeadLetters]} | Effects].
 
 update_smallest_raft_index(IncomingRaftIdx,
@@ -552,13 +549,15 @@ checkout_one(#state{messages = Messages0,
                                                   next_msg_id = Next+1,
                                                   seen = Seen+1},
                             {Custs, SQ, []} = % we expect no effects
-                                update_or_remove_sub(CustomerId, Cust, Custs0, SQ1),
+                                update_or_remove_sub(CustomerId, Cust,
+                                                     Custs0, SQ1),
                             Low = new_low(Low0, NextMsgNum, Messages),
                             State = State0#state{service_queue = SQ,
-                                                 low_msg_num = Low, %/ra_fifo_index:next_key_after(LowIdx, Indexes),
+                                                 low_msg_num = Low,
                                                  messages = Messages,
                                                  customers = Custs},
-                            {State, [{send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}]};
+                            {State, [{send_msg, CPid, {delivery, CTag,
+                                                       [{Next, Msg}]}}]};
                         undefined ->
                             % customer did not exist but was queued, recurse
                             checkout_one(State0#state{service_queue = SQ1})
@@ -570,9 +569,9 @@ checkout_one(#state{messages = Messages0,
             {State0, []}
     end.
 
-new_low(_Prev, _, Messages) when map_size(Messages) =:= 0 ->
+new_low(_, _, Messages) when map_size(Messages) =:= 0 ->
     undefined;
-new_low(_Prev, _, Messages) when map_size(Messages) < 100 ->
+new_low(_, _, Messages) when map_size(Messages) < 100 ->
     % guesstimate value - needs measuring
     lists:min(maps:keys(Messages));
 new_low(Prev, Max, Messages) ->
