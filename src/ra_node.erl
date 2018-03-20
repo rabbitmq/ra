@@ -528,7 +528,8 @@ handle_pre_vote(Msg, State) ->
 
 -spec handle_follower(ra_msg(), ra_node_state()) ->
     {ra_state(), ra_node_state(), ra_effects()}.
-handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId,
+handle_follower(#append_entries_rpc{term = Term,
+                                    leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
@@ -631,6 +632,7 @@ handle_follower({ra_log_event, {written, _} = Evt},
     State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
     {State, Effects} = evaluate_commit_index_follower(State0),
     Reply = append_entries_reply(Term, true, State),
+    ?INFO("follower reply ~p~n", [Reply]),
     {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
@@ -943,7 +945,7 @@ persist_last_applied(#{last_applied := L, log := Log0} = State) ->
 
 -spec terminate(ra_node_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{id := Id, log := Log}, {shutdown, delete}) ->
-    ?INFO("~w: terminating and deleting all data", [Id]),
+    ?INFO("~w: terminating and deleting all data~n", [Id]),
     catch ra_log:delete_everything(Log),
     ok;
 terminate(State, _Reason) ->
@@ -1059,11 +1061,14 @@ pipelineable_peers(#{commit_index := CommitIndex,
 % peers that could need an update
 % TODO: introduce a last_seen timestamp to avoid sending additional message
 % in high-load scenarios
-stale_peers(State) ->
+stale_peers(#{commit_index := CommitIndex} = State) ->
     maps:filter(fun (_Id, #{next_index := NI,
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
                         % TODO: now() - last_seen > ?RCP_INTERVAL_MS
+                        true;
+                    (_Id, #{commit_index := CI}) when CI < CommitIndex ->
+                        % the commit index has been updated
                         true;
                     (_Id, _Peer) ->
                         false
@@ -1237,7 +1242,6 @@ apply_with(_, % Id
                                    ReplyType, Effects0, Notifys0),
     NotifyEffects = make_notify_effects(Notifys),
     TEffects = ra_machine:eol_effects(Machine, MacSt),
-    ?INFO("termination effects ~p~n", [TEffects]),
     % non-local return to be caught by ra_node_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},

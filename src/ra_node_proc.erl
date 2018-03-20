@@ -296,10 +296,16 @@ leader(EventType, Msg, State0) ->
             {State, _Actions} = handle_effects(Effects, EventType, State1),
             {stop, normal, State};
         {delete_and_terminate, State1, Effects} ->
-            {State, _Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~w leader -> terminating_leader term: ~b~n",
-                  [id(State1), current_term(State1)]),
-            {next_state, terminating_leader, State}
+            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            State = send_rpcs(State2),
+            case ra_node:is_fully_replicated(State#state.node_state) of
+                true ->
+                    {stop, {shutdown, delete}, State};
+                false ->
+                    ?INFO("~w leader -> terminating_leader term: ~b~n",
+                          [id(State), current_term(State)]),
+                    {next_state, terminating_leader, State, Actions}
+            end
     end.
 
 candidate({call, From}, {leader_call, Msg},
@@ -483,7 +489,8 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             ?INFO("~w follower -> terminating_follower term: ~b~n",
                   [id(State1), current_term(State1)]),
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            {next_state, terminating_follower, State, Actions}
+            {next_state, terminating_follower, State,
+             Actions}
             % {stop, {shutdown, delete}, State}
     end.
 
@@ -491,6 +498,7 @@ terminating_leader(_EvtType, {command, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->
+    ?INFO("terminating leader got ~w~n", [Msg]),
     {keep_state, State, Actions} = leader(EvtType, Msg, State0),
     NS = State#state.node_state,
     case ra_node:is_fully_replicated(NS) of
@@ -513,10 +521,6 @@ terminating_follower(EvtType, Msg, State0) ->
                                                             Msg, 7]),
             {keep_state, State, Actions}
     end.
-% terminating_follower(_EvtType, Msg, State0) ->
-%     % do not process any further commands
-%     ?INFO("~w: terminating_follower dropping ~W~n", [id(State0), Msg, 10]),
-%     {keep_state, State0, []}.
 
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
@@ -643,8 +647,6 @@ handle_effects(Effects, EvtType, State0) ->
                         handle_effect(Effect, EvtType, State, Actions)
                 end, {State0, []}, Effects).
 
-% -spec handle_effect(ra_node:ra_effect(), term(), #state{}, list()) ->
-%     {#state{}, list()}.
 handle_effect({send_rpcs, Rpcs}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor

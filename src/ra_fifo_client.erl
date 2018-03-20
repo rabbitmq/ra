@@ -234,7 +234,7 @@ checkout(CustomerTag, NumUnsettled, State) ->
 %% @returns `{ok, State}' or `{error | timeout, term()}'
 -spec cancel_checkout(ra_fifo:customer_tag(), state()) ->
     {ok, state()} | {error | timeout, term()}.
-cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} =  State0) ->
+cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
     Nodes = sorted_nodes(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, cancel, CustomerId},

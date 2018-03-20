@@ -22,6 +22,8 @@ all_tests() ->
     [
      start_stop_restart_delete_on_remote,
      start_cluster,
+     delete_two_node_cluster,
+     delete_three_node_cluster,
      start_cluster_majority,
      start_cluster_minority
     ].
@@ -100,6 +102,34 @@ start_cluster(Config) ->
     PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+delete_two_node_cluster(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    Machine = {module, ra_fifo, #{}},
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    ok = ra:delete_cluster(NodeIds),
+    timer:sleep(250),
+    {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
+    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    % assert all nodes are actually started
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+delete_three_node_cluster(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ra_fifo, #{}},
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    ok = ra:delete_cluster(NodeIds),
+    timer:sleep(250),
+    {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
+    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
