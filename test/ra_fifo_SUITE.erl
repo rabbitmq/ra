@@ -329,7 +329,7 @@ ra_fifo_client_cancel_checkout(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
     {ok, F1} = ra_fifo_client:enqueue(m1, F0),
-    {ok, F2} = ra_fifo_client:checkout(<<"tag">>, m1, F1),
+    {ok, F2} = ra_fifo_client:checkout(<<"tag">>, 10, F1),
     {_, F3} = process_ra_events0(F2, [], 250, fun (_, S) -> S end),
     {ok, F4} = ra_fifo_client:cancel_checkout(<<"tag">>, F3),
     {ok, {_, {_, m1}}, _} = ra_fifo_client:dequeue(<<"d1">>, settled, F4),

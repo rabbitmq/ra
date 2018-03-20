@@ -489,9 +489,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             ?INFO("~w follower -> terminating_follower term: ~b~n",
                   [id(State1), current_term(State1)]),
             {State, Actions} = handle_effects(Effects, EventType, State1),
-            {next_state, terminating_follower, State,
-             Actions}
-            % {stop, {shutdown, delete}, State}
+            {next_state, terminating_follower, State, Actions}
     end.
 
 terminating_leader(_EvtType, {command, _}, State0) ->
@@ -619,10 +617,8 @@ handle_pre_vote(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, State#state{node_state = NodeState}, Effects}.
 
 handle_follower(Msg, #state{node_state = NodeState0} = State) ->
-    case catch ra_node:handle_follower(Msg, NodeState0) of
-        {NextState, NodeState, Effects}  ->
-            {NextState, State#state{node_state = NodeState}, Effects}
-    end.
+    {NextState, NodeState, Effects} = ra_node:handle_follower(Msg, NodeState0),
+    {NextState, State#state{node_state = NodeState}, Effects}.
 
 handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
     {NextState, NodeState, Effects} =

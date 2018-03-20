@@ -551,9 +551,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                      leader_id => LeaderId},
                     % evaluate commit index as we may have received an updated
                     % commit index for previously written entries
-                    {State, Effects} = evaluate_commit_index_follower(State1),
-                    Reply = append_entries_reply(Term, true, State),
-                    {follower, State, [{cast, LeaderId, {Id, Reply}} | Effects]};
+                    evaluate_commit_index_follower(State1);
                 [{FirstIdx, _, _} | _] -> % FirstTerm
 
                     {LastIdx, State1} = lists:foldl(
@@ -626,14 +624,9 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
          [Id, Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
-                State00 = #{current_term := Term, id := Id,
-                            log := Log0, leader_id := LeaderId}) ->
-
+                State00 = #{log := Log0}) ->
     State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
-    {State, Effects} = evaluate_commit_index_follower(State0),
-    Reply = append_entries_reply(Term, true, State),
-    ?INFO("follower reply ~p~n", [Reply]),
-    {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
+    evaluate_commit_index_follower(State0);
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
@@ -822,22 +815,37 @@ follower_catchup_cond(_Msg, _State) ->
 wal_down_condition(_Msg, #{log := Log}) ->
     ra_log:can_write(Log).
 
-evaluate_commit_index_follower(State0 = #{commit_index := CommitIndex,
-                                          log := Log}) ->
+evaluate_commit_index_follower(#{commit_index := CommitIndex,
+                                 id := Id, leader_id := LeaderId,
+                                 current_term := Term,
+                                 log := Log} = State0) ->
     % as writes are async we can't use the index of the last available entry
     % in the log as they may not have been fully persisted yet
     % Take the smaller of the two values as commit index may be higher
     % than the last entry received
     {Idx, _} = ra_log:last_written(Log),
     EffectiveCommitIndex = min(Idx, CommitIndex),
-    {State, Effects0, Applied} = apply_to(EffectiveCommitIndex, State0),
-    % filter the effects that should be applied on a follower
-    Effects1 = lists:filter(fun ({release_cursor, _, _}) -> true;
-                                ({incr_metrics, _, _}) -> true;
-                                (_) -> false
-                            end, Effects0),
-    Effects = [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects1],
-    {State, Effects}.
+    % neet catch termination throw
+    case catch apply_to(EffectiveCommitIndex, State0) of
+        {delete_and_terminate, State1, Effects} ->
+            Reply = append_entries_reply(Term, true, State1),
+            {delete_and_terminate, State1,
+                   [cast_reply(Id, LeaderId, Reply) |
+                    filter_follower_effects(Effects)]};
+        {State, Effects0, Applied} ->
+            % filter the effects that should be applied on a follower
+            Effects = filter_follower_effects(Effects0),
+            Reply = append_entries_reply(Term, true, State),
+            {follower, State, [cast_reply(Id, LeaderId, Reply),
+                     {incr_metrics, ra_metrics, [{3, Applied}]}
+                     | Effects]}
+    end.
+
+filter_follower_effects(Effects) ->
+    lists:filter(fun ({release_cursor, _, _}) -> true;
+                     ({incr_metrics, _, _}) -> true;
+                     (_) -> false
+                 end, Effects).
 
 make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
     maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Entries}) ->
@@ -1180,7 +1188,7 @@ apply_to(ApplyTo, #{id := Id,
                 lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
                             {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
-            {AppliedTo, _LastEntryTerm, _} = lists:last(Entries),
+            {AppliedTo, _, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
 
             {State#{last_applied => AppliedTo,
@@ -1235,11 +1243,10 @@ apply_with(Id, _, % Machine
     {State, MacSt, Effects, Notifys};
 apply_with(_, % Id
            Machine,
-           {Idx, Term, {'$ra_cluster', From, delete, ReplyType}},
-           {State0, MacSt, Effects0, Notifys0}) -> % MacState
+           {Idx, _, {'$ra_cluster', From, delete, ReplyType}},
+           {State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
-    {Effects, Notifys} = add_reply(From, {{Idx, Term}, ok},
-                                   ReplyType, Effects0, Notifys0),
+    {Effects, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
     NotifyEffects = make_notify_effects(Notifys),
     TEffects = ra_machine:eol_effects(Machine, MacSt),
     % non-local return to be caught by ra_node_proc

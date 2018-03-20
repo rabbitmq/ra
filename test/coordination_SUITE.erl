@@ -117,6 +117,13 @@ delete_two_node_cluster(Config) ->
     {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
+    receive
+        Anything ->
+            ct:pal("got wierd message ~p~n", [Anything]),
+            exit({unexpected, Anything})
+    after 250 ->
+              ok
+    end,
     ok.
 
 delete_three_node_cluster(Config) ->
