@@ -117,16 +117,21 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                                 C = ConfFun(N, list_to_binary(UId)),
                                 ok =:= start_node(C)
                         end, NodeIds),
-    Node = hd(Started),
-    ok = trigger_election(Node),
-    case members(Node) of
-        {ok, _, _} ->
-            % we have a functioning cluster
-            {ok, Started, NotStarted};
+    case Started of
+        [] ->
+            {error, cluster_not_formed};
         _ ->
-            [delete_node(N) || N <- Started],
-            % we do not have a functioning cluster
-            {error, cluster_not_formed}
+            Node = hd(Started),
+            ok = trigger_election(Node),
+            case members(Node) of
+                {ok, _, _} ->
+                                                % we have a functioning cluster
+                    {ok, Started, NotStarted};
+                _ ->
+                    [delete_node(N) || N <- Started],
+                                                % we do not have a functioning cluster
+                    {error, cluster_not_formed}
+            end
     end.
 
 -spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
