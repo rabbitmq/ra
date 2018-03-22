@@ -139,15 +139,15 @@ delete_cluster(NodeIds) ->
     delete_cluster(NodeIds, ?DEFAULT_TIMEOUT).
 
 -spec delete_cluster(NodeIds :: [ra_node_id()], timeout()) ->
-    ok | {error, term()}.
+    {ok, Leader::ra_node_id()} | {error, term()}.
 delete_cluster(NodeIds, Timeout) ->
     delete_cluster0(NodeIds, Timeout, []).
 
 delete_cluster0([NodeId | Rem], Timeout, Errs) ->
     DeleteCmd = {'$ra_cluster', delete, await_consensus},
     case ra_node_proc:command(NodeId, DeleteCmd, Timeout) of
-        {ok, _, _} ->
-            ok;
+        {ok, _, Leader} ->
+            {ok, Leader};
         {timeout, _} = E ->
             delete_cluster0(Rem, Timeout, [E | Errs]);
         {error, _} = E ->

@@ -504,7 +504,7 @@ cluster_is_deleted(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
-    ok = ra:delete_cluster([NodeId]),
+    {ok, _} = ra:delete_cluster([NodeId]),
     % validate
     ok = validate_process_down(element(1, NodeId), 50),
     Dir = filename:join(PrivDir, UId),
@@ -536,7 +536,7 @@ cluster_is_deleted_with_node_down(Config) ->
     [_, _, _] = filelib:wildcard(Wildcard),
 
     ok = ra:stop_node(NodeId3),
-    ok = ra:delete_cluster(Peers),
+    {ok, _} = ra:delete_cluster(Peers),
     timer:sleep(100),
     % start node again
     ra:restart_node(NodeId3),
