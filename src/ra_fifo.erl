@@ -321,9 +321,10 @@ leader_effects(#state{customers = Custs}) ->
     % return effects to monitor all current customers
     [{monitor, process, P} || {_, P} <- maps:keys(Custs)].
 
-eol_effects(#state{enqueuers = Enqs, customers = Custs0}) ->
+eol_effects(#state{enqueuers = Enqs, customers = Custs0, name = Name}) ->
     Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
-    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))].
+    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))]
+        ++ [{mod_call, ets, delete, [?METRICS_TABLE, Name]}].
 
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
 tick(_Ts, #state{metrics = Metrics}) ->
