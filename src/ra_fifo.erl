@@ -141,6 +141,7 @@
          % needs to be part of snapshot
          service_queue = queue:new() :: queue:queue(customer_id()),
          dead_letter_handler :: maybe(applied_mfa()),
+         cancel_customer_handler :: maybe(applied_mfa()),
          metrics :: metrics()
         }).
 
@@ -164,8 +165,10 @@
 -spec init(config()) -> {state(), ra_machine:effects()}.
 init(#{name := Name} = Conf) ->
     DLH = maps:get(dead_letter_handler, Conf, undefined),
+    CCH = maps:get(cancel_customer_handler, Conf, undefined),
     {#state{name = Name,
             dead_letter_handler = DLH,
+            cancel_customer_handler = CCH,
             metrics = {Name, 0, 0, 0, 0}},
      [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0, 0}}]}.
 
@@ -249,12 +252,12 @@ apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
     State = incr_metrics(State2, {0, 1, 0, 0}),
     {State, [{monitor, process, Pid}], {dequeue, Reply}};
 apply(_RaftIdx, {checkout, cancel, CustomerId}, State0) ->
-    State1 = cancel_customer(CustomerId, State0),
+    {CancelEffects, State1} = cancel_customer(CustomerId, {[], State0}),
     {State2, Effects, Num} = checkout(State1, []),
     State = incr_metrics(State2, {0, Num, 0, 0}),
     % TODO: here we should really demonitor the pid but _only_ if it has no
     % other customers or enqueuers.
-    {State, Effects};
+    {State, CancelEffects ++ Effects};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State2, Effects, Num} = checkout(State1, []),
@@ -291,10 +294,10 @@ apply(_RaftId, {down, Pid, _Info}, #state{customers = Custs0,
     % Find the customers for the down pid
     DownCustomers = maps:keys(
                       maps:filter(fun({_, P}, _) -> P =:= Pid end, Custs0)),
-    State2 = lists:foldl(fun cancel_customer/2, State1, DownCustomers),
+    {CancelEffects, State2} = lists:foldl(fun cancel_customer/2, {[], State1}, DownCustomers),
     {State3, Effects, Num} = checkout(State2, []),
     State = incr_metrics(State3, {0, Num, 0, 0}),
-    {State, Effects};
+    {State, CancelEffects ++ Effects};
 apply(_RaftId, {nodeup, Node},
       #state{customers = Custs0,
              enqueuers = Enqs0} = State0) ->
@@ -364,7 +367,7 @@ query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
 
 %%% Internal
 
-cancel_customer(CustomerId, #state{customers = C0} = S0) ->
+cancel_customer(CustomerId, {Effects, #state{customers = C0, name = Name} = S0}) ->
     case maps:take(CustomerId, C0) of
         {#customer{checked_out = Checked0}, Custs} ->
             S1 = maps:fold(fun (_, {MsgNum, Msg}, S) ->
@@ -372,10 +375,11 @@ cancel_customer(CustomerId, #state{customers = C0} = S0) ->
                            end, S0, Checked0),
             S = incr_metrics(S1, {0, 0, 0,
                                   maps:size(Checked0)}),
-            S#state{customers = Custs};
+            {cancel_customer_effects(CustomerId, Name, S, Effects),
+             S#state{customers = Custs}};
         error ->
             % already removed - do nothing
-            S0
+            {Effects, S0}
     end.
 
 incr_enqueue_count(#state{enqueue_count = C} = State)
@@ -485,6 +489,13 @@ dead_letter_effects(Discarded,
                                 Acc) -> [{rejected, Msg} | Acc]
                             end, [], Discarded),
     [{mod_call, Mod, Fun, Args ++ [DeadLetters]} | Effects].
+
+cancel_customer_effects(_, _, #state{cancel_customer_handler = undefined},
+                        Effects) ->
+    Effects;
+cancel_customer_effects(Pid, Name, #state{cancel_customer_handler = {Mod, Fun, Args}},
+                        Effects) ->
+    [{mod_call, Mod, Fun, Args ++ [Pid, Name]} | Effects].
 
 update_smallest_raft_index(IncomingRaftIdx,
                            {#state{ra_indexes = Indexes} = State, Effects}) ->
