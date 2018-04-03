@@ -55,23 +55,29 @@
       condition_timeout_effects => [ra_effect()]
      }.
 
--type ra_state() :: leader | follower | candidate | pre_vote | await_condition.
+-type ra_state() :: leader | follower | candidate
+                    | pre_vote | await_condition | delete_and_terminate | stop.
 
 -type ra_msg() :: #append_entries_rpc{} |
                   {ra_node_id(), #append_entries_reply{}} |
+                  {ra_node_id(), #install_snapshot_result{}} |
                   #request_vote_rpc{} |
                   #request_vote_result{} |
                   #pre_vote_rpc{} |
                   #pre_vote_result{} |
                   #install_snapshot_rpc{} |
                   election_timeout |
+                  await_condition_timeout |
                   {command, term()}.
+
+-type ra_reply_body() :: #append_entries_reply{} |
+                         #request_vote_result{} |
+                         #pre_vote_result{}.
 
 -type ra_effect() ::
     ra_machine:effect() |
-    {reply, #append_entries_reply{} |
-            #request_vote_result{} |
-            #pre_vote_result{}} |
+    {reply, ra_reply_body()} |
+    {reply, term(), ra_reply_body()} |
     {cast, ra_node_id(), term()} |
     {send_vote_requests, [{ra_node_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |

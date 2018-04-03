@@ -512,7 +512,8 @@ follower_catchup_condition(_Config) ->
 
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
-    {follower, State, [{next_event, cast, Msg}]} = ra_node:handle_await_condition(Msg, State),
+    {follower, State, [{next_event, cast, Msg}]} =
+        ra_node:handle_await_condition(Msg, State),
     {follower, _, [{cast, n1, {n1, #append_entries_reply{success = false,
                                                          next_index = 4}}}]}
     = ra_node:handle_await_condition(await_condition_timeout, State),
@@ -1186,7 +1187,6 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 commit_index => 3,
                 current_term => Term,
                 id => n1,
-                initial_machine_state => [],
                 last_applied => 4,
                 log => Log,
                 machine_state => [{4,apple}],
@@ -1230,7 +1230,7 @@ leader_receives_install_snapshot_result(_Config) ->
                commit_index => 4,
                current_term => Term,
                id => n1,
-               initial_machine_state => [],
+               uid => <<"n1">>,
                last_applied => 4,
                log => Log,
                machine_state => [{4,apple}],
