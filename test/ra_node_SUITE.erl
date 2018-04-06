@@ -474,13 +474,15 @@ follower_catchup_condition(_Config) ->
     % from follower to await condition
     {await_condition, State = #{condition := _}, [_AppendEntryReply]}
     = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 5,
-                                                         prev_log_index = 4}, State0),
+                                                         prev_log_index = 4},
+                              State0),
 
     % append entry with a lower leader term should not enter await condition
     % even if prev_log_index is higher than last index
     {follower, _, [_]}
     = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 4,
-                                                         prev_log_index = 4}, State),
+                                                         prev_log_index = 4},
+                              State),
 
     % append entry when prev log index exists but the term is different should
     % not also enter await condition as it then rewinds and request resends
@@ -488,13 +490,15 @@ follower_catchup_condition(_Config) ->
     {await_condition, _, [_]}
     = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 6,
                                                          prev_log_term = 4,
-                                                         prev_log_index = 3}, State),
+                                                         prev_log_index = 3},
+                              State),
 
-    % append entry when term is ok but there is a gap should remain in await condition
-    % we do not want to send a reply here
-    {await_condition, _, []}
-        = ra_node:handle_await_condition(EmptyAE#append_entries_rpc{term = 5,
-                                                                    prev_log_index = 4}, State),
+    % append entry when term is ok but there is a gap should remain in await
+    % condition we do not want to send a reply here
+    {await_condition, _, []} =
+    ra_node:handle_await_condition(EmptyAE#append_entries_rpc{term = 5,
+                                                              prev_log_index = 4},
+                                   State),
 
     % success case - it transitions back to follower state
     {follower, _, [{next_event, cast, EmptyAE}]} =

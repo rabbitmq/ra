@@ -4,6 +4,7 @@
 
 %% API functions
 -export([start_link/1,
+         start_link/2,
          wait/2]).
 
 %% gen_server callbacks
@@ -38,6 +39,9 @@
 -spec start_link(config()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Config) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Config], []).
+
+start_link(Name, Config) ->
+    gen_server:start_link({local, Name}, ?MODULE, [Config], []).
 
 wait(Pid, Timeout) ->
     gen_server:call(Pid, wait, Timeout).
@@ -75,7 +79,7 @@ handle_info(enqueue, #state{tag = Tag, next = Next0,
     Next = Next0 + 1,
     case ra_fifo_client:enqueue(Next0, Msg, F0) of
         {ok, F} ->
-            ?INFO("Enqueuer: enqueued ~p~n", [Next0]),
+            % ?INFO("Enqueuer: enqueued ~p~n", [Next0]),
             case Max of
                 Next0 ->
                     State = State0#state{state = F},
@@ -94,7 +98,7 @@ handle_info(enqueue, #state{tag = Tag, next = Next0,
 handle_info({ra_event, From, Evt}, #state{state = F0,
                                           applied = Appd} = State0) ->
     {internal, Applied, F} = ra_fifo_client:handle_ra_event(From, Evt, F0),
-    ?INFO("Enqueuer: applied ~p~n", [Applied]),
+    % ?INFO("Enqueuer: applied ~p~n", [Applied]),
     {noreply, State0#state{state = F, applied = Appd ++ Applied}};
 handle_info(reply, #state{waiting = undefined} = State0) ->
     {noreply, State0};

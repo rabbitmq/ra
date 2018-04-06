@@ -32,8 +32,8 @@
                 next_seq = 0 :: seq(),
                 last_applied :: maybe(seq()),
                 next_enqueue_seq = 1 :: seq(),
-                max_pending = ?MAX_PENDING :: non_neg_integer(),
-                soft_limit_pending = ?SOFT_LIMIT_PENDING :: non_neg_integer(),
+                max_pending = 0 :: non_neg_integer(),
+                soft_limit_pending = 0 :: non_neg_integer(),
                 pending = #{} :: #{seq() => {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()}}).
@@ -62,9 +62,8 @@ init(ClusterId, Nodes) ->
 %% @param MaxPending size defining the max number of pending commands.
 -spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer()) -> state().
 init(ClusterId, Nodes, MaxPending) ->
-    #state{cluster_id = ClusterId, nodes = Nodes,
-           soft_limit_pending = trunc(MaxPending * 0.75),
-           max_pending = MaxPending}.
+    update_max_pending(#state{cluster_id = ClusterId,
+                              nodes = Nodes}, MaxPending).
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this
@@ -217,10 +216,11 @@ discard(CustomerTag, [_|_] = MsgIds, State0) ->
 %% @returns `{ok, State}' or `{error | timeout, term()}'
 -spec checkout(ra_fifo:customer_tag(), NumUnsettled :: non_neg_integer(),
                state()) -> {ok, state()} | {error | timeout, term()}.
-checkout(CustomerTag, NumUnsettled, State) ->
-    Nodes = sorted_nodes(State),
+checkout(CustomerTag, NumUnsettled, State0) ->
+    Nodes = sorted_nodes(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
+    State = update_max_pending(State0, NumUnsettled),
     try_send_and_await_consensus(Nodes, Cmd, State).
 
 %% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
@@ -326,6 +326,12 @@ untracked_enqueue(_ClusterId, [Node | _], Msg) ->
 
 %% Internal
 
+update_max_pending(#state{max_pending = Max0} = State, Change) ->
+    Max = Max0 + Change,
+    State#state{soft_limit_pending = trunc(Max * 0.75),
+                max_pending = Max}.
+
+
 try_send_and_await_consensus([Node | Rem], Cmd, State) ->
     case ra:send_and_await_consensus(Node, Cmd) of
         {ok, _, Leader} ->
@@ -339,18 +345,17 @@ try_send_and_await_consensus([Node | Rem], Cmd, State) ->
 seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
   when Seq > Last orelse Last =:= undefined ->
     State = case Last of
-                undefined ->
-                    State0;
+                undefined -> State0;
                 _ ->
                     do_resends(Last+1, Seq-1, State0)
             end,
     case maps:take(Seq, State#state.pending) of
         {{undefined, _}, Pending} ->
             {Corrs, State#state{pending = Pending,
-                                       last_applied = Seq}};
+                                last_applied = Seq}};
         {{Corr, _}, Pending} ->
             {[Corr | Corrs], State#state{pending = Pending,
-                                           last_applied = Seq}};
+                                         last_applied = Seq}};
         error ->
             % must have already been resent or removed for some other reason
             {Corrs, State}
