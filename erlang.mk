@@ -17,7 +17,7 @@
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 export ERLANG_MK_FILENAME
 
-ERLANG_MK_VERSION = 2018.03.05
+ERLANG_MK_VERSION = 2018.03.05-6-gb20df2d
 ERLANG_MK_WITHOUT = 
 
 # Make 3.81 and 3.82 are deprecated.
@@ -187,9 +187,11 @@ ERLANG_MK_BUILD_DIR ?= .erlang.mk.build
 
 erlang-mk: WITHOUT ?= $(ERLANG_MK_WITHOUT)
 erlang-mk:
-	git clone $(ERLANG_MK_REPO) $(ERLANG_MK_BUILD_DIR)
 ifdef ERLANG_MK_COMMIT
+	git clone $(ERLANG_MK_REPO) $(ERLANG_MK_BUILD_DIR)
 	cd $(ERLANG_MK_BUILD_DIR) && git checkout $(ERLANG_MK_COMMIT)
+else
+	git clone --depth 1 $(ERLANG_MK_REPO) $(ERLANG_MK_BUILD_DIR)
 endif
 	if [ -f $(ERLANG_MK_BUILD_CONFIG) ]; then cp $(ERLANG_MK_BUILD_CONFIG) $(ERLANG_MK_BUILD_DIR)/build.config; fi
 	$(MAKE) -C $(ERLANG_MK_BUILD_DIR) WITHOUT='$(strip $(WITHOUT))'
@@ -2879,6 +2881,14 @@ pkg_oauth2_homepage = https://github.com/kivra/oauth2
 pkg_oauth2_fetch = git
 pkg_oauth2_repo = https://github.com/kivra/oauth2
 pkg_oauth2_commit = master
+
+PACKAGES += observer_cli
+pkg_observer_cli_name = observer_cli
+pkg_observer_cli_description = Visualize Erlang/Elixir Nodes On The Command Line
+pkg_observer_cli_homepage = http://zhongwencool.github.io/observer_cli
+pkg_observer_cli_fetch = git
+pkg_observer_cli_repo = https://github.com/zhongwencool/observer_cli
+pkg_observer_cli_commit = master
 
 PACKAGES += octopus
 pkg_octopus_name = octopus
@@ -6621,6 +6631,7 @@ distclean:: distclean-relx-rel
 # Plugin-specific targets.
 
 $(RELX):
+	$(verbose) mkdir -p $(ERLANG_MK_TMP)
 	$(gen_verbose) $(call core_http_get,$(RELX),$(RELX_URL))
 	$(verbose) chmod +x $(RELX)
 
