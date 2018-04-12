@@ -37,7 +37,8 @@ all_tests() ->
      ra_fifo_client_cancel_checkout,
      ra_fifo_client_untracked_enqueue,
      ra_fifo_client_flow,
-     test_queries
+     test_queries,
+     log_fold
     ].
 
 groups() ->
@@ -620,6 +621,33 @@ restarted_node_does_not_reissue_side_effects(Config) ->
               ok
     end,
     ok = ra:stop_node(NodeId),
+    ok.
+
+log_fold(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    NodeId = ?config(node_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(m1, F0),
+    {ok, F2} = ra_fifo_client:enqueue(m2, F1),
+    {ok, F3} = ra_fifo_client:enqueue(m3, F2),
+    {_, F4} = process_ra_events(F3, 500),
+    Fun = fun({_, _, {'$usr', _, {enqueue, _, _, _}, _}}, {E, C, S, D, R}) ->
+                  {E + 1, C, S, D, R};
+             ({_, _, {'$usr', _, {settle, _, _}, _}}, {E, C, S, D, R}) ->
+                  {E, C, S + 1, D, R};
+             ({_, _, {'$usr', _, {discard, _, _}, _}}, {E, C, S, D, R}) ->
+                  {E, C, S, D + 1, R};
+             ({_, _, {'$usr', _, {return, _, _}, _}}, {E, C, S, D, R}) ->
+                  {E, C, S, D, R + 1};
+             ({_, _, {'$usr', _, {checkout, _, _}, _}}, {E, C, S, D, R}) ->
+                  {E, C + 1, S, D, R};
+             (_, Acc) ->
+                  Acc
+          end,
+    ct:pal("~p~n", [ra_node_proc:log_fold(NodeId, %% fun(E, Acc) -> [E | Acc] end, [])]),
+                                          Fun, {0, 0, 0, 0, 0}, 30000)]),
+    ra:stop_node(NodeId),
     ok.
 
 conf(ClusterId, UId, NodeId, _, Peers) ->

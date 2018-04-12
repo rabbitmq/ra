@@ -27,7 +27,8 @@
          make_rpcs/1,
          update_release_cursor/3,
          persist_last_applied/1,
-         terminate/2
+         terminate/2,
+         log_fold/3
         ]).
 
 -type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
@@ -168,7 +169,7 @@ init(#{id := Id,
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
-    {{ClusterIndexTerm, Cluster}, Log1} =
+    {ok, {{ClusterIndexTerm, Cluster}, Log1}} =
     fold_log_from(CommitIndex,
                   fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _) ->
                           {{Idx, Term}, Cluster};
@@ -967,6 +968,23 @@ terminate(State, _Reason) ->
     catch ra_log:close(Log),
     ok.
 
+-spec log_fold(ra_node_state(), fun((term(), State) -> State), State) ->
+                      {ok, State, ra_node_state()} |
+                      {error, term(), ra_node_state()}. 
+log_fold(#{log := Log} = RaState, Fun, State) ->
+    Idx = case ra_log:snapshot_index_term(Log) of
+              {PrevIdx, _PrevTerm} ->
+                  PrevIdx;
+              undefined ->
+                  1
+          end,
+    case fold_log_from(Idx, Fun, {State, Log}) of
+        {ok, {State1, Log1}} ->
+            {ok, State1, RaState#{log => Log1}};
+        {error, Reason, Log1} ->
+            {error, Reason, RaState#{log => Log1}}
+    end.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -1426,10 +1444,15 @@ log_unhandled_msg(RaState, Msg, #{id := Id}) ->
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, 5, Log0) of
         {[], Log} ->
-            {St, Log};
+            {ok, {St, Log}};
         {Entries, Log}  ->
-            St1 = lists:foldl(Folder, St, Entries),
-            fold_log_from(From + 5, Folder, {St1, Log})
+            try
+                St1 = lists:foldl(Folder, St, Entries),
+                fold_log_from(From + 5, Folder, {St1, Log})
+            catch
+                _:Reason ->
+                    {error, Reason, Log}
+            end
     end.
 
 drop_existing({Log0, []}) ->

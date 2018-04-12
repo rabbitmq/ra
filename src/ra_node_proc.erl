@@ -31,7 +31,8 @@
          query/3,
          state_query/2,
          trigger_election/1,
-         ping/2
+         ping/2,
+         log_fold/4
         ]).
 
 -export([send_rpc/2]).
@@ -124,6 +125,9 @@ query(ServerRef, QueryFun, consistent) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 5000).
 
+-spec log_fold(ra_node_id(), fun(), term(), integer()) -> term().
+log_fold(ServerRef, Fun, InitialState, Timeout) ->
+    gen_statem:call(ServerRef, {log_fold, Fun, InitialState}, Timeout).
 
 %% used to query the raft state rather than the machine state
 -spec state_query(ra_node_id(), all | members | machine) ->
@@ -278,6 +282,13 @@ leader(_, tick_timeout, State0) ->
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
+leader({call, From}, {log_fold, Fun, Term}, State) ->
+    case ra_node:log_fold(State#state.node_state, Fun, Term) of
+        {ok, Result, NodeState} ->
+            {keep_state, State#state{node_state = NodeState}, [{reply, From, {ok, Result}}]};
+        {error, Reason, NodeState} ->
+            {keep_state, State#state{node_state = NodeState}, [{reply, From, {error, Reason}}]}
+    end;
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -463,6 +474,13 @@ follower(info, {node_event, Node, down}, State) ->
 follower(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
     {keep_state, State, set_tick_timer(State, [])};
+follower({call, From}, {log_fold, Fun, Term}, State) ->
+    case ra_node:log_fold(State#state.node_state, Fun, Term) of
+        {ok, Result, NodeState} ->
+            {keep_state, State#state{node_state = NodeState}, [{reply, From, {ok, Result}}]};
+        {error, Reason, NodeState} ->
+            {keep_state, State#state{node_state = NodeState}, [{reply, From, {error, Reason}}]}
+    end;
 follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of

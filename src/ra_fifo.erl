@@ -20,7 +20,8 @@
          query_processes/1,
          shadow_copy/1,
          size_test/2,
-         perf_test/2
+         perf_test/2,
+         read_log/0
          % profile/1
          %
         ]).
@@ -193,7 +194,7 @@ apply(RaftIdx, {settle, MsgIds, CustomerId},
             MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
             % need to increment metrics before completing as any snapshot
             % states taken need to includ them
-            State = incr_metrics(State0, {0, 0, length(MsgIds), 0}),
+            State = incr_metrics(State0, {0, 0, maps:size(Discarded), 0}),
             complete(RaftIdx, CustomerId,
                      MsgRaftIdxs, Cust0, Checked,
                      State);
@@ -208,7 +209,7 @@ apply(RaftIdx, {discard, MsgIds, CustomerId},
             Discarded = maps:with(MsgIds, Checked0),
             MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
                                    <- maps:values(Discarded)],
-            State1 = incr_metrics(State0, {0, 0, length(MsgIds), 0}),
+            State1 = incr_metrics(State0, {0, 0, maps:size(Discarded), 0}),
             {State, Effects} = complete(RaftIdx, CustomerId,
                                         MsgRaftIdxs, Cust0, Checked,
                                         State1),
@@ -364,6 +365,21 @@ query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
     Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
     maps:keys(maps:merge(Enqs, Custs)).
 
+
+read_log() ->
+    fun({_, _, {'$usr', _, {enqueue, _, _, _}, _}}, {E, C, S, D, R}) ->
+            {E + 1, C, S, D, R};
+       ({_, _, {'$usr', _, {settle, _, _}, _}}, {E, C, S, D, R}) ->
+            {E, C, S + 1, D, R};
+       ({_, _, {'$usr', _, {discard, _, _}, _}}, {E, C, S, D, R}) ->
+            {E, C, S, D + 1, R};
+       ({_, _, {'$usr', _, {return, _, _}, _}}, {E, C, S, D, R}) ->
+            {E, C, S, D, R + 1};
+       ({_, _, {'$usr', _, {checkout, _, _}, _}}, {E, C, S, D, R}) ->
+            {E, C + 1, S, D, R};
+       (_, Acc) ->
+            Acc
+    end.
 
 %%% Internal
 
