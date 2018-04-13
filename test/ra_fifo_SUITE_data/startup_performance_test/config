@@ -1,0 +1,11 @@
+#{await_condition_timeout => 30000,broadcast_time => 50,
+  cluster_id => startup_performance_test,
+  id => {startup_performance_test,ct_ra@mars},
+  initial_nodes => [],
+  log_init_args =>
+      #{data_dir =>
+            "/Users/dparracorbacho/dev/umbrella-master/deps/ra/test/ra_fifo_SUITE_data/",
+        uid => <<"startup_performance_test">>},
+  log_module => ra_log_file,
+  machine => {module,ra_fifo,#{}},
+  tick_timeout => 1000,uid => <<"startup_performance_test">>}.
