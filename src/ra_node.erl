@@ -180,10 +180,15 @@ init(#{id := Id,
     % apply entries to the statemachine and
     % throw away the effects as they have already been issued
     {State, _, _} = apply_to(CommitIndex,
+                             fun(E, S) ->
+                                     %% Clear out the effects to avoid building up a
+                                     %% long list of effects than then we throw away
+                                     %% on node startup (queue recovery)
+                                     setelement(3, apply_with(Id, Machine, E, S), [])
+                             end,
                              State0#{cluster => Cluster,
                                      cluster_index_term => ClusterIndexTerm,
                                      log => Log1}),
-
     % close and re-open log to ensure segments aren't unnecessarily kept
     % open
     ok = ra_log:close(maps:get(log, State)),
@@ -825,6 +830,7 @@ wal_down_condition(_Msg, #{log := Log}) ->
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := Id, leader_id := LeaderId,
                                  current_term := Term,
+                                 machine := Machine,
                                  log := Log} = State0) ->
     % as writes are async we can't use the index of the last available entry
     % in the log as they may not have been fully persisted yet
@@ -1197,11 +1203,13 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 
+apply_to(ApplyTo, #{id := Id, machine := Machine} = State) ->
+    apply_to(ApplyTo, fun(E, S) -> apply_with(Id, Machine, E, S) end, State).
 
-apply_to(ApplyTo, #{id := Id,
-                    last_applied := LastApplied,
-                    machine := Machine,
-                    machine_state := MacState0} = State0)
+apply_to(ApplyTo, ApplyFun, #{id := Id,
+                              last_applied := LastApplied,
+                              machine := Machine,
+                              machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
     % TODO: fetch and apply batches to reduce peak memory usage
     case fetch_entries(LastApplied + 1, ApplyTo, State0) of
@@ -1209,8 +1217,8 @@ apply_to(ApplyTo, #{id := Id,
             {State, [], 0};
         {Entries, State1} ->
             {State, MacState, NewEffects, Notifys} =
-                lists:foldl(fun(E, St) -> apply_with(Id, Machine, E, St) end,
-                            {State1, MacState0, [], #{}}, Entries),
+                lists:foldl(ApplyFun,
+                  {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
@@ -1219,7 +1227,7 @@ apply_to(ApplyTo, #{id := Id,
                     machine_state => MacState}, NotifyEffects ++ NewEffects,
              AppliedTo - LastApplied}
     end;
-apply_to(_, State) -> % ApplyTo
+apply_to(_, _, State) -> % ApplyTo
     {State, [], 0}.
 
 make_notify_effects(Nots) ->
@@ -1236,12 +1244,14 @@ apply_with(_, % Idx
             % apply returned no reply so use IdxTerm as reply value
             {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
                                            Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx, Notifys};
+            {State, NextMacSt, Effects ++ Efx
+            , Notifys};
         {NextMacSt, Efx, Reply} ->
             % apply returned a return value
             {Effects, Notifys} = add_reply(From, Reply, ReplyType,
                                            Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx, Notifys}
+            {State, NextMacSt, Effects ++ Efx
+            , Notifys}
     end;
 apply_with(_, _, % Id, Machine
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},

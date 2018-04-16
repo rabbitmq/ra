@@ -164,7 +164,8 @@ leader_call(ServerRef, Msg, Timeout) ->
 init(Config0) when is_map(Config0) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    {#{id := Id, uid := UId, cluster := Cluster} = NodeState,
+    {#{id := Id, uid := UId,
+       cluster := Cluster} = NodeState,
      InitEffects} = ra_node:init(Config),
     Key = ra_lib:ra_node_id_to_local_name(Id),
     % ensure ra_directory has the new pid
@@ -181,8 +182,7 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    ?INFO("~w ra_node_proc:init/1:~n~p~n",
-          [Id, ra_node:overview(NodeState)]),
+    ?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
     % New cluster starts should be coordinated and elections triggered
     % explicitly hence if this is a new one we wait here.

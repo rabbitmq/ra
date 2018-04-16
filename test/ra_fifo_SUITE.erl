@@ -143,8 +143,6 @@ ra_fifo_client_return(Config) ->
     {ok, {MsgId, _}, F1} = ra_fifo_client:dequeue(<<"tag">>, unsettled, F),
     {ok, _F2} = ra_fifo_client:return(<<"tag">>, [MsgId], F1),
 
-    % F2 = return_next_delivery(F1, 500),
-    % _F3 = discard_next_delivery(F2, 500),
     ra:stop_node(NodeId),
     ok.
 
@@ -661,9 +659,9 @@ startup_performance_test(Config) ->
 
     Conf = data_conf(ClusterId, UId, NodeId, PrivDir, [], DataDir),
     os:cmd("cp -r " ++ DataDir ++ " " ++ PrivDir),
-    start_profile(Config, [ra_fifo]),
+    %% start_profile(Config, [ra_fifo, lists, ra_node, ordsets, maps, queue]),
     ct:pal("Start takes ~p microseconds ~n", [element(1, timer:tc(fun() -> ra:start_node(Conf) end))]),
-    stop_profile(Config),
+    %% stop_profile(Config),
     ra:send_and_await_consensus(NodeId, {enqueue, self(), undefined, last}),
     ra:stop_node(NodeId),
     ok.

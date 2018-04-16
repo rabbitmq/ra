@@ -6,6 +6,7 @@
 
 -include("ra.hrl").
 
+-include_lib("eunit/include/eunit.hrl").
 -export([
          init/1,
          apply/3,
@@ -120,9 +121,13 @@
          % unassigned messages
          messages = #{} :: #{msg_in_id() => indexed_msg()},
          % defines the lowest message in id available in the messages map
+         % that isn't a return
          low_msg_num :: msg_in_id() | undefined,
          % defines the next message in id to be added to the messages map
          next_msg_num = 1 :: msg_in_id(),
+         % list of returned msg_in_ids - when checking out it picks from
+         % this list first before taking low_msg_num
+         returns = queue:new() :: queue:queue(msg_in_id()),
          % a counter of enqueues - used to trigger shadow copy points
          enqueue_count = 0 :: non_neg_integer(),
          % a map containing all the live processes that have ever enqueued
@@ -389,8 +394,7 @@ cancel_customer(CustomerId, {Effects, #state{customers = C0, name = Name} = S0})
             S1 = maps:fold(fun (_, {MsgNum, Msg}, S) ->
                                    return_one(MsgNum, Msg, S)
                            end, S0, Checked0),
-            S = incr_metrics(S1, {0, 0, 0,
-                                  maps:size(Checked0)}),
+            S = incr_metrics(S1, {0, 0, 0, maps:size(Checked0)}),
             {cancel_customer_effects(CustomerId, Name, S, Effects),
              S#state{customers = Custs}};
         error ->
@@ -409,6 +413,8 @@ enqueue(RaftIdx, RawMsg, #state{messages = Messages,
                                 next_msg_num = NextMsgNum} = State0) ->
     Msg = {RaftIdx, {#{}, RawMsg}}, % indexed message with header map
     State0#state{messages = Messages#{NextMsgNum => Msg},
+                 % this is probably only done to record it when low_msg_num
+                 % is undefined
                  low_msg_num = min(LowMsgNum, NextMsgNum),
                  next_msg_num = NextMsgNum + 1}.
 
@@ -509,7 +515,8 @@ dead_letter_effects(Discarded,
 cancel_customer_effects(_, _, #state{cancel_customer_handler = undefined},
                         Effects) ->
     Effects;
-cancel_customer_effects(Pid, Name, #state{cancel_customer_handler = {Mod, Fun, Args}},
+cancel_customer_effects(Pid, Name,
+                        #state{cancel_customer_handler = {Mod, Fun, Args}},
                         Effects) ->
     [{mod_call, Mod, Fun, Args ++ [Pid, Name]} | Effects].
 
@@ -537,15 +544,17 @@ update_smallest_raft_index(IncomingRaftIdx,
             end
     end.
 
+% TODO update message then update messages and returns in single operations
 return_one(MsgNum, {RaftId, {Header0, RawMsg}},
-           #state{messages = Messages, low_msg_num = Low0} = State0) ->
+           #state{messages = Messages,
+                  returns = Returns} = State0) ->
     Header = maps:update_with(delivery_count,
                               fun (C) -> C+1 end,
                               1, Header0),
     Msg = {RaftId, {Header, RawMsg}},
     % this should not affect the release cursor in any way
     State0#state{messages = maps:put(MsgNum, Msg, Messages),
-                 low_msg_num = min(MsgNum, Low0)}.
+                 returns = queue:in(MsgNum, Returns)}.
 
 
 checkout(State, Effects) ->
@@ -556,63 +565,84 @@ checkout0({State, []}, Effects, Num) ->
 checkout0({State, Efxs}, Effects, Num) ->
     checkout0(checkout_one(State), Efxs ++ Effects, Num + 1).
 
+
+next_checkout_message(#state{returns = Returns,
+                             low_msg_num = Low0,
+                             next_msg_num = NextMsgNum} = State) ->
+    case queue:out(Returns) of
+        {{value, Next}, Rest} ->
+            {Next, State#state{returns = Rest}};
+        {empty, _} ->
+            case Low0 of
+                undefined ->
+                    {undefined, State};
+                _ ->
+                    Low = Low0 + 1,
+                    case Low of
+                        NextMsgNum ->
+                            %% the map will be empty after this item is removed
+                            {Low0, State#state{low_msg_num = undefined}};
+                        _ ->
+                            {Low0, State#state{low_msg_num = Low}}
+                    end
+            end
+    end.
+
 checkout_one(#state{messages = Messages0,
-                    low_msg_num = Low0,
-                    next_msg_num = NextMsgNum,
                     service_queue = SQ0,
-                    customers = Custs0} = State0) ->
-    % messages are available
-    case maps:take(Low0, Messages0) of
-        {{_, Msg} = IdxMsg, Messages} ->
-            % there are customers waiting to be serviced
-            case queue:out(SQ0) of
-                {{value, {CTag, CPid} = CustomerId}, SQ1} ->
-                    % process customer checkout
+                    customers = Custs0} = InitState) ->
+    case queue:out(SQ0) of
+        {{value, {CTag, CPid} = CustomerId}, SQ1} ->
+            {NextMsgInId, State0} = next_checkout_message(InitState),
+            %% messages are available
+            case maps:take(NextMsgInId, Messages0) of
+                {{_, Msg} = IdxMsg, Messages} ->
+                    %% there are customers waiting to be serviced
+                    %% process customer checkout
                     case maps:get(CustomerId, Custs0, undefined) of
                         #customer{checked_out = Checked0,
                                   next_msg_id = Next,
                                   seen = Seen} = Cust0 ->
-                            Checked = maps:put(Next, {Low0, IdxMsg}, Checked0),
+                            Checked = maps:put(Next, {NextMsgInId, IdxMsg},
+                                               Checked0),
                             Cust = Cust0#customer{checked_out = Checked,
                                                   next_msg_id = Next+1,
                                                   seen = Seen+1},
                             {Custs, SQ, []} = % we expect no effects
                                 update_or_remove_sub(CustomerId, Cust,
                                                      Custs0, SQ1),
-                            Low = new_low(Low0, NextMsgNum, Messages),
                             State = State0#state{service_queue = SQ,
-                                                 low_msg_num = Low,
                                                  messages = Messages,
                                                  customers = Custs},
                             {State, [{send_msg, CPid, {delivery, CTag,
                                                        [{Next, Msg}]}}]};
                         undefined ->
-                            % customer did not exist but was queued, recurse
-                            checkout_one(State0#state{service_queue = SQ1})
+                            %% customer did not exist but was queued, recurse
+                            checkout_one(InitState#state{service_queue = SQ1})
                     end;
-                _ ->
-                    {State0, []}
+                error ->
+                    {InitState, []}
             end;
-        error ->
-            {State0, []}
+        _ ->
+            {InitState, []}
     end.
 
-new_low(_, _, Messages) when map_size(Messages) =:= 0 ->
-    undefined;
-new_low(_, _, Messages) when map_size(Messages) < 100 ->
-    % guesstimate value - needs measuring
-    lists:min(maps:keys(Messages));
-new_low(Prev, Max, Messages) ->
-    walk_map(Prev+1, Max, Messages).
+% new_low(_, _, Messages) when map_size(Messages) =:= 0 ->
+%     undefined;
+% new_low(_, _, Messages) when map_size(Messages) < 100 ->
+%     % guesstimate value - needs measuring
+%     lists:min(maps:keys(Messages));
+% new_low(Prev, Max, Messages) ->
+%     walk_map(Prev+1, Max, Messages).
 
-walk_map(N, Max, Map) when N =< Max ->
-    case maps:is_key(N, Map) of
-        true -> N;
-        false ->
-            walk_map(N+1, Max, Map)
-    end;
-walk_map(_, _, _) ->
-    undefined.
+% walk_map(N, Max, Map) when N =< Max ->
+%     case maps:is_key(N, Map) of
+%         true -> N;
+%         false ->
+%             walk_map(N+1, Max, Map)
+%     end;
+% walk_map(_, _, _) ->
+%     undefined.
 
 
 update_or_remove_sub(CustomerId, #customer{lifetime = once,
@@ -737,6 +767,7 @@ shadow_copy(#state{customers = Customers,
     State#state{messages = #{},
                 ra_indexes = ra_fifo_index:empty(),
                 low_msg_num = undefined,
+                returns = queue:new(),
                 % TODO: optimise
                 % this is inefficient (from a memory use point of view)
                 % as it creates a new tuple for every customer
@@ -783,6 +814,7 @@ enq_enq_checkout_test() ->
     {State2, _} = enq(2, 2, second, State1),
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, Cid}, State2),
+    io:format("effects ~p", [Effects]),
     ?assertEffect({monitor, _, _}, Effects),
     ?assertEffect({send_msg, _, {delivery, _, _}}, Effects),
     ok.
@@ -1094,14 +1126,14 @@ delivery_query_returns_deliveries_test() ->
     [_, _, _] = get_checked_out(Cid, 1, 3, State),
     ok.
 
-performance_test() ->
-    ensure_ets(),
-    % just under ~200ms on my machine [Karl]
-    NumMsgs = 100000,
-    {Taken, _} = perf_test(NumMsgs, 0),
-    ?debugFmt("performance_test took ~p ms for ~p messages",
-              [Taken / 1000, NumMsgs]),
-    ok.
+% performance_test() ->
+%     ensure_ets(),
+%     % just under ~200ms on my machine [Karl]
+%     NumMsgs = 100000,
+%     {Taken, _} = perf_test(NumMsgs, 0),
+%     ?debugFmt("performance_test took ~p ms for ~p messages",
+%               [Taken / 1000, NumMsgs]),
+%     ok.
 
 enq(Idx, MsgSeq, Msg, State) ->
     apply(Idx, {enqueue, self(), MsgSeq, Msg}, State).
