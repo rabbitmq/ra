@@ -5,7 +5,8 @@
 -include("ra.hrl").
 
 %% State functions
--export([leader/3,
+-export([recover/3,
+         leader/3,
          follower/3,
          pre_vote/3,
          candidate/3,
@@ -184,19 +185,7 @@ init(Config0) when is_map(Config0) ->
                     await_condition_timeout = AwaitCondTimeout},
     ?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
-    % New cluster starts should be coordinated and elections triggered
-    % explicitly hence if this is a new one we wait here.
-    % Else we set an election timer
-    Actions = case ra_node:is_new(State#state.node_state) of
-                  true ->
-                      Actions0;
-                  false ->
-                      ?INFO("~w: is not new, setting election timeout.~n",
-                            [Id]),
-                      [election_timeout_action(short, State) | Actions0]
-              end,
-
-    {ok, follower, State, set_tick_timer(State, Actions)}.
+    {ok, recover, State, [{next_event, cast, go} | Actions0]}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -204,6 +193,20 @@ callback_mode() -> state_functions.
 %%%===================================================================
 %%% State functions
 %%%===================================================================
+recover(_EventType, go, State = #state{node_state = NodeState0}) ->
+    NodeState = ra_node:recover(NodeState0),
+    % New cluster starts should be coordinated and elections triggered
+    % explicitly hence if this is a new one we wait here.
+    % Else we set an election timer
+    Actions = case ra_node:is_new(NodeState) of
+                  true ->
+                      [];
+                  false ->
+                      ?INFO("~w: is not new, setting election timeout.~n",
+                            [id(State)]),
+                      [election_timeout_action(short, State)]
+              end,
+    {next_state, follower, State#state{node_state = NodeState}, set_tick_timer(State, Actions)}.
 
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect

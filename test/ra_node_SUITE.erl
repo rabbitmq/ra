@@ -71,7 +71,7 @@ end_per_testcase(_TestCase, Config) ->
 id(X) -> X.
 
 ra_node_init(Conf) ->
-    element(1, ra_node:init(Conf)).
+    ra_node:recover(element(1, ra_node:init(Conf))).
 
 init(_Config) ->
     #{id := Id,

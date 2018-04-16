@@ -28,7 +28,8 @@
          update_release_cursor/3,
          persist_last_applied/1,
          terminate/2,
-         log_fold/3
+         log_fold/3,
+         recover/1
         ]).
 
 -type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
@@ -169,7 +170,7 @@ init(#{id := Id,
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
     % peers and become a leader
-    {ok, {{ClusterIndexTerm, Cluster}, Log1}} =
+    {ok, {{ClusterIndexTerm, Cluster}, Log}} =
     fold_log_from(CommitIndex,
                   fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _) ->
                           {{Idx, Term}, Cluster};
@@ -179,6 +180,14 @@ init(#{id := Id,
     % TODO: do we need to set previous cluster here?
     % apply entries to the statemachine and
     % throw away the effects as they have already been issued
+    {State0#{log => Log,
+            cluster => Cluster,
+            cluster_index_term => ClusterIndexTerm}, InitEffects}.
+
+
+recover(#{commit_index := CommitIndex,
+          id := Id,
+          machine := Machine} = State0) ->
     {State, _, _} = apply_to(CommitIndex,
                              fun(E, S) ->
                                      %% Clear out the effects to avoid building up a
@@ -186,15 +195,11 @@ init(#{id := Id,
                                      %% on node startup (queue recovery)
                                      setelement(3, apply_with(Id, Machine, E, S), [])
                              end,
-                             State0#{cluster => Cluster,
-                                     cluster_index_term => ClusterIndexTerm,
-                                     log => Log1}),
+                             State0),
     % close and re-open log to ensure segments aren't unnecessarily kept
     % open
-    ok = ra_log:close(maps:get(log, State)),
-    Log = ra_log:init(LogMod, LogInitArgs),
-    {State#{log => Log}, InitEffects}.
-
+    Log = ra_log:release_resources(maps:get(log, State)),
+    State#{log => Log}.
 
 % the peer id in the append_entries_reply message is an artifact of
 % the "fake" rpc call in ra_proxy as when using reply the unique reference

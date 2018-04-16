@@ -25,7 +25,8 @@
          overview/1,
          write_config/2,
          read_config/1,
-         delete_everything/1
+         delete_everything/1,
+         release_resources/1
         ]).
 
 -include("ra.hrl").
@@ -526,6 +527,12 @@ delete_everything(#state{directory = Dir} = Log) ->
                   "directory ~s~n Error: ~p~n", [Dir, Err])
     end,
     ok.
+
+release_resources(#state{open_segments = OpenSegs} = State) ->
+    % deliberately ignoring return value
+    % close all open segments
+    [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
+    State#state{open_segments = #{}}.
 
 %%% Local functions
 

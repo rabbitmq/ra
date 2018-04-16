@@ -29,7 +29,8 @@
          overview/1,
          write_config/2,
          read_config/1,
-         delete_everything/1
+         delete_everything/1,
+         release_resources/1
         ]).
 
 -type ra_log_init_args() :: #{atom() => term()}.
@@ -133,6 +134,9 @@
 
 -callback delete_everything(State :: ra_log_state()) ->
     ok.
+
+-callback release_resources(State :: ra_log_state()) ->
+    ra_log_state().
 
 %%
 %% API
@@ -324,3 +328,8 @@ read_config({Mod, Log}) ->
     ok.
 delete_everything({Mod, Log}) ->
     Mod:delete_everything(Log).
+
+-spec release_resources(State :: ra_log()) ->
+                               ra_log().
+release_resources({Mod, Log}) ->
+    {Mod, Mod:release_resources(Log)}.
