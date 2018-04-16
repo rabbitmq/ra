@@ -38,8 +38,7 @@ all_tests() ->
      ra_fifo_client_untracked_enqueue,
      ra_fifo_client_flow,
      test_queries,
-     log_fold,
-     startup_performance_test
+     log_fold
     ].
 
 groups() ->
@@ -649,52 +648,6 @@ log_fold(Config) ->
                                           Fun, {0, 0, 0, 0, 0}, 30000)]),
     ra:stop_node(NodeId),
     ok.
-
-startup_performance_test(Config) ->
-    ClusterId = ?config(cluster_id, Config),
-    NodeId = ?config(node_id, Config),
-    DataDir = ?config(data_dir, Config),
-    UId = ?config(uid, Config),
-    PrivDir = ?config(priv_dir, Config),
-
-    Conf = data_conf(ClusterId, UId, NodeId, PrivDir, [], DataDir),
-    os:cmd("cp -r " ++ DataDir ++ " " ++ PrivDir),
-    %% start_profile(Config, [ra_fifo, lists, ra_node, ordsets, maps, queue]),
-    ct:pal("Start takes ~p microseconds ~n", [element(1, timer:tc(fun() -> ra:start_node(Conf) end))]),
-    %% stop_profile(Config),
-    ra:send_and_await_consensus(NodeId, {enqueue, self(), undefined, last}),
-    ra:stop_node(NodeId),
-    ok.
-
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p~n", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p~n", [Case]),
-    lg:stop(),
-    % this segfaults
-    % timer:sleep(2000),
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
-
-data_conf(ClusterId, UId, NodeId, _, Peers, DataDir) ->
-    #{cluster_id => ClusterId,
-      id => NodeId,
-      uid => UId,
-      log_module => ra_log_file,
-      log_init_args => #{uid => UId,
-                         data_dir => DataDir},
-      initial_nodes => Peers,
-      machine => {module, ra_fifo, #{}}}.
 
 conf(ClusterId, UId, NodeId, _, Peers) ->
     #{cluster_id => ClusterId,
