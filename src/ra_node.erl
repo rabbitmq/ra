@@ -1206,29 +1206,33 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
 apply_to(ApplyTo, #{id := Id, machine := Machine} = State) ->
     apply_to(ApplyTo, fun(E, S) -> apply_with(Id, Machine, E, S) end, State).
 
-apply_to(ApplyTo, ApplyFun, #{id := Id,
-                              last_applied := LastApplied,
-                              machine := Machine,
-                              machine_state := MacState0} = State0)
+apply_to(ApplyTo, ApplyFun, State) ->
+    apply_to(ApplyTo, ApplyFun, 0, [], State).
+
+apply_to(ApplyTo, ApplyFun, NumApplied, Effects, #{id := Id,
+                                                   last_applied := LastApplied,
+                                                   machine := Machine,
+                                                   machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
+    To = min(LastApplied + 1 + 1024, ApplyTo),
     % TODO: fetch and apply batches to reduce peak memory usage
-    case fetch_entries(LastApplied + 1, ApplyTo, State0) of
+    case fetch_entries(LastApplied + 1, To, State0) of
         {[], State} ->
-            {State, [], 0};
+            {State, Effects, NumApplied};
         {Entries, State1} ->
             {State, MacState, NewEffects, Notifys} =
                 lists:foldl(ApplyFun,
-                  {State1, MacState0, [], #{}}, Entries),
+                            {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
-
-            {State#{last_applied => AppliedTo,
-                    machine_state => MacState}, NotifyEffects ++ NewEffects,
-             AppliedTo - LastApplied}
+            apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
+                     Effects ++ NotifyEffects ++ NewEffects,
+                     State#{last_applied => AppliedTo,
+                            machine_state => MacState})
     end;
-apply_to(_, _, State) -> % ApplyTo
-    {State, [], 0}.
+apply_to(_, _, NumApplied, Effects, State) -> % ApplyTo
+    {State, Effects, NumApplied}.
 
 make_notify_effects(Nots) ->
     [{notify, Pid, lists:reverse(Corrs)}
