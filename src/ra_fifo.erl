@@ -72,7 +72,7 @@
                          cancel.
 
 -type protocol() ::
-    {enqueue, Sender :: pid(), MsgSeq :: msg_seqno(), Msg :: raw_msg()} |
+    {enqueue, Sender :: maybe(pid()), MsgSeq :: maybe(msg_seqno()), Msg :: raw_msg()} |
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgIds :: [msg_id()], Customer :: customer_id()} |
     {return, MsgIds :: [msg_id()], Customer :: customer_id()} |
@@ -90,7 +90,7 @@
 -type client_msg() :: delivery().
 %% the messages `ra_fifo' can send to customers.
 
--type applied_mfa() :: {module(), function(), [term()]}.
+-type applied_mfa() :: {module(), atom(), [term()]}.
 % represents a partially applied module call
 
 -define(METRICS_TABLE, ra_fifo_metrics).
@@ -183,7 +183,7 @@ init(#{name := Name} = Conf) ->
 % msg_ids are scoped per customer
 % ra_indexes holds all raft indexes for enqueues currently on queue
 -spec apply(ra_index(), command(), state()) ->
-    {state(), ra_machine:effects()}.
+    {state(), ra_machine:effects()} | {state(), ra_machine:effects(), term()}.
 apply(RaftIdx, {enqueue, From, Seq, RawMsg}, State00) ->
     State0 = append_to_master_index(RaftIdx, State00),
     {State1, Effects0} = maybe_enqueue(RaftIdx, From, Seq, RawMsg, State0),
