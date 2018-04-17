@@ -492,13 +492,18 @@ overview(#state{last_index = LastIndex,
                 last_written_index_term = LWIT,
                 snapshot_index_in_progress = SIIP,
                 segment_refs = Segs,
+                snapshot_state = SnapshotState,
                 open_segments = OpenSegs}) ->
     #{type => ?MODULE,
       last_index => LastIndex,
       last_written_index_term => LWIT,
       num_segments => length(Segs),
       open_segments => maps:size(OpenSegs),
-      snapshot_index_in_progress => SIIP
+      snapshot_index_in_progress => SIIP,
+      snapshot_index => case SnapshotState of
+                            undefined -> undefined;
+                            _ -> element(1, SnapshotState)
+                        end
      }.
 
 write_config(Config, #state{directory = Dir}) ->

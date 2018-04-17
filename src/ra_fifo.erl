@@ -22,7 +22,8 @@
          shadow_copy/1,
          size_test/2,
          perf_test/2,
-         read_log/0
+         read_log/0,
+         query_ra_indexes/1
          % profile/1
          %
         ]).
@@ -81,12 +82,6 @@
 -type command() :: protocol() | ra_machine:builtin_command().
 %% all the command types suppored by ra fifo
 
--type metrics() :: {Name :: atom(),
-                    Enqueued :: non_neg_integer(),
-                    CheckedOut :: non_neg_integer(),
-                    Settled :: non_neg_integer(),
-                    Returned :: non_neg_integer()}.
-
 -type client_msg() :: delivery().
 %% the messages `ra_fifo' can send to customers.
 
@@ -96,7 +91,7 @@
 -define(METRICS_TABLE, ra_fifo_metrics).
 -define(SHADOW_COPY_INTERVAL, 128).
 % metrics tuple format:
-% {Key, Enqueues, Checkouts, Settlements, Returns}
+% {Key, Ready, Pending, Total}
 
 -record(customer,
         {checked_out = #{} :: #{msg_id() => {msg_in_id(), indexed_msg()}},
@@ -147,8 +142,7 @@
          % needs to be part of snapshot
          service_queue = queue:new() :: queue:queue(customer_id()),
          dead_letter_handler :: maybe(applied_mfa()),
-         cancel_customer_handler :: maybe(applied_mfa()),
-         metrics :: metrics()
+         cancel_customer_handler :: maybe(applied_mfa())
         }).
 
 -opaque state() :: #state{}.
@@ -174,9 +168,8 @@ init(#{name := Name} = Conf) ->
     CCH = maps:get(cancel_customer_handler, Conf, undefined),
     {#state{name = Name,
             dead_letter_handler = DLH,
-            cancel_customer_handler = CCH,
-            metrics = {Name, 0, 0, 0, 0}},
-     [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0, 0}}]}.
+            cancel_customer_handler = CCH},
+     [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0}}]}.
 
 
 
@@ -187,11 +180,9 @@ init(#{name := Name} = Conf) ->
 apply(RaftIdx, {enqueue, From, Seq, RawMsg}, State00) ->
     State0 = append_to_master_index(RaftIdx, State00),
     {State1, Effects0} = maybe_enqueue(RaftIdx, From, Seq, RawMsg, State0),
-    {State2, Effects, Num} = checkout(State1, Effects0),
-    State = incr_metrics(State2, {1, Num, 0, 0}),
-    {State, Effects};
+    checkout(State1, Effects0);
 apply(RaftIdx, {settle, MsgIds, CustomerId},
-      #state{customers = Custs0} = State0) ->
+      #state{customers = Custs0} = State) ->
     case Custs0 of
         #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
             Checked = maps:without(MsgIds, Checked0),
@@ -199,12 +190,10 @@ apply(RaftIdx, {settle, MsgIds, CustomerId},
             MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
             % need to increment metrics before completing as any snapshot
             % states taken need to includ them
-            State = incr_metrics(State0, {0, 0, maps:size(Discarded), 0}),
-            complete(RaftIdx, CustomerId,
-                     MsgRaftIdxs, Cust0, Checked,
-                     State);
+            complete(RaftIdx, CustomerId, MsgRaftIdxs,
+                     Cust0, Checked, State);
         _ ->
-            {State0, []}
+            {State, []}
     end;
 apply(RaftIdx, {discard, MsgIds, CustomerId},
       #state{customers = Custs0} = State0) ->
@@ -214,10 +203,9 @@ apply(RaftIdx, {discard, MsgIds, CustomerId},
             Discarded = maps:with(MsgIds, Checked0),
             MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
                                    <- maps:values(Discarded)],
-            State1 = incr_metrics(State0, {0, 0, maps:size(Discarded), 0}),
             {State, Effects} = complete(RaftIdx, CustomerId,
                                         MsgRaftIdxs, Cust0, Checked,
-                                        State1),
+                                        State0),
             {State, dead_letter_effects(Discarded, State, Effects)};
         _ ->
             {State0, []}
@@ -242,32 +230,28 @@ apply(RaftIdx, {checkout, {dequeue, settled}, CustomerId}, State0) ->
     State1 = update_customer(CustomerId, {once, 1}, State0),
     % turn send msg effect into reply
     {State2, [{send_msg, _, {_, _, [{MsgId, _} = M]}}]} = checkout_one(State1),
-    State3 = incr_metrics(State2, {0, 1, 0, 0}),
     % immediately settle
-    {State, Effects} = apply(RaftIdx, {settle, [MsgId], CustomerId}, State3),
+    {State, Effects} = apply(RaftIdx, {settle, [MsgId], CustomerId}, State2),
     {State, Effects, {dequeue, M}};
 apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
       State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
-    {State2, Reply} = case checkout_one(State1) of
-                          {S, [{send_msg, _, {_, _, [M]}}]} ->
-                              {S, M};
-                          {S, []} ->
-                              {S, empty}
-                      end,
-    State = incr_metrics(State2, {0, 1, 0, 0}),
+    {State, Reply} = case checkout_one(State1) of
+                         {S, [{send_msg, _, {_, _, [M]}}]} ->
+                             {S, M};
+                         {S, []} ->
+                             {S, empty}
+                     end,
     {State, [{monitor, process, Pid}], {dequeue, Reply}};
 apply(_RaftIdx, {checkout, cancel, CustomerId}, State0) ->
     {CancelEffects, State1} = cancel_customer(CustomerId, {[], State0}),
-    {State2, Effects, Num} = checkout(State1, []),
-    State = incr_metrics(State2, {0, Num, 0, 0}),
+    {State, Effects} = checkout(State1, []),
     % TODO: here we should really demonitor the pid but _only_ if it has no
     % other customers or enqueuers.
     {State, CancelEffects ++ Effects};
 apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
-    {State2, Effects, Num} = checkout(State1, []),
-    State = incr_metrics(State2, {0, Num, 0, 0}),
+    {State, Effects} = checkout(State1, []),
     {State, [{monitor, process, Pid} | Effects]};
 apply(_RaftId, {down, CustomerPid, noconnection},
       #state{customers = Custs0,
@@ -301,12 +285,10 @@ apply(_RaftId, {down, Pid, _Info}, #state{customers = Custs0,
     DownCustomers = maps:keys(
                       maps:filter(fun({_, P}, _) -> P =:= Pid end, Custs0)),
     {CancelEffects, State2} = lists:foldl(fun cancel_customer/2, {[], State1}, DownCustomers),
-    {State3, Effects, Num} = checkout(State2, []),
-    State = incr_metrics(State3, {0, Num, 0, 0}),
+    {State, Effects} = checkout(State2, []),
     {State, CancelEffects ++ Effects};
-apply(_RaftId, {nodeup, Node},
-      #state{customers = Custs0,
-             enqueuers = Enqs0} = State0) ->
+apply(_RaftId, {nodeup, Node}, #state{customers = Custs0,
+                                      enqueuers = Enqs0} = State0) ->
     Custs = maps:fold(fun({_, P}, #customer{suspected_down = true}, Acc)
                             when node(P) =:= Node ->
                               [P | Acc];
@@ -323,26 +305,37 @@ apply(_RaftId, {nodeup, Node},
 apply(_RaftId, {nodedown, _Node}, State) ->
     {State, []}.
 
-
-
 -spec leader_effects(state()) -> ra_machine:effects().
 leader_effects(#state{customers = Custs}) ->
     % return effects to monitor all current customers
     [{monitor, process, P} || {_, P} <- maps:keys(Custs)].
 
+-spec eol_effects(state()) -> ra_machine:effects().
 eol_effects(#state{enqueuers = Enqs, customers = Custs0, name = Name}) ->
     Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
     [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))]
         ++ [{mod_call, ets, delete, [?METRICS_TABLE, Name]}].
 
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
-tick(_Ts, #state{metrics = Metrics}) ->
+tick(_Ts, #state{name = Name,
+                 messages = Messages,
+                 ra_indexes = Indexes} = State) ->
+    Metrics = {Name,
+               maps:size(Messages), % Ready
+               num_checked_out(State), % checked out
+               ra_fifo_index:size(Indexes)}, % Toral
     [{mod_call, ets, insert, [?METRICS_TABLE, Metrics]}].
 
+-spec overview(state()) -> map().
 overview(#state{customers = Custs,
-                ra_indexes = Indexes}) ->
+                enqueuers = Enqs,
+                messages = Messages,
+                ra_indexes = Indexes} = State) ->
     #{type => ?MODULE,
       num_customers => maps:size(Custs),
+      num_checked_out => num_checked_out(State),
+      num_enqueuers => maps:size(Enqs),
+      num_ready_messages => maps:size(Messages),
       num_messages => ra_fifo_index:size(Indexes)}.
 
 -spec get_checked_out(customer_id(), msg_id(), msg_id(), state()) ->
@@ -371,6 +364,10 @@ query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
     maps:keys(maps:merge(Enqs, Custs)).
 
 
+query_ra_indexes(#state{ra_indexes = RaIndexes}) ->
+    RaIndexes.
+
+
 read_log() ->
     fun({_, _, {'$usr', _, {enqueue, _, _, _}, _}}, {E, C, S, D, R}) ->
             {E + 1, C, S, D, R};
@@ -388,13 +385,17 @@ read_log() ->
 
 %%% Internal
 
+num_checked_out(#state{customers = Custs}) ->
+    lists:foldl(fun (#customer{checked_out = C}, Acc) ->
+                        maps:size(C) + Acc
+                end, 0, maps:values(Custs)).
+
 cancel_customer(CustomerId, {Effects, #state{customers = C0, name = Name} = S0}) ->
     case maps:take(CustomerId, C0) of
         {#customer{checked_out = Checked0}, Custs} ->
-            S1 = maps:fold(fun (_, {MsgNum, Msg}, S) ->
-                                   return_one(MsgNum, Msg, S)
-                           end, S0, Checked0),
-            S = incr_metrics(S1, {0, 0, 0, maps:size(Checked0)}),
+            S = maps:fold(fun (_, {MsgNum, Msg}, S) ->
+                                  return_one(MsgNum, Msg, S)
+                          end, S0, Checked0),
             {cancel_customer_effects(CustomerId, Name, S, Effects),
              S#state{customers = Custs}};
         error ->
@@ -466,9 +467,6 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
 snd(T) ->
     element(2, T).
 
-incr_metrics(#state{metrics = {N, E0, C0, S0, R0}} = State, {E, C, S, R}) ->
-    State#state{metrics = {N, E0 + E, C0 + C, S0 + S, R0 + R}}.
-
 return(CustomerId, MsgNumMsgs, Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0} = State0) ->
     Num = length(MsgNumMsgs),
@@ -478,11 +476,9 @@ return(CustomerId, MsgNumMsgs, Cust0, Checked,
     State1 = lists:foldl(fun({MsgNum, Msg}, S0) ->
                                  return_one(MsgNum, Msg, S0)
                          end, State0, MsgNumMsgs),
-    {State2, Effects, NumChecked} = checkout(State1#state{customers = Custs,
-                                                          service_queue = SQ},
-                                             Effects0),
-    State = incr_metrics(State2, {0, NumChecked, 0, Num}),
-    {State, Effects}.
+    checkout(State1#state{customers = Custs,
+                          service_queue = SQ},
+             Effects0).
 
 % used to processes messages that are finished
 complete(IncomingRaftIdx, CustomerId, MsgRaftIdxs, Cust0, Checked,
@@ -491,13 +487,12 @@ complete(IncomingRaftIdx, CustomerId, MsgRaftIdxs, Cust0, Checked,
     Cust = Cust0#customer{checked_out = Checked},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
     Indexes = lists:foldl(fun ra_fifo_index:delete/2, Indexes0, MsgRaftIdxs),
-    {State1, Effects, NumChecked} =
+    {State, Effects} =
         checkout(State0#state{customers = Custs,
                               ra_indexes = Indexes,
                               service_queue = SQ},
                  Effects0),
     % settle metrics are incremented separately
-    State = incr_metrics(State1, {0, NumChecked, 0, 0}),
     update_smallest_raft_index(IncomingRaftIdx, {State, Effects}).
 
 dead_letter_effects(_Discarded,
@@ -558,12 +553,12 @@ return_one(MsgNum, {RaftId, {Header0, RawMsg}},
 
 
 checkout(State, Effects) ->
-    checkout0(checkout_one(State), Effects, 0).
+    checkout0(checkout_one(State), Effects).
 
-checkout0({State, []}, Effects, Num) ->
-    {State, lists:reverse(Effects), Num};
-checkout0({State, Efxs}, Effects, Num) ->
-    checkout0(checkout_one(State), Efxs ++ Effects, Num + 1).
+checkout0({State, []}, Effects) ->
+    {State, lists:reverse(Effects)};
+checkout0({State, Efxs}, Effects) ->
+    checkout0(checkout_one(State), Efxs ++ Effects).
 
 
 next_checkout_message(#state{returns = Returns,
@@ -759,7 +754,8 @@ run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
     run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
 
-shadow_copy(#state{customers = Customers,
+shadow_copy(#state{name = _Name,
+                   customers = Customers,
                    enqueuers = Enqueuers0} = State) ->
     Enqueuers = maps:map(fun (_, E) -> E#enqueuer{pending = []}
                          end, Enqueuers0),
@@ -768,6 +764,7 @@ shadow_copy(#state{customers = Customers,
                 ra_indexes = ra_fifo_index:empty(),
                 low_msg_num = undefined,
                 returns = queue:new(),
+                % metrics = {Name, 0, 0, 0, 0},
                 % TODO: optimise
                 % this is inefficient (from a memory use point of view)
                 % as it creates a new tuple for every customer
@@ -1065,7 +1062,7 @@ discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
 
 tick_test() ->
     {State0, [_]} = enq(1, 1, second, test_init(test)),
-    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 0, 0}]}] =
+    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 1}]}] =
         tick(1, State0),
     ok.
 
@@ -1090,6 +1087,7 @@ release_cursor_snapshot_state_test() ->
                 {enqueue, self(), 7, 6},
                 {settle, [1], Oth},
                 {settle, [4], Cid},
+                {return, [2], Oth},
                 {checkout, {once, 0}, Oth}
               ],
     Indexes = lists:seq(1, length(Commands)),

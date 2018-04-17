@@ -38,7 +38,8 @@ all_tests() ->
      ra_fifo_client_untracked_enqueue,
      ra_fifo_client_flow,
      test_queries,
-     log_fold
+     log_fold,
+     recover
     ].
 
 groups() ->
@@ -630,7 +631,7 @@ log_fold(Config) ->
     {ok, F1} = ra_fifo_client:enqueue(m1, F0),
     {ok, F2} = ra_fifo_client:enqueue(m2, F1),
     {ok, F3} = ra_fifo_client:enqueue(m3, F2),
-    {_, F4} = process_ra_events(F3, 500),
+    {_, _F4} = process_ra_events(F3, 500),
     Fun = fun({_, _, {'$usr', _, {enqueue, _, _, _}, _}}, {E, C, S, D, R}) ->
                   {E + 1, C, S, D, R};
              ({_, _, {'$usr', _, {settle, _, _}, _}}, {E, C, S, D, R}) ->
@@ -647,6 +648,23 @@ log_fold(Config) ->
     ct:pal("~p~n", [ra_node_proc:log_fold(NodeId, %% fun(E, Acc) -> [E | Acc] end, [])]),
                                           Fun, {0, 0, 0, 0, 0}, 30000)]),
     ra:stop_node(NodeId),
+    ok.
+
+recover(Config) ->
+    NodeId = ?config(node_id, Config),
+    ClusterId = ?config(cluster_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    ra:members(NodeId),
+    ra:stop_node(NodeId),
+    ra:restart_node(NodeId),
+    timer:sleep(1000),
+    ra:members(NodeId),
+    _St = sys:get_status(NodeId),
+    {ok, {_, {_, msg1}}, _F2} = ra_fifo_client:dequeue(<<"tag">>, settled, F1),
+
+    ok = ra:stop_node(NodeId),
     ok.
 
 conf(ClusterId, UId, NodeId, _, Peers) ->

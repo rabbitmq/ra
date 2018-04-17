@@ -72,7 +72,7 @@ my_segments(Who) ->
 
 -spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
 my_segments(SegWriter, Who) ->
-    gen_server:call(SegWriter, {my_segments, Who}).
+    gen_server:call(SegWriter, {my_segments, Who}, infinity).
 
 % used to wait for the segment writer to finish processing anything in flight
 await() ->

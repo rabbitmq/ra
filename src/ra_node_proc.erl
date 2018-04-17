@@ -183,7 +183,7 @@ init(Config0) when is_map(Config0) ->
     State0 = #state{node_state = NodeState, name = Key,
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
-    ?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
+    %%?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
     {ok, recover, State, [{next_event, cast, go} | Actions0]}.
 
