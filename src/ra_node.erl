@@ -835,7 +835,6 @@ wal_down_condition(_Msg, #{log := Log}) ->
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := Id, leader_id := LeaderId,
                                  current_term := Term,
-                                 machine := Machine,
                                  log := Log} = State0) ->
     % as writes are async we can't use the index of the last available entry
     % in the log as they may not have been fully persisted yet
@@ -1214,10 +1213,9 @@ apply_to(ApplyTo, #{id := Id, machine := Machine} = State) ->
 apply_to(ApplyTo, ApplyFun, State) ->
     apply_to(ApplyTo, ApplyFun, 0, [], State).
 
-apply_to(ApplyTo, ApplyFun, NumApplied, Effects, #{id := Id,
-                                                   last_applied := LastApplied,
-                                                   machine := Machine,
-                                                   machine_state := MacState0} = State0)
+apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
+         #{last_applied := LastApplied,
+           machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
     To = min(LastApplied + 1 + 1024, ApplyTo),
     % TODO: fetch and apply batches to reduce peak memory usage
@@ -1226,8 +1224,7 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Effects, #{id := Id,
             {State, Effects, NumApplied};
         {Entries, State1} ->
             {State, MacState, NewEffects, Notifys} =
-                lists:foldl(ApplyFun,
-                            {State1, MacState0, [], #{}}, Entries),
+                lists:foldl(ApplyFun, {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
             % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
@@ -1249,7 +1246,6 @@ apply_with(_, % Idx
            {State, MacSt, Effects0, Notifys0}) ->
     case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
         {NextMacSt, Efx} ->
-
             % apply returned no reply so use IdxTerm as reply value
             {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
                                            Effects0, Notifys0),

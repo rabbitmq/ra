@@ -178,9 +178,13 @@ init(#{name := Name} = Conf) ->
 -spec apply(ra_index(), command(), state()) ->
     {state(), ra_machine:effects()} | {state(), ra_machine:effects(), term()}.
 apply(RaftIdx, {enqueue, From, Seq, RawMsg}, State00) ->
-    State0 = append_to_master_index(RaftIdx, State00),
-    {State1, Effects0} = maybe_enqueue(RaftIdx, From, Seq, RawMsg, State0),
-    checkout(State1, Effects0);
+    case maybe_enqueue(RaftIdx, From, Seq, RawMsg, State00) of
+        {ok, State0, Effects0} ->
+            State = append_to_master_index(RaftIdx, State0),
+            checkout(State, Effects0);
+        {duplicate, State, Effects} ->
+            {State, Effects}
+    end;
 apply(RaftIdx, {settle, MsgIds, CustomerId},
       #state{customers = Custs0} = State) ->
     case Custs0 of
@@ -275,8 +279,10 @@ apply(_RaftId, {down, Pid, _Info}, #state{customers = Custs0,
     % TODO: if there are any pending enqueuers these should be enqueued
     % This should be ok as we won't see any more enqueues from this pid
     State1 = case maps:take(Pid, Enqs0) of
-                 {_E, Enqs} ->
-                    State0#state{enqueuers = Enqs};
+                 {#enqueuer{pending = Pend}, Enqs} ->
+                     lists:foldl(fun ({_, RIdx, RawMsg}, S) ->
+                                         enqueue(RIdx, RawMsg, S)
+                                 end, State0#state{enqueuers = Enqs}, Pend);
                  error ->
                      State0
              end,
@@ -435,33 +441,36 @@ enqueue_pending(From,
 enqueue_pending(From, Enq, #state{enqueuers = Enqueuers0} = State) ->
     State#state{enqueuers = Enqueuers0#{From => Enq}}.
 
-maybe_enqueue(RaftIdx, undefined, undefined, RawMsg, State0) ->
+maybe_enqueue(RaftIdx, undefined, undefined, RawMsg,
+              State0) ->
     % direct enqueue without tracking
-    {enqueue(RaftIdx, RawMsg, State0), []};
+    {ok, enqueue(RaftIdx, RawMsg, State0), []};
 maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
               #state{enqueuers = Enqueuers0} = State0) ->
     case maps:get(From, Enqueuers0, undefined) of
         undefined ->
             State1 = State0#state{enqueuers = Enqueuers0#{From => #enqueuer{}}},
-            {State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
-                                             RawMsg, State1),
-            {State, [{monitor, process, From} | Effects]};
+            {ok, State, Effects} = maybe_enqueue(RaftIdx, From, MsgSeqNo,
+                                                 RawMsg, State1),
+            {ok, State, [{monitor, process, From} | Effects]};
         #enqueuer{next_seqno = MsgSeqNo} = Enq0 ->
             % it is the next expected seqno
             State1 = enqueue(RaftIdx, RawMsg, State0),
             Enq = Enq0#enqueuer{next_seqno = MsgSeqNo + 1},
             State = enqueue_pending(From, Enq, State1),
-            {State, []};
+            {ok, State, []};
         #enqueuer{next_seqno = Next,
                   pending = Pending0} = Enq0
           when MsgSeqNo > Next ->
             % out of order delivery
             Pending = [{MsgSeqNo, RaftIdx, RawMsg} | Pending0],
             Enq = Enq0#enqueuer{pending = lists:sort(Pending)},
-            {State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
+            {ok, State0#state{enqueuers = Enqueuers0#{From => Enq}}, []};
         #enqueuer{next_seqno = Next} when MsgSeqNo =< Next ->
-            % duplicate delivery
-            {State0, []}
+            % duplicate delivery - remove the raft index from the ra_indexes
+            % map as it was added earlier
+            % RaIndexes = ra_fifo_index:delete(RaftIdx, State0#state.ra_indexes),
+            {duplicate, State0, []}
     end.
 
 snd(T) ->
@@ -1122,6 +1131,23 @@ delivery_query_returns_deliveries_test() ->
     % 3 deliveries are returned
     [{0, {#{}, one}}] = get_checked_out(Cid, 0, 0, State),
     [_, _, _] = get_checked_out(Cid, 1, 3, State),
+    ok.
+
+pending_enqueue_is_enqueued_on_down_test() ->
+    Cid = {<<"cid">>, self()},
+    Pid = self(),
+    {State0, _} = enq(1, 2, first, test_init(test)),
+    {State1, _} = apply(2, {down, Pid, noproc}, State0),
+    {_State2, _, {dequeue, {0, {_, first}}}} =
+        apply(3, {checkout, {dequeue, settled}, Cid}, State1),
+    ok.
+
+duplicate_delivery_test() ->
+    {State0, _} = enq(1, 1, first, test_init(test)),
+    {#state{ra_indexes = RaIdxs,
+            messages = Messages}, _} = enq(2, 1, first, State0),
+    ?assertEqual(1, ra_fifo_index:size(RaIdxs)),
+    ?assertEqual(1, maps:size(Messages)),
     ok.
 
 % performance_test() ->
