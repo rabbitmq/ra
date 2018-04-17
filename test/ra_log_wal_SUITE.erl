@@ -36,6 +36,8 @@ groups() ->
 
 init_per_group(Group, Config) ->
     application:ensure_all_started(sasl),
+    application:load(ra),
+    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     ra_directory:init(?config(priv_dir, Config)),
     % application:ensure_all_started(lg),
     [{write_strategy, Group} | Config].
@@ -47,20 +49,24 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     G = ?config(write_strategy, Config),
     Dir = filename:join([PrivDir, G, TestCase]),
-    _ = ra_log_file_ets:start_link(),
+    {ok, Ets} = ra_log_file_ets:start_link(),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     WalConf = #{dir => Dir, write_strategy => G},
-    [{writer_id, {UId, self()}},
+    [{ra_log_file_ets, Ets},
+     {writer_id, {UId, self()}},
      {test_case, TestCase},
      {wal_conf, WalConf},
      {wal_dir, Dir} | Config].
 
+end_per_testcase(_TestCase, Config) ->
+    proc_lib:stop(?config(ra_log_file_ets, Config)),
+    Config.
 
 basic_log_writes(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
@@ -69,12 +75,13 @@ basic_log_writes(Config) ->
     {12, 1, "value"} = mem_tbl_read(UId, 12),
     undefined = mem_tbl_read(UId, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    proc_lib:stop(Pid),
     ok.
 
 same_uid_different_process(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
     Self = self(),
@@ -91,7 +98,7 @@ same_uid_different_process(Config) ->
     end,
     {12, 1, "value"} = mem_tbl_read(UId, 12),
     {13, 1, "value2"} = mem_tbl_read(UId, 13),
-
+    proc_lib:stop(Pid),
     ok.
 
 
@@ -139,12 +146,13 @@ write_many(Config) ->
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
     ct:pal("Metrics: ~p~n", [Metrics]),
+    proc_lib:stop(WalPid),
     ok.
 
 overwrite(Config) ->
     Conf = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
-    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     Data = data,
     [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
@@ -154,6 +162,7 @@ overwrite(Config) ->
     ok = ra_log_wal:write(WriterId, ra_log_wal, 2, 2, Data),
     % ensure we await the correct range that should not have a wonky start
     await_written(WriterId, {2, 2, 2}),
+    proc_lib:stop(Pid),
     ok.
 
 truncate_write(Config) ->
@@ -161,7 +170,7 @@ truncate_write(Config) ->
     % a trucated write does not need to follow the sequence
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
     [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
@@ -174,6 +183,7 @@ truncate_write(Config) ->
     [{UId, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
     [_] = ets:lookup(Tid, 7),
     [_] = ets:lookup(Tid, 8),
+    proc_lib:stop(Pid),
     ok.
 
 out_of_seq_writes(Config) ->
@@ -184,7 +194,7 @@ out_of_seq_writes(Config) ->
     % the wal will discard all subsequent writes until it receives the missing one
     Conf = ?config(wal_conf, Config),
     {_UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
     [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
@@ -227,7 +237,7 @@ out_of_seq_writes(Config) ->
     % write the missing one
     ok = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
     await_written(WriterId, {6, 6, 1}),
-
+    proc_lib:stop(Pid),
     ok.
 
 roll_over(Config) ->
@@ -238,7 +248,7 @@ roll_over(Config) ->
     meck:expect(ra_log_file_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_size_bytes
-    {ok, _Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
                                              segment_writer => self()}, []),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
@@ -267,6 +277,7 @@ roll_over(Config) ->
     ?assert(undefined =/= mem_tbl_read(UId, 1)),
     ?assert(undefined =/= mem_tbl_read(UId, 5)),
     meck:unload(),
+    proc_lib:stop(Pid),
     ok.
 
 recover_truncated_write(Config) ->
@@ -280,18 +291,19 @@ recover_truncated_write(Config) ->
     meck:new(ra_log_file_segment_writer, [passthrough]),
     meck:expect(ra_log_file_segment_writer, await,
                 fun(_) -> ok end),
-    {ok, _} = ra_log_wal:start_link(Conf, []),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
     ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
-    {ok, _} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
     [{UId, _, 9, 9, _}] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
     meck:unload(),
+    proc_lib:stop(Pid),
     ok.
 
 recover_after_roll_over(Config) ->
@@ -312,6 +324,7 @@ recover_after_roll_over(Config) ->
     timer:sleep(1000),
     ?assert(erlang:is_process_alive(Wal)),
     meck:unload(),
+    proc_lib:stop(Wal),
     ok.
 
 recover(Config) ->
@@ -324,7 +337,7 @@ recover(Config) ->
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_file_segment_writer, [passthrough]),
     meck:expect(ra_log_file_segment_writer, await, fun(_) -> ok end),
-    {ok, _} = ra_log_wal:start_link(Conf, []),
+    {ok, _Wal} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -332,7 +345,7 @@ recover(Config) ->
      || Idx <- lists:seq(101, 200)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
-    {ok, _} = ra_log_wal:start_link(Conf, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
     % how can we better wait for recovery to finish?
     timer:sleep(1000),
 
@@ -359,6 +372,7 @@ recover(Config) ->
     end,
 
     meck:unload(),
+    proc_lib:stop(Pid),
     ok.
 
 empty_mailbox() ->

@@ -206,7 +206,8 @@ recover(_EventType, go, State = #state{node_state = NodeState0}) ->
                             [id(State)]),
                       [election_timeout_action(short, State)]
               end,
-    {next_state, follower, State#state{node_state = NodeState}, set_tick_timer(State, Actions)}.
+    {next_state, follower, State#state{node_state = NodeState},
+     set_tick_timer(State, Actions)}.
 
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
