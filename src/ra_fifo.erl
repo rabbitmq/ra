@@ -142,13 +142,16 @@
          % needs to be part of snapshot
          service_queue = queue:new() :: queue:queue(customer_id()),
          dead_letter_handler :: maybe(applied_mfa()),
-         cancel_customer_handler :: maybe(applied_mfa())
+         cancel_customer_handler :: maybe(applied_mfa()),
+         become_leader_handler :: maybe(applied_mfa())
         }).
 
 -opaque state() :: #state{}.
 
 -type config() :: #{name := atom(),
-                    dead_letter_handler => maybe(applied_mfa())}.
+                    dead_letter_handler => applied_mfa(),
+                    become_leader_handler => applied_mfa(),
+                    cancel_customer_handler => applied_mfa()}.
 
 -export_type([protocol/0,
               delivery/0,
@@ -166,9 +169,12 @@
 init(#{name := Name} = Conf) ->
     DLH = maps:get(dead_letter_handler, Conf, undefined),
     CCH = maps:get(cancel_customer_handler, Conf, undefined),
+    BLH = maps:get(become_leader_handler, Conf, undefined),
     {#state{name = Name,
             dead_letter_handler = DLH,
-            cancel_customer_handler = CCH},
+            cancel_customer_handler = CCH,
+            become_leader_handler = BLH
+           },
      [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0}}]}.
 
 
@@ -312,9 +318,17 @@ apply(_RaftId, {nodedown, _Node}, State) ->
     {State, []}.
 
 -spec leader_effects(state()) -> ra_machine:effects().
-leader_effects(#state{customers = Custs}) ->
+leader_effects(#state{customers = Custs,
+                      name = Name,
+                      become_leader_handler = BLH}) ->
     % return effects to monitor all current customers
-    [{monitor, process, P} || {_, P} <- maps:keys(Custs)].
+    Effects = [{monitor, process, P} || {_, P} <- maps:keys(Custs)],
+    case BLH of
+        undefined ->
+            Effects;
+        {Mod, Fun, Args} ->
+            [{mod_call, Mod, Fun, Args ++ [Name]} | Effects]
+    end.
 
 -spec eol_effects(state()) -> ra_machine:effects().
 eol_effects(#state{enqueuers = Enqs, customers = Custs0, name = Name}) ->
@@ -1160,6 +1174,13 @@ duplicate_delivery_test() ->
             messages = Messages}, _} = enq(2, 1, first, State0),
     ?assertEqual(1, ra_fifo_index:size(RaIdxs)),
     ?assertEqual(1, maps:size(Messages)),
+    ok.
+
+leader_effects_test() ->
+
+    S0 = element(1, init(#{name => the_name,
+                           become_leader_handler => {m, f, [a]}})),
+    [{mod_call, m, f, [a, the_name]}] = leader_effects(S0),
     ok.
 
 % performance_test() ->

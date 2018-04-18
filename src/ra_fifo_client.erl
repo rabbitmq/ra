@@ -153,7 +153,6 @@ dequeue(CustomerTag, Settlement, State0) ->
     {ok | slow, state()} | {error, stop_sending}.
 settle(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
-    % TODO: make ra_fifo settle support lists of message ids
     Cmd = {settle, MsgIds, customer_id(CustomerTag)},
     send_command(Node, undefined, Cmd, State0).
 
@@ -443,7 +442,7 @@ send_command(Node, Correlation, Command,
     {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}}}}.
 
 resend_command(Node, Correlation, Command,
-             #state{pending = Pending} = State0) ->
+               #state{pending = Pending} = State0) ->
     {Seq, State} = next_seq(State0),
     ok = ra:send_and_notify(Node, Command, Seq),
     State#state{pending = Pending#{Seq => {Correlation, Command}}}.
