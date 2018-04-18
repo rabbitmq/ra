@@ -476,11 +476,16 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg,
 snd(T) ->
     element(2, T).
 
-return(CustomerId, MsgNumMsgs, Cust0, Checked,
+return(CustomerId, MsgNumMsgs, #customer{lifetime = Life} = Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0} = State0) ->
-    Num = length(MsgNumMsgs),
-    Cust = Cust0#customer{checked_out = Checked,
-                          seen = Cust0#customer.seen - Num},
+    Cust = case Life of
+              auto ->
+                   Num = length(MsgNumMsgs),
+                   Cust0#customer{checked_out = Checked,
+                          seen = Cust0#customer.seen - Num};
+               once ->
+                   Cust0#customer{checked_out = Checked}
+           end,
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
     State1 = lists:foldl(fun({MsgNum, Msg}, S0) ->
                                  return_one(MsgNum, Msg, S0)
@@ -1070,9 +1075,16 @@ discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
     ok.
 
 tick_test() ->
-    {State0, [_]} = enq(1, 1, second, test_init(test)),
-    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 0, 1}]}] =
-        tick(1, State0),
+    Cid = {<<"c">>, self()},
+    Cid2 = {<<"c2">>, self()},
+    {S0, _} = enq(1, 1, fst, test_init(test)),
+    {S1, _} = enq(2, 2, snd, S0),
+    {S2, {MsgId, _}} = deq(3, Cid, unsettled, S1),
+    {S3, {_, _}} = deq(4, Cid2, unsettled, S2),
+    {S4, _} = apply(5, {return, [MsgId], Cid}, S3),
+
+    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 1, 2}]}] =
+        tick(1, S4),
     ok.
 
 release_cursor_snapshot_state_test() ->
@@ -1161,6 +1173,11 @@ duplicate_delivery_test() ->
 
 enq(Idx, MsgSeq, Msg, State) ->
     apply(Idx, {enqueue, self(), MsgSeq, Msg}, State).
+
+deq(Idx, Cid, Settlement, State0) ->
+    {State, _, {dequeue, Msg}} =
+        apply(Idx, {checkout, {dequeue,  Settlement}, Cid}, State0),
+    {State, Msg}.
 
 check_n(Cid, Idx, N, State) ->
     apply(Idx, {checkout, {auto, N}, Cid}, State).
