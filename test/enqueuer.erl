@@ -78,27 +78,25 @@ handle_info(enqueue, #state{tag = Tag, next = Next0,
     Msg = {Tag, Next0},
     Next = Next0 + 1,
     case ra_fifo_client:enqueue(Next0, Msg, F0) of
-        {ok, F} ->
-            % ?INFO("Enqueuer: enqueued ~p~n", [Next0]),
+        {T, F} when T =/= error ->
             case Max of
                 Next0 ->
                     State = State0#state{state = F},
                     erlang:send_after(Interval, self(), reply),
                     {noreply, State};
                 _ ->
-                    State = State0#state{next = Next,
-                                         state = F},
+                    State = State0#state{next = Next, state = F},
                     erlang:send_after(Interval, self(), enqueue),
                     {noreply, State}
             end;
         Err ->
-            ?WARN("Enqueuer: error enqueue ~p~n", [Err]),
+            ?WARN("Enqueuer: error enqueue ~W~n", [Err, 5]),
+            erlang:send_after(10, self(), enqueue),
             {noreply, State0}
     end;
-handle_info({ra_event, From, Evt}, #state{state = F0,
-                                          applied = Appd} = State0) ->
+handle_info({ra_event, From, Evt},
+            #state{state = F0, applied = Appd} = State0) ->
     {internal, Applied, F} = ra_fifo_client:handle_ra_event(From, Evt, F0),
-    % ?INFO("Enqueuer: applied ~p~n", [Applied]),
     {noreply, State0#state{state = F, applied = Appd ++ Applied}};
 handle_info(reply, #state{waiting = undefined} = State0) ->
     {noreply, State0};

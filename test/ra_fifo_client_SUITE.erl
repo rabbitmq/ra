@@ -101,8 +101,8 @@ flow(Config) ->
 %% Utility
 
 node_setup(DataDir) ->
-    LogFile = filename:join([DataDir, atom_to_list(node()), "ra.log"]),
-    SaslFile = filename:join([DataDir, atom_to_list(node()), "ra_sasl.log"]),
+    LogFile = filename:join([DataDir, "ra.log"]),
+    SaslFile = filename:join([DataDir, "ra_sasl.log"]),
     application:load(sasl),
     application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     application:stop(sasl),
@@ -129,9 +129,10 @@ start_slave(N, PrivDir) ->
     Dir0 = filename:join(PrivDir, N),
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
-    Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
+    Pa = string:join(["-pa" | search_paths()] ++
+                     ["-s ra -ra data_dir", Dir], " "),
     ct:pal("starting slave node with ~s~n", [Pa]),
     {ok, S} = slave:start_link(Host, N, Pa),
-    _ = rpc:call(S, ?MODULE, node_setup, [Dir]),
+    _ = rpc:call(S, ?MODULE, node_setup, [Dir0]),
     _ = rpc:call(S, application, ensure_all_started, [ra]),
     S.

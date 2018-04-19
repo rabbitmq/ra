@@ -33,8 +33,13 @@
                 last_applied :: maybe(seq()),
                 next_enqueue_seq = 1 :: seq(),
                 max_pending = 0 :: non_neg_integer(),
+                %% indicates that we've exceeded the soft limit
+                slow = false :: boolean(),
+                unsent_commands = #{} :: #{ra_fifo:customer_id() =>
+                                           {[seq()], [seq()]}},
                 soft_limit_pending = 0 :: non_neg_integer(),
-                pending = #{} :: #{seq() => {maybe(term()), ra_fifo:command()}},
+                pending = #{} :: #{seq() =>
+                                   {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()}}).
 
@@ -150,11 +155,27 @@ dequeue(CustomerTag, Settlement, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec settle(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok | slow, state()} | {error, stop_sending}.
-settle(CustomerTag, [_|_] = MsgIds, State0) ->
+    {ok, state()}.
+settle(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     Cmd = {settle, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0).
+    case send_command(Node, undefined, Cmd, State0) of
+        {slow, S} ->
+            % turn slow into ok for this function
+            {ok, S};
+        {ok, _} = Ret ->
+            Ret
+    end;
+settle(CustomerTag, [_|_] = MsgIds,
+       #state{unsent_commands = Unsent0} = State0) ->
+    CustomerId = customer_id(CustomerTag),
+    %% we've reached the soft limit so will stash the command to be
+    %% sent once we have seen enough notifications
+    Unsent = maps:update_with(CustomerId,
+                              fun ({Settles, Returns}) ->
+                                      {Settles ++ MsgIds, Returns}
+                              end, {MsgIds, []}, Unsent0),
+    {ok, State0#state{unsent_commands = Unsent}}.
 
 %% @doc Return a message to the queue.
 %% @param CustomerTag the tag uniquely identifying the customer.
@@ -171,12 +192,22 @@ settle(CustomerTag, [_|_] = MsgIds, State0) ->
 %% If this happens the caller should either discard or cache the requested
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec return(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
-    {ok | slow, state()} | {error, stop_sending}.
-return(CustomerTag, [_|_] = MsgIds, State0) ->
+    {ok, state()}.
+return(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
     Cmd = {return, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0).
+    send_command(Node, undefined, Cmd, State0);
+return(CustomerTag, [_|_] = MsgIds,
+       #state{unsent_commands = Unsent0} = State0) ->
+    CustomerId = customer_id(CustomerTag),
+    %% we've reached the soft limit so will stash the command to be
+    %% sent once we have seen enough notifications
+    Unsent = maps:update_with(CustomerId,
+                              fun ({Settles, Returns}) ->
+                                      {Settles, Returns ++ MsgIds}
+                              end, {[], MsgIds}, Unsent0),
+    State0#state{unsent_commands = Unsent}.
 
 %% @doc Discards a checked out message.
 %% If the queue has a dead_letter_handler configured this will be called.
@@ -219,8 +250,8 @@ checkout(CustomerTag, NumUnsettled, State0) ->
     Nodes = sorted_nodes(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
-    State = update_max_pending(State0, NumUnsettled),
-    try_send_and_await_consensus(Nodes, Cmd, State).
+    % State = update_max_pending(State0, NumUnsettled),
+    try_send_and_await_consensus(Nodes, Cmd, State0).
 
 %% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
 %%
@@ -286,10 +317,40 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
 -spec handle_ra_event(ra_node_id(), ra_node_proc:ra_event_body(), state()) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()} | eol.
-handle_ra_event(From, {applied, Seqs}, State0) ->
-    {Corrs, State} = lists:foldl(fun seq_applied/2,
-                                 {[], State0#state{leader = From}}, Seqs),
-    {internal, lists:reverse(Corrs), State};
+handle_ra_event(From, {applied, Seqs},
+                #state{soft_limit_pending = SftLmt} = State0) ->
+    {Corrs, State1} = lists:foldl(fun seq_applied/2,
+                                  {[], State0#state{leader = From}},
+                                  Seqs),
+    %% TODO check if we have moved from softlimit to safe zone
+    case maps:size(State1#state.pending) < SftLmt of
+        true when State1#state.slow == true ->
+            % we have exited soft limit state
+            % send any unsent commands
+            State2 = State1#state{slow = false,
+                                  unsent_commands = #{}},
+            % build up a list of commands to issue
+            Commands = maps:fold(fun (Cid, {Settled, []}, Acc) ->
+                                         [{settle, Settled, Cid} | Acc];
+                                     (Cid, {[], Returns}, Acc) ->
+                                         [{return, Returns, Cid} | Acc];
+                                     (Cid, {Settled, Returns}, Acc) ->
+                                         [{settle, Settled, Cid},
+                                          {return, Returns, Cid} | Acc]
+                                 end, [], State1#state.unsent_commands),
+            Node = pick_node(State2),
+            %% send all the settlements and returns
+            State = lists:foldl(fun (C, S0) ->
+                                        case send_command(Node, undefined,
+                                                          C, S0) of
+                                            {T, S} when T =/= error ->
+                                                S
+                                        end
+                                end, State2, Commands),
+            {internal, lists:reverse(Corrs), State};
+        _ ->
+            {internal, lists:reverse(Corrs), State1}
+    end;
 handle_ra_event(Leader, {machine, {delivery, _CustomerTag, _} = Del}, State0) ->
     handle_delivery(Leader, Del, State0);
 handle_ra_event(_From, {rejected, {not_leader, undefined, _Seq}}, State0) ->
@@ -426,8 +487,7 @@ customer_id(CustomerTag) ->
     {CustomerTag, self()}.
 
 send_command(_Node, _Correlation, _Command,
-             #state{pending = Pending,
-                    max_pending = Max})
+             #state{pending = Pending, max_pending = Max})
   when map_size(Pending) =:= Max ->
     {error, stop_sending};
 send_command(Node, Correlation, Command,
@@ -439,7 +499,8 @@ send_command(Node, Correlation, Command,
               true -> slow;
               false -> ok
           end,
-    {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}}}}.
+    {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}},
+                      slow = Tag == slow}}.
 
 resend_command(Node, Correlation, Command,
                #state{pending = Pending} = State0) ->

@@ -69,16 +69,15 @@ handle_info({ra_event, From, Evt}, #state{state = F0,
                                           max = Max} = State0) ->
     case ra_fifo_client:handle_ra_event(From, Evt, F0) of
         {internal, _Applied, F} ->
-            % ?INFO("consumer applied ~w~n", [Applied]),
             {noreply, State0#state{state = F}};
         {{delivery, _, Dels}, F1} ->
             MsgIds = [X || {X, _} <- Dels],
+            % ?INFO("consumer settling ~w~n", [MsgIds]),
             {ok, F} = ra_fifo_client:settle(State0#state.consumer_tag,
                                             MsgIds, F1),
             case State0#state{state = F,
                               num_received = Recvd + length(MsgIds)} of
                 #state{num_received = Max} = State ->
-                    ?INFO("Consumer: received ~b~n", [Max]),
                     case Not of
                         undefined -> ok;
                         Pid ->
