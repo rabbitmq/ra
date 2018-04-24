@@ -77,7 +77,8 @@
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgIds :: [msg_id()], Customer :: customer_id()} |
     {return, MsgIds :: [msg_id()], Customer :: customer_id()} |
-    {discard, MsgIds :: [msg_id()], Customer :: customer_id()}.
+    {discard, MsgIds :: [msg_id()], Customer :: customer_id()} |
+    purge.
 
 -type command() :: protocol() | ra_machine:builtin_command().
 %% all the command types suppored by ra fifo
@@ -264,6 +265,26 @@ apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, State0) ->
     State1 = update_customer(Customer, Spec, State0),
     {State, Effects} = checkout(State1, []),
     {State, [{monitor, process, Pid} | Effects]};
+apply(RaftIdx, purge, #state{customers = Custs0,
+                             ra_indexes = Indexes } = State0) ->
+    Total = ra_fifo_index:size(Indexes),
+    {State1, Effects1} =
+        maps:fold(
+          fun(CustomerId, C = #customer{checked_out = Checked0},
+              {StateAcc0, EffectsAcc0}) ->
+                  MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
+                                             <- maps:values(Checked0)],
+                  {StateAcc, Effects} = complete(RaftIdx, CustomerId, MsgRaftIdxs, C, #{},
+                                                 StateAcc0),
+                  {StateAcc, Effects ++ EffectsAcc0}
+          end, {State0, []}, Custs0),
+    {State, Effects} = update_smallest_raft_index(
+                         RaftIdx,
+                         {State1#state{ra_indexes = ra_fifo_index:empty(),
+                                       messages = #{},
+                                       returns = queue:new(),
+                                       low_msg_num = undefined}, Effects1}),
+    {State, Effects, {purge, Total}};
 apply(_RaftId, {down, CustomerPid, noconnection},
       #state{customers = Custs0,
              enqueuers = Enqs0} = State0) ->
@@ -1192,6 +1213,16 @@ leader_effects_test() ->
 %     ?debugFmt("performance_test took ~p ms for ~p messages",
 %               [Taken / 1000, NumMsgs]),
 %     ok.
+
+purge_test() ->
+    Cid = {<<"purge_test">>, self()},
+    {State1, _} = enq(1, 1, first, test_init(test)),
+    {State2, _, {purge, 1}} = apply(2, purge, State1),
+    {State3, _} = enq(3, 2, second, State2),
+    % get returns a reply value
+    {_State4, [{monitor, _, _}], {dequeue, {0, {_, second}}}} =
+        apply(4, {checkout, {dequeue, unsettled}, Cid}, State3),
+    ok.
 
 enq(Idx, MsgSeq, Msg, State) ->
     apply(Idx, {enqueue, self(), MsgSeq, Msg}, State).

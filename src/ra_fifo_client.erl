@@ -16,7 +16,8 @@
          return/3,
          discard/3,
          handle_ra_event/3,
-         untracked_enqueue/3
+         untracked_enqueue/3,
+         purge/1
          ]).
 
 -include("ra.hrl").
@@ -270,6 +271,16 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
     Cmd = {checkout, cancel, CustomerId},
     State = State0#state{customer_deliveries = maps:remove(CustomerTag, CDels)},
     try_send_and_await_consensus(Nodes, Cmd, State).
+
+-spec purge(state()) -> {ok, non_neg_integer(), state()} | {error | timeout, term()}.
+purge(State0) ->
+    Node = pick_node(State0),
+    case ra:send_and_await_consensus(Node, purge) of
+        {ok, {purge, Reply}, Leader} ->
+            {ok, Reply, State0#state{leader = Leader}};
+        Err ->
+            Err
+    end.
 
 %% @doc Handles incoming `ra_events'. Events carry both internal "bookeeping"
 %% events emitted by the `ra' leader as well as `ra_fifo' emitted events such
