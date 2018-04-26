@@ -1,3 +1,5 @@
+%% @doc The primary module for interacting with ra nodes and clusters.
+
 -module(ra).
 
 -include("ra.hrl").
@@ -68,7 +70,9 @@ start_local_cluster(Num, Name, Machine) ->
     _ = ra:members(Node1),
     Res.
 
-%% Starts a ra node
+%% @doc Starts a ra node
+%% @param Conf a ra_node_config() configuration map.
+%% @returns `{ok | error, Error}'
 -spec start_node(ra_node:ra_node_config()) -> ok | {error, term()}.
 start_node(Conf) ->
     % don't match on return value in case it is already running
@@ -79,6 +83,9 @@ start_node(Conf) ->
         {'EXIT', Err} -> {error, Err}
     end.
 
+%% @doc Restarts a previously succesfully started ra node
+%% @param NodeId the ra_node_id() of the node
+%% @returns `{ok | error, Error}'
 -spec restart_node(ra_node_id()) -> ok | {error, term()}.
 restart_node(NodeId) ->
     % don't match on return value in case it is already running
@@ -89,6 +96,9 @@ restart_node(NodeId) ->
         {'EXIT', Err} -> {error, Err}
     end.
 
+%% @doc Stops a ra node
+%% @param NodeId the ra_node_id() of the node
+%% @returns `{ok | error, nodedown}'
 -spec stop_node(ra_node_id()) -> ok | {error, nodedown}.
 stop_node(NodeId) ->
     try ra_nodes_sup:stop_node(NodeId) of
@@ -99,9 +109,13 @@ stop_node(NodeId) ->
         exit:{{nodedown, _}, _} -> {error, nodedown}
     end.
 
+%% @doc Deletes a ra node
+%% The node is forcefully deleted.
+%% @param NodeId the ra_node_id() of the node
+%% @returns `{ok | error, nodedown}'
 -spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
-delete_node(RaNodeId) ->
-    ra_nodes_sup:delete_node(RaNodeId).
+delete_node(NodeId) ->
+    ra_nodes_sup:delete_node(NodeId).
 
 %% @doc Starts a distributed ra cluster.
 %%
@@ -162,10 +176,19 @@ start_cluster(ClusterId, Machine, NodeIds) ->
             end
     end.
 
+%% @doc Deletes a ra cluster in an orderly fashion
+%% This function commits and end of life command which after each node applies
+%% it will cause that node to shut down and delete all it's data.
+%% The leader will stay up until it has successfully replicated the end of life
+%% command to all nodes after which it too will shut down and delete all it's
+%% data.
+%% @param NodeIds the ra_node_ids of the cluster
+%% @returns `{ok | error, nodedown}'
 -spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
 delete_cluster(NodeIds) ->
     delete_cluster(NodeIds, ?DEFAULT_TIMEOUT).
 
+%% @see delete_cluster/1
 -spec delete_cluster(NodeIds :: [ra_node_id()], timeout()) ->
     {ok, Leader::ra_node_id()} | {error, term()}.
 delete_cluster(NodeIds, Timeout) ->
@@ -185,20 +208,37 @@ delete_cluster0([], _, Errs) ->
     {error, {no_more_nodes_to_try, Errs}}.
 
 
--spec add_node(ra_node_id(), ra_node_id()) ->
-    ra_cmd_ret().
+%% @doc Add a ra node id to a ra cluster's membership configuration
+%% This commits a join command to the leader log. After this has been replicated
+%% the leader will start replicating entries to the new node.
+%% This function returns after appending the command to the log.
+%%
+%% @param ServerRef the ra node to send the command to
+%% @param NodeId the ra node id of the new node
+-spec add_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
                          ?DEFAULT_TIMEOUT).
 
+%% @doc Removes a node from the cluster's membership configuration
+%% This function returns after appending the command to the log.
+%%
+%% @param ServerRef the ra node to send the command to
+%% @param NodeId the ra node id of the node to remove
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append},
                          ?DEFAULT_TIMEOUT).
 
+%% @doc Causes the node to entre the pre-vote and attempt become leader
+%% It is necessary to call this function when starting a new cluster as a
+%% branch new ra node will not automatically enter pre-vote by itself.
+%% Previously started nodes will however.
+%%
+%% @param NodeId the ra node id of the node to trigger the election on.
 -spec trigger_election(ra_node_id()) -> ok.
-trigger_election(Id) ->
-    ra_node_proc:trigger_election(Id).
+trigger_election(NodeId) ->
+    ra_node_proc:trigger_election(NodeId).
 
 % safe way to remove an active node from a cluster
 leave_and_terminate(NodeId) ->
@@ -219,48 +259,105 @@ leave_and_terminate(ServerRef, NodeId) ->
             stop_node(NodeId)
     end.
 
+%% @see send/3
 -spec send(ra_node_id(), term()) -> ra_cmd_ret().
 send(Ref, Data) ->
     send(Ref, Data, ?DEFAULT_TIMEOUT).
 
+%% @doc send a command to the ra node.
+%% if the ra node addressed isn't the leader and the leader is known
+%% it will automatically redirect the call to the leader node.
+%% This function returns after the command has been appended to the leader's
+%% raft log.
+%%
+%% @param ServerRef the ra node id of the node to send the commadn to.
+%% @param Command the command, an arbitrary term that the current state
+%% machine can understand.
+%% @param Timeout a timeout value
+%% @returns {@link ra_cmd_ret()}
 -spec send(ra_node_id(), term(), timeout()) -> ra_cmd_ret().
-send(Ref, Data, Timeout) ->
-    ra_node_proc:command(Ref, usr(Data, after_log_append), Timeout).
+send(ServerRef, Command, Timeout) ->
+    ra_node_proc:command(ServerRef, usr(Command, after_log_append), Timeout).
 
 -spec send_and_await_consensus(ra_node_id(), term()) -> ra_cmd_ret().
 send_and_await_consensus(Ref, Data) ->
     send_and_await_consensus(Ref, Data, ?DEFAULT_TIMEOUT).
 
+%% @doc send a command to the ra node.
+%% if the ra node addressed isn't the leader and the leader is known
+%% it will automatically redirect the call to the leader node.
+%% This function returns after the command has been replicated and applied to
+%% the ra state machine. This is a fully synchronous interaction with the
+%% ra consensus system.
+%% Use this for low throughput actions where simple semantics are needed.
+%% if the state machine supports it it may return a result value which will
+%% be included in the result tuple.
+%%
+%% @param ServerRef the ra node id of the node to send the commadn to.
+%% @param Command the command, an arbitrary term that the current state
+%% machine can understand.
+%% @param Timeout a timeout value
+%% @returns {@link ra_cmd_ret()}
 -spec send_and_await_consensus(ra_node_id(), term(), timeout()) ->
     ra_cmd_ret().
 send_and_await_consensus(Ref, Data, Timeout) ->
     ra_node_proc:command(Ref, usr(Data, await_consensus), Timeout).
 
+%% @doc send a command to the ra node using cast.
+%% This will send a command to the ra node using a cast.
+%% if the node addressed isn't the leader the command will be discarded and
+%% and asyncronous notification message returned to the caller of the format:
+%% `{ra_event, ra_node_id(), {rejected, {not_leader, Correlation, LeaderId}}'.
+%%
+%% If the node addressed is the leader the command will be appended to the log
+%% and replicated. Once it achieves consensus and asynchronous notification
+%% message of the format:
+%% `{ra_event, ra_node_id(), {applied, [Correlation]}}'
+%%
+%% @param ServerRef the ra node id of the node to send the commadn to.
+%% @param Command the command, an arbitrary term that the current state
+%% machine can understand.
+%% @param Timeout a timeout value
+%% @returns {@link ra_cmd_ret()}
 -spec send_and_notify(ra_node_id(), term(), term()) -> ok.
-send_and_notify(Ref, Data, Correlation) ->
-    Cmd = usr(Data, {notify_on_consensus, Correlation, self()}),
-    ra_node_proc:cast_command(Ref, Cmd).
+send_and_notify(ServerRef, Command, Correlation) ->
+    Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
+    ra_node_proc:cast_command(ServerRef, Cmd).
 
+%% @doc Cast a message to a node
+%% This is the least reliable way to interact with a ra node. If the node
+%% addressed isn't the leader no notification will be issued.
 -spec cast(ra_node_id(), term()) -> ok.
-cast(Ref, Data) ->
-    Cmd = usr(Data, noreply),
-    ra_node_proc:cast_command(Ref, Cmd).
+cast(ServerRef, Command) ->
+    Cmd = usr(Command, noreply),
+    ra_node_proc:cast_command(ServerRef, Cmd).
 
--spec dirty_query(Node::ra_node_id(), QueryFun::fun((term()) -> term())) ->
+%% @doc query the machine state on any node
+%% This allows you to run the QueryFun over the the machine state and
+%% return the result. Any ra node can be addressed.
+%% This can return infinitely state results.
+-spec dirty_query(NodeId :: ra_node_id(),
+                  QueryFun :: fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 dirty_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
 
+%% @doc Query the state machine
+%% This allows a caller to query the state machine by appending the query
+%% to the log and returning the result once applied. This guarantees the
+%% result is consistent.
 -spec consistent_query(Node::ra_node_id(),
                        QueryFun::fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 consistent_query(Node, QueryFun) ->
     ra_node_proc:query(Node, QueryFun, consistent).
 
+%% @doc Query the members of a cluster
 -spec members(ra_node_id()) -> ra_node_proc:ra_leader_call_ret([ra_node_id()]).
 members(ServerRef) ->
     ra_node_proc:state_query(ServerRef, members).
 
+%% internal
 
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
