@@ -28,6 +28,8 @@ DEP_PLUGINS = elvis_mk
 
 PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten looking_glass
 
+EDOC_OUTPUT = docs
+
 all::
 
 escript-zip::
