@@ -33,12 +33,23 @@
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
 
-% starts the ra application
+%% @doc Starts the ra application
 -spec start() -> ok.
 start() ->
     {ok, _} = application:ensure_all_started(ra),
     ok.
 
+%% @doc Starts a ra cluster on the current erlang node.
+%% Useful for testing and exploration. Use {@link start_cluster/3} for
+%% real use.
+%%
+%% @param Num the number of nodes in the cluster
+%% @param Name The name of the cluster
+%% @param Machine The {@link ra_machine:machine/0} configuration.
+%% @returns `[ra_node_id()]' after a leader has been elected
+-spec start_local_cluster(non_neg_integer(), atom() | string(),
+                          ra_machine:machine()) ->
+    [ra_node_id()].
 start_local_cluster(Num, Name, Machine) ->
     [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
                            || N <- lists:seq(1, Num)],
@@ -54,6 +65,7 @@ start_local_cluster(Num, Name, Machine) ->
                Id
            end || Id <- Nodes],
     ok = ra:trigger_election(Node1),
+    _ = ra:members(Node1),
     Res.
 
 %% Starts a ra node
@@ -91,6 +103,22 @@ stop_node(NodeId) ->
 delete_node(RaNodeId) ->
     ra_nodes_sup:delete_node(RaNodeId).
 
+%% @doc Starts a distributed ra cluster.
+%%
+%%
+%% @param ClusterId the cluster id of the cluster.
+%% @param Machine The {@link ra_machine:machine/0} configuration.
+%% @param NodeIds The list of ra node ids.
+%% @returns
+%% `{ok, Started, NotStarted}'  if a cluster could be successfully
+%% started. A cluster can be successfully started if more than half of the
+%% nodes provided could be started. Nodes that could not be started need to
+%% be retried periodically using {@link start_node/1}
+%%
+%% `{error, cluster_not_formed}' if a cluster could not be started.
+%%
+%% If a cluster could not be formed any nodes that did manage to start are
+%% forcefully deleted.
 -spec start_cluster(ra_cluster_id(), ra_machine:machine(), [ra_node_id()]) ->
     {ok, [ra_node_id()], [ra_node_id()]} |
     {error, cluster_not_formed}.

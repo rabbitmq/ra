@@ -1,0 +1,178 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_machine</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_machine</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>The <code>ra_machine</code> behaviour.
+
+
+<h2><a name="description">Description</a></h2><p>The <code>ra_machine</code> behaviour.</p>
+ 
+  <p>Used to implement the logic for the state machine running inside Ra.</p>
+ 
+  <h3><a name="Callbacks">Callbacks</a></h3>
+ 
+  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt; {state(), effects()}'</code></p>
+ 
+  <p>Initialize a new machine state.</p>
+ 
+ <p><br>
+  <code>-callback apply(Index :: ra_index(), <a href="#type-command"><code>command()</code></a>, State) -&gt;
+     {State, effects()} | {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
+ 
+  <p>Applies each entry to the state machine.</p>
+ 
+ <p><br>
+  <code>-callback leader_effects(state()) -&gt; effects().</code></p>
+ 
+  <p>Optional. Called when a node becomes leader, use this to return any effects  
+need to be issued at this point.</p>
+ 
+ <p><br>
+  <code>-callback eol_effects(state()) -&gt; effects().</code></p>
+ 
+  <p>Optional. Called when a ra cluster is deleted.</p>
+ 
+ <p><br>
+  <code>-callback tick(TimeMs :: milliseconds(), state()) -&gt; effects().</code></p>
+ 
+  <p>Optional. Called periodically.  
+Suitable for issuing periodic side effects such as updating metrics systems.</p>
+ 
+ <p><br>
+  <code>-callback overview(state()) -&gt; map(). </code></p>
+ 
+  Optional. A map of overview information. Needs to be efficient.
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-apply_fun">apply_fun()</a></h3>
+<p><tt>apply_fun(State) = fun((<a href="#type-user_command">user_command()</a>, State) -&gt; State)</tt></p>
+
+
+<h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
+<p><tt>builtin_command() = {down, pid(), term()} | {nodeup | nodedown, node()}</tt></p>
+<p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
+  to monitor effects</p>
+
+<h3 class="typedecl"><a name="type-command">command()</a></h3>
+<p><tt>command() = <a href="#type-user_command">user_command()</a> | <a href="#type-builtin_command">builtin_command()</a></tt></p>
+
+
+<h3 class="typedecl"><a name="type-effect">effect()</a></h3>
+<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, pid()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} | {metrics_table, atom(), <a href="#type-maybe">maybe</a>(tuple())}</tt></p>
+<p><p>  Effects are data structure that can be returned by <a href="#apply-2"><code>apply/2</code></a> to ask  
+ra to realise a side-effect in the real works, such as sending a message to a process.</p>
+ 
+  <p>Although both leaders and followers will process the same commands effects
+  are typically only applied on the leader. The only exception to this is
+  the <code>relaase_cursor</code> effect that is realised on all effects as it is part  
+of the ra implementation log truncation mechanism.</p>
+ 
+  <p>When leaders change and when clusters are restarted there is a small chance  
+that effects are issued multiple times so designing effects to be idempotent  
+is a good idea.</p>
+ 
+ 
+  <dl>
+  <dt><b>send_msg</b></dt>
+  <dd> send a message to a pid or registered process
+  NB: this is sent using <code>noconnect</code> and <code>nosuspend</code> in order to avoid
+  blocking the ra process during failures.
+  </dd>
+  <dt><b>mod_call</b></dt>
+  <dd> Call an arbitrary Module:Function with the supplied arguments </dd>
+  <dt><b>monitor</b></dt>
+  <dd> monitor a process or erlang node </dd>
+  <dt><b>demonitor</b></dt>
+  <dd> demonitor a process </dd>
+  <dt><b>release_cursor</b></dt>
+  <dd> indicate to Ra that none of the preceeding entries contribute to the
+  current machine state </dd>
+  </dl></p>
+
+<h3 class="typedecl"><a name="type-effects">effects()</a></h3>
+<p><tt>effects() = [<a href="#type-effect">effect()</a>]</tt></p>
+<p>  See: <a href="effect.html"><code>effect</code></a></p>
+
+<h3 class="typedecl"><a name="type-machine">machine()</a></h3>
+<p><tt>machine() = {simple, <a href="#type-apply_fun">apply_fun</a>(State), State} | {module, module(), AddInitArgs::#{term() =&gt; term()}}</tt></p>
+<p>  Machine configuration.
+  the <code>module()</code> should implement the <a href="ra_machine.html"><code>ra_machine</code></a> behaviour.</p>
+
+<h3 class="typedecl"><a name="type-milliseconds">milliseconds()</a></h3>
+<p><tt>milliseconds() = non_neg_integer()</tt></p>
+
+
+<h3 class="typedecl"><a name="type-reply">reply()</a></h3>
+<p><tt>reply() = term()</tt></p>
+<p>  an arbitrary term that can be returned to the caller, _if_ the caller
+  used <a href="ra.html#send_and_await_consensus-2"><code>ra:send_and_await_consensus/2</code></a> or
+  <a href="ra.html#send_and_await_consensus-3"><code>ra:send_and_await_consensus/3</code></a></p>
+
+<h3 class="typedecl"><a name="type-state">state()</a></h3>
+<p><tt>state() = term()</tt></p>
+<p>  The state for a given machine implementation.</p>
+
+<h3 class="typedecl"><a name="type-user_command">user_command()</a></h3>
+<p><tt>user_command() = term()</tt></p>
+<p>  the command type for a given machine implementation</p>
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#eol_effects-2">eol_effects/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
+<tr><td valign="top"><a href="#leader_effects-2">leader_effects/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="apply-4">apply/4</a></h3>
+<div class="spec">
+<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Cmd::<a href="#type-command">command()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>} | {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="eol_effects-2">eol_effects/2</a></h3>
+<div class="spec">
+<p><tt>eol_effects(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="init-2">init/2</a></h3>
+<div class="spec">
+<p><tt>init(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; {<a href="#type-state">state()</a>, <a href="#type-effects">effects()</a>}</tt><br></p>
+</div><p>initialise a new machine</p>
+
+<h3 class="function"><a name="leader_effects-2">leader_effects/2</a></h3>
+<div class="spec">
+<p><tt>leader_effects(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="module-1">module/1</a></h3>
+<div class="spec">
+<p><tt>module(X1::<a href="#type-machine">machine()</a>) -&gt; undefined | module()</tt><br></p>
+</div>
+
+<h3 class="function"><a name="overview-2">overview/2</a></h3>
+<div class="spec">
+<p><tt>overview(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; map()</tt><br></p>
+</div>
+
+<h3 class="function"><a name="tick-3">tick/3</a></h3>
+<div class="spec">
+<p><tt>tick(X1::<a href="#type-machine">machine()</a>, TimeMs::<a href="#type-milliseconds">milliseconds()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -157,6 +157,7 @@
               delivery/0,
               command/0,
               customer_tag/0,
+              customer_id/0,
               client_msg/0,
               msg/0,
               msg_id/0,
