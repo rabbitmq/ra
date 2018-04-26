@@ -1,0 +1,95 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_log_wal</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_log_wal</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-state">state()</a></h3>
+<p><tt>state() = #state{file_num = non_neg_integer(), wal = #wal{fd = <a href="#type-maybe">maybe</a>(<a href="file.html#type-io_device">file:io_device()</a>), filename = <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>), writer_name_cache = <a href="#type-writer_name_cache">writer_name_cache()</a>, wal_file_size = non_neg_integer()} | undefined, batch = <a href="#type-maybe">maybe</a>(#batch{writes = non_neg_integer(), waiting = #{}, start_time = <a href="#type-maybe">maybe</a>(integer()), pending = iolist()}), file_modes = [term()], dir = string(), max_batch_size = non_neg_integer(), max_wal_size_bytes = non_neg_integer(), segment_writer = atom(), writers = #{}, metrics_cursor = non_neg_integer(), compute_checksums = boolean(), write_strategy = <a href="#type-wal_write_strategy">wal_write_strategy()</a>}</tt></p>
+
+
+<h3 class="typedecl"><a name="type-wal_conf">wal_conf()</a></h3>
+<p><tt>wal_conf() = #{dir =&gt; <a href="file.html#type-filename_all">file:filename_all()</a>, max_wal_size_bytes =&gt; non_neg_integer(), max_writer_entries_per_wal =&gt; non_neg_integer(), segment_writer =&gt; atom() | pid(), compute_checksums =&gt; boolean(), wal_strategy =&gt; <a href="#type-wal_write_strategy">wal_write_strategy()</a>}</tt></p>
+
+
+<h3 class="typedecl"><a name="type-wal_write_strategy">wal_write_strategy()</a></h3>
+<p><tt>wal_write_strategy() = delay_writes | delay_writes_sync | no_delay</tt></p>
+
+
+<h3 class="typedecl"><a name="type-writer_id">writer_id()</a></h3>
+<p><tt>writer_id() = {binary(), pid()}</tt></p>
+
+
+<h3 class="typedecl"><a name="type-writer_name_cache">writer_name_cache()</a></h3>
+<p><tt>writer_name_cache() = {NextIntId::non_neg_integer(), #{<a href="#type-writer_id">writer_id()</a> =&gt; binary()}}</tt></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#force_roll_over-1">force_roll_over/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-3">init/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_link-2">start_link/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#system_continue-3">system_continue/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#system_terminate-4">system_terminate/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#truncate_write-5">truncate_write/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#write-5">write/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#write_debug-3">write_debug/3</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="force_roll_over-1">force_roll_over/1</a></h3>
+<div class="spec">
+<p><tt>force_roll_over(Wal) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="init-3">init/3</a></h3>
+<div class="spec">
+<p><tt>init(Conf0::<a href="#type-wal_conf">wal_conf()</a>, Parent::pid(), Options::list()) -&gt; <a href="#type-state">state()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="start_link-2">start_link/2</a></h3>
+<div class="spec">
+<p><tt>start_link(Config::<a href="#type-wal_conf">wal_conf()</a>, Options::list()) -&gt; {ok, pid()} | {error, {already_started, pid()}}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="system_continue-3">system_continue/3</a></h3>
+<div class="spec">
+<p><tt>system_continue(Parent, Debug, State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="system_terminate-4">system_terminate/4</a></h3>
+<div class="spec">
+<p><tt>system_terminate(Reason, Parent, Debug, State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="truncate_write-5">truncate_write/5</a></h3>
+<div class="spec">
+<p><tt>truncate_write(From::<a href="#type-writer_id">writer_id()</a>, Wal::atom(), Idx::<a href="#type-ra_index">ra_index()</a>, Term::<a href="#type-ra_term">ra_term()</a>, Entry::term()) -&gt; ok | {error, wal_down}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="write-5">write/5</a></h3>
+<div class="spec">
+<p><tt>write(From::<a href="#type-writer_id">writer_id()</a>, Wal::atom(), Idx::<a href="#type-ra_index">ra_index()</a>, Term::<a href="#type-ra_term">ra_term()</a>, Entry::term()) -&gt; ok | {error, wal_down}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="write_debug-3">write_debug/3</a></h3>
+<div class="spec">
+<p><tt>write_debug(Dev, Event, Name) -&gt; any()</tt></p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

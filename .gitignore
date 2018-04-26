@@ -5,7 +5,6 @@ erl_crash.dump
 /.erlang.mk/
 /cover/
 /deps/
-/doc/
 /ebin/
 !/ebin/ra.app
 /logs/

@@ -34,7 +34,8 @@ end_per_suite(Config) ->
 non_assoc_prop({Ops, Initial}) ->
     ct:pal("non_assoc_prop Ops: ~p Initial: ~p~n", [Ops, Initial]),
     [A, B, C] = Cluster = ra:start_local_cluster(3, "test",
-                                                 {simple, fun non_assoc_apply/2, Initial}),
+                                                 {simple, fun non_assoc_apply/2,
+                                                  Initial}),
     Expected = lists:foldl(fun non_assoc_apply/2, Initial, Ops),
     % identity operation to ensure cluster is ready
     {ok, _, Leader} = ra:send_and_await_consensus(A, {add, 0}),
