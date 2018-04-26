@@ -365,12 +365,13 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              % TODO: only set this is leader was not detected
              [election_timeout_action(long, State) | Actions]};
         {leader, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
-            ?INFO("~w candidate -> leader term: ~b~n",
-                  [id(State), current_term(State)]),
+            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            State = State2#state{pending_commands = []},
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
+            ?INFO("~w candidate -> leader term: ~b~n",
+                  [id(State), current_term(State)]),
             {next_state, leader, State, Actions ++ NextEvents}
     end.
 

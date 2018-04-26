@@ -142,13 +142,14 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     % uid for all
     % TODO: validate all nodes are on different erlang nodes
     TS = erlang:system_time(millisecond),
-    ConfFun = fun (N, U) -> #{cluster_id => ClusterId,
-                              id => N,
-                              uid => U,
-                              initial_nodes => NodeIds,
-                              log_module => ra_log_file,
-                              log_init_args => #{uid => U},
-                              machine => Machine}
+    ConfFun = fun (N, U) ->
+                      #{cluster_id => ClusterId,
+                        id => N,
+                        uid => U,
+                        initial_nodes => NodeIds,
+                        log_module => ra_log_file,
+                        log_init_args => #{uid => U},
+                        machine => Machine}
               end,
     {Started, NotStarted} =
         lists:partition(fun (N) ->
@@ -167,11 +168,11 @@ start_cluster(ClusterId, Machine, NodeIds) ->
             ok = trigger_election(Node),
             case members(Node) of
                 {ok, _, _} ->
-                                                % we have a functioning cluster
+                    % we have a functioning cluster
                     {ok, Started, NotStarted};
                 _ ->
                     [delete_node(N) || N <- Started],
-                                                % we do not have a functioning cluster
+                    % we do not have a functioning cluster
                     {error, cluster_not_formed}
             end
     end.
