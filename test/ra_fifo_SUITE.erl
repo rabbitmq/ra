@@ -659,9 +659,7 @@ recover(Config) ->
     ra:members(NodeId),
     ra:stop_node(NodeId),
     ra:restart_node(NodeId),
-    timer:sleep(1000),
     ra:members(NodeId),
-    _St = sys:get_status(NodeId),
     {ok, {_, {_, msg1}}, _F2} = ra_fifo_client:dequeue(<<"tag">>, settled, F1),
 
     ok = ra:stop_node(NodeId),
