@@ -89,7 +89,6 @@
 -type applied_mfa() :: {module(), atom(), [term()]}.
 % represents a partially applied module call
 
--define(METRICS_TABLE, ra_fifo_metrics).
 -define(SHADOW_COPY_INTERVAL, 128).
 % metrics tuple format:
 % {Key, Ready, Pending, Total}
@@ -144,7 +143,8 @@
          service_queue = queue:new() :: queue:queue(customer_id()),
          dead_letter_handler :: maybe(applied_mfa()),
          cancel_customer_handler :: maybe(applied_mfa()),
-         become_leader_handler :: maybe(applied_mfa())
+         become_leader_handler :: maybe(applied_mfa()),
+         metrics_handler :: maybe(applied_mfa())
         }).
 
 -opaque state() :: #state{}.
@@ -152,7 +152,8 @@
 -type config() :: #{name := atom(),
                     dead_letter_handler => applied_mfa(),
                     become_leader_handler => applied_mfa(),
-                    cancel_customer_handler => applied_mfa()}.
+                    cancel_customer_handler => applied_mfa(),
+                    metrics_handler => applied_mfa()}.
 
 -export_type([protocol/0,
               delivery/0,
@@ -172,12 +173,13 @@ init(#{name := Name} = Conf) ->
     DLH = maps:get(dead_letter_handler, Conf, undefined),
     CCH = maps:get(cancel_customer_handler, Conf, undefined),
     BLH = maps:get(become_leader_handler, Conf, undefined),
+    MH = maps:get(metrics_handler, Conf, undefined),
     {#state{name = Name,
             dead_letter_handler = DLH,
             cancel_customer_handler = CCH,
-            become_leader_handler = BLH
-           },
-     [{metrics_table, ra_fifo_metrics, {Name, 0, 0, 0}}]}.
+            become_leader_handler = BLH,
+            metrics_handler = MH
+           }, []}.
 
 
 
@@ -353,20 +355,25 @@ leader_effects(#state{customers = Custs,
     end.
 
 -spec eol_effects(state()) -> ra_machine:effects().
-eol_effects(#state{enqueuers = Enqs, customers = Custs0, name = Name}) ->
+eol_effects(#state{enqueuers = Enqs, customers = Custs0}) ->
     Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
-    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))]
-        ++ [{mod_call, ets, delete, [?METRICS_TABLE, Name]}].
+    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))].
 
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
 tick(_Ts, #state{name = Name,
                  messages = Messages,
-                 ra_indexes = Indexes} = State) ->
+                 ra_indexes = Indexes,
+                 metrics_handler = MH} = State) ->
     Metrics = {Name,
                maps:size(Messages), % Ready
                num_checked_out(State), % checked out
-               ra_fifo_index:size(Indexes)}, % Toral
-    [{mod_call, ets, insert, [?METRICS_TABLE, Metrics]}].
+               ra_fifo_index:size(Indexes)}, % Total
+    case MH of
+        undefined ->
+            [];
+        {Mod, Fun, Args} ->
+            [{mod_call, Mod, Fun, Args ++ [Metrics]}]
+    end.
 
 -spec overview(state()) -> map().
 overview(#state{customers = Custs,
@@ -853,7 +860,11 @@ ensure_ets() ->
     end.
 
 test_init(Name) ->
-    element(1, init(#{name => Name})).
+    element(1, init(#{name => Name,
+                      metrics_handler => {?MODULE, metrics_handler, []}})).
+
+metrics_handler(_) ->
+    ok.
 
 enq_enq_checkout_test() ->
     Cid = {<<"enq_enq_checkout_test">>, self()},
@@ -1119,8 +1130,7 @@ tick_test() ->
     {S3, {_, _}} = deq(4, Cid2, unsettled, S2),
     {S4, _} = apply(5, {return, [MsgId], Cid}, S3),
 
-    [{mod_call, ets, insert, [?METRICS_TABLE, {test, 1, 1, 2}]}] =
-        tick(1, S4),
+    [{mod_call, _, _, [{test, 1, 1, 2}]}] = tick(1, S4),
     ok.
 
 release_cursor_snapshot_state_test() ->
