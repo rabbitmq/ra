@@ -153,7 +153,9 @@
 <p><tt>restart_node(NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; ok | {error, term()}</tt><br></p>
 <p><tt>NodeId</tt>: the ra_node_id() of the node<br>
 </p>
-<p>returns: <code>{ok | error, Error}</code></p>
+<p>returns: <code>{ok | error, Error}</code> when error can be
+  <code>not_found</code> or <code>name_not_registered</code> when the ra node has never before
+  been started on erlang node.</p>
 </div><p>Restarts a previously succesfully started ra node</p>
 
 <h3 class="function"><a name="send-2">send/2</a></h3>

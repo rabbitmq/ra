@@ -85,7 +85,9 @@ start_node(Conf) ->
 
 %% @doc Restarts a previously succesfully started ra node
 %% @param NodeId the ra_node_id() of the node
-%% @returns `{ok | error, Error}'
+%% @returns `{ok | error, Error}' when error can be
+%% `not_found' or `name_not_registered' when the ra node has never before
+%% been started on erlang node.
 -spec restart_node(ra_node_id()) -> ok | {error, term()}.
 restart_node(NodeId) ->
     % don't match on return value in case it is already running
