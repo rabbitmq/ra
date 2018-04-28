@@ -18,6 +18,7 @@
          consistent_query/2,
          % cluster management
          start_node/1,
+         start_node/4,
          restart_node/1,
          stop_node/1,
          delete_node/1,
@@ -85,7 +86,9 @@ start_node(Conf) ->
 
 %% @doc Restarts a previously succesfully started ra node
 %% @param NodeId the ra_node_id() of the node
-%% @returns `{ok | error, Error}'
+%% @returns `{ok | error, Error}' when error can be
+%% `not_found' or `name_not_registered' when the ra node has never before
+%% been started on erlang node.
 -spec restart_node(ra_node_id()) -> ok | {error, term()}.
 restart_node(NodeId) ->
     % don't match on return value in case it is already running
@@ -141,24 +144,10 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     % as long as all nodes are on different erlang nodes we can use the same
     % uid for all
     % TODO: validate all nodes are on different erlang nodes
-    TS = erlang:system_time(millisecond),
-    ConfFun = fun (N, U) ->
-                      #{cluster_id => ClusterId,
-                        id => N,
-                        uid => U,
-                        initial_nodes => NodeIds,
-                        log_module => ra_log_file,
-                        log_init_args => #{uid => U},
-                        machine => Machine}
-              end,
     {Started, NotStarted} =
         lists:partition(fun (N) ->
-                                U = erlang:unique_integer(),
-                                UId = ra_lib:to_list(ClusterId)
-                                      ++ ra_lib:to_list(U)
-                                      ++ ra_lib:to_list(TS),
-                                C = ConfFun(N, list_to_binary(UId)),
-                                ok =:= start_node(C)
+                                ok =:= start_node(ClusterId, N,
+                                                  Machine, NodeIds)
                         end, NodeIds),
     case Started of
         [] ->
@@ -176,6 +165,25 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                     {error, cluster_not_formed}
             end
     end.
+
+-spec start_node(ra_cluster_id(), ra_node_id(),
+                 ra_machine:machine(), [ra_node_id()]) ->
+    ok | {error, term()}.
+start_node(ClusterId, NodeId, Machine, NodeIds) ->
+    TS = erlang:system_time(millisecond),
+    I = erlang:unique_integer(),
+    UId = ra_lib:to_list(ClusterId)
+          ++ ra_lib:to_list(I)
+          ++ ra_lib:to_list(TS),
+    U = list_to_binary(UId),
+    Conf = #{cluster_id => ClusterId,
+             id => NodeId,
+             uid => U,
+             initial_nodes => NodeIds,
+             log_module => ra_log_file,
+             log_init_args => #{uid => U},
+             machine => Machine},
+    start_node(Conf).
 
 %% @doc Deletes a ra cluster in an orderly fashion
 %% This function commits and end of life command which after each node applies

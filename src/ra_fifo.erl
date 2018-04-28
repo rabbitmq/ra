@@ -872,7 +872,6 @@ enq_enq_checkout_test() ->
     {State2, _} = enq(2, 2, second, State1),
     {_State3, Effects} =
         apply(3, {checkout, {once, 2}, Cid}, State2),
-    io:format("effects ~p", [Effects]),
     ?assertEffect({monitor, _, _}, Effects),
     ?assertEffect({send_msg, _, {delivery, _, _}}, Effects),
     ok.

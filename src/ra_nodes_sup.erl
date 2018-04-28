@@ -27,8 +27,13 @@ start_node(#{id := NodeId} = Config) ->
 
 -spec restart_node(ra_node_id()) -> supervisor:startchild_ret().
 restart_node({RaName, Node}) ->
-    {ok, Conf} = rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]),
-    start_node(Conf).
+    case rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]) of
+        {ok, Conf} ->
+            start_node(Conf);
+        Err ->
+            {error, Err}
+    end.
+
 
 prepare_restart_rpc(RaName) ->
     case ra_directory:registered_name_from_node_name(RaName) of
