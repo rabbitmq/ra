@@ -96,7 +96,7 @@ delete_segments(Config) ->
             ok = ra_log_file_segment_writer:delete_segments(TblWriterPid,
                                                             UId, 3,
                                                             [Segment]),
-            timer:sleep(500),
+            timer:sleep(1000),
             % validate file is gone
             ?assert(false =:= filelib:is_file(SegmentFile)),
             ok

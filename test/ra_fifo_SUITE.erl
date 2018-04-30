@@ -656,11 +656,12 @@ recover(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    {_, F2} = process_ra_events(F1, 50),
     ra:members(NodeId),
     ra:stop_node(NodeId),
     ra:restart_node(NodeId),
     ra:members(NodeId),
-    {ok, {_, {_, msg1}}, _F2} = ra_fifo_client:dequeue(<<"tag">>, settled, F1),
+    {ok, {_, {_, msg1}}, _} = ra_fifo_client:dequeue(<<"tag">>, settled, F2),
 
     ok = ra:stop_node(NodeId),
     ok.

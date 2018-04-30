@@ -213,8 +213,9 @@ out_of_seq_writes(Config) ->
 
     % then write 4 and 5
     ok = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
+    await_written(WriterId, {4, 4, 1}),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
-    await_written(WriterId, {4, 5, 1}),
+    await_written(WriterId, {5, 5, 1}),
 
     % perform another out of sync write
     ok = ra_log_wal:write(WriterId, ra_log_wal, 7, 1, Data),
@@ -388,7 +389,7 @@ await_written({UId, _}, {_From, To, _Term} = Written) ->
         {ra_log_event, {written, Written}} ->
             mem_tbl_read(UId, To)
     after 5000 ->
-              throw(written_timeout)
+              throw({written_timeout, To})
     end.
 
 start_profile(Config, Modules) ->
