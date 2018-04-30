@@ -186,14 +186,14 @@ init(#{id := Id,
 
 
 recover(#{commit_index := CommitIndex,
-          id := Id,
           machine := Machine} = State0) ->
     {State, _, _} = apply_to(CommitIndex,
                              fun(E, S) ->
                                      %% Clear out the effects to avoid building up a
                                      %% long list of effects than then we throw away
                                      %% on node startup (queue recovery)
-                                     setelement(3, apply_with(Id, Machine, E, S), [])
+                                     setelement(3,
+                                                apply_with(Machine, E, S), [])
                              end,
                              State0),
     % close and re-open log to ensure segments aren't unnecessarily kept
@@ -288,10 +288,10 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                [Id, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
-                      {EntryTerm, L} ->
+                      {_EntryTerm, L} ->
                           ?INFO("~w: leader received last_index from ~w with "
                                 "different term ~b~n",
-                                [Id, PeerId, EntryTerm]),
+                                [Id, PeerId, _EntryTerm]),
                           % last_index has a different term or entry does not
                           % exist
                           % The peer must have received an entry from a previous
@@ -388,10 +388,9 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             {leader, State, Effects}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
-              #{current_term := CurTerm,
-                id := Id} = State0) when Term > CurTerm ->
+              #{current_term := CurTerm} = State0) when Term > CurTerm ->
     ?INFO("~w leader saw append_entries_rpc for term ~b abdicates term: ~b!~n",
-         [Id, Term, CurTerm]),
+         [id(State0), Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
                                                   id := Id}) ->
@@ -460,38 +459,38 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
             {candidate, State0#{votes => NewVotes}, []}
     end;
 handle_candidate(#request_vote_result{term = Term},
-                 State0 = #{current_term := CurTerm, id := Id})
+                 State0 = #{current_term := CurTerm})
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_result with higher term"
-          " received ~b -> ~b", [Id, CurTerm, Term]),
+          " received ~b -> ~b", [id(State0), CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}],
                         State0),
     {follower, State, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
-                 State0 = #{current_term := CurTerm}) when Term >= CurTerm ->
+                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
     State = update_meta([{current_term, Term}, {voted_for, undefined}],
                         State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{leader_id = LeaderId},
-                 State = #{current_term := CurTerm}) ->
+                 #{current_term := CurTerm} = State) ->
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
-                 #{id := Id, current_term := CurTerm} = State0)
+                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
     ?INFO("~w: candidate append_entries_reply with higher"
           " term received ~b -> ~b~n",
-          [Id, CurTerm, Term]),
+          [id(State0), CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
-                 State0 = #{current_term := CurTerm, id := Id})
+                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_rpc with higher term received ~b -> ~b~n",
-          [Id, CurTerm, Term]),
+          [id(State0), CurTerm, Term]),
     State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
@@ -633,12 +632,12 @@ handle_follower(#append_entries_rpc{term = Term,
                     % repeat reply effect on condition timeout
                     condition_timeout_effects => Effects}, Effects}
     end;
-handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
-                State = #{id := Id, current_term := CurTerm}) ->
+handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
+                #{id := Id, current_term := CurTerm} = State) ->
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
     ?INFO("~w: follower request_vote_rpc in ~b but current term ~b~n",
-         [Id, Term, CurTerm]),
+         [Id, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State00 = #{log := Log0}) ->
@@ -650,18 +649,17 @@ handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
-                State = #{id := Id, current_term := Term,
-                          voted_for := VotedFor})
+                #{current_term := Term, voted_for := VotedFor} = State)
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
     ?INFO("~w: follower request_vote_rpc for ~w already voted for ~w in ~b",
-          [Id, Cand, VotedFor, Term]),
+          [id(State), Cand, VotedFor, Term]),
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
-                State0 = #{current_term := CurTerm, id := Id})
+                #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
@@ -669,7 +667,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
         true ->
             ?INFO("~w: granting vote for ~w with last indexterm ~w"
                   "for term ~b previous term was ~b~n",
-                  [Id, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
+                  [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
@@ -677,15 +675,15 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             ?INFO("~w: declining vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
                   " last log entry idxterm seen was: ~w~n",
-                  [Id, Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
+                  [id(State0), Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State#{current_term => Term}, [{reply, Reply}]}
     end;
-handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand},
-                State = #{current_term := CurTerm, id := Id})
+handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
+                State = #{current_term := CurTerm})
   when Term < CurTerm ->
     ?INFO("~w declining vote to ~w for term ~b, current term ~b~n",
-          [Id, Cand, Term, CurTerm]),
+          [id(State), _Cand, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = Term}},
@@ -969,8 +967,8 @@ persist_last_applied(#{last_applied := L, log := Log0} = State) ->
 
 
 -spec terminate(ra_node_state(), Reason :: {shutdown, delete} | term()) -> ok.
-terminate(#{id := Id, log := Log}, {shutdown, delete}) ->
-    ?INFO("~w: terminating and deleting all data~n", [Id]),
+terminate(#{log := Log} = _State, {shutdown, delete}) ->
+    ?INFO("~w: terminating and deleting all data~n", [id(_State)]),
     catch ra_log:delete_everything(Log),
     ok;
 terminate(State, _Reason) ->
@@ -1037,7 +1035,7 @@ call_for_election(pre_vote, #{id := Id,
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
-                 State0 = #{current_term := CurTerm, id := Id})
+                 #{current_term := CurTerm}= State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
@@ -1045,22 +1043,22 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
         true ->
             ?INFO("~w: granting pre-vote for ~w with last indexterm ~w"
                   "for term ~b previous term was ~b~n",
-                  [Id, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
+                  [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             Reply = #pre_vote_result{term = Term, vote_granted = true},
             {FsmState, State#{voted_for => Cand}, [{reply, Reply}]};
         false ->
             ?INFO("~w: declining pre-vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
                   "Last log entry idxterm seen was: ~w~n",
-                  [Id, Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
+                  [id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
             Reply = #pre_vote_result{term = Term, vote_granted = false},
             {FsmState, State, [{reply, Reply}]}
     end;
-process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand},
-                State = #{current_term := CurTerm, id := Id})
+process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = _Cand},
+                #{current_term := CurTerm} = State)
   when Term < CurTerm ->
     ?INFO("~w declining pre-vote to ~w for term ~b, current term ~b~n",
-          [Id, Cand, Term, CurTerm]),
+          [id(State), _Cand, Term, CurTerm]),
     Reply = #pre_vote_result{term = CurTerm, vote_granted = false},
     {FsmState, State, [{reply, Reply}]}.
 
@@ -1207,8 +1205,8 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 
-apply_to(ApplyTo, #{id := Id, machine := Machine} = State) ->
-    apply_to(ApplyTo, fun(E, S) -> apply_with(Id, Machine, E, S) end, State).
+apply_to(ApplyTo, #{machine := Machine} = State) ->
+    apply_to(ApplyTo, fun(E, S) -> apply_with(Machine, E, S) end, State).
 
 apply_to(ApplyTo, ApplyFun, State) ->
     apply_to(ApplyTo, ApplyFun, 0, [], State).
@@ -1240,8 +1238,7 @@ make_notify_effects(Nots) ->
     [{notify, Pid, lists:reverse(Corrs)}
      || {Pid, Corrs} <- maps:to_list(Nots)].
 
-apply_with(_, % Idx
-           Machine,
+apply_with(Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},
            {State, MacSt, Effects0, Notifys0}) ->
     case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
@@ -1258,30 +1255,30 @@ apply_with(_, % Idx
             {State, NextMacSt, Effects ++ Efx
             , Notifys}
     end;
-apply_with(_, _, % Id, Machine
+apply_with(_, % Machine
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
            {State, MacSt, Effects0, Notifys0}) ->
     {Effects, Notifys} = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
                                    ReplyType, Effects0, Notifys0),
     {State, MacSt, Effects, Notifys};
-apply_with(Id, _Machine,
-           {Idx, Term, {'$ra_cluster_change', From, New, ReplyType}},
+apply_with(_Machine,
+           {Idx, Term, {'$ra_cluster_change', From, _New, ReplyType}},
            {State0, MacSt, Effects0, Notifys0}) ->
-    ?INFO("~w: applying ra cluster change to ~w~n", [Id, maps:keys(New)]),
+    ?INFO("~w: applying ra cluster change to ~w~n",
+          [id(State0), maps:keys(_New)]),
     {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
                                    Effects0, Notifys0),
     State = State0#{cluster_change_permitted => true},
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
     {State1, MacSt, Effects1, Notifys};
-apply_with(Id, _, % Machine
+apply_with(_, % Machine
            {_, Term, noop}, % Idx
            {State0 = #{current_term := Term}, MacSt, Effects, Notifys}) ->
-    ?INFO("~w: enabling ra cluster changes in ~b~n", [Id, Term]),
+    ?INFO("~w: enabling ra cluster changes in ~b~n", [id(State0), Term]),
     State = State0#{cluster_change_permitted => true},
     {State, MacSt, Effects, Notifys};
-apply_with(_, % Id
-           Machine,
+apply_with(Machine,
            {Idx, _, {'$ra_cluster', From, delete, ReplyType}},
            {State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
@@ -1292,9 +1289,10 @@ apply_with(_, % Id
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, NotifyEffects ++ TEffects ++ Effects});
-apply_with(Id, _Machine, Cmd, Acc) ->
+apply_with(_, Cmd, Acc) ->
     % TODO: uh why a catch all here? try to remove this and see if it breaks
-    ?WARN("~p: apply_with: unhandled command: ~W~n", [Id, Cmd, 8]),
+    ?WARN("~p: apply_with: unhandled command: ~W~n",
+          [id(element(1, Acc)), Cmd, 8]),
     Acc.
 
 add_next_cluster_change(Effects,

@@ -269,8 +269,7 @@ last_written(#state{last_written_index_term = LWTI}) ->
 -spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
 handle_event({written, {FromIdx, ToIdx, Term}},
-             #state{last_written_index_term = {LastWrittenIdx, _},
-                    uid = UId} = State0)
+             #state{last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx =< LastWrittenIdx + 1 ->
     % We need to ignore any written events for the same index but in a prior term
     % if we do not we may end up confirming to a leader writes that have not yet
@@ -282,9 +281,9 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % 10ms worth of entries
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
-        {X, State} ->
+        {_X, State} ->
             ?INFO("~s: written event did not find term ~p found ~p",
-                  [UId, {ToIdx, Term}, X]),
+                  [State#state.uid, {ToIdx, Term}, _X]),
             State
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
@@ -748,10 +747,11 @@ resend_from(Idx, #state{uid = UId} = State0) ->
             State0
     end.
 
-resend_from0(Idx, #state{uid = UId, last_index = LastIdx,
+resend_from0(Idx, #state{last_index = LastIdx,
                          last_resend_time = undefined,
                          cache = Cache} = State) ->
-    ?INFO("~s: ra_log_file: resending from ~b to ~b", [UId, Idx, LastIdx]),
+    ?INFO("~s: ra_log_file: resending from ~b to ~b",
+          [State#state.uid, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))

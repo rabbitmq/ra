@@ -435,7 +435,6 @@ follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(_, {command, {_CmdType, Data, noreply}},
          State) ->
-    Id = id(State),
     % forward to leader
     case leader_id(State) of
         undefined ->
@@ -444,7 +443,7 @@ follower(_, {command, {_CmdType, Data, noreply}},
             {keep_state, State, []};
         LeaderId ->
             ?INFO("~w follower leader cast - redirecting to ~w ~n",
-                  [Id, LeaderId]),
+                  [id(State), LeaderId]),
             ok = ra:cast(LeaderId, Data),
             {keep_state, State, []}
     end;
@@ -574,8 +573,7 @@ await_condition(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
-await_condition(EventType, Msg, State0 = #state{node_state = NState,
-                                                leader_monitor = MRef}) ->
+await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -588,7 +586,7 @@ await_condition(EventType, Msg, State0 = #state{node_state = NState,
         {pre_vote, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
             ?INFO("~w await_condition -> pre_vote in term: ~b~n",
-                  [ra_node:id(NState), current_term(State1)]),
+                  [id(State), current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, pre_vote, State#state{leader_monitor = undefined},
              [election_timeout_action(long, State) | Actions]};
@@ -791,8 +789,10 @@ uid(#state{node_state = NodeState}) ->
 leader_id(#state{node_state = NodeState}) ->
     ra_node:leader_id(NodeState).
 
+-ifdef(info).
 current_term(#state{node_state = NodeState}) ->
     ra_node:current_term(NodeState).
+-endif.
 
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
@@ -887,10 +887,10 @@ handle_leader_down(#state{leader_monitor = Mon} = State) ->
             {keep_state,
              State#state{leader_monitor = monitor(process, Leader)},
              []};
-        PingRes ->
+        _PingRes ->
             ?INFO("~w: Leader ~w appears down. Ping returned: ~w~n"
                   " Setting election timeout~n",
-                  [id(State), Leader, PingRes]),
+                  [id(State), Leader, _PingRes]),
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(short, State)]}
     end.

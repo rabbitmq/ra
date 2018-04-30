@@ -4,6 +4,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-define(info, true).
 
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends

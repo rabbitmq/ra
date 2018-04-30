@@ -51,8 +51,7 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(Info, State) ->
-    ?INFO("~p: info msg: ~p", [?MODULE, Info]),
+handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
