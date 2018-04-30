@@ -28,6 +28,12 @@
          %
         ]).
 
+-ifdef(TEST).
+-export([
+         metrics_handler/1
+        ]).
+-endif.
+
 -type raw_msg() :: term().
 %% The raw message. It is opaque to ra_fifo.
 
