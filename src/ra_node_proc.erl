@@ -185,7 +185,9 @@ init(Config0) when is_map(Config0) ->
                     await_condition_timeout = AwaitCondTimeout},
     %%?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
-    {ok, recover, State, [{next_event, cast, go} | Actions0]}.
+    %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
+    %% does not support this. it was fixed in 20.3.2
+    {ok, recover, State, [{state_timeout, 0, go} | Actions0]}.
 
 %% callback mode
 callback_mode() -> state_functions.
@@ -207,7 +209,11 @@ recover(_EventType, go, State = #state{node_state = NodeState0}) ->
                       [election_timeout_action(short, State)]
               end,
     {next_state, follower, State#state{node_state = NodeState},
-     set_tick_timer(State, Actions)}.
+     set_tick_timer(State, Actions)};
+recover(_, _, State) ->
+    % all other events need to be postponed until we can return
+    % `next_event` from init
+    {keep_state, State, {postpone, true}}.
 
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
