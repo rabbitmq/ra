@@ -272,12 +272,13 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
     State = State0#state{customer_deliveries = maps:remove(CustomerTag, CDels)},
     try_send_and_await_consensus(Nodes, Cmd, State).
 
--spec purge(state()) -> {ok, non_neg_integer(), state()} | {error | timeout, term()}.
-purge(State0) ->
-    Node = pick_node(State0),
+%% @doc Purges all the messages from a ra_fifo queue and returns the number
+%% of messages purged.
+-spec purge(ra_node_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
+purge(Node) ->
     case ra:send_and_await_consensus(Node, purge) of
-        {ok, {purge, Reply}, Leader} ->
-            {ok, Reply, State0#state{leader = Leader}};
+        {ok, {purge, Reply}, _} ->
+            {ok, Reply};
         Err ->
             Err
     end.
