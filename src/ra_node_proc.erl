@@ -29,6 +29,7 @@
 -export([start_link/1,
          command/3,
          cast_command/2,
+         cast_command/3,
          query/3,
          state_query/2,
          trigger_election/1,
@@ -57,6 +58,11 @@
                            | '$ra_cluster_change' | '$ra_cluster'.
 
 -type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
+
+-type ra_command_with_from() ::
+    {ra_command_type(), from(), term(), command_reply_mode()}.
+
+-type ra_command_priority() :: normal | high.
 
 -type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_node_id()} |
                                     {error, term()} |
@@ -98,7 +104,8 @@
                 monitors = #{} :: #{pid() | node() => maybe(reference())},
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
-                await_condition_timeout :: non_neg_integer()}).
+                await_condition_timeout :: non_neg_integer(),
+                delayed_commands = [] :: [ra_command_with_from()]}).
 
 %%%===================================================================
 %%% API
@@ -112,11 +119,15 @@ start_link(Config = #{id := Id}) ->
 -spec command(ra_node_id(), ra_command(), timeout()) ->
     ra_cmd_ret().
 command(ServerRef, Cmd, Timeout) ->
-    leader_call(ServerRef, {command, Cmd}, Timeout).
+    leader_call(ServerRef, {command, high, Cmd}, Timeout).
 
 -spec cast_command(ra_node_id(), ra_command()) -> ok.
 cast_command(ServerRef, Cmd) ->
-    gen_statem:cast(ServerRef, {command, Cmd}).
+    gen_statem:cast(ServerRef, {command, normal, Cmd}).
+
+-spec cast_command(ra_node_id(), ra_command_priority(), ra_command()) -> ok.
+cast_command(ServerRef, Priority, Cmd) ->
+    gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_node_id(), query_fun(), dirty | consistent) ->
     {ok, {ra_idxterm(), term()}, ra_node_id()}.
@@ -220,12 +231,9 @@ leader(EventType, {leader_call, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
-leader(EventType, {command, {CmdType, Data, ReplyMode}},
+leader(EventType, {command, high, {CmdType, Data, ReplyMode}},
        #state{node_state = NodeState0} = State0) ->
-    %% Persist command into log
-    %% Return raft index + term to caller so they can wait for apply
-    %% notifications
-    %% Send msg to peer with updated state data
+    %% high priority commands are written immediately
     From = case EventType of
                cast -> undefined;
                {call, F} -> F
@@ -236,6 +244,32 @@ leader(EventType, {command, {CmdType, Data, ReplyMode}},
     {State, Actions} = handle_effects(Effects, EventType,
                                       State0#state{node_state = NodeState}),
     {keep_state, State, Actions};
+leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
+       #state{delayed_commands = Delayed} = State0) ->
+    %% cache the normal command until the flush_commands message arrives
+    From = case EventType of
+               cast -> undefined;
+               {call, F} -> F
+           end,
+    Cmd = {CmdType, From , Data, ReplyMode},
+    Actions = case Delayed of
+                  [] ->
+                      [{state_timeout, 0, flush_commands}];
+                  _ ->
+                      []
+              end,
+    {keep_state, State0#state{delayed_commands = [Cmd | Delayed]}, Actions};
+leader(EventType, flush_commands,
+       #state{node_state = NodeState0,
+              delayed_commands = Delayed} = State0) ->
+
+    %% write all delayed commands
+    {leader, NodeState, Effects} =
+        ra_node:handle_leader({commands, lists:reverse(Delayed)}, NodeState0),
+
+    {State, Actions} = handle_effects(Effects, EventType,
+                                      State0#state{node_state = NodeState}),
+    {keep_state, State#state{delayed_commands = []}, Actions};
 leader({call, From}, {dirty_query, QueryFun},
        #state{node_state = NodeState} = State) ->
     Reply = perform_dirty_query(QueryFun, leader, NodeState),
@@ -332,7 +366,8 @@ leader(EventType, Msg, State0) ->
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
-candidate(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+candidate(cast, {command, _Priority,
+                 {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -385,7 +420,8 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
 pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
-pre_vote(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+pre_vote(cast, {command, _Priority,
+                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -433,7 +469,7 @@ pre_vote(EventType, Msg, State0) ->
 
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
-follower(_, {command, {_CmdType, Data, noreply}},
+follower(_, {command, _Priority, {_CmdType, Data, noreply}},
          State) ->
     % forward to leader
     case leader_id(State) of
@@ -447,7 +483,8 @@ follower(_, {command, {_CmdType, Data, noreply}},
             ok = ra:cast(LeaderId, Data),
             {keep_state, State, []}
     end;
-follower(cast, {command, {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+follower(cast, {command, _Priority,
+                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -520,7 +557,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, terminating_follower, State, Actions}
     end.
 
-terminating_leader(_EvtType, {command, _}, State0) ->
+terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->

@@ -42,7 +42,8 @@
                 pending = #{} :: #{seq() =>
                                    {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
-                                               seq()}}).
+                                               seq()},
+                priority :: high | normal}).
 
 -opaque state() :: #state{}.
 
@@ -95,7 +96,7 @@ enqueue(Correlation, Msg, State0) ->
     {Next, State1} = next_enqueue_seq(State0),
     % by default there is no correlation id
     Cmd = {enqueue, self(), Next, Msg},
-    send_command(Node, Correlation, Cmd, State1).
+    send_command(Node, Correlation, Cmd, normal, State1).
 
 %% @doc Enqueues a message.
 %% @param Msg an arbitrary erlang term representing the message.
@@ -160,7 +161,7 @@ dequeue(CustomerTag, Settlement, State0) ->
 settle(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     Cmd = {settle, MsgIds, customer_id(CustomerTag)},
-    case send_command(Node, undefined, Cmd, State0) of
+    case send_command(Node, undefined, Cmd, high, State0) of
         {slow, S} ->
             % turn slow into ok for this function
             {ok, S};
@@ -198,7 +199,7 @@ return(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
     Cmd = {return, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0);
+    send_command(Node, undefined, Cmd, high, State0);
 return(CustomerTag, [_|_] = MsgIds,
        #state{unsent_commands = Unsent0} = State0) ->
     CustomerId = customer_id(CustomerTag),
@@ -230,7 +231,7 @@ return(CustomerTag, [_|_] = MsgIds,
 discard(CustomerTag, [_|_] = MsgIds, State0) ->
     Node = pick_node(State0),
     Cmd = {discard, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0).
+    send_command(Node, undefined, Cmd, high, State0).
 
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
@@ -354,7 +355,7 @@ handle_ra_event(From, {applied, Seqs},
             %% send all the settlements and returns
             State = lists:foldl(fun (C, S0) ->
                                         case send_command(Node, undefined,
-                                                          C, S0) of
+                                                          C, high, S0) of
                                             {T, S} when T =/= error ->
                                                 S
                                         end
@@ -498,21 +499,30 @@ next_enqueue_seq(#state{next_enqueue_seq = Seq} = State) ->
 customer_id(CustomerTag) ->
     {CustomerTag, self()}.
 
-send_command(_Node, _Correlation, _Command,
+send_command(_Node, _Correlation, _Command, _Priority,
              #state{pending = Pending, max_pending = Max})
   when map_size(Pending) =:= Max ->
     {error, stop_sending};
-send_command(Node, Correlation, Command,
+send_command(Node, Correlation, Command, Priority,
              #state{pending = Pending,
+                    priority = Priority,
                     soft_limit_pending = SftLmt} = State0) ->
     {Seq, State} = next_seq(State0),
-    ok = ra:send_and_notify(Node, Command, Seq),
+    ok = ra:send_and_notify(Node, Priority, Command, Seq),
     Tag = case maps:size(Pending) >= SftLmt of
               true -> slow;
               false -> ok
           end,
     {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}},
-                      slow = Tag == slow}}.
+                      priority = Priority,
+                      slow = Tag == slow}};
+send_command(Node, Correlation, Command, high,
+             #state{priority = normal} = State) ->
+    send_command(Node, Correlation, Command, normal, State);
+send_command(Node, Correlation, Command, normal,
+             #state{priority = high} = State) ->
+    send_command(Node, Correlation, Command, normal,
+                 State#state{priority = normal}).
 
 resend_command(Node, Correlation, Command,
                #state{pending = Pending} = State0) ->

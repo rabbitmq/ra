@@ -343,6 +343,21 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                       end,
             {leader, State, Effects}
     end;
+handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
+    {State0, Effects0} = lists:foldl(
+                           fun(C, {S0, E}) ->
+                                   {queued, I, T, S} = append_log_leader(C, S0),
+                                   case C of
+                                       {_, From, _, after_log_append} ->
+                                           {S, [{reply, From , {I, T}} | E]};
+                                       _ ->
+                                           {S, E}
+                                   end
+                           end, {State00, []}, Cmds),
+
+    {State, Rpcs} = make_pipelined_rpcs(length(Cmds), State0),
+    %% TOOD: ra_metrics
+    {leader, State, [{send_rpcs, Rpcs} | Effects0]};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     Log = ra_log:handle_event(Evt, Log0),
     {State1, Effects, Applied} = evaluate_quorum(State0#{log => Log}),
@@ -862,10 +877,14 @@ filter_follower_effects(Effects) ->
                      (_) -> false
                  end, Effects).
 
-make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
+make_pipelined_rpcs(State) ->
+    make_pipelined_rpcs(?AER_CHUNK_SIZE, State).
+
+make_pipelined_rpcs(MaxBatchSize, #{commit_index := CommitIndex} = State0) ->
     maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Entries}) ->
                       {LastIdx, Entry, S} =
-                          append_entries_or_snapshot(PeerId, Next, S0),
+                          append_entries_or_snapshot(PeerId, Next,
+                                                     MaxBatchSize, S0),
                       Peer = Peer0#{next_index => LastIdx+1,
                                     commit_index => CommitIndex},
                       {update_peer(PeerId, Peer,S), [Entry | Entries]}
@@ -874,22 +893,27 @@ make_pipelined_rpcs(#{commit_index := CommitIndex} = State0) ->
 % makes empty append entries for peers that aren't pipelineable
 make_rpcs(State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
-                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
+                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next,
+                                                                 ?AER_CHUNK_SIZE,
+                                                                 S0),
                       {S, [Entry | Entries]}
               end, {State, []}, stale_peers(State)).
 
 make_all_rpcs(State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
-                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next, S0),
+                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next,
+                                                                 ?AER_CHUNK_SIZE,
+                                                                 S0),
                       {S, [Entry | Entries]}
               end, {State, []}, peers(State)).
 
-append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
-                                           current_term := Term} = State) ->
+append_entries_or_snapshot(PeerId, Next, MaxBatchSize,
+                           #{id := Id, log := Log0,
+                             current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when PrevTerm =/= undefined ->
-            make_aer_chunk(PeerId, PrevIdx, PrevTerm, ?AER_CHUNK_SIZE,
+            make_aer_chunk(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
                            State#{log => Log});
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
@@ -897,7 +921,7 @@ append_entries_or_snapshot(PeerId, Next, #{id := Id, log := Log0,
             case ra_log:snapshot_index_term(Log) of
                 {PrevIdx, PrevTerm} ->
                     % Previous index is the same as snapshot index
-                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, ?AER_CHUNK_SIZE,
+                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
                                    State#{log => Log});
                 _ ->
                     {LastIndex, LastTerm, Config, MacState} =

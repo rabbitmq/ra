@@ -12,7 +12,9 @@
          send_and_await_consensus/2,
          send_and_await_consensus/3,
          send_and_notify/3,
+         send_and_notify/4,
          cast/2,
+         cast/3,
          dirty_query/2,
          members/1,
          consistent_query/2,
@@ -333,6 +335,11 @@ send_and_notify(ServerRef, Command, Correlation) ->
     Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
     ra_node_proc:cast_command(ServerRef, Cmd).
 
+-spec send_and_notify(ra_node_id(), high | normal, term(), term()) -> ok.
+send_and_notify(ServerRef, Priority, Command, Correlation) ->
+    Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
+    ra_node_proc:cast_command(ServerRef, Priority, Cmd).
+
 %% @doc Cast a message to a node
 %% This is the least reliable way to interact with a ra node. If the node
 %% addressed isn't the leader no notification will be issued.
@@ -340,6 +347,14 @@ send_and_notify(ServerRef, Command, Correlation) ->
 cast(ServerRef, Command) ->
     Cmd = usr(Command, noreply),
     ra_node_proc:cast_command(ServerRef, Cmd).
+
+%% @doc Cast a message to a node with a priority
+%% This is the least reliable way to interact with a ra node. If the node
+%% addressed isn't the leader no notification will be issued.
+-spec cast(ra_node_id(), normal | high, term()) -> ok.
+cast(ServerRef, Priority, Command) ->
+    Cmd = usr(Command, noreply),
+    ra_node_proc:cast_command(ServerRef, Priority, Cmd).
 
 %% @doc query the machine state on any node
 %% This allows you to run the QueryFun over the the machine state and
