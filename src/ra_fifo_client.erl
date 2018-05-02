@@ -23,8 +23,7 @@
 
 -include("ra.hrl").
 
--define(MAX_PENDING, 1024).
--define(SOFT_LIMIT_PENDING, 768).
+-define(SOFT_LIMIT, 1024).
 
 -type seq() :: non_neg_integer().
 
@@ -34,12 +33,11 @@
                 next_seq = 0 :: seq(),
                 last_applied :: maybe(seq()),
                 next_enqueue_seq = 1 :: seq(),
-                max_pending = 0 :: non_neg_integer(),
                 %% indicates that we've exceeded the soft limit
                 slow = false :: boolean(),
                 unsent_commands = #{} :: #{ra_fifo:customer_id() =>
                                            {[seq()], [seq()], [seq()]}},
-                soft_limit_pending = 0 :: non_neg_integer(),
+                soft_limit = ?SOFT_LIMIT :: non_neg_integer(),
                 pending = #{} :: #{seq() =>
                                    {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
@@ -62,7 +60,7 @@
 %% ensure the leader node is at the head of the list.
 -spec init(ra_cluster_id(), [ra_node_id()]) -> state().
 init(ClusterId, Nodes) ->
-    init(ClusterId, Nodes, ?MAX_PENDING).
+    init(ClusterId, Nodes, ?SOFT_LIMIT).
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
@@ -71,17 +69,19 @@ init(ClusterId, Nodes) ->
 %% ensure the leader node is at the head of the list.
 %% @param MaxPending size defining the max number of pending commands.
 -spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer()) -> state().
-init(ClusterId, Nodes, MaxPending) ->
-    update_max_pending(#state{cluster_id = ClusterId,
-                              nodes = Nodes}, MaxPending).
+init(ClusterId, Nodes, SoftLimit) ->
+    #state{cluster_id = ClusterId,
+           nodes = Nodes,
+           soft_limit = SoftLimit}.
 
 -spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
-init(ClusterId, Nodes, MaxPending, BlockFun, UnblockFun) ->
-    update_max_pending(#state{cluster_id = ClusterId,
-                              nodes = Nodes,
-                              block_handler = BlockFun,
-                              unblock_handler = UnblockFun}, MaxPending).
+init(ClusterId, Nodes, SoftLimit, BlockFun, UnblockFun) ->
+    #state{cluster_id = ClusterId,
+           nodes = Nodes,
+           block_handler = BlockFun,
+           unblock_handler = UnblockFun,
+           soft_limit = SoftLimit}.
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this
@@ -293,7 +293,6 @@ checkout(CustomerTag, NumUnsettled, State0) ->
     Nodes = sorted_nodes(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
-    % State = update_max_pending(State0, NumUnsettled),
     try_send_and_await_consensus(Nodes, Cmd, State0).
 
 %% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
@@ -372,7 +371,7 @@ purge(Node) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()} | eol.
 handle_ra_event(From, {applied, Seqs},
-                #state{soft_limit_pending = SftLmt,
+                #state{soft_limit = SftLmt,
                        unblock_handler = UnblockFun} = State0) ->
     {Corrs, State1} = lists:foldl(fun seq_applied/2,
                                   {[], State0#state{leader = From}},
@@ -439,12 +438,6 @@ untracked_enqueue(_ClusterId, [Node | _], Msg) ->
     ok.
 
 %% Internal
-
-update_max_pending(#state{max_pending = Max0} = State, Change) ->
-    Max = Max0 + Change,
-    State#state{soft_limit_pending = trunc(Max * 0.75),
-                max_pending = Max}.
-
 
 try_send_and_await_consensus([Node | Rem], Cmd, State) ->
     case ra:send_and_await_consensus(Node, Cmd, 30000) of
@@ -540,14 +533,10 @@ next_enqueue_seq(#state{next_enqueue_seq = Seq} = State) ->
 customer_id(CustomerTag) ->
     {CustomerTag, self()}.
 
-send_command(_Node, _Correlation, _Command, _Priority,
-             #state{pending = Pending, max_pending = Max})
-  when map_size(Pending) =:= Max ->
-    {error, stop_sending};
 send_command(Node, Correlation, Command, Priority,
              #state{pending = Pending,
                     priority = Priority,
-                    soft_limit_pending = SftLmt} = State0) ->
+                    soft_limit = SftLmt} = State0) ->
     {Seq, State} = next_seq(State0),
     ok = ra:send_and_notify(Node, Priority, Command, Seq),
     Tag = case maps:size(Pending) >= SftLmt of
