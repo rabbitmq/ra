@@ -7,6 +7,7 @@
 -export([
          init/2,
          init/3,
+         init/5,
          checkout/3,
          cancel_checkout/2,
          enqueue/2,
@@ -37,12 +38,14 @@
                 %% indicates that we've exceeded the soft limit
                 slow = false :: boolean(),
                 unsent_commands = #{} :: #{ra_fifo:customer_id() =>
-                                           {[seq()], [seq()]}},
+                                           {[seq()], [seq()], [seq()]}},
                 soft_limit_pending = 0 :: non_neg_integer(),
                 pending = #{} :: #{seq() =>
                                    {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
-                                               seq()}}).
+                                               seq()},
+                block_handler = fun() -> ok end :: fun(() -> ok),
+                unblock_handler = fun() -> ok end :: fun(() -> ok)}).
 
 -opaque state() :: #state{}.
 
@@ -71,6 +74,14 @@ init(ClusterId, Nodes, MaxPending) ->
     update_max_pending(#state{cluster_id = ClusterId,
                               nodes = Nodes}, MaxPending).
 
+-spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer(), fun(() -> ok),
+           fun(() -> ok)) -> state().
+init(ClusterId, Nodes, MaxPending, BlockFun, UnblockFun) ->
+    update_max_pending(#state{cluster_id = ClusterId,
+                              nodes = Nodes,
+                              block_handler = BlockFun,
+                              unblock_handler = UnblockFun}, MaxPending).
+
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this
 %% command when it has been applied.
@@ -90,12 +101,19 @@ init(ClusterId, Nodes, MaxPending) ->
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec enqueue(Correlation :: term(), Msg :: term(), State :: state()) ->
     {ok | slow, state()} | {error, stop_sending}.
-enqueue(Correlation, Msg, State0) ->
+enqueue(Correlation, Msg, State0 = #state{slow = Slow,
+                                          block_handler = BlockFun}) ->
     Node = pick_node(State0),
     {Next, State1} = next_enqueue_seq(State0),
     % by default there is no correlation id
     Cmd = {enqueue, self(), Next, Msg},
-    send_command(Node, Correlation, Cmd, State1).
+    case send_command(Node, Correlation, Cmd, State1) of
+        {slow, _} = Ret when not Slow ->
+            BlockFun(),
+            Ret;
+        Any ->
+            Any
+    end.
 
 %% @doc Enqueues a message.
 %% @param Msg an arbitrary erlang term representing the message.
@@ -173,9 +191,9 @@ settle(CustomerTag, [_|_] = MsgIds,
     %% we've reached the soft limit so will stash the command to be
     %% sent once we have seen enough notifications
     Unsent = maps:update_with(CustomerId,
-                              fun ({Settles, Returns}) ->
-                                      {Settles ++ MsgIds, Returns}
-                              end, {MsgIds, []}, Unsent0),
+                              fun ({Settles, Returns, Discards}) ->
+                                      {Settles ++ MsgIds, Returns, Discards}
+                              end, {MsgIds, [], []}, Unsent0),
     {ok, State0#state{unsent_commands = Unsent}}.
 
 %% @doc Return a message to the queue.
@@ -198,17 +216,23 @@ return(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
     Cmd = {return, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0);
+    case send_command(Node, undefined, Cmd, State0) of
+        {slow, S} ->
+            % turn slow into ok for this function
+            {ok, S};
+        {ok, _} = Ret ->
+            Ret
+    end;
 return(CustomerTag, [_|_] = MsgIds,
        #state{unsent_commands = Unsent0} = State0) ->
     CustomerId = customer_id(CustomerTag),
     %% we've reached the soft limit so will stash the command to be
     %% sent once we have seen enough notifications
     Unsent = maps:update_with(CustomerId,
-                              fun ({Settles, Returns}) ->
-                                      {Settles, Returns ++ MsgIds}
-                              end, {[], MsgIds}, Unsent0),
-    State0#state{unsent_commands = Unsent}.
+                              fun ({Settles, Returns, Discards}) ->
+                                      {Settles, Returns ++ MsgIds, Discards}
+                              end, {[], MsgIds, []}, Unsent0),
+    {ok, State0#state{unsent_commands = Unsent}}.
 
 %% @doc Discards a checked out message.
 %% If the queue has a dead_letter_handler configured this will be called.
@@ -227,10 +251,27 @@ return(CustomerTag, [_|_] = MsgIds,
 %% enqueue until at least one <code>ra_event</code> has been processes.
 -spec discard(ra_fifo:customer_tag(), [ra_fifo:msg_id()], state()) ->
     {ok | slow, state()} | {error, stop_sending}.
-discard(CustomerTag, [_|_] = MsgIds, State0) ->
+discard(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     Cmd = {discard, MsgIds, customer_id(CustomerTag)},
-    send_command(Node, undefined, Cmd, State0).
+    case send_command(Node, undefined, Cmd, State0) of
+        {slow, S} ->
+            % turn slow into ok for this function
+            {ok, S};
+        {ok, _} = Ret ->
+            Ret
+    end;
+discard(CustomerTag, [_|_] = MsgIds,
+        #state{unsent_commands = Unsent0} = State0) ->
+    CustomerId = customer_id(CustomerTag),
+    %% we've reached the soft limit so will stash the command to be
+    %% sent once we have seen enough notifications
+    Unsent = maps:update_with(CustomerId,
+                              fun ({Settles, Returns, Discards}) ->
+                                      {Settles, Returns, Discards ++ MsgIds}
+                              end, {[], [], MsgIds}, Unsent0),
+    {ok, State0#state{unsent_commands = Unsent}}.
+
 
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
@@ -330,7 +371,8 @@ purge(Node) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()} | eol.
 handle_ra_event(From, {applied, Seqs},
-                #state{soft_limit_pending = SftLmt} = State0) ->
+                #state{soft_limit_pending = SftLmt,
+                       unblock_handler = UnblockFun} = State0) ->
     {Corrs, State1} = lists:foldl(fun seq_applied/2,
                                   {[], State0#state{leader = From}},
                                   Seqs),
@@ -342,14 +384,12 @@ handle_ra_event(From, {applied, Seqs},
             State2 = State1#state{slow = false,
                                   unsent_commands = #{}},
             % build up a list of commands to issue
-            Commands = maps:fold(fun (Cid, {Settled, []}, Acc) ->
-                                         [{settle, Settled, Cid} | Acc];
-                                     (Cid, {[], Returns}, Acc) ->
-                                         [{return, Returns, Cid} | Acc];
-                                     (Cid, {Settled, Returns}, Acc) ->
-                                         [{settle, Settled, Cid},
-                                          {return, Returns, Cid} | Acc]
-                                 end, [], State1#state.unsent_commands),
+            Commands = maps:fold(
+                         fun (Cid, {Settled, Returns, Discards}, Acc) ->
+                                 add_command(Cid, settle, Settled,
+                                             add_command(Cid, return, Returns,
+                                                         add_command(Cid, discard, Discards, Acc)))
+                         end, [], State1#state.unsent_commands),
             Node = pick_node(State2),
             %% send all the settlements and returns
             State = lists:foldl(fun (C, S0) ->
@@ -359,6 +399,7 @@ handle_ra_event(From, {applied, Seqs},
                                                 S
                                         end
                                 end, State2, Commands),
+            UnblockFun(),
             {internal, lists:reverse(Corrs), State};
         _ ->
             {internal, lists:reverse(Corrs), State1}
@@ -405,7 +446,7 @@ update_max_pending(#state{max_pending = Max0} = State, Change) ->
 
 
 try_send_and_await_consensus([Node | Rem], Cmd, State) ->
-    case ra:send_and_await_consensus(Node, Cmd) of
+    case ra:send_and_await_consensus(Node, Cmd, 30000) of
         {ok, _, Leader} ->
             {ok, State#state{leader = Leader}};
         Err when length(Rem) =:= 0 ->
@@ -520,6 +561,7 @@ resend_command(Node, Correlation, Command,
     ok = ra:send_and_notify(Node, Command, Seq),
     State#state{pending = Pending#{Seq => {Correlation, Command}}}.
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
+add_command(_Cid, _Tag, [], Acc) ->
+    Acc;
+add_command(Cid, Tag, MsgIds, Acc) ->
+    [{Tag, MsgIds, Cid} | Acc].
