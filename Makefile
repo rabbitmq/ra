@@ -43,3 +43,10 @@ shell: app
 
 check-rabbitmq-components.mk:
 	true
+
+RABBITMQ_UPSTREAM_FETCH_URL ?= https://github.com/rabbitmq/aten.git
+
+.PHONY: show-upstream-git-fetch-url
+
+show-upstream-git-fetch-url:
+	@echo $(RABBITMQ_UPSTREAM_FETCH_URL)
