@@ -856,15 +856,6 @@ shadow_copy(#state{name = _Name,
                           (_) -> false
                       end, Effects))).
 
-ensure_ets() ->
-    case ets:info(ra_fifo_metrics) of
-        undefined ->
-            _ = ets:new(ra_fifo_metrics,
-                        [public, named_table, {write_concurrency, true}]);
-        _ ->
-            ok
-    end.
-
 test_init(Name) ->
     element(1, init(#{name => Name,
                       metrics_handler => {?MODULE, metrics_handler, []}})).
@@ -903,7 +894,6 @@ enq_enq_deq_deq_settle_test() ->
     ok.
 
 enq_enq_checkout_get_settled_test() ->
-    ensure_ets(),
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
     {State1, _} = enq(1, 1, first, test_init(test)),
     % get returns a reply value
@@ -912,7 +902,6 @@ enq_enq_checkout_get_settled_test() ->
     ok.
 
 checkout_get_empty_test() ->
-    ensure_ets(),
     Cid = {<<"checkout_get_empty_test">>, self()},
     State = test_init(test),
     {_State2, [], {dequeue, empty}} =
@@ -927,7 +916,6 @@ untracked_enq_deq_test() ->
         apply(3, {checkout, {dequeue, settled}, Cid}, State1),
     ok.
 release_cursor_test() ->
-    ensure_ets(),
     Cid = {<<"release_cursor_test">>, self()},
     {State1, _} = enq(1, 1, first,  test_init(test)),
     {State2, _} = enq(2, 2, second, State1),
@@ -940,7 +928,6 @@ release_cursor_test() ->
     ok.
 
 checkout_enq_settle_test() ->
-    ensure_ets(),
     Cid = {<<"checkout_enq_settle_test">>, self()},
     {State1, [{monitor, _, _}]} = check(Cid, 1, test_init(test)),
     {State2, Effects0} = enq(2, 1,  first, State1),
@@ -1221,7 +1208,6 @@ leader_effects_test() ->
     ok.
 
 % performance_test() ->
-%     ensure_ets(),
 %     % just under ~200ms on my machine [Karl]
 %     NumMsgs = 100000,
 %     {Taken, _} = perf_test(NumMsgs, 0),
