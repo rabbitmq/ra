@@ -369,11 +369,13 @@ eol_effects(#state{enqueuers = Enqs, customers = Custs0}) ->
 tick(_Ts, #state{name = Name,
                  messages = Messages,
                  ra_indexes = Indexes,
-                 metrics_handler = MH} = State) ->
+                 metrics_handler = MH,
+                 customers = Custs} = State) ->
     Metrics = {Name,
                maps:size(Messages), % Ready
                num_checked_out(State), % checked out
-               ra_fifo_index:size(Indexes)}, % Total
+               ra_fifo_index:size(Indexes), %% Total
+               maps:size(Custs)}, % Customers
     case MH of
         undefined ->
             [];
@@ -1122,7 +1124,7 @@ tick_test() ->
     {S3, {_, _}} = deq(4, Cid2, unsettled, S2),
     {S4, _} = apply(5, {return, [MsgId], Cid}, S3),
 
-    [{mod_call, _, _, [{test, 1, 1, 2}]}] = tick(1, S4),
+    [{mod_call, _, _, [{test, 1, 1, 2, 1}]}] = tick(1, S4),
     ok.
 
 release_cursor_snapshot_state_test() ->
