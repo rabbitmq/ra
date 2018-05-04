@@ -8,6 +8,8 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(info, true).
+
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -22,6 +24,7 @@ all_tests() ->
     [
      start_stop_restart_delete_on_remote,
      start_cluster,
+     delete_one_node_cluster,
      delete_two_node_cluster,
      delete_three_node_cluster,
      start_cluster_majority,
@@ -102,6 +105,35 @@ start_cluster(Config) ->
     PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+delete_one_node_cluster(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterId = ?config(cluster_id, Config),
+    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    Machine = {module, ra_fifo, #{}},
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, _} = ra:delete_cluster(NodeIds),
+    timer:sleep(250),
+    Wc = filename:join([PrivDir, s1, "*"]),
+    [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    % assert all nodes are actually started
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    % restart node
+    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    receive
+        Anything ->
+            ct:pal("got wierd message ~p~n", [Anything]),
+            exit({unexpected, Anything})
+    after 250 ->
+              ok
+    end,
+    %% validate there is no data
+    Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    ct:pal("Files  ~p~n", [Files]),
+    [] = Files,
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 

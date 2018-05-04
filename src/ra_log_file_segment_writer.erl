@@ -179,39 +179,47 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
                   active_segments = ActiveSegments} = State) ->
-    % TODO: first check that node is registered?
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
-    Segment0 = case ActiveSegments of
-                   #{RaNodeUId := S} -> S;
-                   _ -> open_file(Dir, SegConf)
-               end,
-    case Segment0 of
-        undefined ->
-            State;
-        _ ->
-            {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
-                                                    Segment0, SegConf),
-            % fsync
-            {ok, Segment} = ra_log_file_segment:sync(Segment1),
+    case filelib:is_dir(Dir) of
+        true ->
+            %% check that the directory exists - if it does not exist the node has
+            %% never been started or has been deleted and we should just continue
+            Segment0 = case ActiveSegments of
+                           #{RaNodeUId := S} -> S;
+                           _ -> open_file(Dir, SegConf)
+                       end,
+            case Segment0 of
+                undefined ->
+                    State;
+                _ ->
+                    {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
+                                                            Segment0, SegConf),
+                    % fsync
+                    {ok, Segment} = ra_log_file_segment:sync(Segment1),
 
-            % notify writerid of new segment update
-            % includes the full range of the segment
-            Segments = [begin
-                            {Start, End} = ra_log_file_segment:range(S),
-                            {Start, End, ra_log_file_segment:filename(S)}
-                        end || S <- [Segment | Closed0]],
+                    % notify writerid of new segment update
+                    % includes the full range of the segment
+                    Segments = [begin
+                                    {Start, End} = ra_log_file_segment:range(S),
+                                    {Start, End, ra_log_file_segment:filename(S)}
+                                end || S <- [Segment | Closed0]],
 
-            Msg = {ra_log_event, {segments, Tid, Segments}},
-            try ra_directory:send(RaNodeUId, Msg) of
-                _ -> ok
-            catch
-                ErrType:Err ->
-                    ?ERR("ra_log_file_segment_writer: error sending "
-                         "ra_log_event to: "
-                         "~p. Error:~n~p:~p~n", [RaNodeUId, ErrType, Err])
-            end,
-            State#state{active_segments =
-                        ActiveSegments#{RaNodeUId => Segment}}
+                    Msg = {ra_log_event, {segments, Tid, Segments}},
+                    try ra_directory:send(RaNodeUId, Msg) of
+                        _ -> ok
+                    catch
+                        ErrType:Err ->
+                            ?ERR("ra_log_file_segment_writer: error sending "
+                                 "ra_log_event to: "
+                                 "~w. Error:~n~w:~w~n", [RaNodeUId, ErrType, Err])
+                    end,
+                    State#state{active_segments =
+                                ActiveSegments#{RaNodeUId => Segment}}
+            end;
+        false ->
+            ?INFO("segment_writer: skipping segment as directory ~s does "
+                  "not exist~n", [Dir]),
+            State
     end.
 
 append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
@@ -254,15 +262,20 @@ open_file(Dir, SegConf) ->
                [F | _Old] ->
                    F
            end,
-    % this needs to be done as the target directory could have been deleted
-    % TODO: it is slightly racy so we should probably catch execptions in the final
-    % varions
-    ok = filelib:ensure_dir(File),
-    case ra_log_file_segment:open(File, SegConf#{mode => append}) of
-        {ok, Segment} ->
-            Segment;
-        Err ->
-            ?WARN("segment_writer: failed to open segment file ~s"
-                  "error: ~P", [File, Err]),
-            undefined
+    %% there is a small chance we'll get here without the target directory
+    %% existing this could happend during node deletion
+    case filelib:ensure_dir(File) of
+        ok ->
+            case ra_log_file_segment:open(File, SegConf#{mode => append}) of
+                {ok, Segment} ->
+                    Segment;
+                Err ->
+                    ?WARN("segment_writer: failed to open segment file ~s"
+                          "error: ~P", [File, Err]),
+                    undefined
+            end;
+        {error, Err} ->
+            ?WARN("segment_writer: failed to create directory ~w, Err: ~w~n",
+                  [File, Err]),
+              undefined
     end.
