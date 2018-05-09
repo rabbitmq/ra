@@ -461,6 +461,7 @@ update_release_cursor(Idx, Cluster, MachineState,
             % here.
             % The MachineState is a dehydrated version of the state at
             % the release_cursor point.
+            ok = sync_meta(State),
             write_snapshot({Idx, Term, Cluster, MachineState}, State);
         false ->
             State0

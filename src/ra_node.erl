@@ -139,9 +139,10 @@ init(#{id := Id,
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log0) of
             undefined ->
-                {0,
-                 make_cluster(Id, InitialNodes), InitialMachineState, {0, 0}};
+                {0, make_cluster(Id, InitialNodes),
+                 InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
+                %% +1 as the snapshot is the last index before the first index
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
 
@@ -161,7 +162,7 @@ init(#{id := Id,
                current_term => CurrentTerm,
                voted_for => VotedFor,
                commit_index => CommitIndex,
-               last_applied => FirstIndex - 1,
+               last_applied => FirstIndex - 1, %% needs -1 as fetches with +1
                persisted_last_applied => LastApplied,
                log => Log0,
                machine => Machine,
@@ -1249,7 +1250,8 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
                 lists:foldl(ApplyFun, {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
-            % ?INFO("~p: applied to: ~b in ~b", [Id,  LastEntryIdx, LastEntryTerm]),
+            % ?INFO("~p: applied to: ~b in ~b",
+                        % [Id,  LastEntryIdx, LastEntryTerm]),
             apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
                      Effects ++ NotifyEffects ++ NewEffects,
                      State#{last_applied => AppliedTo,

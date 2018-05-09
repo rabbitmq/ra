@@ -270,8 +270,8 @@ open_file(Dir, SegConf) ->
                 {ok, Segment} ->
                     Segment;
                 Err ->
-                    ?WARN("segment_writer: failed to open segment file ~s"
-                          "error: ~P", [File, Err]),
+                    ?WARN("segment_writer: failed to open segment file ~w"
+                          "error: ~W", [File, Err]),
                     undefined
             end;
         {error, Err} ->
