@@ -139,14 +139,14 @@ init(#{id := Id,
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log0) of
             undefined ->
-                {0, make_cluster(Id, InitialNodes),
+                {1, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
                 %% +1 as the snapshot is the last index before the first index
-                {Idx, Clu, MacSt, {Idx, Term}}
+                {Idx + 1, Clu, MacSt, {Idx, Term}}
         end,
 
-    CommitIndex = max(LastApplied, FirstIndex),
+    CommitIndex = max(LastApplied, FirstIndex - 1),
 
     State0 = #{id => Id,
                uid => UId,
