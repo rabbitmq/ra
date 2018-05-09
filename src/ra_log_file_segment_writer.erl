@@ -149,12 +149,14 @@ handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
                             {noreply, State0}
                     end;
                 _ ->
-                    ok = file:delete(SegmentFile),
+                    %% don't validate the file got deleted as it is possible
+                    %% to get multiple requests under high load
+                    _ = file:delete(SegmentFile),
                     {noreply, State0}
             end;
         _ ->
             % if it isn't active we can just delete it
-            ok = file:delete(SegmentFile),
+            _ = file:delete(SegmentFile),
             {noreply, State0}
     end.
 
