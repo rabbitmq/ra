@@ -42,6 +42,7 @@ init_per_testcase(TestCase, Config) ->
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     file:make_dir(Dir),
+    file:make_dir(filename:join(Dir, UId)),
     register(TestCase, self()),
     [{uid, UId},
      {test_case, TestCase}, {wal_dir, Dir} | Config].
