@@ -18,7 +18,8 @@
          discard/3,
          handle_ra_event/3,
          untracked_enqueue/3,
-         purge/1
+         purge/1,
+         cluster_id/1
          ]).
 
 -include("ra.hrl").
@@ -323,6 +324,11 @@ purge(Node) ->
         Err ->
             Err
     end.
+
+%% @doc returns the cluster id
+-spec cluster_id(state()) -> ra_cluster_id().
+cluster_id(#state{cluster_id = ClusterId}) ->
+    ClusterId.
 
 %% @doc Handles incoming `ra_events'. Events carry both internal "bookeeping"
 %% events emitted by the `ra' leader as well as `ra_fifo' emitted events such
