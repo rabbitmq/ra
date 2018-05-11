@@ -10,6 +10,7 @@ start_link() ->
 
 init([]) ->
     _ = ets:new(ra_metrics, [named_table, public, {write_concurrency, true}]),
+    _ = ets:new(ra_state, [named_table, public, {write_concurrency, true}]),
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     RaLogFileMetrics = #{id => ra_metrics_ets,
                          start => {ra_metrics_ets, start_link, []}},

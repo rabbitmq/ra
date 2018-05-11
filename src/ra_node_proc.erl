@@ -45,7 +45,6 @@
 -define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
-
 -type correlation() :: non_neg_integer().
 
 -type command_reply_mode() :: after_log_append |
@@ -74,7 +73,7 @@
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
 
--type states() :: leader | follower | candiate | await_condition.
+-type states() :: leader | follower | candidate | await_condition.
 
 %% ra_event types
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_node_id()),
@@ -201,11 +200,14 @@ init(Config0) when is_map(Config0) ->
     {ok, recover, State, [{state_timeout, 0, go} | Actions0]}.
 
 %% callback mode
-callback_mode() -> state_functions.
+callback_mode() -> [state_functions, state_enter].
 
 %%%===================================================================
 %%% State functions
 %%%===================================================================
+recover(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, recover}),
+    {keep_state, State};
 recover(_EventType, go, State = #state{node_state = NodeState0}) ->
     NodeState = ra_node:recover(NodeState0),
     % New cluster starts should be coordinated and elections triggered
@@ -226,6 +228,9 @@ recover(_, _, State) ->
     % `next_event` from init
     {keep_state, State, {postpone, true}}.
 
+leader(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, leader}),
+    {keep_state, State};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
     leader(EventType, Msg, State);
@@ -363,6 +368,9 @@ leader(EventType, Msg, State0) ->
             end
     end.
 
+candidate(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, candidate}),
+    {keep_state, State};
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -417,6 +425,9 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     end.
 
 
+pre_vote(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, pre_vote}),
+    {keep_state, State};
 pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -467,6 +478,9 @@ pre_vote(EventType, Msg, State0) ->
              [election_timeout_action(long, State) | Actions]}
     end.
 
+follower(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, follower}),
+    {keep_state, State};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(_, {command, _Priority, {_CmdType, Data, noreply}},
@@ -557,6 +571,9 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, terminating_follower, State, Actions}
     end.
 
+terminating_leader(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, terminating_leader}),
+    {keep_state, State};
 terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
@@ -573,6 +590,9 @@ terminating_leader(EvtType, Msg, State0) ->
             {keep_state, State, Actions}
     end.
 
+terminating_follower(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, terminating_follower}),
+    {keep_state, State};
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     {keep_state, State, Actions} = follower(EvtType, Msg, State0),
@@ -610,6 +630,9 @@ await_condition(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
+await_condition(enter, _OldState, State = #state{name = Name}) ->
+    ets:insert(ra_state, {Name, await_condition}),
+    {keep_state, State};
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
@@ -650,6 +673,7 @@ terminate(Reason, StateName,
     end,
     _ = aten:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
+    _ = ets:delete(ra_state, Key),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
