@@ -111,7 +111,7 @@
 % primitive logging abstraction
 -define(error, true).
 -define(warn, true).
-% -define(info, true).
+-define(info, true).
 
 -ifdef(info).
 -define(INFO(Fmt, Args), error_logger:info_msg(Fmt, Args)).
