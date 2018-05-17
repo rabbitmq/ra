@@ -153,6 +153,8 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                         end, NodeIds),
     case Started of
         [] ->
+            ?WARN("ra: failed to form new cluster ~w.~n "
+                  "No nodes were succesfully started.~n", [ClusterId]),
             {error, cluster_not_formed};
         _ ->
             Node = hd(Started),
@@ -161,7 +163,9 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                 {ok, _, _} ->
                     % we have a functioning cluster
                     {ok, Started, NotStarted};
-                _ ->
+                Err ->
+                    ?WARN("ra: failed to form new cluster ~w.~n "
+                          "Error: ~w~n", [ClusterId, Err]),
                     [delete_node(N) || N <- Started],
                     % we do not have a functioning cluster
                     {error, cluster_not_formed}
