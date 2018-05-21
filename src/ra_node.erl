@@ -626,9 +626,12 @@ handle_follower(#append_entries_rpc{term = Term,
                      condition => fun follower_catchup_cond/2,
                      % repeat reply effect on condition timeout
                      condition_timeout_effects => Effects}, Effects};
-        {term_mismatch, State0} ->
-            ?INFO("~w: term mismatch - follower had entry at ~b "
-                  "but not with term ~b~n", [Id, PLIdx, PLTerm]),
+        {term_mismatch, OtherTerm, State0} ->
+            CommitIndex = maps:get(commit_index, State0),
+            ?INFO("~w: term mismatch - follower had entry at ~b with term ~b "
+                  "but not with term ~b~n"
+                  "Asking leader to resend from ~b~n",
+                  [Id, PLIdx, OtherTerm, PLTerm, CommitIndex + 1]),
             % This situation arises when a minority leader replicates entries
             % that it cannot commit then gets replaced by a majority leader
             % that also has made progress
@@ -638,7 +641,6 @@ handle_follower(#append_entries_rpc{term = Term,
             % and commit_index + 1 as the next expected.
             % This _may_ overwrite some valid entries but is probably the
             % simplest way to proceed
-            CommitIndex = maps:get(commit_index, State0),
             {Reply, State} = mismatch_append_entries_reply(Term, CommitIndex,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply)],
@@ -1198,8 +1200,8 @@ has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
             end;
         {Term, Log} ->
             {entry_ok, State#{log => Log}};
-        {_OtherTerm, Log} ->
-            {term_mismatch, State#{log => Log}}
+        {OtherTerm, Log} ->
+            {term_mismatch, OtherTerm, State#{log => Log}}
     end.
 
 fetch_term(Idx, #{log := Log}) ->

@@ -211,9 +211,10 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
                         _ -> ok
                     catch
                         ErrType:Err ->
-                            ?ERR("ra_log_file_segment_writer: error sending "
-                                 "ra_log_event to: "
-                                 "~w. Error:~n~w:~w~n", [RaNodeUId, ErrType, Err])
+                            ?WARN("ra_log_file_segment_writer: error sending "
+                                  "ra_log_event to: "
+                                  "~s. Error:~n~w:~W~n",
+                                  [RaNodeUId, ErrType, Err, 7])
                     end,
                     State#state{active_segments =
                                 ActiveSegments#{RaNodeUId => Segment}}
