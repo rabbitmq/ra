@@ -1,7 +1,7 @@
 # Writing a state machine.
 
 For `ra` to do anything useful you need to provide it with a state machine
-implementation that solve a particular problem.
+implementation that solves a particular problem.
 
 To implement a state machine to run in `ra` you need to implement the
 `ra_machine` behaviour. There are two mandatory callbacks that need to be
