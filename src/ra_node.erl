@@ -831,7 +831,7 @@ follower_catchup_cond(#append_entries_rpc{term = Term,
     case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
         {entry_ok, _State} ->
             true;
-        {_, _State} ->
+        _ ->
             false
     end;
 follower_catchup_cond(#install_snapshot_rpc{term = Term,
@@ -1193,8 +1193,8 @@ has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
             case ra_log:snapshot_index_term(Log) of
                 {Idx, Term} ->
                     {entry_ok, State#{log => Log}};
-                {Idx, _OtherTerm} ->
-                    {term_mismatch, State#{log => Log}};
+                {Idx, OtherTerm} ->
+                    {term_mismatch, OtherTerm, State#{log => Log}};
                 _ ->
                     {missing, State#{log => Log}}
             end;
