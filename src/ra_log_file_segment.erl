@@ -155,7 +155,7 @@ sync(#state{fd = Fd, pending = Pend} = State) ->
 read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
     % TODO: should we better indicate when records aren't found?
     % This depends on the semantics we want from a segment
-    {Locs, Metas} = read_locs(Idx0 + Num -1, Idx0, Index, {[], []}),
+    {Locs, Metas} = read_locs(Idx0 + Num - 1, Idx0, Index, {[], []}),
     {ok, Datas} = file:pread(Fd, Locs),
     combine(Metas, Datas, []).
 
@@ -184,7 +184,7 @@ read_locs(Idx, FinalIdx, Index, {Locs, Meta} = Acc) ->
             read_locs(Idx-1, FinalIdx, Index,
                       {[{Offset, Length} | Locs], [{Idx, Term, Crc} | Meta]});
         _ ->
-            Acc
+            read_locs(Idx-1, FinalIdx, Index, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).

@@ -1008,8 +1008,8 @@ terminate(State, _Reason) ->
     ok.
 
 -spec log_fold(ra_node_state(), fun((term(), State) -> State), State) ->
-                      {ok, State, ra_node_state()} |
-                      {error, term(), ra_node_state()}. 
+    {ok, State, ra_node_state()} |
+    {error, term(), ra_node_state()}. 
 log_fold(#{log := Log} = RaState, Fun, State) ->
     Idx = case ra_log:snapshot_index_term(Log) of
               {PrevIdx, _PrevTerm} ->

@@ -111,6 +111,8 @@ write_then_read(Config) ->
     % read two consequtive entries from index 1
     {ok, SegR} = ra_log_file_segment:open(Fn, #{mode => read}),
     [{1, 2, Data}, {2, 2, Data}] = ra_log_file_segment:read(SegR, 1, 2),
+    %% validate a larger range still returns results
+    [{1, 2, Data}, {2, 2, Data}] = ra_log_file_segment:read(SegR, 1, 5),
     {1, 2} = ra_log_file_segment:range(SegR),
     ok = ra_log_file_segment:close(SegR),
     ok.
