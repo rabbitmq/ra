@@ -300,7 +300,8 @@ ra_fifo_client_discard(Config) ->
              id => NodeId,
              uid => UId,
              log_module => ra_log_file,
-             log_init_args => #{data_dir => PrivDir, uid => UId},
+             log_init_args => #{data_dir => PrivDir, uid => UId,
+                                metrics_handler => {ra_file_handle, default_handler}},
              initial_nodes => [],
              machine => {module, ra_fifo,
                          #{dead_letter_handler =>
@@ -483,7 +484,8 @@ node_is_deleted(Config) ->
     UId2 = ?config(uid2, Config),
     ok = ra:start_node(Conf#{uid => UId2,
                              log_init_args => #{data_dir => PrivDir,
-                                                uid => UId2}}),
+                                                uid => UId2,
+                                                metrics_handler => {ra_file_handle, default_handler}}}),
     ok = ra:trigger_election(NodeId),
     F = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, _} = ra_fifo_client:checkout(<<"tag">>, 10, F),
@@ -671,7 +673,8 @@ conf(ClusterId, UId, NodeId, _, Peers) ->
       id => NodeId,
       uid => UId,
       log_module => ra_log_file,
-      log_init_args => #{uid => UId},
+      log_init_args => #{uid => UId,
+                         metrics_handler => {ra_file_handle, default_handler}},
       initial_nodes => Peers,
       machine => {module, ra_fifo, #{}}}.
 
@@ -761,5 +764,6 @@ validate_process_down(Name, Num) ->
 start_cluster(ClusterId, NodeIds) ->
     {ok, NodeIds, _} = ra:start_cluster(ClusterId,
                                         {module, ra_fifo, #{}},
+                                        #{metrics_handler => {ra_file_handle, default_handler}},
                                         NodeIds),
     ok.

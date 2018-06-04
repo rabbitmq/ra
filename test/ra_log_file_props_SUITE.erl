@@ -158,7 +158,9 @@ write_prop(Dir, TestCase) ->
        begin
            {queued, Log0} = ra_log_file:write(
                              Entries,
-                             ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                             ra_log_file:init(
+                               #{data_dir => Dir, uid => TestCase,
+                                 metrics_handler => {ra_file_handle, default_handler}})),
            {LogEntries, Log} = ra_log_file:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
@@ -183,7 +185,8 @@ write_missing_entry_prop(Dir, TestCase) ->
        ?FORALL(
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
-              Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                       metrics_handler => {ra_file_handle, default_handler}}),
               Reply = ra_log_file:write(Head ++ Tail, Log),
               reset(Log),
               ?WHENFAIL(ct:pal("Reply: ~p~n", [Reply]),
@@ -206,7 +209,8 @@ write_overwrite_entry_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               NewEntry = [{Idx, Term, <<"overwrite">>}],
               {queued, Log} = ra_log_file:write(NewEntry, Log0),
               {LogEntries, Log1} = ra_log_file:take(1, length(Entries), Log),
@@ -231,7 +235,8 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Head,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               Reply = ra_log_file:write(Tail, Log0),
               reset(Log0),
               ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
@@ -253,7 +258,8 @@ append_missing_entry_prop(Dir, TestCase) ->
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               Log0 = append_all(Head,
-                               ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                               ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                  metrics_handler => {ra_file_handle, default_handler}})),
               Failed = try
                            ra_log_file:append(hd(Tail), Log0),
                            false
@@ -279,7 +285,8 @@ write_index_starts_zero_prop(Dir, TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_zero_gen(),
        begin
-           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                    metrics_handler => {ra_file_handle, default_handler}}),
            Reply = ra_log_file:write([Entry], Log),
            reset(Log),
            ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
@@ -303,7 +310,8 @@ append_prop(Dir, TestCase) ->
        begin
            Log0 = append_all(
                    Entries,
-                   ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                   ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                      metrics_handler => {ra_file_handle, default_handler}})),
            {LogEntries, Log} = ra_log_file:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
@@ -324,7 +332,8 @@ append_overwrite_entry_prop(Dir, TestCase) ->
           begin
               {queued, Log} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               Failed = try
                            ra_log_file:append({Idx, Term, <<"overwrite">>}, Log),
                            false
@@ -346,7 +355,8 @@ append_index_starts_one_prop(Dir, TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_gen(),
        begin
-           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                    metrics_handler => {ra_file_handle, default_handler}}),
            Failed = try
                        ra_log_file:append(Entry, Log),
                        false
@@ -371,7 +381,8 @@ take_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,
-                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                    metrics_handler => {ra_file_handle, default_handler}})),
               {Selected, Log} = ra_log_file:take(Start, Num, Log0),
               Expected = lists:sublist(Entries, Start, Num),
               reset(Log),
@@ -393,7 +404,8 @@ take_out_of_range_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               {Reply, Log} = ra_log_file:take(Start, Num, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Start: ~p Num: ~p~nReply: ~p~n", [Start, Num, Reply]),
@@ -413,7 +425,8 @@ fetch_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               {Got, Log} = ra_log_file:fetch(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Got, Entry]),
@@ -433,7 +446,8 @@ fetch_out_of_range_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               {Reply, Log} = ra_log_file:fetch(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: undefined~n", [Reply]),
@@ -451,7 +465,8 @@ last_index_term_prop(Dir, TestCase) ->
        begin
            {queued, Log} = ra_log_file:write(
                              Entries,
-                             ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                             ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                metrics_handler => {ra_file_handle, default_handler}})),
            {LastIdx, LastTerm} = case Entries of
                                      [] ->
                                          {0, 0};
@@ -478,7 +493,8 @@ fetch_term_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                   metrics_handler => {ra_file_handle, default_handler}})),
               {Term, Log} = ra_log_file:fetch_term(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Term, ExpectedTerm]),
@@ -498,7 +514,8 @@ fetch_out_of_range_term_prop(Dir, TestCase) ->
           begin
               {queued, Log0} = ra_log_file:write(
                                  Entries,
-                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                    metrics_handler => {ra_file_handle, default_handler}})),
               {Term, Log} = ra_log_file:fetch_term(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p for index: ~p~n", [Term, Start]),
@@ -516,7 +533,8 @@ next_index_term_prop(Dir, TestCase) ->
        begin
            {queued, Log} = ra_log_file:write(
                               Entries,
-                              ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                              ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                                 metrics_handler => {ra_file_handle, default_handler}})),
            {LastIdx, _LastTerm, _} = lists:last(Entries),
            Idx = ra_log_file:next_index(Log),
            reset(Log),
@@ -538,7 +556,8 @@ read_write_meta_prop(Dir, TestCase) ->
        Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
-                            ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                            ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                               metrics_handler => {ra_file_handle, default_handler}})),
            %% Ensure we overwrite the duplicates before checking the writes
            Meta = dict:to_list(dict:from_list(Meta0)),
            Result = [{K, V, ra_log_file:read_meta(K, Log)} || {K, V} <- Meta],
@@ -559,7 +578,8 @@ sync_meta_prop(Dir, TestCase) ->
        Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
-                            ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                            ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                               metrics_handler => {ra_file_handle, default_handler}})),
            ok == ra_log_file:sync_meta(Log)
        end).
 
@@ -600,7 +620,8 @@ last_written_with_wal_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                        metrics_handler => {ra_file_handle, default_handler}}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -658,7 +679,8 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                        metrics_handler => {ra_file_handle, default_handler}}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -709,7 +731,8 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
               Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
-                                        resend_window => 2}),
+                                        resend_window => 2,
+                                        metrics_handler => {ra_file_handle, default_handler}}),
               ra_log_file:take(1, 10, Log0),
               {Log, _Last, Ts} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
@@ -807,7 +830,8 @@ last_written_prop(Dir, TestCase) ->
           begin
               flush(),
               Actions = lists:zip3(Entries, Waits, Consumes),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+                                        metrics_handler => {ra_file_handle, default_handler}}),
               {Log, Last} = lists:foldl(fun({Entry, Wait, Consume}, {Acc0, Last0}) ->
                                                 {queued, Acc} = ra_log_file:write([Entry], Acc0),
                                                 timer:sleep(Wait),

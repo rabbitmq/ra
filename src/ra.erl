@@ -20,12 +20,12 @@
          consistent_query/2,
          % cluster management
          start_node/1,
-         start_node/4,
+         start_node/5,
          restart_node/1,
          stop_node/1,
          delete_node/1,
          % cluster operations
-         start_cluster/3,
+         start_cluster/4,
          delete_cluster/1,
          delete_cluster/2,
 
@@ -45,7 +45,7 @@ start() ->
     ok.
 
 %% @doc Starts a ra cluster on the current erlang node.
-%% Useful for testing and exploration. Use {@link start_cluster/3} for
+%% Useful for testing and exploration. Use {@link start_cluster/4} for
 %% real use.
 %%
 %% @param Num the number of nodes in the cluster
@@ -138,10 +138,10 @@ delete_node(NodeId) ->
 %%
 %% If a cluster could not be formed any nodes that did manage to start are
 %% forcefully deleted.
--spec start_cluster(ra_cluster_id(), ra_machine:machine(), [ra_node_id()]) ->
+-spec start_cluster(ra_cluster_id(), ra_machine:machine(), map(), [ra_node_id()]) ->
     {ok, [ra_node_id()], [ra_node_id()]} |
     {error, cluster_not_formed}.
-start_cluster(ClusterId, Machine, NodeIds) ->
+start_cluster(ClusterId, Machine, LogOptions, NodeIds) ->
     % create locally unique id
     % as long as all nodes are on different erlang nodes we can use the same
     % uid for all
@@ -149,7 +149,7 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     {Started, NotStarted} =
         lists:partition(fun (N) ->
                                 ok =:= start_node(ClusterId, N,
-                                                  Machine, NodeIds)
+                                                  Machine, LogOptions, NodeIds)
                         end, NodeIds),
     case Started of
         [] ->
@@ -173,9 +173,9 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     end.
 
 -spec start_node(ra_cluster_id(), ra_node_id(),
-                 ra_machine:machine(), [ra_node_id()]) ->
+                 ra_machine:machine(), map(), [ra_node_id()]) ->
     ok | {error, term()}.
-start_node(ClusterId, NodeId, Machine, NodeIds) ->
+start_node(ClusterId, NodeId, Machine, LogOptions, NodeIds) ->
     TS = erlang:system_time(millisecond),
     I = erlang:unique_integer(),
     UId = ra_lib:to_list(ClusterId)
@@ -187,7 +187,8 @@ start_node(ClusterId, NodeId, Machine, NodeIds) ->
              uid => U,
              initial_nodes => NodeIds,
              log_module => ra_log_file,
-             log_init_args => #{uid => U},
+             log_init_args => maps:merge(#{uid => U},
+                                         LogOptions),
              machine => Machine},
     start_node(Conf).
 

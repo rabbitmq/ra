@@ -1,7 +1,7 @@
 -module(ra_log_file_segment).
 
--export([open/1,
-         open/2,
+-export([open/2,
+         open/3,
          append/4,
          sync/1,
          read/3,
@@ -37,7 +37,8 @@
          mode = append :: read | append,
          index = undefined :: maybe(ra_segment_index()),
          range :: maybe({ra_index(), ra_index()}),
-         pending = [] :: [{non_neg_integer(), binary()}]
+         pending = [] :: [{non_neg_integer(), binary()}],
+         metrics_handler
         }).
 
 -type ra_log_file_segment_options() :: #{max_count => non_neg_integer(),
@@ -47,15 +48,16 @@
 -export_type([state/0,
               ra_log_file_segment_options/0]).
 
--spec open(Filename :: file:filename_all()) ->
+-spec open(Filename :: file:filename_all(), fun()) ->
     {ok, state()} | {error, term()}.
-open(Filename) ->
-    open(Filename, #{}).
+open(Filename, Handler) ->
+    open(Filename, #{}, Handler).
 
 -spec open(Filename :: file:filename_all(),
-           Options :: ra_log_file_segment_options()) ->
+           Options :: ra_log_file_segment_options(),
+           fun()) ->
     {ok, state()} | {error, term()}.
-open(Filename, Options) ->
+open(Filename, Options, Handler) ->
     AbsFilename = filename:absname(Filename),
     FileExists = filelib:is_file(AbsFilename),
     Mode = maps:get(mode, Options, append),
@@ -63,17 +65,17 @@ open(Filename, Options) ->
                 append -> [read, write, raw, binary];
                 read -> [read, raw, read_ahead, binary]
             end,
-    case file:open(AbsFilename, Modes) of
+    case ra_file_handle:open(AbsFilename, Modes, Handler) of
         {ok, Fd} ->
-            process_file(FileExists, Mode, Filename, Fd, Options);
+            process_file(FileExists, Mode, Filename, Fd, Options, Handler);
         Err -> Err
     end.
 
-process_file(true, Mode, Filename, Fd, _Options) ->
-    case read_header(Fd) of
+process_file(true, Mode, Filename, Fd, _Options, Handler) ->
+    case read_header(Fd, Handler) of
         {ok, MaxCount} ->
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount),
+            {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount, Handler),
             {ok, #state{version = 1,
                         max_count = MaxCount,
                         filename = Filename,
@@ -85,14 +87,15 @@ process_file(true, Mode, Filename, Fd, _Options) ->
                         index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
                         range = Range,
                         % TODO: we don't need an index in memory in append mode
-                        index = Index}};
+                        index = Index,
+                        metrics_handler = Handler}};
         Err ->
             Err
     end;
-process_file(false, Mode, Filename, Fd, Options) ->
+process_file(false, Mode, Filename, Fd, Options, Handler) ->
     MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-    ok = write_header(MaxCount, Fd),
+    ok = write_header(MaxCount, Fd, Handler),
     {ok, #state{version = 1,
                 max_count = MaxCount,
                 filename = Filename,
@@ -101,7 +104,8 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 index_offset = ?HEADER_SIZE,
                 mode = Mode,
                 data_start = ?HEADER_SIZE + IndexSize,
-                data_offset = ?HEADER_SIZE + IndexSize}}.
+                data_offset = ?HEADER_SIZE + IndexSize,
+                metrics_handler = Handler}}.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
@@ -135,15 +139,15 @@ append(#state{%fd = Fd,
      end.
 
 -spec sync(state()) -> {ok, state()} | {error, term()}.
-sync(#state{fd = Fd, pending = []} = State) ->
-    case file:sync(Fd) of
+sync(#state{fd = Fd, pending = [], metrics_handler = Handler} = State) ->
+    case ra_file_handle:sync(Fd, Handler) of
         ok ->
             {ok, State};
         {error, _} = Err ->
             Err
     end;
-sync(#state{fd = Fd, pending = Pend} = State) ->
-    case file:pwrite(Fd, Pend) of
+sync(#state{fd = Fd, pending = Pend, metrics_handler = Handler} = State) ->
+    case ra_file_handle:pwrite(Fd, Pend, Handler) of
         ok ->
             sync(State#state{pending = []});
         {error, _} = Err ->
@@ -152,11 +156,11 @@ sync(#state{fd = Fd, pending = Pend} = State) ->
 
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
-read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
+read(#state{fd = Fd, mode = read, index = Index, metrics_handler = Handler}, Idx0, Num) ->
     % TODO: should we better indicate when records aren't found?
     % This depends on the semantics we want from a segment
     {Locs, Metas} = read_locs(Idx0 + Num - 1, Idx0, Index, {[], []}),
-    {ok, Datas} = file:pread(Fd, Locs),
+    {ok, Datas} = ra_file_handle:pread(Fd, Locs, Handler),
     combine(Metas, Datas, []).
 
 -spec term_query(state(), Idx :: ra_index()) ->
@@ -200,14 +204,16 @@ filename(#state{filename = Fn}) ->
     filename:absname(Fn).
 
 -spec close(state()) -> ok.
-close(#state{fd = Fd, mode = append} = State) ->
+close(#state{fd = Fd, mode = append,
+             metrics_handler = Handler} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
-    _ = file:close(Fd),
+    _ = ra_file_handle:close(Fd, Handler),
     ok;
-close(#state{fd = Fd}) ->
-    _ = file:close(Fd),
+close(#state{fd = Fd,
+             metrics_handler = Handler}) ->
+    _ = ra_file_handle:close(Fd, Handler),
     ok.
 
 %%% Internal
@@ -217,11 +223,11 @@ update_range(undefined, Idx) ->
 update_range({First, _Last}, Idx) ->
     {min(First, Idx), Idx}.
 
-recover_index(Fd, MaxCount) ->
+recover_index(Fd, MaxCount, Handler) ->
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-    {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+    {ok, ?HEADER_SIZE} = ra_file_handle:position(Fd, ?HEADER_SIZE, Handler),
     DataOffset = ?HEADER_SIZE + IndexSize,
-    case file:read(Fd, IndexSize) of
+    case ra_file_handle:read(Fd, IndexSize, Handler) of
         {ok, Data} ->
             parse_index_data(Data, DataOffset);
         eof ->
@@ -259,14 +265,14 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
                      update_range(Range, Idx),
                      Index#{Idx => {Term, Offset, Length, Crc}}).
 
-write_header(MaxCount, Fd) ->
+write_header(MaxCount, Fd, Handler) ->
     Header = <<?VERSION:16/integer, MaxCount:16/integer>>,
-    {ok, 0} = file:position(Fd, 0),
-    ok = file:write(Fd, Header).
+    {ok, 0} = ra_file_handle:position(Fd, 0, Handler),
+    ok = ra_file_handle:write(Fd, Header, Handler).
 
-read_header(Fd) ->
-    {ok, 0} = file:position(Fd, 0),
-    case file:read(Fd, ?HEADER_SIZE) of
+read_header(Fd, Handler) ->
+    {ok, 0} = ra_file_handle:position(Fd, 0, Handler),
+    case ra_file_handle:read(Fd, ?HEADER_SIZE, Handler) of
         {ok, Buffer} ->
             case Buffer of
                 <<1:16/integer, MaxCount:16/integer>> ->

@@ -56,8 +56,10 @@ init_per_group(ra_log_file, Config) ->
                       end,
                       UId = atom_to_binary(TestCase, utf8),
                       ra_directory:register_name(UId, self(), TestCase),
-                      ra_log:init(ra_log_file, #{data_dir => PrivDir,
-                                                 uid => UId})
+                      ra_log:init(ra_log_file,
+                                  #{data_dir => PrivDir,
+                                    uid => UId,
+                                    metrics_handler => {ra_file_handle, default_handler}})
               end,
     [{init_fun, InitFun} | Config].
 
@@ -281,7 +283,8 @@ snapshot(Config) ->
     Snapshot = ra_log:read_snapshot(Log),
     % initialise another log
     LogB = ra_log:init(ra_log_file, #{data_dir => ?config(priv_dir, Config),
-                                      uid => <<"snapshot">>}),
+                                      uid => <<"snapshot">>,
+                                      metrics_handler => {ra_file_handle, default_handler}}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
     {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),
     Snapshot = ra_log:read_snapshot(LogB),

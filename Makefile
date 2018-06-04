@@ -5,7 +5,8 @@ PROJECT_MOD = ra_app
 
 define PROJECT_ENV
 [
-	{data_dir, "/var/vcap/store/ra/shared"}
+	{data_dir, "/var/vcap/store/ra/shared"},
+	{metrics_handler, {ra_file_handle, default_handler}}
 ]
 endef
 

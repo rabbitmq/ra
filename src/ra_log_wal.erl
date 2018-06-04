@@ -76,7 +76,8 @@
                 writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 compute_checksums = false :: boolean(),
-                write_strategy = delay_writs :: wal_write_strategy()
+                write_strategy = delay_writs :: wal_write_strategy(),
+                metrics_handler
                }).
 
 -type state() :: #state{}.
@@ -145,7 +146,8 @@ start_link(Config, Options) ->
     end.
 
 -spec init(wal_conf(), pid(), list()) -> state().
-init(#{dir := Dir} = Conf0, Parent, Options) ->
+init(#{dir := Dir,
+       metrics_handler := MHandler} = Conf0, Parent, Options) ->
     Conf = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
     % test that off_heap is actuall beneficial
@@ -165,7 +167,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
     Debug0 = sys:debug_options(Options),
     {State, Debug} = recover_wal(Dir, Conf, Debug0),
     ok = proc_lib:init_ack(Parent, {ok, self()}),
-    loop_wait(State, Parent, Debug).
+    loop_wait(State#state{metrics_handler = MHandler}, Parent, Debug).
 
 
 %% Internal
@@ -173,7 +175,8 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
                    compute_checksums := ComputeChecksum,
-                   write_strategy := WriteStrategy},
+                   write_strategy := WriteStrategy,
+                   metrics_handler := MetricsHandler},
            Dbg0) ->
     % ensure configured directory exists
     ok = filelib:ensure_dir(Dir),
@@ -215,7 +218,8 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                                 max_wal_size_bytes = MaxWalSize,
                                 compute_checksums = ComputeChecksum,
                                 segment_writer = TblWriter,
-                                write_strategy = WriteStrategy},
+                                write_strategy = WriteStrategy,
+                                metrics_handler = MetricsHandler},
                          Dbg0),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
@@ -236,7 +240,7 @@ loop_wait(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0#state.wal),
+            cleanup(State0),
             exit(Reason);
         Msg ->
             Debug1 = handle_debug_in(Debug0, Msg),
@@ -257,7 +261,7 @@ loop_batched(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0#state.wal),
+            cleanup(State0),
             exit(Reason);
         Msg ->
             Debug1 = handle_debug_in(Debug0, Msg),
@@ -271,10 +275,11 @@ loop_batched(State0, Parent, Debug0) ->
                         Parent, Debug)
     end.
 
-cleanup(#wal{fd = undefined}) ->
+cleanup(#state{wal = #wal{fd = undefined}}) ->
     ok;
-cleanup(#wal{fd = Fd}) ->
-    _ = file:sync(Fd),
+cleanup(#state{wal = #wal{fd = Fd},
+               metrics_handler = Handler}) ->
+    _ = ra_file_handle:sync(Fd, Handler),
     ok.
 
 handle_debug_in(Debug, Msg) ->
@@ -366,11 +371,12 @@ append_data(#state{wal = #wal{fd = Fd,
                               wal_file_size = FileSize} = Wal,
                    batch = Batch,
                    writers = Writers,
-                   write_strategy = WriteStrat} = State,
+                   write_strategy = WriteStrat,
+                   metrics_handler = Handler} = State,
             Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
     case WriteStrat of
         no_delay ->
-            ok = file:write(Fd, Data);
+            ok = ra_file_handle:write(Fd, Data, Handler);
         _ ->
             ok
     end,
@@ -415,7 +421,8 @@ roll_over(State0, Dbg) ->
     roll_over(ra_log_open_mem_tables, State, Dbg).
 
 roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
-                             segment_writer = SegWriter} = State0, Dbg) ->
+                             segment_writer = SegWriter,
+                             metrics_handler = Handler} = State0, Dbg) ->
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
@@ -424,20 +431,21 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
         undefined ->
             ok;
         Wal ->
-            ok = close_file(Wal#wal.fd),
+            ok = close_file(Wal#wal.fd, Handler),
             ok = close_open_mem_tables(OpnMemTbls, Wal#wal.filename, SegWriter)
     end,
     State = open_file(NextFile, State0),
     {State#state{file_num = Num}, Dbg}.
 
 open_file(File, #state{write_strategy = delay_writes_sync,
-                       file_modes = Modes0} = State) ->
+                       file_modes = Modes0,
+                       metrics_handler = Handler} = State) ->
         Modes = [sync | Modes0],
-        case file:open(File, Modes) of
+        case ra_file_handle:open(File, Modes, Handler) of
             {ok, Fd} ->
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
-                ok = file:sync(Fd),
+                ok = ra_file_handle:sync(Fd, Handler),
                 State#state{file_modes = Modes,
                             wal = #wal{fd = Fd, filename = File}};
             {error, enotsup} ->
@@ -445,15 +453,16 @@ open_file(File, #state{write_strategy = delay_writes_sync,
                       "Reverting back to delay_writes strategy.", []),
                 open_file(File, State#state{write_strategy = delay_writes})
         end;
-open_file(File, #state{file_modes = Modes} = State) ->
-    {ok, Fd} = file:open(File, Modes),
+open_file(File, #state{file_modes = Modes,
+                       metrics_handler = Handler} = State) ->
+    {ok, Fd} = ra_file_handle:open(File, Modes, Handler),
     State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
 
-close_file(undefined) ->
+close_file(undefined, _) ->
     ok;
-close_file(Fd) ->
-    ok = file:sync(Fd),
-    file:close(Fd).
+close_file(Fd, Handler) ->
+    ok = ra_file_handle:sync(Fd, Handler),
+    ra_file_handle:close(Fd, Handler).
 
 close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     MemTables = ets:tab2list(OpnMemTbls),
@@ -508,17 +517,18 @@ complete_batch(#state{wal = #wal{fd = Fd},
                                      start_time = ST,
                                      pending = Pend},
                       metrics_cursor = Cursor,
-                      write_strategy = WriteStrat} = State0,
+                      write_strategy = WriteStrat,
+                      metrics_handler = Handler} = State0,
                Debug0) ->
     TS = os:system_time(millisecond),
     case WriteStrat of
         delay_writes_sync ->
-            ok = file:write(Fd, lists:reverse(Pend));
+            ok = ra_file_handle:write(Fd, lists:reverse(Pend), Handler);
         delay_writes ->
-            ok = file:write(Fd, lists:reverse(Pend)),
-            ok = file:sync(Fd);
+            ok = ra_file_handle:write(Fd, lists:reverse(Pend), Handler),
+            ok = ra_file_handle:sync(Fd, Handler);
         no_delay ->
-            ok = file:sync(Fd)
+            ok = ra_file_handle:sync(Fd, Handler)
     end,
 
     SyncTS = os:system_time(millisecond),
@@ -625,7 +635,7 @@ system_continue(Parent, Debug, State) ->
     loop_batched(State, Parent, Debug).
 
 system_terminate(Reason, _Parent, _Debug, State) ->
-    cleanup(State#state.wal),
+    cleanup(State),
     exit(Reason).
 
 write_debug(Dev, Event, Name) ->
