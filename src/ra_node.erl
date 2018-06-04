@@ -179,19 +179,22 @@ init(#{id := Id,
                           Acc
                   end, {{SnapshotIndexTerm, Cluster0}, Log0}),
     % TODO: do we need to set previous cluster here?
-    % apply entries to the statemachine and
-    % throw away the effects as they have already been issued
     {State0#{log => Log,
-            cluster => Cluster,
-            cluster_index_term => ClusterIndexTerm}, InitEffects}.
+             cluster => Cluster,
+             cluster_index_term => ClusterIndexTerm}, InitEffects}.
 
 
-recover(#{commit_index := CommitIndex,
+recover(#{id := Id,
+          commit_index := CommitIndex,
+          last_applied := _LastApplied,
           machine := Machine} = State0) ->
+    ?INFO("~w: recovering state machine from ~b to ~b~n", [Id, _LastApplied,
+                                                           CommitIndex]),
     {State, _, _} = apply_to(CommitIndex,
                              fun(E, S) ->
-                                     %% Clear out the effects to avoid building up a
-                                     %% long list of effects than then we throw away
+                                     %% Clear out the effects to avoid building
+                                     %% up a long list of effects than then
+                                     %% we throw away
                                      %% on node startup (queue recovery)
                                      setelement(3,
                                                 apply_with(Machine, E, S), [])
@@ -290,16 +293,16 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
                       {_EntryTerm, L} ->
-                          ?INFO("~w: leader received last_index from ~w with "
-                                "different term ~b~n",
-                                [Id, PeerId, _EntryTerm]),
+                          ?INFO("~w: leader received last_index ~b from ~w with "
+                                "term ~b different term ~b~n",
+                                [Id, LastIdx, PeerId, LastTerm, _EntryTerm]),
                           % last_index has a different term or entry does not
                           % exist
                           % The peer must have received an entry from a previous
-                          % leader
-                          % and the current leader wrote a different entry at the same
-                          % index in a different term.
-                          % decrement next_index but don't go lower than match index.
+                          % leader and the current leader wrote a different
+                          % entry at the same index in a different term.
+                          % decrement next_index but don't go lower than
+                          % match index.
                           {Peer0#{next_index => max(min(NI-1, LastIdx), MI)}, L}
                   end,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
@@ -617,9 +620,10 @@ handle_follower(#append_entries_rpc{term = Term,
                     end
             end;
         {missing, State0} ->
-            ?INFO("~w: follower did not have entry at ~b in ~b~n",
-                  [Id, PLIdx, PLTerm]),
             Reply = append_entries_reply(Term, false, State0),
+            ?INFO("~w: follower did not have entry at ~b in ~b."
+                  "requesting from ~b~n",
+                  [Id, PLIdx, PLTerm, Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
              State0#{leader_id => LeaderId,
@@ -863,15 +867,15 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
         {delete_and_terminate, State1, Effects} ->
             Reply = append_entries_reply(Term, true, State1),
             {delete_and_terminate, State1,
-                   [cast_reply(Id, LeaderId, Reply) |
-                    filter_follower_effects(Effects)]};
+             [cast_reply(Id, LeaderId, Reply) |
+              filter_follower_effects(Effects)]};
         {State, Effects0, Applied} ->
             % filter the effects that should be applied on a follower
             Effects = filter_follower_effects(Effects0),
             Reply = append_entries_reply(Term, true, State),
             {follower, State, [cast_reply(Id, LeaderId, Reply),
-                     {incr_metrics, ra_metrics, [{3, Applied}]}
-                     | Effects]}
+                               {incr_metrics, ra_metrics, [{3, Applied}]}
+                               | Effects]}
     end.
 
 filter_follower_effects(Effects) ->
