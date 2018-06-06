@@ -12,6 +12,7 @@
          fetch_term/2,
          take/3,
          last_index_term/1,
+         set_last_index/2,
          handle_event/2,
          last_written/1,
          next_index/1,
@@ -91,6 +92,9 @@
 
 -callback last_index_term(State :: ra_log_state()) ->
     maybe(ra_idxterm()).
+
+-callback set_last_index(ra_index(), ra_log_state()) ->
+    {ok, ra_log_state()} | {not_found, ra_log_state()}.
 
 % writes snapshot to storage and discards any prior entries
 -callback install_snapshot(Snapshot :: ra_log_snapshot(),
@@ -219,6 +223,12 @@ take(Start, Num, {Mod, Log0}) ->
 -spec last_index_term(State::ra_log()) -> maybe(ra_idxterm()).
 last_index_term({Mod, Log}) ->
     Mod:last_index_term(Log).
+
+-spec set_last_index(ra_index(), ra_log_state()) ->
+    {ok, ra_log_state()} | {not_found, ra_log_state()}.
+set_last_index(Idx, {Mod, Log0}) ->
+    {Res, Log} = Mod:set_last_index(Idx, Log0),
+    {Res, {Mod, Log}}.
 
 -spec handle_event(Evt :: ra_log_event(), Log :: ra_log_state()) ->
     ra_log_state().

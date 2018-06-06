@@ -9,6 +9,7 @@
          write/2,
          take/3,
          last_index_term/1,
+         set_last_index/2,
          handle_event/2,
          last_written/1,
          fetch/2,
@@ -190,7 +191,8 @@ append(Entry, #state{last_index = LastIdx} = State0)
       when element(1, Entry) =:= LastIdx + 1 ->
     {queued, wal_write(State0, Entry)};
 append({Idx, _, _}, #state{last_index = LastIdx}) ->
-    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b", [Idx, LastIdx+1])),
+    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b",
+                                      [Idx, LastIdx+1])),
     exit({integrity_error, Msg}).
 
 -spec write(Entries :: [log_entry()],
@@ -265,6 +267,23 @@ last_index_term(#state{last_index = LastIdx, last_term = LastTerm}) ->
 -spec last_written(ra_log_file_state()) -> ra_idxterm().
 last_written(#state{last_written_index_term = LWTI}) ->
     LWTI.
+
+%% forces the last index and last written index back to a prior index
+-spec set_last_index(ra_index(), ra_log_file_state()) ->
+    {ok, ra_log_file_state()} | {not_found, ra_log_file_state()}.
+set_last_index(Idx, #state{last_written_index_term = {LWIdx0, _}} = State0) ->
+    case fetch_term(Idx, State0) of
+        {undefined, State} ->
+            {not_found, State};
+        {Term, State1} ->
+            LWIdx = min(Idx, LWIdx0),
+            {LWTerm, State2} = fetch_term(LWIdx, State1),
+            %% this should always be found but still assert just in case
+            true = LWTerm =/= undefined,
+            {ok, State2#state{last_index = Idx,
+                              last_term = Term,
+                              last_written_index_term = {LWIdx, LWTerm}}}
+    end.
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_file_state()) ->
     ra_log_file_state().
@@ -565,6 +584,7 @@ truncate_cache(Idx, #state{cache = Cache0} = State) ->
                             (_, _) -> false
                         end, Cache0),
     State#state{cache = Cache}.
+
 update_metrics(Id, Ops) ->
     _ = ets:update_counter(ra_log_file_metrics, Id, Ops),
     ok.

@@ -187,9 +187,12 @@ init(#{id := Id,
 recover(#{id := Id,
           commit_index := CommitIndex,
           last_applied := _LastApplied,
-          machine := Machine} = State0) ->
-    ?INFO("~w: recovering state machine from ~b to ~b~n", [Id, _LastApplied,
-                                                           CommitIndex]),
+          machine := Machine,
+          machine_state := MacState} = State0) ->
+    MacInfo = ra_machine:overview(Machine, MacState),
+    ?INFO("~w: recovering state machine from ~b to ~b~nMacState ~w~n", [Id, _LastApplied,
+                                                           CommitIndex,
+                                                           MacInfo]),
     {State, _, _} = apply_to(CommitIndex,
                              fun(E, S) ->
                                      %% Clear out the effects to avoid building
@@ -467,18 +470,16 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            {State, Rpcs} = make_all_rpcs(
-                              initialise_peers(State0)),
+            {State, Rpcs} = make_all_rpcs(initialise_peers(State0)),
             Effects = ra_machine:leader_effects(Machine, MacState),
             {leader, maps:without([votes, leader_id], State),
              [{send_rpcs, Rpcs},
-              {next_event, cast, {command, noop}}
-             | Effects]};
+              {next_event, cast, {command, noop}} | Effects]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
 handle_candidate(#request_vote_result{term = Term},
-                 State0 = #{current_term := CurTerm})
+                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_result with higher term"
           " received ~b -> ~b", [id(State0), CurTerm, Term]),
@@ -503,14 +504,16 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     ?INFO("~w: candidate append_entries_reply with higher"
           " term received ~b -> ~b~n",
           [id(State0), CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
+    State = update_meta([{current_term, Term}, {voted_for, undefined}],
+                        State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_rpc with higher term received ~b -> ~b~n",
           [id(State0), CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}], State0),
+    State = update_meta([{current_term, Term}, {voted_for, undefined}],
+                        State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
@@ -576,13 +579,36 @@ handle_follower(#append_entries_rpc{term = Term,
         {entry_ok, State0} ->
             % filter entries already seen
             {Log1, Entries} = drop_existing({Log0, Entries0}),
+            %% TODO: if we end up dropping all existing and have possibly seen
+            %% entries in another term with a higher index we may end up incorrectly
+            %% skipping ahead without truncating the log.
+            %% Example
+            %% CommitIndex 1
+            %% Follower [1:1, 2:1, 3:1]
+            %% Leader   [1:1, 2:1] ([3:2, 4:2])
+            %% sending empty AERpc with last idx term 2:1
+            %% Follower returns success with next_index = 4
+            %% Leader either crashes or sends 4:2 - now index 3 is
+            %% different on the follower
             case Entries of
                 [] ->
+                    Log2 = case Entries0 of
+                               [] ->
+                                   %% if no entries were sent we need to reset
+                                   %% last index to match the leader
+                                   ?INFO("ra: resetting last index to ~b~n",
+                                         [PLIdx]),
+                                   {ok, L} = ra_log:set_last_index(PLIdx, Log1),
+                                   L;
+                               _ ->
+                                   Log1
+                           end,
                     % update commit index to be the min of the last
                     % entry seen (but not necessarily written)
                     % and the leader commit
-                    {Idx, _} = ra_log:last_index_term(Log1),
+                    {Idx, _} = ra_log:last_index_term(Log2),
                     State1 = State0#{commit_index => min(Idx, LeaderCommit),
+                                     log => Log2,
                                      leader_id => LeaderId},
                     % evaluate commit index as we may have received an updated
                     % commit index for previously written entries
@@ -592,8 +618,8 @@ handle_follower(#append_entries_rpc{term = Term,
                     {LastIdx, State1} = lists:foldl(
                                           fun pre_append_log_follower/2,
                                           {FirstIdx, State0}, Entries),
-                    % Increment only commit_index here as we are not applying anything
-                    % at this point.
+                    % Increment only commit_index here as we are not applying
+                    % anything at this point.
                     % last_applied will be incremented when the written event is
                     % processed
                     State = State1#{commit_index => min(LeaderCommit, LastIdx),
@@ -622,7 +648,7 @@ handle_follower(#append_entries_rpc{term = Term,
         {missing, State0} ->
             Reply = append_entries_reply(Term, false, State0),
             ?INFO("~w: follower did not have entry at ~b in ~b."
-                  "requesting from ~b~n",
+                  " Requesting from ~b~n",
                   [Id, PLIdx, PLTerm, Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
@@ -659,7 +685,7 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
     ?INFO("~w: follower request_vote_rpc in ~b but current term ~b~n",
-         [Id, _Term, CurTerm]),
+          [Id, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State00 = #{log := Log0}) ->
@@ -1247,7 +1273,6 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
            machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
     To = min(LastApplied + 1 + 1024, ApplyTo),
-    % TODO: fetch and apply batches to reduce peak memory usage
     case fetch_entries(LastApplied + 1, To, State0) of
         {[], State} ->
             {State, Effects, NumApplied};
@@ -1256,8 +1281,7 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
                 lists:foldl(ApplyFun, {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
-            % ?INFO("~p: applied to: ~b in ~b",
-                        % [Id,  LastEntryIdx, LastEntryTerm]),
+            ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
             apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
                      Effects ++ NotifyEffects ++ NewEffects,
                      State#{last_applied => AppliedTo,
@@ -1278,14 +1302,12 @@ apply_with(Machine,
             % apply returned no reply so use IdxTerm as reply value
             {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
                                            Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx
-            , Notifys};
+            {State, NextMacSt, Effects ++ Efx, Notifys};
         {NextMacSt, Efx, Reply} ->
             % apply returned a return value
             {Effects, Notifys} = add_reply(From, Reply, ReplyType,
                                            Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx
-            , Notifys}
+            {State, NextMacSt, Effects ++ Efx, Notifys}
     end;
 apply_with(_, % Machine
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
@@ -1389,7 +1411,7 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     end.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
-                    {_, State = #{cluster_index_term := {Idx, CITTerm}}})
+                        {_, State = #{cluster_index_term := {Idx, CITTerm}}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster

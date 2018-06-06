@@ -113,6 +113,8 @@ write_then_read(Config) ->
     [{1, 2, Data}, {2, 2, Data}] = ra_log_file_segment:read(SegR, 1, 2),
     %% validate a larger range still returns results
     [{1, 2, Data}, {2, 2, Data}] = ra_log_file_segment:read(SegR, 1, 5),
+    %% out of range returns nothing
+    [{2, 2, Data}] = ra_log_file_segment:read(SegR, 2, 2),
     {1, 2} = ra_log_file_segment:range(SegR),
     ok = ra_log_file_segment:close(SegR),
     ok.

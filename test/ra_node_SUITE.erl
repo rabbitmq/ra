@@ -48,6 +48,7 @@ all() ->
      follower_aer_2,
      follower_aer_3,
      follower_aer_4,
+     follower_aer_5,
      follower_catchup_condition,
      wal_down_condition
     ].
@@ -220,7 +221,8 @@ follower_aer_1(_Config) ->
                                               last_index = 2}}}, _]}
         = ra_node:handle_follower({ra_log_event, {written, {2, 2, 1}}}, State4),
 
-    % AER with index [] -> last_applied: 2 - replies with last_index = 2, next_index = 4
+    % AER with index [] -> last_applied: 2 - replies with last_index = 2,
+        % next_index = 4
     % empty AER before {written, 3} is received
     AER4 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 3,
                                prev_log_term = 1, leader_commit = 3,
@@ -367,6 +369,40 @@ follower_aer_4(_Config) ->
         = ra_node:handle_follower({ra_log_event, {written, {4, 4, 1}}}, State1),
     % AER with index [5], commit_index = 10 -> last_applied = 4, commit_index = 5
     ok.
+
+follower_aer_5(_Config) ->
+    %% Scenario
+    %% Leader with smaller log is elected and sends empty aer
+    %% Follower should truncate it's log and reply with an appropriate
+    %% next index
+    Init = empty_state(3, n2),
+    AER1 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 0,
+                               prev_log_term = 0, leader_commit = 10,
+                               entries = [
+                                          entry(1, 1, one),
+                                          entry(2, 1, two),
+                                          entry(3, 1, tre),
+                                          entry(4, 1, for)
+                                         ]},
+    %% set up follower state
+    {follower, State00, _} = ra_node:handle_follower(AER1, Init),
+    %% TODO also test when written even occurs after
+    {follower, State0, _} = ra_node:handle_follower(
+                              {ra_log_event, {written, {4, 4, 1}}}, State00),
+    % now an AER from another leader in a higher term is received
+    % This is what the leader sends immedately before committing it;s noop
+    AER2 = #append_entries_rpc{term = 2, leader_id = n5, prev_log_index = 3,
+                               prev_log_term = 1, leader_commit = 3,
+                               entries = []},
+    {follower, State1, Effects} = ra_node:handle_follower(AER2, State0),
+    {cast, n5, {_, M}} = hd(Effects),
+    ?assertMatch(#append_entries_reply{next_index = 4,
+                                       last_term = 1,
+                                       last_index = 3}, M),
+    ct:pal("Effects ~p~n State: ~p", [Effects, State1]),
+    ok.
+
+
 
 follower_aer_term_mismatch(_Config) ->
     State = (base_state(3))#{commit_index => 2},

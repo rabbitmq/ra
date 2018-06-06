@@ -33,7 +33,8 @@ init_per_testcase(TestCase, Config0) ->
     Config = [{cluster_id, TestCase},
               {nodes, Nodes}, {ra_nodes, RaNodes},
               {name, TestCase} | Config1],
-    NodeId = setup_ra_cluster(Config),
+    Machine = {module, ra_fifo, #{}},
+    NodeId = setup_ra_cluster(Config, Machine),
     %% Make sure nodes are synchronised
     ct:pal("Members ~p~n", [ra:members(NodeId)]),
     Config.
@@ -90,6 +91,7 @@ enq_drain_basic(Config) ->
     RaNodes = ?config(ra_nodes, Config),
     Scenario = [{wait, 5000},
                 {part, select_nodes(Nodes), 5000},
+                {app_restart, select_nodes(RaNodes)},
                 {wait, 5000},
                 {part, select_nodes(Nodes), 20000},
                 {wait, 5000}],
@@ -107,21 +109,42 @@ do_enq_drain_scenario(ClusterId, Nodes, RaNodes, Scenario) ->
                 nodes => RaNodes,
                 num_messages => NumMessages,
                 spec => {EnqInterval, custard}},
-    {ok, Enq} = enqueuer:start_link(EnqConf),
+    EnqConf2 = #{cluster_id => ClusterId,
+                 nodes => lists:reverse(RaNodes),
+                 num_messages => NumMessages,
+                 spec => {EnqInterval, custard}},
+    {ok, Enq} = enqueuer:start_link(enq_one, EnqConf),
+    {ok, Enq2} = enqueuer:start_link(enq_two, EnqConf2),
     ct:pal("enqueue_checkout wait_on_scenario ~n", []),
     ok = nemesis:wait_on_scenario(Nem, ScenarioTime * 2),
     {applied, Applied, _} = enqueuer:wait(Enq, ScenarioTime * 2),
+    {applied, Applied2, _} = enqueuer:wait(Enq2, ScenarioTime * 2),
     ct:pal("enqueuer:wait ~p ~n", [Applied]),
+    ct:pal("enqueuer:wait ~p ~n", [Applied2]),
     proc_lib:stop(Nem),
     proc_lib:stop(Enq),
+    validate_machine_state(RaNodes),
     Received = drain(ClusterId, RaNodes),
+    validate_machine_state(RaNodes),
     ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p~n",
            [NumMessages, Applied, Received, Scenario]),
     % assert no messages were lost
-    Remaining = Applied -- Received,
+    Remaining = (Applied ++ Applied2) -- Received,
     ct:pal("Remaining ~p~n", [Remaining]),
     MaxReceived = lists:max(Received),
     Remaining =:= [] andalso NumMessages =:= MaxReceived.
+
+validate_machine_state(Nodes) ->
+    % give the cluster a bit of time to settle first
+    timer:sleep(1000),
+    MacStates = [begin
+                     {ok, S, _} = ra:dirty_query(N, fun ra_lib:id/1),
+                     S
+                 end || N <- Nodes],
+    H = hd(MacStates),
+    lists:foreach(fun (S) -> ?assertEqual(H, S) end,
+                  MacStates),
+    ok.
 
 select_nodes(Nodes) ->
     N = trunc(length(Nodes) / 2),
@@ -139,6 +162,8 @@ scenario_time([], Acc) ->
     Acc;
 scenario_time([heal | Rest], Acc) ->
     scenario_time(Rest, Acc);
+scenario_time([{app_restart, _} | Rest], Acc) ->
+    scenario_time(Rest, Acc + 100);
 scenario_time([{_, T} | Rest], Acc) ->
     scenario_time(Rest, Acc + T);
 scenario_time([{_, _, T} | Rest], Acc) ->
@@ -171,7 +196,7 @@ prepare_erlang_cluster(Config, Nodes) ->
     erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
     tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0).
 
-setup_ra_cluster(Config) ->
+setup_ra_cluster(Config, Machine) ->
     Nodes = ?config(nodes, Config),
     Name = ?config(name, Config),
     DataDir = data_dir(Config),
@@ -180,7 +205,8 @@ setup_ra_cluster(Config) ->
     Configs = lists:map(
                 fun(Node) ->
                         ct:pal("Start app on ~p~n", [Node]),
-                        NodeConfig = make_node_ra_config(Name, Nodes, Node, DataDir),
+                        NodeConfig = make_node_ra_config(Name, Nodes, Node,
+                                                         Machine, DataDir),
                         ok = ct_rpc:call(Node, ?MODULE, node_setup, [DataDir]),
                         ok = ct_rpc:call(Node, application, load, [ra]),
                         ok = ct_rpc:call(Node, application, set_env,
@@ -219,7 +245,7 @@ data_dir(Config) ->
     Cwd = ?config(priv_dir, Config),
     filename:join(Cwd, "part").
 
-make_node_ra_config(Name, Nodes, Node, DataDir) ->
+make_node_ra_config(Name, Nodes, Node, Machine, DataDir) ->
     #{cluster_id => Name,
       id => {Name, Node},
       uid => atom_to_binary(Name, utf8),
@@ -228,7 +254,7 @@ make_node_ra_config(Name, Nodes, Node, DataDir) ->
       log_init_args =>
       #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
         uid => atom_to_binary(Name, utf8)},
-      machine => {module, ra_fifo, #{}}
+      machine =>  Machine
      }.
 
 run_proper(Fun, Args, NumTests) ->

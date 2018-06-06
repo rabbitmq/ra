@@ -773,6 +773,7 @@ handle_effect({send_vote_requests, VoteRequests}, _, % EvtType
     {State, Actions};
 handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
+    ?INFO("UPDATE RELEASE CURSOr ~w", [Index]),
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect({monitor, process, Pid}, _,

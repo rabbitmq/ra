@@ -23,6 +23,8 @@ all_tests() ->
      validate_reads_for_overlapped_writes,
      cache_overwrite_then_take,
      last_written_overwrite,
+     last_index_reset,
+     last_index_reset_before_written,
      recovery,
      recover_bigly,
      resend_write,
@@ -246,6 +248,45 @@ last_written_overwrite(Config) ->
     {queued, Log3} = ra_log_file:write([{3, 2, <<3:64/integer>>}], Log2),
     Log4 = deliver_all_log_events(Log3, 200),
     {3, 2} = ra_log_file:last_written(Log4),
+    ok.
+
+last_index_reset(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
+    Log1 = write_n(1, 5, 1, Log0),
+    Log2 = deliver_all_log_events(Log1, 500),
+    {4, 1} = ra_log_file:last_written(Log2),
+    5 = ra_log_file:next_index(Log2),
+    {4, 1} = ra_log_file:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER 
+    {ok, Log3} = ra_log_file:set_last_index(3, Log2),
+    {3, 1} = ra_log_file:last_written(Log3),
+    4 = ra_log_file:next_index(Log3),
+    {3, 1} = ra_log_file:last_index_term(Log3),
+    ok.
+
+last_index_reset_before_written(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
+    Log1 = write_n(1, 5, 1, Log0),
+    {0, 0} = ra_log_file:last_written(Log1),
+    5 = ra_log_file:next_index(Log1),
+    {4, 1} = ra_log_file:last_index_term(Log1),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER 
+    {ok, Log2} = ra_log_file:set_last_index(3, Log1),
+    {0, 0} = ra_log_file:last_written(Log2),
+    4 = ra_log_file:next_index(Log2),
+    {3, 1} = ra_log_file:last_index_term(Log2),
+    %% deliver written events should not allow the last_written to go higher
+    %% than the reset
+    Log3 = deliver_all_log_events(Log2, 500),
+    {0, 0} = ra_log_file:last_written(Log3),
+    4 = ra_log_file:next_index(Log3),
+    {3, 1} = ra_log_file:last_index_term(Log3),
     ok.
 
 recovery(Config) ->

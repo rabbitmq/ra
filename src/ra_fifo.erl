@@ -119,6 +119,7 @@
 
 -record(state,
         {name :: atom(),
+         shadow_copy_interval = ?SHADOW_COPY_INTERVAL :: non_neg_integer(),
          % unassigned messages
          messages = #{} :: #{msg_in_id() => indexed_msg()},
          % defines the lowest message in id available in the messages map
@@ -180,12 +181,13 @@ init(#{name := Name} = Conf) ->
     CCH = maps:get(cancel_customer_handler, Conf, undefined),
     BLH = maps:get(become_leader_handler, Conf, undefined),
     MH = maps:get(metrics_handler, Conf, undefined),
+    SHI = maps:get(shadow_copy_interval, Conf, ?SHADOW_COPY_INTERVAL),
     {#state{name = Name,
             dead_letter_handler = DLH,
             cancel_customer_handler = CCH,
             become_leader_handler = BLH,
-            metrics_handler = MH
-           }, []}.
+            metrics_handler = MH,
+            shadow_copy_interval = SHI}, []}.
 
 
 
@@ -460,9 +462,9 @@ cancel_customer(CustomerId, {Effects, #state{customers = C0, name = Name} = S0})
             {Effects, S0}
     end.
 
-incr_enqueue_count(#state{enqueue_count = C} = State)
- when C =:= ?SHADOW_COPY_INTERVAL ->
-    {State#state{enqueue_count = 1}, shadow_copy(State)};
+incr_enqueue_count(#state{enqueue_count = C,
+                          shadow_copy_interval = C} = State) ->
+    {State#state{enqueue_count = 0}, shadow_copy(State)};
 incr_enqueue_count(#state{enqueue_count = C} = State) ->
     {State#state{enqueue_count = C + 1}, undefined}.
 
@@ -600,6 +602,7 @@ update_smallest_raft_index(IncomingRaftIdx,
                  {Smallest, Shadow} ->
                     % we emit the last index _not_ to contribute to the
                     % current state - hence the -1
+                    ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest-1, Shadow]),
                     {State, [{release_cursor, Smallest - 1, Shadow} | Effects]}
             end
     end.
@@ -686,23 +689,6 @@ checkout_one(#state{messages = Messages0,
         _ ->
             {InitState, []}
     end.
-
-% new_low(_, _, Messages) when map_size(Messages) =:= 0 ->
-%     undefined;
-% new_low(_, _, Messages) when map_size(Messages) < 100 ->
-%     % guesstimate value - needs measuring
-%     lists:min(maps:keys(Messages));
-% new_low(Prev, Max, Messages) ->
-%     walk_map(Prev+1, Max, Messages).
-
-% walk_map(N, Max, Map) when N =< Max ->
-%     case maps:is_key(N, Map) of
-%         true -> N;
-%         false ->
-%             walk_map(N+1, Max, Map)
-%     end;
-% walk_map(_, _, _) ->
-%     undefined.
 
 
 update_or_remove_sub(CustomerId, #customer{lifetime = once,
@@ -860,6 +846,7 @@ shadow_copy(#state{name = _Name,
 
 test_init(Name) ->
     element(1, init(#{name => Name,
+                      shadow_copy_interval => 0,
                       metrics_handler => {?MODULE, metrics_handler, []}})).
 
 metrics_handler(_) ->
@@ -1130,30 +1117,41 @@ tick_test() ->
 release_cursor_snapshot_state_test() ->
     Tag = <<"release_cursor_snapshot_state_test">>,
     Cid = {Tag, self()},
-    OthPid = spawn(fun () -> ok end),
-    Oth = {<<"oth">>, OthPid},
+    % OthPid = spawn(fun () -> ok end),
+    % Oth = {<<"oth">>, OthPid},
+    % Commands = [
+    %             {checkout, {auto, 5}, Cid},
+    %             {enqueue, self(), 1, 0},
+    %             {enqueue, self(), 2, 1},
+    %             {settle, [0], Cid},
+    %             {enqueue, self(), 3, 2},
+    %             {settle, [1], Cid},
+    %             {checkout, {auto, 4}, Oth},
+    %             {enqueue, self(), 4, 3},
+    %             {enqueue, self(), 5, 4},
+    %             {settle, [2, 3], Cid},
+    %             {enqueue, self(), 6, 5},
+    %             {settle, [0], Oth},
+    %             {enqueue, self(), 7, 6},
+    %             {settle, [1], Oth},
+    %             {settle, [4], Cid},
+    %             {return, [2], Oth},
+    %             {checkout, {once, 0}, Oth}
+    %           ],
     Commands = [
-                {checkout, {auto, 5}, Cid},
-                {enqueue, self(), 1, 0},
-                {enqueue, self(), 2, 1},
-                {settle, [0], Cid},
-                {enqueue, self(), 3, 2},
-                {settle, [1], Cid},
-                {checkout, {auto, 4}, Oth},
-                {enqueue, self(), 4, 3},
-                {enqueue, self(), 5, 4},
-                {settle, [2, 3], Cid},
-                {enqueue, self(), 6, 5},
-                {settle, [0], Oth},
-                {enqueue, self(), 7, 6},
-                {settle, [1], Oth},
-                {settle, [4], Cid},
-                {return, [2], Oth},
-                {checkout, {once, 0}, Oth}
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {checkout, {dequeue, settled}, Cid},
+                {enqueue, self(), 3, three}
+                % {enqueue, self(), 4, four},
+                % {checkout, {dequeue, settled}, Cid}
+                % {enqueue, self(), 5, five},
+                % {checkout, {dequeue, settled}, Cid}
               ],
     Indexes = lists:seq(1, length(Commands)),
     Entries = lists:zip(Indexes, Commands),
     {State, Effects} = run_log(test_init(help), Entries),
+    % ?debugFmt("Effects ~p ~p~n~p~n", [Effects, State, Entries]),
 
     [begin
          Filtered = lists:dropwhile(fun({X, _}) when X =< SnapIdx -> true;
@@ -1161,8 +1159,8 @@ release_cursor_snapshot_state_test() ->
                                     end, Entries),
          {S, _} = run_log(SnapState, Filtered),
          % assert log can be restored from any release cursor index
-         % ?debugFmt("Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
-         %           [SnapIdx, S, State, SnapState, Filtered]),
+         ?debugFmt("Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
+                   [SnapIdx, S, State, SnapState, Filtered]),
          ?assertEqual(State, S)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
@@ -1252,8 +1250,12 @@ settle(Cid, Idx, MsgId, State) ->
 
 run_log(InitState, Entries) ->
     lists:foldl(fun ({Idx, E}, {Acc0, Efx0}) ->
-                        {Acc, Efx} = apply(Idx, E, Acc0),
-                        {Acc, Efx0 ++ Efx}
+                        case apply(Idx, E, Acc0) of
+                            {Acc, Efx} ->
+                                {Acc, Efx0 ++ Efx};
+                            {Acc, Efx, _} ->
+                                {Acc, Efx0 ++ Efx}
+                        end
                 end, {InitState, []}, Entries).
 -endif.
 
