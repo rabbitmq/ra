@@ -1121,7 +1121,7 @@ enq_deq_snapshot_recover_test() ->
                 {enqueue, self(), 5, five},
                 {checkout, {dequeue, settled}, Cid}
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 enq_deq_settle_snapshot_recover_test() ->
     Tag = atom_to_binary(?FUNCTION_NAME, utf8),
@@ -1134,7 +1134,7 @@ enq_deq_settle_snapshot_recover_test() ->
                 {checkout, {dequeue, unsettled}, Cid},
                 {settle, [0], Cid}
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 enq_deq_settle_snapshot_recover_2_test() ->
     Tag = atom_to_binary(?FUNCTION_NAME, utf8),
@@ -1150,7 +1150,7 @@ enq_deq_settle_snapshot_recover_2_test() ->
                 {checkout, {dequeue, unsettled}, Oth},
                 {settle, [0], Oth}
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 snapshot_recover_test() ->
     Tag = atom_to_binary(?FUNCTION_NAME, utf8),
@@ -1162,7 +1162,7 @@ snapshot_recover_test() ->
                 {enqueue, self(), 3, three},
                 purge
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 enq_deq_return_snapshot_recover_test() ->
     Tag = atom_to_binary(?FUNCTION_NAME, utf8),
@@ -1179,7 +1179,7 @@ enq_deq_return_snapshot_recover_test() ->
                 {settle, [0], Oth},
                 purge
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 enq_check_settle_snapshot_recover_test() ->
     Tag = atom_to_binary(?FUNCTION_NAME, utf8),
@@ -1193,7 +1193,7 @@ enq_check_settle_snapshot_recover_test() ->
                 {settle, [2], Cid},
                 {settle, [1], Cid}
               ],
-    run_snapshot_test(Tag, Commands).
+    run_snapshot_test(?FUNCTION_NAME, Commands).
 
 
 run_snapshot_test(Name, Commands) ->

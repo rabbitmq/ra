@@ -20,7 +20,7 @@
 
 -type scenario() :: [{wait, non_neg_integer()} |
                      {part, [node()], non_neg_integer()} |
-                     {app_restart, [node()]} |
+                     {app_restart, [ra_node_id()]} |
                      heal].
 
 -type config() :: #{nodes := [ra_node_id()],
