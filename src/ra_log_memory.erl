@@ -6,6 +6,7 @@
          write/2,
          take/3,
          last_index_term/1,
+         set_last_index/2,
          handle_event/2,
          last_written/1,
          fetch/2,
@@ -127,6 +128,22 @@ last_index_term(#state{last_index = LastIdx,
             end
     end.
 
+-spec set_last_index(ra_index(), ra_log_memory_state()) ->
+    {ok, ra_log_memory_state()} | {not_found, ra_log_memory_state()}.
+set_last_index(Idx, #state{last_written = {LWIdx, _}} = State0) ->
+    case fetch_term(Idx, State0) of
+        {undefined, State} ->
+            {not_found, State};
+        {Term, State1} when Idx < LWIdx ->
+            %% need to revert last_written too
+            State = State1#state{last_index = Idx,
+                                 last_written = {Idx, Term}},
+            {ok, State};
+        {_, State1} ->
+            State = State1#state{last_index = Idx},
+            {ok, State}
+    end.
+
 -spec last_written(ra_log_memory_state()) -> ra_idxterm().
 last_written(#state{last_written = LastWritten}) ->
     % we could just use the last index here but we need to "fake" it to
@@ -169,7 +186,7 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 flush(_Idx, Log) -> Log.
 
 -spec install_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
-                     State :: ra_log_memory_state()) ->
+                       State :: ra_log_memory_state()) ->
     ra_log_memory_state().
 install_snapshot(Snapshot, #state{entries = Log0} = State) ->
     Index  = element(1, Snapshot),

@@ -14,10 +14,13 @@
          terminate/2,
          code_change/3]).
 
+-export([partition/1]).
+
 -include("ra.hrl").
 
 -type scenario() :: [{wait, non_neg_integer()} |
                      {part, [node()], non_neg_integer()} |
+                     {app_restart, [node()]} |
                      heal].
 
 -type config() :: #{nodes := [ra_node_id()],
@@ -80,6 +83,9 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+partition(Partitions) ->
+    partition(Partitions, fun tcp_inet_proxy_helpers:block_traffic_between/2).
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -97,12 +103,17 @@ handle_step(#state{steps = [{part, Partition0, Time} | Rem],
 handle_step(#state{steps = [heal | Rem]} = State) ->
     heal(State#state.nodes),
     handle_step(State#state{steps = Rem});
+handle_step(#state{steps = [{app_restart, Nodes} | Rem]} = State) ->
+    [begin
+         rpc:call(N, application, stop, [ra]),
+         rpc:call(N, application, start, [ra]),
+         rpc:call(N, ra, restart_node, [Id])
+     end || {_, N} = Id <- Nodes],
+    handle_step(State#state{steps = Rem});
 handle_step(#state{steps = []} = _State) ->
     done.
 
 
-partition(Partitions) ->
-    partition(Partitions, fun tcp_inet_proxy_helpers:block_traffic_between/2).
 
 partition({Partition1, Partition2}, PartitionFun) ->
     lists:foreach(

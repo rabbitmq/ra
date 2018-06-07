@@ -40,7 +40,8 @@ all_tests() ->
      ra_fifo_client_flow,
      test_queries,
      log_fold,
-     recover
+     recover,
+     recover_after_kill
     ].
 
 groups() ->
@@ -666,6 +667,54 @@ recover(Config) ->
     ok = ra:stop_node(NodeId),
     ok.
 
+recover_after_kill(Config) ->
+    NodeId = {Name, _} = ?config(node_id, Config),
+    ClusterId = ?config(cluster_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    ra:members(NodeId),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:enqueue(msgq1, F0),
+    {F2, Deqd} = enq_deq_n(64, F1),
+    % timer:sleep(100),
+    exit(whereis(Name), kill),
+    application:stop(ra),
+    application:start(ra),
+    ra:restart_node(NodeId),
+    ra:members(NodeId),
+    %% this should by the default release cursor interval of 128
+    %% create a new snapshot
+    {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
+    {ok, {_X, MS}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+    %% kill node again to trigger post snapshot recovery
+    exit(whereis(Name), kill),
+    timer:sleep(250),
+    ra:members(NodeId),
+    timer:sleep(100),
+    % give leader time to commit noop
+    {ok, {_X2, MS2}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+    ok = ra:stop_node(NodeId),
+    % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
+    %        [X, X2, MS, MS2, AllDeq]),
+    ?assertEqual(MS, MS2),
+    ok = ra:restart_node(NodeId),
+    ra:members(NodeId),
+    {ok, {_, MS3}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+    ?assertEqual(MS2, MS3),
+    ok.
+
+enq_deq_n(N, F0) ->
+    enq_deq_n(N, F0, []).
+
+enq_deq_n(0, F0, Acc) ->
+    {_, F} = process_ra_events(F0, 100),
+    {F, Acc};
+enq_deq_n(N, F, Acc) ->
+    {ok, F1} = ra_fifo_client:enqueue(N, F),
+    {ok, {_, {_, Deq}}, F2} = ra_fifo_client:dequeue(term_to_binary(N), settled, F1),
+
+    {_, F3} = process_ra_events(F2, 5),
+    enq_deq_n(N-1, F3, [Deq | Acc]).
+
 conf(ClusterId, UId, NodeId, _, Peers) ->
     #{cluster_id => ClusterId,
       id => NodeId,
@@ -678,7 +727,7 @@ conf(ClusterId, UId, NodeId, _, Peers) ->
 process_ra_event(State, Wait) ->
     receive
         {ra_event, From, Evt} ->
-            ct:pal("processed ra event ~p~n", [Evt]),
+            % ct:pal("processed ra event ~p~n", [Evt]),
             {internal, _, S} = ra_fifo_client:handle_ra_event(From, Evt, State),
             S
     after Wait ->
@@ -699,7 +748,6 @@ process_ra_events(State, Acc, Wait) ->
 process_ra_events0(State0, Acc, Wait, DeliveryFun) ->
     receive
         {ra_event, From, Evt} ->
-            ct:pal("processing ra event ~p~n", [Evt]),
             case ra_fifo_client:handle_ra_event(From, Evt, State0) of
                 {internal, _, State} ->
                     process_ra_events0(State, Acc, Wait, DeliveryFun);
