@@ -19,7 +19,7 @@
          query_messages_ready/1,
          query_messages_checked_out/1,
          query_processes/1,
-         shadow_copy/1,
+         dehydrate_state/1,
          size_test/2,
          perf_test/2,
          read_log/0,
@@ -92,7 +92,7 @@
 -type client_msg() :: delivery().
 %% the messages `ra_fifo' can send to customers.
 
--type applied_mfa() :: {module(), atom(), [term()]}.
+-type applied_mfa() :: {module(), atom(), list()}.
 % represents a partially applied module call
 
 -define(SHADOW_COPY_INTERVAL, 128).
@@ -160,7 +160,8 @@
                     dead_letter_handler => applied_mfa(),
                     become_leader_handler => applied_mfa(),
                     cancel_customer_handler => applied_mfa(),
-                    metrics_handler => applied_mfa()}.
+                    metrics_handler => applied_mfa(),
+                    shadow_copy_interval => non_neg_integer()}.
 
 -export_type([protocol/0,
               delivery/0,
@@ -206,28 +207,22 @@ apply(RaftIdx, {enqueue, From, Seq, RawMsg}, State00) ->
 apply(RaftIdx, {settle, MsgIds, CustomerId},
       #state{customers = Custs0} = State) ->
     case Custs0 of
-        #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
-            Checked = maps:without(MsgIds, Checked0),
-            Discarded = maps:with(MsgIds, Checked0),
-            MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
+        #{CustomerId := Cust0} ->
             % need to increment metrics before completing as any snapshot
             % states taken need to includ them
-            complete(RaftIdx, CustomerId, MsgRaftIdxs,
-                     Cust0, Checked, State);
+            complete_and_checkout(RaftIdx, MsgIds, CustomerId,
+                                  Cust0, State);
         _ ->
             {State, []}
     end;
 apply(RaftIdx, {discard, MsgIds, CustomerId},
       #state{customers = Custs0} = State0) ->
     case Custs0 of
-        #{CustomerId := Cust0 = #customer{checked_out = Checked0}} ->
-            Checked = maps:without(MsgIds, Checked0),
-            Discarded = maps:with(MsgIds, Checked0),
-            MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
-                                   <- maps:values(Discarded)],
-            {State, Effects} = complete(RaftIdx, CustomerId,
-                                        MsgRaftIdxs, Cust0, Checked,
-                                        State0),
+        #{CustomerId := Cust0} ->
+            {State, Effects} = complete_and_checkout(RaftIdx, MsgIds,
+                                                     CustomerId, Cust0,
+                                                     State0),
+            Discarded = maps:with(MsgIds, Cust0#customer.checked_out),
             {State, dead_letter_effects(Discarded, State, Effects)};
         _ ->
             {State0, []}
@@ -284,16 +279,16 @@ apply(RaftIdx, purge, #state{customers = Custs0,
               {StateAcc0, EffectsAcc0}) ->
                   MsgRaftIdxs = [RIdx || {_MsgInId, {RIdx, _}}
                                              <- maps:values(Checked0)],
-                  {StateAcc, Effects} = complete(RaftIdx, CustomerId, MsgRaftIdxs, C, #{},
-                                                 StateAcc0),
+                  {StateAcc, Effects} = complete(CustomerId, MsgRaftIdxs, C,
+                                                 #{}, StateAcc0),
                   {StateAcc, Effects ++ EffectsAcc0}
           end, {State0, []}, Custs0),
     {State, Effects} = update_smallest_raft_index(
-                         RaftIdx,
-                         {State1#state{ra_indexes = ra_fifo_index:empty(),
-                                       messages = #{},
-                                       returns = queue:new(),
-                                       low_msg_num = undefined}, Effects1}),
+                         RaftIdx, Indexes,
+                         State1#state{ra_indexes = ra_fifo_index:empty(),
+                                      messages = #{},
+                                      returns = queue:new(),
+                                      low_msg_num = undefined}, Effects1),
     {State, Effects, {purge, Total}};
 apply(_RaftId, {down, CustomerPid, noconnection},
       #state{customers = Custs0,
@@ -463,8 +458,10 @@ cancel_customer(CustomerId, {Effects, #state{customers = C0, name = Name} = S0})
     end.
 
 incr_enqueue_count(#state{enqueue_count = C,
-                          shadow_copy_interval = C} = State) ->
-    {State#state{enqueue_count = 0}, shadow_copy(State)};
+                          shadow_copy_interval = C} = State0) ->
+    % time to stash a dehydrated state version
+    State = State0#state{enqueue_count = 0},
+    {State, dehydrate_state(State)};
 incr_enqueue_count(#state{enqueue_count = C} = State) ->
     {State#state{enqueue_count = C + 1}, undefined}.
 
@@ -548,19 +545,27 @@ return(CustomerId, MsgNumMsgs, #customer{lifetime = Life} = Cust0, Checked,
              Effects0).
 
 % used to processes messages that are finished
-complete(IncomingRaftIdx, CustomerId, MsgRaftIdxs, Cust0, Checked,
+complete(CustomerId, MsgRaftIdxs, Cust0, Checked,
        #state{customers = Custs0, service_queue = SQ0,
               ra_indexes = Indexes0} = State0) ->
     Cust = Cust0#customer{checked_out = Checked},
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
     Indexes = lists:foldl(fun ra_fifo_index:delete/2, Indexes0, MsgRaftIdxs),
-    {State, Effects} =
-        checkout(State0#state{customers = Custs,
-                              ra_indexes = Indexes,
-                              service_queue = SQ},
-                 Effects0),
+    {State0#state{customers = Custs,
+                  ra_indexes = Indexes,
+                  service_queue = SQ}, Effects0}.
+
+complete_and_checkout(IncomingRaftIdx, MsgIds, CustomerId,
+                      #customer{checked_out = Checked0} = Cust0,
+                      #state{ra_indexes = Indexes0} = State0) ->
+    Checked = maps:without(MsgIds, Checked0),
+    Discarded = maps:with(MsgIds, Checked0),
+    MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
+    {State1, Effects0}  = complete(CustomerId, MsgRaftIdxs,
+                                   Cust0, Checked, State0),
+    {State, Effects} = checkout(State1, Effects0),
     % settle metrics are incremented separately
-    update_smallest_raft_index(IncomingRaftIdx, {State, Effects}).
+    update_smallest_raft_index(IncomingRaftIdx, Indexes0, State, Effects).
 
 dead_letter_effects(_Discarded,
                     #state{dead_letter_handler = undefined},
@@ -582,28 +587,28 @@ cancel_customer_effects(Pid, Name,
                         Effects) ->
     [{mod_call, Mod, Fun, Args ++ [Pid, Name]} | Effects].
 
-update_smallest_raft_index(IncomingRaftIdx,
-                           {#state{ra_indexes = Indexes} = State, Effects}) ->
+update_smallest_raft_index(IncomingRaftIdx, OldIndexes,
+                           #state{ra_indexes = Indexes,
+                                  messages = Messages} = State, Effects) ->
     case ra_fifo_index:size(Indexes) of
-        0 ->
+        0 when map_size(Messages) =:= 0 ->
             % there are no messages on queue anymore and no pending enqueues
             % we can forward release_cursor all the way until
             % the last received command
             {State,
-             [{release_cursor, IncomingRaftIdx, shadow_copy(State)} | Effects]};
+             [{release_cursor, IncomingRaftIdx, State} | Effects]};
         _ ->
-            % TODO: for simplicity can we just always take the smallest here?
-            % Then we won't need the MsgRaftIdx
-            case ra_fifo_index:smallest(Indexes) of
-                 {_, undefined} -> % smallest
+            % Take the smallest raft index available in the index when starting
+            % to process this command
+            case ra_fifo_index:smallest(OldIndexes) of
+                 {Smallest, Shadow} when Shadow =/= undefined ->
+                    % ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest,
+                    %                              Shadow]),
+                    {State, [{release_cursor, Smallest, Shadow} | Effects]};
+                 _ -> % smallest
                     % no shadow taken for this index,
                     % no release cursor increase
-                    {State, Effects};
-                 {Smallest, Shadow} ->
-                    % we emit the last index _not_ to contribute to the
-                    % current state - hence the -1
-                    ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest-1, Shadow]),
-                    {State, [{release_cursor, Smallest - 1, Shadow} | Effects]}
+                    {State, Effects}
             end
     end.
 
@@ -805,27 +810,14 @@ run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
     run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
 
-shadow_copy(#state{name = _Name,
-                   customers = Customers,
-                   enqueuers = Enqueuers0} = State) ->
-    Enqueuers = maps:map(fun (_, E) -> E#enqueuer{pending = []}
-                         end, Enqueuers0),
-    % creates a copy of the current state suitable for snapshotting
-    State#state{messages = #{},
-                ra_indexes = ra_fifo_index:empty(),
-                low_msg_num = undefined,
-                returns = queue:new(),
-                % metrics = {Name, 0, 0, 0, 0},
-                % TODO: optimise
-                % this is inefficient (from a memory use point of view)
-                % as it creates a new tuple for every customer
-                % even if they haven't changed instead we could just update a copy
-                % of the last dehydrated state with the difference
-                customers = maps:map(fun (_, V) ->
-                                             V#customer{checked_out = #{}}
-                                     end, Customers),
-                enqueuers = Enqueuers
-               }.
+dehydrate_state(#state{messages = Messages0} = State) ->
+    %% replace all message bodies with a nil marker
+    %% as effects will never be actioned for these again
+    Messages = maps:map(fun (_K, {I, {H, _}}) ->
+                                {I, {H, nil}}
+                        end, Messages0),
+    State#state{messages = Messages,
+                ra_indexes = ra_fifo_index:empty()}.
 
 
 -ifdef(TEST).
@@ -910,7 +902,7 @@ release_cursor_test() ->
     {State2, _} = enq(2, 2, second, State1),
     {State3, _} = check(Cid, 3, 10, State2),
     % no release cursor effect at this point
-    {State4, []} = settle(Cid, 4, 1, State3),
+    {State4, _} = settle(Cid, 4, 1, State3),
     {_Final, Effects1} = settle(Cid, 5, 0, State4),
     % empty queue forwards release cursor all the way
     ?assertEffect({release_cursor, 5, _}, Effects1),
@@ -1114,44 +1106,101 @@ tick_test() ->
     [{mod_call, _, _, [{test, 1, 1, 2, 1}]}] = tick(1, S4),
     ok.
 
-release_cursor_snapshot_state_test() ->
+enq_deq_snapshot_recover_test() ->
     Tag = <<"release_cursor_snapshot_state_test">>,
     Cid = {Tag, self()},
     % OthPid = spawn(fun () -> ok end),
     % Oth = {<<"oth">>, OthPid},
-    % Commands = [
-    %             {checkout, {auto, 5}, Cid},
-    %             {enqueue, self(), 1, 0},
-    %             {enqueue, self(), 2, 1},
-    %             {settle, [0], Cid},
-    %             {enqueue, self(), 3, 2},
-    %             {settle, [1], Cid},
-    %             {checkout, {auto, 4}, Oth},
-    %             {enqueue, self(), 4, 3},
-    %             {enqueue, self(), 5, 4},
-    %             {settle, [2, 3], Cid},
-    %             {enqueue, self(), 6, 5},
-    %             {settle, [0], Oth},
-    %             {enqueue, self(), 7, 6},
-    %             {settle, [1], Oth},
-    %             {settle, [4], Cid},
-    %             {return, [2], Oth},
-    %             {checkout, {once, 0}, Oth}
-    %           ],
     Commands = [
                 {enqueue, self(), 1, one},
                 {enqueue, self(), 2, two},
                 {checkout, {dequeue, settled}, Cid},
-                {enqueue, self(), 3, three}
-                % {enqueue, self(), 4, four},
-                % {checkout, {dequeue, settled}, Cid}
-                % {enqueue, self(), 5, five},
-                % {checkout, {dequeue, settled}, Cid}
+                {enqueue, self(), 3, three},
+                {enqueue, self(), 4, four},
+                {checkout, {dequeue, settled}, Cid},
+                {enqueue, self(), 5, five},
+                {checkout, {dequeue, settled}, Cid}
               ],
+    run_snapshot_test(Tag, Commands).
+
+enq_deq_settle_snapshot_recover_test() ->
+    Tag = atom_to_binary(?FUNCTION_NAME, utf8),
+    Cid = {Tag, self()},
+    % OthPid = spawn(fun () -> ok end),
+    % Oth = {<<"oth">>, OthPid},
+    Commands = [
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {checkout, {dequeue, unsettled}, Cid},
+                {settle, [0], Cid}
+              ],
+    run_snapshot_test(Tag, Commands).
+
+enq_deq_settle_snapshot_recover_2_test() ->
+    Tag = atom_to_binary(?FUNCTION_NAME, utf8),
+    Cid = {Tag, self()},
+    OthPid = spawn(fun () -> ok end),
+    Oth = {<<"oth">>, OthPid},
+    Commands = [
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {checkout, {dequeue, unsettled}, Cid},
+                {settle, [0], Cid},
+                {enqueue, self(), 3, two},
+                {checkout, {dequeue, unsettled}, Oth},
+                {settle, [0], Oth}
+              ],
+    run_snapshot_test(Tag, Commands).
+
+snapshot_recover_test() ->
+    Tag = atom_to_binary(?FUNCTION_NAME, utf8),
+    Cid = {Tag, self()},
+    Commands = [
+                {checkout, {auto, 2}, Cid},
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {enqueue, self(), 3, three},
+                purge
+              ],
+    run_snapshot_test(Tag, Commands).
+
+enq_deq_return_snapshot_recover_test() ->
+    Tag = atom_to_binary(?FUNCTION_NAME, utf8),
+    Cid = {Tag, self()},
+    OthPid = spawn(fun () -> ok end),
+    Oth = {<<"oth">>, OthPid},
+    Commands = [
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {checkout, {dequeue, unsettled}, Cid},
+                {return, [0], Cid},
+                {enqueue, self(), 3, two},
+                {checkout, {dequeue, unsettled}, Oth},
+                {settle, [0], Oth},
+                purge
+              ],
+    run_snapshot_test(Tag, Commands).
+
+enq_check_settle_snapshot_recover_test() ->
+    Tag = atom_to_binary(?FUNCTION_NAME, utf8),
+    Cid = {Tag, self()},
+    Commands = [
+                {checkout, {auto, 2}, Cid},
+                {enqueue, self(), 1, 0},
+                {enqueue, self(), 2, 1},
+                {enqueue, self(), 3, 1},
+                {settle, [0], Cid},
+                {settle, [2], Cid},
+                {settle, [1], Cid}
+              ],
+    run_snapshot_test(Tag, Commands).
+
+
+run_snapshot_test(Name, Commands) ->
     Indexes = lists:seq(1, length(Commands)),
     Entries = lists:zip(Indexes, Commands),
-    {State, Effects} = run_log(test_init(help), Entries),
-    % ?debugFmt("Effects ~p ~p~n~p~n", [Effects, State, Entries]),
+    {State, Effects} = run_log(test_init(Name), Entries),
+    ?debugFmt("Final state ~p ~n", [State]),
 
     [begin
          Filtered = lists:dropwhile(fun({X, _}) when X =< SnapIdx -> true;
@@ -1159,8 +1208,8 @@ release_cursor_snapshot_state_test() ->
                                     end, Entries),
          {S, _} = run_log(SnapState, Filtered),
          % assert log can be restored from any release cursor index
-         ?debugFmt("Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
-                   [SnapIdx, S, State, SnapState, Filtered]),
+         % ?debugFmt("Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
+         %           [SnapIdx, S, State, SnapState, Filtered]),
          ?assertEqual(State, S)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
@@ -1223,6 +1272,16 @@ purge_test() ->
     % get returns a reply value
     {_State4, [{monitor, _, _}], {dequeue, {0, {_, second}}}} =
         apply(4, {checkout, {dequeue, unsettled}, Cid}, State3),
+    ok.
+
+purge_with_checkout_test() ->
+    Cid = {<<"purge_test">>, self()},
+    {State0, _} = check_auto(Cid, 1, test_init(?FUNCTION_NAME)),
+    {State1, _} = enq(2, 1, first, State0),
+    {State2, _} = enq(3, 2, second, State1),
+    {State3, _, {purge, 2}} = apply(2, purge, State2),
+    #customer{checked_out = Checked} = maps:get(Cid, State3#state.customers),
+    ?assertEqual(0, maps:size(Checked)),
     ok.
 
 enq(Idx, MsgSeq, Msg, State) ->

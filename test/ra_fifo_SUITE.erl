@@ -683,18 +683,18 @@ recover_after_kill(Config) ->
     ra:members(NodeId),
     %% this should by the default release cursor interval of 128
     %% create a new snapshot
-    {_F3, AllDeq} = enq_deq_n(65, F2, Deqd),
-    {ok, {X, MS}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+    {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
+    {ok, {_X, MS}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
     %% kill node again to trigger post snapshot recovery
     exit(whereis(Name), kill),
     timer:sleep(250),
     ra:members(NodeId),
     timer:sleep(100),
     % give leader time to commit noop
-    {ok, {X2, MS2}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
+    {ok, {_X2, MS2}, _} = ra:dirty_query(NodeId, fun (S) -> S end),
     ok = ra:stop_node(NodeId),
-    ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
-           [X, X2, MS, MS2, AllDeq]),
+    % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
+    %        [X, X2, MS, MS2, AllDeq]),
     ?assertEqual(MS, MS2),
     ok = ra:restart_node(NodeId),
     ra:members(NodeId),

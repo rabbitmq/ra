@@ -187,12 +187,9 @@ init(#{id := Id,
 recover(#{id := Id,
           commit_index := CommitIndex,
           last_applied := _LastApplied,
-          machine := Machine,
-          machine_state := MacState} = State0) ->
-    MacInfo = ra_machine:overview(Machine, MacState),
-    ?INFO("~w: recovering state machine from ~b to ~b~nMacState ~w~n", [Id, _LastApplied,
-                                                           CommitIndex,
-                                                           MacInfo]),
+          machine := Machine} = State0) ->
+    ?INFO("~w: recovering state machine from ~b to ~b~n",
+          [Id, _LastApplied, CommitIndex]),
     {State, _, _} = apply_to(CommitIndex,
                              fun(E, S) ->
                                      %% Clear out the effects to avoid building
@@ -579,17 +576,6 @@ handle_follower(#append_entries_rpc{term = Term,
         {entry_ok, State0} ->
             % filter entries already seen
             {Log1, Entries} = drop_existing({Log0, Entries0}),
-            %% TODO: if we end up dropping all existing and have possibly seen
-            %% entries in another term with a higher index we may end up incorrectly
-            %% skipping ahead without truncating the log.
-            %% Example
-            %% CommitIndex 1
-            %% Follower [1:1, 2:1, 3:1]
-            %% Leader   [1:1, 2:1] ([3:2, 4:2])
-            %% sending empty AERpc with last idx term 2:1
-            %% Follower returns success with next_index = 4
-            %% Leader either crashes or sends 4:2 - now index 3 is
-            %% different on the follower
             case Entries of
                 [] ->
                     Log2 = case Entries0 of
@@ -624,8 +610,6 @@ handle_follower(#append_entries_rpc{term = Term,
                     % processed
                     State = State1#{commit_index => min(LeaderCommit, LastIdx),
                                     leader_id => LeaderId},
-                    % ?INFO("~p: follower received ~p append_entries in ~p.~n",
-                    %      [Id, {PLIdx, PLTerm, length(Entries)}, Term]),
                     case ra_log:write(Entries, Log1) of
                         {written, Log} ->
                             % schedule a written next_event
@@ -1281,7 +1265,7 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
                 lists:foldl(ApplyFun, {State1, MacState0, [], #{}}, Entries),
             NotifyEffects = make_notify_effects(Notifys),
             {AppliedTo, _, _} = lists:last(Entries),
-            ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
+            % ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
             apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
                      Effects ++ NotifyEffects ++ NewEffects,
                      State#{last_applied => AppliedTo,
