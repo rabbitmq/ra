@@ -44,17 +44,13 @@ init_per_testcase(TestCase, Config) ->
     file:make_dir(Dir),
     file:make_dir(filename:join(Dir, UId)),
     register(TestCase, self()),
-    _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
-    ra_file_handle:start_link(),
     [{uid, UId},
      {test_case, TestCase}, {wal_dir, Dir} | Config].
 
 accept_mem_tables(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Tid = make_mem_table(UId, Entries),
@@ -64,8 +60,7 @@ accept_mem_tables(Config) ->
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid, [{1, 3, SegmentFile}]}} ->
-            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read},
-                                                 {ra_file_handle, default_handler}),
+            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
                        || {I, T, B} <- ra_log_file_segment:read(Seg, 1, 3)]
@@ -80,9 +75,7 @@ accept_mem_tables(Config) ->
 
 delete_segments(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
@@ -115,9 +108,7 @@ delete_segments(Config) ->
 
 my_segments(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
@@ -141,9 +132,7 @@ accept_mem_tables_append(Config) ->
     % append to a previously written segment
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     % first batch
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
@@ -155,8 +144,7 @@ accept_mem_tables_append(Config) ->
     AllEntries = Entries ++ Entries2,
     receive
         {ra_log_event, {segments, _Tid, [{1, 5, SegmentFile}]}} ->
-            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read},
-                                                 {ra_file_handle, default_handler}),
+            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             AllEntries = [{I, T, binary_to_term(B)}
                           || {I, T, B} <- ra_log_file_segment:read(Seg, 1, 5)]
@@ -168,9 +156,7 @@ accept_mem_tables_append(Config) ->
 
 accept_mem_tables_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     UId = ?config(uid, Config),
     % first batch
     Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
@@ -183,8 +169,7 @@ accept_mem_tables_overwrite(Config) ->
 
     receive
         {ra_log_event, {segments, _Tid, [{1, 3, SegmentFile}]}} ->
-            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read},
-                                                 {ra_file_handle, default_handler}),
+            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             C2 = term_to_binary(c2),
             [{1, 43, _}, {2, 43, _}] = ra_log_file_segment:read(Seg, 1, 2),
             [{3, 43, C2}] = ra_log_file_segment:read(Seg, 3, 1),
@@ -200,8 +185,7 @@ accept_mem_tables_rollover(Config) ->
     UId = ?config(uid, Config),
     % configure max segment size
     Conf = #{data_dir => Dir,
-             segment_conf => #{max_count => 8},
-             metrics_handler => {ra_file_handle, default_handler}},
+             segment_conf => #{max_count => 8}},
     {ok, Pid} = ra_log_file_segment_writer:start_link(Conf),
     % more entries than fit a single segment
     Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
@@ -221,9 +205,7 @@ accept_mem_tables_for_down_node(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     application:start(sasl),
-    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(
-                           #{data_dir => Dir,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    {ok, TblWriterPid} = ra_log_file_segment_writer:start_link(#{data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Tid = make_mem_table(<<"not_self">>, Entries),
@@ -237,8 +219,7 @@ accept_mem_tables_for_down_node(Config) ->
     ok = ra_log_file_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid2, [{1, 3, SegmentFile}]}} ->
-            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read},
-                                                 {ra_file_handle, default_handler}),
+            {ok, Seg} = ra_log_file_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
                        || {I, T, B} <- ra_log_file_segment:read(Seg, 1, 3)]

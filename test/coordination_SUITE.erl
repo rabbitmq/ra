@@ -66,8 +66,7 @@ conf({Name, _Node} = NodeId, Nodes) ->
       uid => UId,
       initial_nodes => Nodes,
       log_module => ra_log_file,
-      log_init_args => #{uid => UId,
-                         metrics_handler => {ra_file_handle, default_handler}},
+      log_init_args => #{uid => UId},
       machine => {module, ra_fifo, #{}}}.
 
 start_stop_restart_delete_on_remote(Config) ->
@@ -99,9 +98,7 @@ start_cluster(Config) ->
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ra_fifo, #{}},
-    {ok, Started, []} = ra:start_cluster(ClusterId, Machine,
-                                         #{metrics_handler => {ra_file_handle, default_handler}},
-                                         NodeIds),
+    {ok, Started, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
     % assert all nodes are actually started
@@ -116,9 +113,7 @@ delete_one_node_cluster(Config) ->
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
     Machine = {module, ra_fifo, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine,
-                                   #{metrics_handler => {ra_file_handle, default_handler}},
-                                   NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     Wc = filename:join([PrivDir, s1, "*"]),
@@ -147,9 +142,7 @@ delete_two_node_cluster(Config) ->
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
     Machine = {module, ra_fifo, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine,
-                                   #{metrics_handler => {ra_file_handle, default_handler}},
-                                   NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
@@ -170,9 +163,7 @@ delete_three_node_cluster(Config) ->
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ra_fifo, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine,
-                                   #{metrics_handler => {ra_file_handle, default_handler}},
-                                   NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
@@ -189,10 +180,7 @@ start_cluster_majority(Config) ->
     S3 = make_node_name(s3),
     NodeIds = NodeIds0 ++ [{ClusterId, S3}],
     Machine = {module, ra_fifo, #{}},
-    {ok, Started, NotStarted} =
-        ra:start_cluster(ClusterId, Machine,
-                         #{metrics_handler => {ra_file_handle, default_handler}},
-                         NodeIds),
+    {ok, Started, NotStarted} = ra:start_cluster(ClusterId, Machine, NodeIds),
     % assert  two were started
     ?assertEqual(2,  length(Started)),
     ?assertEqual(1,  length(NotStarted)),
@@ -212,10 +200,7 @@ start_cluster_minority(Config) ->
     S3 = make_node_name(s3),
     NodeIds = NodeIds0 ++ [{ClusterId, S2}, {ClusterId, S3}],
     Machine = {module, ra_fifo, #{}},
-    {error, cluster_not_formed} =
-        ra:start_cluster(ClusterId, Machine,
-                         #{metrics_handler => {ra_file_handle, default_handler}},
-                         NodeIds),
+    {error, cluster_not_formed} = ra:start_cluster(ClusterId, Machine, NodeIds),
     % assert none is started
     [{error, _} = ra_node_proc:ping(N, 50) || N <- NodeIds],
     [ok = slave:stop(S) || {_, S} <- NodeIds0],

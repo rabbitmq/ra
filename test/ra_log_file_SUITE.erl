@@ -76,8 +76,7 @@ end_per_testcase(_, _Config) ->
 handle_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {queued, Log1} = ra_log_file:write([{1, 1, "value"},
                                         {2, 1, "value"}], Log0),
     receive
@@ -104,8 +103,7 @@ handle_overwrite(Config) ->
 receive_segment(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a few entries
     Entries = [{I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
 
@@ -133,8 +131,7 @@ receive_segment(Config) ->
 read_one(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
@@ -150,8 +147,7 @@ read_one(Config) ->
 take_after_overwrite_and_init(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_file:take(1, 5, Log2),
@@ -161,8 +157,7 @@ take_after_overwrite_and_init(Config) ->
     % ensure we cannot take stale entries
     {[{1, 2, _}], Log6} = ra_log_file:take(1, 5, Log5),
     _ = ra_log_file:close(Log6),
-    Log = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {[{1, 2, _}], _} = ra_log_file:take(1, 5, Log),
     ok.
 
@@ -170,8 +165,7 @@ take_after_overwrite_and_init(Config) ->
 validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a few entries
     Log1 = append_and_roll(1, 100, 1, Log0),
     Log2 = append_and_roll(100, 200, 1, Log1),
@@ -210,8 +204,7 @@ validate_sequential_reads(Config) ->
 validate_reads_for_overlapped_writes(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
     % write 300 - 399 in term 1 - no roll
@@ -235,8 +228,7 @@ validate_reads_for_overlapped_writes(Config) ->
 cache_overwrite_then_take(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = write_n(3, 4, 2, Log1),
     % validate only 3 entries can be read even if requested range is greater
@@ -246,8 +238,7 @@ cache_overwrite_then_take(Config) ->
 last_written_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
     {4, 1} = ra_log_file:last_written(Log2),
@@ -260,8 +251,7 @@ last_written_overwrite(Config) ->
 recovery(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_and_roll(1, 10, 1, Log0),
     {9, 1} = ra_log_file:last_index_term(Log1),
@@ -276,8 +266,7 @@ recovery(Config) ->
     application:ensure_all_started(ra),
     % % TODO how to avoid sleep
     timer:sleep(2000),
-    Log5 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log5 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {20, 3} = ra_log_file:last_index_term(Log5),
     Log6 = validate_read(1, 5, 1, Log5),
     Log7 = validate_read(5, 15, 2, Log6),
@@ -289,8 +278,7 @@ recovery(Config) ->
 recover_bigly(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 10000, 1, Log0),
     Log2 = deliver_all_log_events(Log1, 5),
     {9999, 1} = ra_log_file:last_index_term(Log2),
@@ -299,8 +287,7 @@ recover_bigly(Config) ->
     application:stop(ra),
     application:ensure_all_started(ra),
     % ra_log_file_segment_writer:await(),
-    Log = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {9999, 1} = ra_log_file:last_written(Log),
     {9999, 1} = ra_log_file:last_index_term(Log),
     ra_log_file:close(Log),
@@ -317,8 +304,7 @@ resend_write(Config) ->
                                    end),
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 500),
@@ -342,8 +328,7 @@ wal_crash_recover(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              resend_window => 1,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+                              resend_window => 1}),
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
     ok = proc_lib:stop(ra_log_file_segment_writer),
@@ -363,8 +348,7 @@ wal_crash_recover(Config) ->
 wal_down_read_availability(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Log1 = append_n(1, 10, 2, Log0),
     Log2 = deliver_all_log_events(Log1, 200),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
@@ -375,8 +359,7 @@ wal_down_read_availability(Config) ->
 wal_down_append_throws(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     ?assert(ra_log_file:can_write(Log0)),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     ?assert(not ra_log_file:can_write(Log0)),
@@ -386,8 +369,7 @@ wal_down_append_throws(Config) ->
 wal_down_write_returns_error_wal_down(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {error, wal_down} = ra_log_file:write([{1,1,hi}], Log0),
     ok.
@@ -396,8 +378,7 @@ detect_lost_written_range(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              wal => ra_log_wal,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+                              wal => ra_log_wal}),
     meck:new(ra_log_wal, [passthrough]),
     {0, 0} = ra_log_file:last_index_term(Log0),
     % write some entries
@@ -427,8 +408,7 @@ detect_lost_written_range(Config) ->
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log_file:take(0, 20, Log5),
     ra_log_file:close(Log5),
-    Log = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {19, 2} = ra_log_file:last_written(Log5),
     {RecoveredEntries, _} = ra_log_file:take(0, 20, Log),
     ?assert(length(Entries) =:= 20),
@@ -439,16 +419,14 @@ detect_lost_written_range(Config) ->
 snapshot_recovery(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
     Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
     Log2 = ra_log_file:install_snapshot(Snapshot, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log_file:close(Log3),
-    Log = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                             metrics_handler => {ra_file_handle, default_handler}}),
+    Log = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     Snapshot = ra_log_file:read_snapshot(Log),
     {9, 2} = ra_log_file:last_index_term(Log),
     {[], _} = ra_log_file:take(1, 9, Log),
@@ -461,8 +439,7 @@ snapshot_installation(Config) ->
     % then write entries
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log_file:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
     Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
@@ -481,8 +458,7 @@ update_release_cursor(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
     % assert there are two segments at this point
@@ -516,8 +492,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % ra_log_file should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     % assert there are no segments at this point
     [] = find_segments(Config),
 
@@ -556,12 +531,10 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
 transient_writer_is_handled(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId,
-                              metrics_handler => {ra_file_handle, default_handler}}),
+    Log0 = ra_log_file:init(#{data_dir => Dir, uid => UId}),
     _Pid = spawn(fun () ->
                          ra_directory:register_name(<<"sub_proc">>, self(), sub_proc),
-                         Log0 = ra_log_file:init(#{data_dir => Dir, uid => <<"sub_proc">>,
-                                                   metrics_handler => {ra_file_handle, default_handler}}),
+                         Log0 = ra_log_file:init(#{data_dir => Dir, uid => <<"sub_proc">>}),
                          Log1 = append_n(1, 10, 2, Log0),
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),

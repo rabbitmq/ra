@@ -22,8 +22,7 @@
 
 -record(state, {data_dir :: file:filename(),
                 segment_conf = #{} :: ra_log_file_segment:ra_log_file_segment_options(),
-                active_segments = #{} :: #{ra_uid() => ra_log_file_segment:state()},
-                metrics_handler}).
+                active_segments = #{} :: #{ra_uid() => ra_log_file_segment:state()}}).
 
 -include("ra.hrl").
 
@@ -98,12 +97,11 @@ await(SegWriter)  ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([#{data_dir := DataDir, metrics_handler := Handler} = Conf]) ->
+init([#{data_dir := DataDir} = Conf]) ->
     process_flag(trap_exit, true),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{data_dir = DataDir,
-                segment_conf = SegmentConf,
-                metrics_handler = Handler}}.
+                segment_conf = SegmentConf}}.
 
 handle_call(await, _From, State) ->
     {reply, ok, State};
@@ -182,8 +180,7 @@ code_change(_OldVsn, State, _Extra) ->
 do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
-                  active_segments = ActiveSegments,
-                  metrics_handler = Handler} = State) ->
+                  active_segments = ActiveSegments} = State) ->
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
     case filelib:is_dir(Dir) of
         true ->
@@ -191,14 +188,14 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
             %% never been started or has been deleted and we should just continue
             Segment0 = case ActiveSegments of
                            #{RaNodeUId := S} -> S;
-                           _ -> open_file(Dir, SegConf, Handler)
+                           _ -> open_file(Dir, SegConf)
                        end,
             case Segment0 of
                 undefined ->
                     State;
                 _ ->
                     {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
-                                                            Segment0, SegConf, Handler),
+                                                            Segment0, SegConf),
                     % fsync
                     {ok, Segment} = ra_log_file_segment:sync(Segment1),
 
@@ -228,37 +225,37 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
             State
     end.
 
-append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf, Handler) ->
+append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
     % EndIdx + 1 because FP
-    append_to_segment(Tid, StartIdx, EndIdx+1, Seg, [], SegConf, Handler).
+    append_to_segment(Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
 
-append_to_segment(_Tid, EndIdx, EndIdx, Seg, Closed, _SegConf, Handler) ->
+append_to_segment(_Tid, EndIdx, EndIdx, Seg, Closed, _SegConf) ->
     {Seg, Closed};
-append_to_segment(Tid, Idx, EndIdx, Seg0, Closed, SegConf, Handler) ->
+append_to_segment(Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
     [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
     Data = term_to_binary(Data0),
     case ra_log_file_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
-            append_to_segment(Tid, Idx+1, EndIdx, Seg, Closed, SegConf, Handler);
+            append_to_segment(Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
         {error, full} ->
             % close and open a new segment
-            Seg1 = open_successor_segment(Seg0, SegConf, Handler),
+            Seg1 = open_successor_segment(Seg0, SegConf),
             {ok, Seg} = ra_log_file_segment:append(Seg1, Idx, Term, Data),
-            append_to_segment(Tid, Idx+1, EndIdx, Seg, [Seg0 | Closed], SegConf, Handler)
+            append_to_segment(Tid, Idx+1, EndIdx, Seg, [Seg0 | Closed], SegConf)
     end.
 
 find_segment_files(Dir) ->
     lists:reverse(
       lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))).
 
-open_successor_segment(CurSeg, SegConf, Handler) ->
+open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_file_segment:filename(CurSeg),
     Fn = ra_lib:zpad_filename_incr(Fn0),
     ok = ra_log_file_segment:close(CurSeg),
-    {ok, Seg} = ra_log_file_segment:open(Fn, SegConf, Handler),
+    {ok, Seg} = ra_log_file_segment:open(Fn, SegConf),
     Seg.
 
-open_file(Dir, SegConf, Handler) ->
+open_file(Dir, SegConf) ->
     File = case find_segment_files(Dir) of
                [] ->
                    F = ra_lib:zpad_filename("", "segment", 1),
@@ -272,7 +269,7 @@ open_file(Dir, SegConf, Handler) ->
     %% existing this could happend during node deletion
     case filelib:ensure_dir(File) of
         ok ->
-            case ra_log_file_segment:open(File, SegConf#{mode => append}, Handler) of
+            case ra_log_file_segment:open(File, SegConf#{mode => append}) of
                 {ok, Segment} ->
                     Segment;
                 Err ->

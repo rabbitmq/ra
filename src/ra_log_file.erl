@@ -55,8 +55,7 @@
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
          wal :: atom(), % registered name
          last_resend_time :: maybe(integer()),
-         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
-         metrics_handler
+         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer()
         }).
 
 -type ra_log_file_state() :: #state{}.
@@ -67,8 +66,7 @@
                                    resend_window => integer()}.
 
 -spec init(ra_log_file_init_args()) -> ra_log_file_state().
-init(#{uid := UId,
-       metrics_handler := Handler} = Conf) ->
+init(#{uid := UId} = Conf) ->
     %% overriding the data_dir is only here for test compatibility
     %% as it needs to match what the segment writer has it makes no real
     %% sense to make it independently configurable
@@ -80,7 +78,7 @@ init(#{uid := UId,
     Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
     Meta = filename:join(Dir, "meta.dat"),
     ok = filelib:ensure_dir(Meta),
-    Kv = ra_log_file_meta:init(Meta, Handler),
+    Kv = ra_log_file_meta:init(Meta),
 
     % initialise metrics for this node
     true = ets:insert(ra_log_file_metrics, {UId, 0, 0, 0, 0}),
@@ -91,7 +89,7 @@ init(#{uid := UId,
     % TODO: safely encode UId for use a directory name
 
     % recover current range and any references to segments
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, Handler) of
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
                                           R ->  R
@@ -117,8 +115,7 @@ init(#{uid := UId,
                       snapshot_state = SnapshotState,
                       kv = Kv,
                       wal = Wal,
-                      resend_window_seconds = ResendWindow,
-                      metrics_handler = Handler},
+                      resend_window_seconds = ResendWindow},
 
     LastIdx = State000#state.last_index,
     % recover the last term
@@ -142,7 +139,7 @@ init(#{uid := UId,
           [last_index_term(State)]),
     State.
 
-recover_range(UId, Handler) ->
+recover_range(UId) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_nodes are part of the same
     % supervision tree
@@ -159,7 +156,7 @@ recover_range(UId, Handler) ->
     SegRefs =
     [begin
          %% ?INFO("ra_log_file: recovering ~p~n", [S]),
-         {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}, Handler),
+         {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
          {F, L} = ra_log_file_segment:range(Seg),
          %% ?INFO("ra_log_file: recovered ~p ~p~n", [S, {F, L}]),
          ok = ra_log_file_segment:close(Seg),
@@ -227,8 +224,7 @@ write([{Idx, _, _} | _], #state{uid = UId, last_index = LastIdx}) ->
 -spec take(ra_index(), non_neg_integer(), ra_log_file_state()) ->
     {[log_entry()], ra_log_file_state()}.
 take(Start, Num, #state{uid = UId, first_index = FirstIdx,
-                        last_index = LastIdx,
-                        metrics_handler = Handler} = State)
+                        last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx ->
     % 0. Check that the request isn't outside of first_index and last_index
     % 1. Check the local cache for any unflushed entries, carry reminders
@@ -250,7 +246,7 @@ take(Start, Num, #state{uid = UId, first_index = FirstIdx,
                             ok = update_metrics(UId, MetricOps),
                             {Entries2, State};
                         {Entries2, MetricOps2, {S, E} = Rem2} ->
-                            case segment_take(State, Rem2, Entries2, Handler) of
+                            case segment_take(State, Rem2, Entries2) of
                                 {Open, undefined, Entries} ->
                                     MetricOp = {?METRICS_SEGMENT_POS, E - S + 1},
                                     ok = update_metrics(UId, [MetricOp | MetricOps2]),
@@ -649,7 +645,7 @@ lookup_range(Tid, Start, End, Acc) when End > Start ->
 
 
 segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
-             Range, Entries0, Handler) ->
+             Range, Entries0) ->
     lists:foldl(
       fun(_, {_, undefined, _} = Acc) ->
               Acc;
@@ -662,8 +658,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
                         #{Fn := S} -> S;
                         _ ->
                             {ok, S} = ra_log_file_segment:open(Fn,
-                                                               #{mode => read},
-                                                               Handler),
+                                                               #{mode => read}),
                             S
                     end,
 
@@ -684,25 +679,24 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #state{segment_refs = SegRefs,
-                               open_segments = OpenSegs,
-                               metrics_handler = Handler} = State) ->
-    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Handler),
+                               open_segments = OpenSegs} = State) ->
+    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs),
     {Result, State#state{open_segments = Open}}.
 
-segment_term_query0(Idx, [{From, To, Filename} | _Tail], Open, Handler)
+segment_term_query0(Idx, [{From, To, Filename} | _Tail], Open)
   when Idx >= From andalso Idx =< To ->
     case Open of
         #{Filename := Seg} ->
             Term = ra_log_file_segment:term_query(Seg, Idx),
             {Term, Open};
         _ ->
-            {ok, Seg} = ra_log_file_segment:open(Filename, #{mode => read}, Handler),
+            {ok, Seg} = ra_log_file_segment:open(Filename, #{mode => read}),
             Term = ra_log_file_segment:term_query(Seg, Idx),
             {Term, Open#{Filename => Seg}}
     end;
-segment_term_query0(Idx, [_ | Tail], Open, Handler) ->
-    segment_term_query0(Idx, Tail, Open, Handler);
-segment_term_query0(_Idx, [], Open, _Handler) ->
+segment_term_query0(Idx, [_ | Tail], Open) ->
+    segment_term_query0(Idx, Tail, Open);
+segment_term_query0(_Idx, [], Open) ->
     {undefined, Open}.
 
 
