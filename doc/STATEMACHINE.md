@@ -169,12 +169,60 @@ read(Key) ->
 
 ## Effects
 
-TODO: describe effects here
+Effects are used to separate the state machine logic from the effects it wants
+to take inside it's environment. Each call to the `apply/3` function can return
+a list of effects for the leader to realise. This includes sending messages,
+setting up node and process monitors and calling arbitrary functions.
+Only the leader that first applies an entry will attempt the effect. Followers
+process the same set of commands but simply throw away any effects returned by
+the state machine.
+
+How does ra ensure we not re-issue effects on recovery?
+
+Each ra node persists it's `last_applied` index. When the node restarts it
+replays it's log until this point and throws away any resulting effects as they
+should already have been issued.
+
+NB: as the `last_applied` index is only persisted periodically there is a small
+chance that some effects may be issued multiple times when all the nodes in the
+cluster crash suddenly and at the same time. It is worth taking this into account
+when implementing your state machine. There is also a chance that effects will
+never be issued or reach their recipients. Ra makes no allowance for this.
+(See recommendation about using an ARQ protocol below).
 
 ### Send a message
 
-### Call a module:function with some args
+The `{send_msg, pid(), Msg :: term()}` effects asynchronously sends a message
+to the specified
+`pid`. Not that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
+options which are the least reliable message sending options. It does this so
+that a state machine `send_msg` effect will never block the main `ra` process.
+To ensure message reliability normal [Autmatic Repeat Query ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
+like protocols between the state machine and the receiver should be implemented
+if needed.
 
 ### Monitors
 
+Use '`{monitor, process | node, pid() | node()}` to ask the `ra` leader to
+monitor a process or node. If `ra` receives a `DOWN` for a process it
+is monitoring it will commit a `{down,  pid(), term()}` command to the log that
+the state machine needs to handle. If it detects a monitored node as down or up
+it will commit a `{nodeup | nodedown, node()}` command.
+
+Use `{demonitor, pid()}` to demonitor a process. Currently there is no way to
+demonitor a node.
+
+### Call a function
+
+Use the `{modcall, module(), function(), Args :: [term()]}` to call an arbitrary
+function. Care need to be taken not to block the `ra` process whilst doing so.
+It is recommended that expensive operations are done in another process.
+
+The `mod_call` effect is useful for e.g. updating an ets table of committed entries
+or similar.
+
 ### Update the release cursor (Snapshotting)
+
+To (potentially) trigger a snapshot return the `{release_cursor, RaftIndex, MachineState}`
+effect. This is why the raft index is included in the `apply/3` function. Ra will
+only create a snapshot if doing so will result in log segments being deleted.
