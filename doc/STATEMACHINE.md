@@ -7,7 +7,7 @@ To implement a state machine to run in `ra` you need to implement the
 `ra_machine` behaviour. There are two mandatory callbacks that need to be
 implemented:
 
-```
+```erlang
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
 -callback 'apply'(Index :: ra_index(), command(), State) ->
@@ -36,16 +36,16 @@ As an example we are going to write a simple key-value store that takes
 Create a new erlang module named `ra_kv` using the `ra_machine` behaviour and
 export the `init/1` and `apply/3` functions:
 
-```
+```erlang
 -module(ra_kv).
 -behaviour(ra_machine).
 -export([init/1, apply/3]).
 ```
 
 First we are going to define a type spec for the state and commands that we will
-use. The state is imply a map of arbitrary keys and values. We can store anything.
+use. The state is simply a map of arbitrary keys and values. We can store anything.
 
-```
+```erlang
 -opaque state() :: #{term() => term()}.
 
 -type ra_kv_command() :: {write, Key :: term(), Value :: term()} |
@@ -55,14 +55,14 @@ use. The state is imply a map of arbitrary keys and values. We can store anythin
 To implement `init/1` simply return and empty map and an empty list of effects.
 This is the initial state of our kv store.
 
-```
+```erlang
 init(_Config) -> {#{}, []}.
 ```
 
 To implement the `apply/3` function we need to handle each of the commands
 we support.
 
-```
+```erlang
 apply(_Index, {write, Key, Value}, State) ->
     {maps:put(Key, Value, State), []};
 apply(_Index, {read, Key}, State) ->
@@ -87,7 +87,7 @@ function. It takes a ClusterId that can be an arbitrary term, we here use a
 binary, a machine configuration and a list of nodes that define the initial
 set of members.
 
-```
+```erlang
 start() ->
     %% the initial cluster members
     Nodes = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
@@ -106,7 +106,7 @@ start() ->
 If you then start an erlang shell with `make shell` or similar and call
 `ra_kv:start/0` you should hopefully be returned with something like:
 
-```
+```erlang
 {ok,[{ra_kv1,nonode@nohost},
      {ra_kv2,nonode@nohost},
      {ra_kv3,nonode@nohost}],
@@ -120,7 +120,7 @@ and error.
 
 Now you can write your first value into the databas.
 
-```
+```erlang
 2> ra:send_and_await_consensus(ra_kv1, {write, k, v}).
 {ok,{2,1},ra_kv1}
 3> ra:send_and_await_consensus(ra_kv1, {read, k}).
@@ -145,7 +145,7 @@ We have already added the `start/0` function to start a local ra cluster. It wou
 make sense to abstract interactions with the kv store behind a nicer interface
 than calling `ra:send_and_await_consensus/2` directly.
 
-```
+```erlang
 write(Key, Value) ->
     %% it would make sense to cache this to avoid redirection costs when this
     %% node happens not to be the current leader
