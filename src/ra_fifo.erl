@@ -598,10 +598,15 @@ update_smallest_raft_index(IncomingRaftIdx, OldIndexes,
             {State,
              [{release_cursor, IncomingRaftIdx, State} | Effects]};
         _ ->
+            NewSmallest = ra_fifo_index:smallest(Indexes),
             % Take the smallest raft index available in the index when starting
             % to process this command
-            case ra_fifo_index:smallest(OldIndexes) of
-                 {Smallest, Shadow} when Shadow =/= undefined ->
+            case {NewSmallest, ra_fifo_index:smallest(OldIndexes)} of
+                {{Smallest, _}, {Smallest, _}} ->
+                    % smallest has not changed, do not issue release cursor
+                    % effects
+                    {State, Effects};
+                {_, {Smallest, Shadow}} when Shadow =/= undefined ->
                     % ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest,
                     %                              Shadow]),
                     {State, [{release_cursor, Smallest, Shadow} | Effects]};
@@ -1186,21 +1191,30 @@ enq_check_settle_snapshot_recover_test() ->
     Cid = {Tag, self()},
     Commands = [
                 {checkout, {auto, 2}, Cid},
-                {enqueue, self(), 1, 0},
-                {enqueue, self(), 2, 1},
-                {enqueue, self(), 3, 1},
+                {enqueue, self(), 1, one},
+                {enqueue, self(), 2, two},
+                {settle, [1], Cid},
                 {settle, [0], Cid},
-                {settle, [2], Cid},
-                {settle, [1], Cid}
+                {enqueue, self(), 3, three},
+                {settle, [2], Cid}
+
               ],
+         % ?debugFmt("~w running commands ~w~n", [?FUNCTION_NAME, C]),
     run_snapshot_test(?FUNCTION_NAME, Commands).
 
 
 run_snapshot_test(Name, Commands) ->
+    %% create every incremental permuation of the commands lists
+    %% and run the snapshot tests against that
+    [begin
+         % ?debugFmt("~w running commands ~w~n", [?FUNCTION_NAME, C]),
+         run_snapshot_test0(Name, C)
+     end || C <- prefixes(Commands, 1, [])].
+
+run_snapshot_test0(Name, Commands) ->
     Indexes = lists:seq(1, length(Commands)),
     Entries = lists:zip(Indexes, Commands),
     {State, Effects} = run_log(test_init(Name), Entries),
-    ?debugFmt("Final state ~p ~n", [State]),
 
     [begin
          Filtered = lists:dropwhile(fun({X, _}) when X =< SnapIdx -> true;
@@ -1213,6 +1227,12 @@ run_snapshot_test(Name, Commands) ->
          ?assertEqual(State, S)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
+
+prefixes(Source, N, Acc) when N > length(Source) ->
+    lists:reverse(Acc);
+prefixes(Source, N, Acc) ->
+    {X, _} = lists:split(N, Source),
+    prefixes(Source, N+1, [X | Acc]).
 
 delivery_query_returns_deliveries_test() ->
     Tag = <<"release_cursor_snapshot_state_test">>,
