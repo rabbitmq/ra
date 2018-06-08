@@ -6,7 +6,6 @@ erl_crash.dump
 /cover/
 /deps/
 /ebin/
-/doc/
 !/ebin/ra.app
 /logs/
 /plugins/

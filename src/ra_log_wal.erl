@@ -9,6 +9,8 @@
          system_terminate/4,
          write_debug/3]).
 
+-export([wal2list/1]).
+
 -compile([inline_list_funcs]).
 
 -include("ra.hrl").
@@ -550,6 +552,30 @@ incr_batch(#batch{writes = Writes,
     Batch#batch{writes = Writes + 1,
                 waiting = Waiting,
                 pending = [Data | Pend]}.
+
+wal2list(File) ->
+    {ok, Data} = file:read_file(File),
+    dump_records(Data, []).
+
+dump_records(<<_:1/integer, 0:1/integer, _:14/integer,
+               IdDataLen:16/integer, _:IdDataLen/binary,
+               _:32/integer,
+               EntryDataLen:32/integer,
+               Idx:64/integer, _:64/integer,
+               EntryData:EntryDataLen/binary,
+               Rest/binary>>, Entries) ->
+    % TODO: recover writers info, i.e. last index seen
+    dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
+dump_records(<<_:1/integer, 1:1/integer, _:14/integer,
+                  _:32/integer,
+                  EntryDataLen:32/integer,
+                  Idx:64/integer, _:64/integer,
+                  EntryData:EntryDataLen/binary,
+                  Rest/binary>>, Entries) ->
+    dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
+dump_records(<<>>, Entries) ->
+    Entries.
+
 
 recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   IdDataLen:16/integer, IdData:IdDataLen/binary,
