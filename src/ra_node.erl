@@ -578,8 +578,9 @@ handle_follower(#append_entries_rpc{term = Term,
             {Log1, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
                 [] ->
+                    LastIdx = ra_log:last_index_term(Log1),
                     Log2 = case Entries0 of
-                               [] ->
+                               [] when element(1, LastIdx) > PLIdx ->
                                    %% if no entries were sent we need to reset
                                    %% last index to match the leader
                                    ?INFO("ra: resetting last index to ~b~n",

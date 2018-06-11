@@ -125,7 +125,7 @@ delete_one_node_cluster(Config) ->
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
     receive
         Anything ->
-            ct:pal("got wierd message ~p~n", [Anything]),
+            ct:pal("got weird message ~p~n", [Anything]),
             exit({unexpected, Anything})
     after 250 ->
               ok
@@ -133,7 +133,7 @@ delete_one_node_cluster(Config) ->
     %% validate there is no data
     Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
     ct:pal("Files  ~p~n", [Files]),
-    [] = Files,
+    [_] = Files,
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 

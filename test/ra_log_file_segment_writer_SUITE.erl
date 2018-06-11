@@ -68,6 +68,8 @@ accept_mem_tables(Config) ->
               throw(ra_log_event_timeout)
     end,
 
+    timer:sleep(250),
+
     % assert wal file has been deleted.
     false = filelib:is_file(WalFile),
     ok = gen_server:stop(TblWriterPid),

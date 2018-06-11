@@ -11,6 +11,8 @@
          max_count/1,
          filename/1]).
 
+-export([dump_index/1]).
+
 -include("ra.hrl").
 
 -define(VERSION, 1).
@@ -229,6 +231,37 @@ recover_index(Fd, MaxCount) ->
             % to where the data offset starts.
             {0, DataOffset, undefined, #{}}
     end.
+
+dump_index(File) ->
+    {ok, Fd} = file:open(File, [read, raw, binary
+                               ]),
+    {ok, MaxCount} = read_header(Fd),
+    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+    {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+    DataOffset = ?HEADER_SIZE + IndexSize,
+    case file:read(Fd, IndexSize) of
+        {ok, Data} ->
+            D = [begin
+                     file:position(Fd, O),
+                     {ok, B} = file:read(Fd, N),
+                     {I, T, binary_to_term(B)}
+                 end || {I, T, O, N} <- dump_index_data(Data, [])],
+            file:close(Fd),
+            D;
+        eof ->
+            file:close(Fd),
+            % if no entries have been written the file hasn't "stretched"
+            % to where the data offset starts.
+            {0, DataOffset, undefined, #{}}
+    end.
+
+dump_index_data(<<Idx:64/integer, Term:64/integer,
+                  Offset:32/integer, Length:32/integer,
+                  _:32/integer, Rest/binary>>,
+                 Acc) ->
+dump_index_data(Rest, [{Idx, Term, Offset, Length} | Acc]);
+dump_index_data(_, Acc) ->
+    lists:reverse(Acc).
 
 parse_index_data(Data, DataOffset) ->
     parse_index_data(Data, 0, 0, DataOffset, undefined, #{}).
