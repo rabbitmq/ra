@@ -91,7 +91,7 @@ set of members.
 start() ->
     %% the initial cluster members
     Nodes = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
-    %% an arbitrary cluster ud
+    %% an arbitrary cluster id
     ClusterId = <<"ra_kv">>,
     %% the config passed to `init/1`
     Config = #{},
