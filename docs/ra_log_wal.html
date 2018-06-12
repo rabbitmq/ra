@@ -42,6 +42,7 @@
 <tr><td valign="top"><a href="#system_continue-3">system_continue/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#system_terminate-4">system_terminate/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#truncate_write-5">truncate_write/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#wal2list-1">wal2list/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#write-5">write/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#write_debug-3">write_debug/3</a></td><td></td></tr>
 </table>
@@ -76,6 +77,11 @@
 <h3 class="function"><a name="truncate_write-5">truncate_write/5</a></h3>
 <div class="spec">
 <p><tt>truncate_write(From::<a href="#type-writer_id">writer_id()</a>, Wal::atom(), Idx::<a href="#type-ra_index">ra_index()</a>, Term::<a href="#type-ra_term">ra_term()</a>, Entry::term()) -&gt; ok | {error, wal_down}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="wal2list-1">wal2list/1</a></h3>
+<div class="spec">
+<p><tt>wal2list(File) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="write-5">write/5</a></h3>

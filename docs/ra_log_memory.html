@@ -43,6 +43,7 @@
 <tr><td valign="top"><a href="#read_meta-2">read_meta/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_snapshot-1">read_snapshot/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#release_resources-1">release_resources/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#set_last_index-2">set_last_index/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#snapshot_index_term-1">snapshot_index_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#sync_meta-1">sync_meta/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#take-3">take/3</a></td><td></td></tr>
@@ -143,6 +144,11 @@
 <h3 class="function"><a name="release_resources-1">release_resources/1</a></h3>
 <div class="spec">
 <p><tt>release_resources(State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="set_last_index-2">set_last_index/2</a></h3>
+<div class="spec">
+<p><tt>set_last_index(Idx::<a href="#type-ra_index">ra_index()</a>, State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; {ok, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>} | {not_found, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="snapshot_index_term-1">snapshot_index_term/1</a></h3>

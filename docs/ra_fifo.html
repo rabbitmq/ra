@@ -17,7 +17,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-applied_mfa">applied_mfa()</a></h3>
-<p><tt>applied_mfa() = {module(), atom(), [term()]}</tt></p>
+<p><tt>applied_mfa() = {module(), atom(), list()}</tt></p>
 <p> represents a partially applied module call</p>
 
 <h3 class="typedecl"><a name="type-checkout_spec">checkout_spec()</a></h3>
@@ -33,7 +33,7 @@
 <p>  all the command types suppored by ra fifo</p>
 
 <h3 class="typedecl"><a name="type-config">config()</a></h3>
-<p><tt>config() = #{name := atom(), dead_letter_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, become_leader_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, cancel_customer_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>}</tt></p>
+<p><tt>config() = #{name := atom(), dead_letter_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, become_leader_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, cancel_customer_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, metrics_handler =&gt; <a href="#type-applied_mfa">applied_mfa()</a>, shadow_copy_interval =&gt; non_neg_integer()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-customer_id">customer_id()</a></h3>
@@ -76,7 +76,7 @@
   same process</p>
 
 <h3 class="typedecl"><a name="type-protocol">protocol()</a></h3>
-<p><tt>protocol() = {enqueue, Sender::<a href="#type-maybe">maybe</a>(pid()), MsgSeq::<a href="#type-maybe">maybe</a>(<a href="#type-msg_seqno">msg_seqno()</a>), Msg::<a href="#type-raw_msg">raw_msg()</a>} | {checkout, Spec::<a href="#type-checkout_spec">checkout_spec()</a>, Customer::<a href="#type-customer_id">customer_id()</a>} | {settle, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>} | {return, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>} | {discard, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>}</tt></p>
+<p><tt>protocol() = {enqueue, Sender::<a href="#type-maybe">maybe</a>(pid()), MsgSeq::<a href="#type-maybe">maybe</a>(<a href="#type-msg_seqno">msg_seqno()</a>), Msg::<a href="#type-raw_msg">raw_msg()</a>} | {checkout, Spec::<a href="#type-checkout_spec">checkout_spec()</a>, Customer::<a href="#type-customer_id">customer_id()</a>} | {settle, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>} | {return, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>} | {discard, MsgIds::[<a href="#type-msg_id">msg_id()</a>], Customer::<a href="#type-customer_id">customer_id()</a>} | purge</tt></p>
 
 
 <h3 class="typedecl"><a name="type-raw_msg">raw_msg()</a></h3>
@@ -89,10 +89,12 @@
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-3">apply/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#dehydrate_state-1">dehydrate_state/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#eol_effects-1">eol_effects/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#get_checked_out-4">get_checked_out/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_effects-1">leader_effects/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#metrics_handler-1">metrics_handler/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#perf_test-2">perf_test/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query_messages_checked_out-1">query_messages_checked_out/1</a></td><td></td></tr>
@@ -100,7 +102,6 @@
 <tr><td valign="top"><a href="#query_processes-1">query_processes/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query_ra_indexes-1">query_ra_indexes/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_log-0">read_log/0</a></td><td></td></tr>
-<tr><td valign="top"><a href="#shadow_copy-1">shadow_copy/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#size_test-2">size_test/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-2">tick/2</a></td><td></td></tr>
 </table>
@@ -110,6 +111,11 @@
 <h3 class="function"><a name="apply-3">apply/3</a></h3>
 <div class="spec">
 <p><tt>apply(RaftIdx::<a href="#type-ra_index">ra_index()</a>, X2::<a href="#type-command">command()</a>, State00::<a href="#type-state">state()</a>) -&gt; {<a href="#type-state">state()</a>, <a href="ra_machine.html#type-effects">ra_machine:effects()</a>} | {<a href="#type-state">state()</a>, <a href="ra_machine.html#type-effects">ra_machine:effects()</a>, term()}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="dehydrate_state-1">dehydrate_state/1</a></h3>
+<div class="spec">
+<p><tt>dehydrate_state(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="eol_effects-1">eol_effects/1</a></h3>
@@ -130,6 +136,11 @@
 <h3 class="function"><a name="leader_effects-1">leader_effects/1</a></h3>
 <div class="spec">
 <p><tt>leader_effects(State::<a href="#type-state">state()</a>) -&gt; <a href="ra_machine.html#type-effects">ra_machine:effects()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="metrics_handler-1">metrics_handler/1</a></h3>
+<div class="spec">
+<p><tt>metrics_handler(X1) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
@@ -165,11 +176,6 @@
 <h3 class="function"><a name="read_log-0">read_log/0</a></h3>
 <div class="spec">
 <p><tt>read_log() -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="shadow_copy-1">shadow_copy/1</a></h3>
-<div class="spec">
-<p><tt>shadow_copy(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="size_test-2">size_test/2</a></h3>

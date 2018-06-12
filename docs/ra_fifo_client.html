@@ -28,6 +28,7 @@
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cancel_checkout-2">cancel_checkout/2</a></td><td>Cancels a checkout with the ra_fifo queue  for the customer tag.</td></tr>
 <tr><td valign="top"><a href="#checkout-3">checkout/3</a></td><td>Register with the ra_fifo queue to "checkout" messages as they  
 become available.</td></tr>
+<tr><td valign="top"><a href="#cluster_id-1">cluster_id/1</a></td><td>returns the cluster id.</td></tr>
 <tr><td valign="top"><a href="#dequeue-3">dequeue/3</a></td><td>Dequeue a message from the queue.</td></tr>
 <tr><td valign="top"><a href="#discard-3">discard/3</a></td><td>Discards a checked out message.</td></tr>
 <tr><td valign="top"><a href="#enqueue-2">enqueue/2</a></td><td>Enqueues a message.</td></tr>
@@ -35,6 +36,9 @@ become available.</td></tr>
 <tr><td valign="top"><a href="#handle_ra_event-3">handle_ra_event/3</a></td><td>Handles incoming <code>ra_events</code>.</td></tr>
 <tr><td valign="top"><a href="#init-2">init/2</a></td><td>Create the initial state for a new ra_fifo sessions.</td></tr>
 <tr><td valign="top"><a href="#init-3">init/3</a></td><td>Create the initial state for a new ra_fifo sessions.</td></tr>
+<tr><td valign="top"><a href="#init-5">init/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#purge-1">purge/1</a></td><td>Purges all the messages from a ra_fifo queue and returns the number
+  of messages purged.</td></tr>
 <tr><td valign="top"><a href="#return-3">return/3</a></td><td>Return a message to the queue.</td></tr>
 <tr><td valign="top"><a href="#settle-3">settle/3</a></td><td>Settle a message.</td></tr>
 <tr><td valign="top"><a href="#untracked_enqueue-3">untracked_enqueue/3</a></td><td>Attempts to enqueue a message using cast semantics.</td></tr>
@@ -72,6 +76,11 @@ become available.</p>
   has been accepted by the ra process or it times out.
  </p>
 
+<h3 class="function"><a name="cluster_id-1">cluster_id/1</a></h3>
+<div class="spec">
+<p><tt>cluster_id(State::<a href="#type-state">state()</a>) -&gt; <a href="#type-ra_cluster_id">ra_cluster_id()</a></tt><br></p>
+</div><p>returns the cluster id</p>
+
 <h3 class="function"><a name="dequeue-3">dequeue/3</a></h3>
 <div class="spec">
 <p><tt>dequeue(CustomerTag::<a href="ra_fifo.html#type-customer_tag">ra_fifo:customer_tag()</a>, Settlement::settled | unsettled, State0::<a href="#type-state">state()</a>) -&gt; {ok, <a href="ra_fifo.html#type-delivery_msg">ra_fifo:delivery_msg()</a> | empty, <a href="#type-state">state()</a>} | {error | timeout, term()}</tt><br></p>
@@ -88,10 +97,11 @@ become available.</p>
 
 <h3 class="function"><a name="discard-3">discard/3</a></h3>
 <div class="spec">
-<p><tt>discard(CustomerTag::<a href="ra_fifo.html#type-customer_tag">ra_fifo:customer_tag()</a>, MsgIds::[<a href="ra_fifo.html#type-msg_id">ra_fifo:msg_id()</a>], State0::<a href="#type-state">state()</a>) -&gt; {ok | slow, <a href="#type-state">state()</a>} | {error, stop_sending}</tt><br></p>
+<p><tt>discard(CustomerTag::<a href="ra_fifo.html#type-customer_tag">ra_fifo:customer_tag()</a>, MsgIds::[<a href="ra_fifo.html#type-msg_id">ra_fifo:msg_id()</a>], State::<a href="#type-state">state()</a>) -&gt; {ok | slow, <a href="#type-state">state()</a>} | {error, stop_sending}</tt><br></p>
 <p><tt>CustomerTag</tt>: the tag uniquely identifying the customer.<br>
 <tt>MsgIds</tt>: the message ids to discard
   from <a href="ra_fifo.html#delivery-0"><code>ra_fifo:delivery/0</code></a><br>
+<tt>State</tt>: the ra_fifo_client state<br>
 </p>
 <p>returns: <p>
   <code>{ok | slow, State}</code> if the command was successfully sent. If the return
@@ -204,14 +214,24 @@ for further processing.</p>
 
 <h3 class="function"><a name="init-3">init/3</a></h3>
 <div class="spec">
-<p><tt>init(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, Nodes::[<a href="#type-ra_node_id">ra_node_id()</a>], MaxPending::non_neg_integer()) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><tt>init(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, Nodes::[<a href="#type-ra_node_id">ra_node_id()</a>], SoftLimit::non_neg_integer()) -&gt; <a href="#type-state">state()</a></tt><br></p>
 <p><tt>ClusterId</tt>: the id of the cluster to interact with<br>
 <tt>Nodes</tt>: The known nodes of the queue. If the current leader is known
   ensure the leader node is at the head of the list.<br>
-<tt>MaxPending</tt>: size defining the max number of pending commands.<br>
 </p>
 </div><p>Create the initial state for a new ra_fifo sessions. A state is needed
   to interact with a ra_fifo queue using @module.</p>
+
+<h3 class="function"><a name="init-5">init/5</a></h3>
+<div class="spec">
+<p><tt>init(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, Nodes::[<a href="#type-ra_node_id">ra_node_id()</a>], SoftLimit::non_neg_integer(), BlockFun::fun(() -&gt; ok), UnblockFun::fun(() -&gt; ok)) -&gt; <a href="#type-state">state()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="purge-1">purge/1</a></h3>
+<div class="spec">
+<p><tt>purge(Node::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; {ok, non_neg_integer()} | {error | timeout, term()}</tt><br></p>
+</div><p>Purges all the messages from a ra_fifo queue and returns the number
+  of messages purged.</p>
 
 <h3 class="function"><a name="return-3">return/3</a></h3>
 <div class="spec">

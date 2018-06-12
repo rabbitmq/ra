@@ -5,5 +5,5 @@
           ra_log_file_ets,ra_log_file_meta,ra_log_file_segment,
           ra_log_file_segment_writer,ra_log_file_snapshot_writer,
           ra_log_file_sup,ra_log_memory,ra_log_wal,ra_log_wal_sup,ra_lru,
-          ra_machine,ra_metrics_ets,ra_node,ra_node_proc,ra_nodes_sup,
-          ra_proxy,ra_sup,ra_system_sup]}.
+          ra_machine,ra_metrics_ets,ra_node,ra_node_proc,ra_nodes_sup,ra_sup,
+          ra_system_sup]}.

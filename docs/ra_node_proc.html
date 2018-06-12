@@ -40,6 +40,10 @@
 <p><tt>ra_command() = {<a href="#type-ra_command_type">ra_command_type()</a>, term(), <a href="#type-command_reply_mode">command_reply_mode()</a>}</tt></p>
 
 
+<h3 class="typedecl"><a name="type-ra_command_priority">ra_command_priority()</a></h3>
+<p><tt>ra_command_priority() = normal | high</tt></p>
+
+
 <h3 class="typedecl"><a name="type-ra_command_type">ra_command_type()</a></h3>
 <p><tt>ra_command_type() = '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' | '$ra_cluster_change' | '$ra_cluster'</tt></p>
 
@@ -65,7 +69,7 @@
 
 
 <h3 class="typedecl"><a name="type-states">states()</a></h3>
-<p><tt>states() = leader | follower | candiate | await_condition</tt></p>
+<p><tt>states() = leader | follower | candidate | await_condition</tt></p>
 
 
 <h2><a name="index">Function Index</a></h2>
@@ -73,6 +77,7 @@
 <tr><td valign="top"><a href="#callback_mode-0">callback_mode/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#candidate-3">candidate/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#cast_command-2">cast_command/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#cast_command-3">cast_command/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#code_change-4">code_change/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#command-3">command/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#follower-3">follower/3</a></td><td></td></tr>
@@ -98,7 +103,7 @@
 
 <h3 class="function"><a name="await_condition-3">await_condition/3</a></h3>
 <div class="spec">
-<p><tt>await_condition(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>await_condition(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="callback_mode-0">callback_mode/0</a></h3>
@@ -108,12 +113,17 @@
 
 <h3 class="function"><a name="candidate-3">candidate/3</a></h3>
 <div class="spec">
-<p><tt>candidate(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>candidate(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="cast_command-2">cast_command/2</a></h3>
 <div class="spec">
 <p><tt>cast_command(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
+</div>
+
+<h3 class="function"><a name="cast_command-3">cast_command/3</a></h3>
+<div class="spec">
+<p><tt>cast_command(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Priority::<a href="#type-ra_command_priority">ra_command_priority()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="code_change-4">code_change/4</a></h3>
@@ -128,7 +138,7 @@
 
 <h3 class="function"><a name="follower-3">follower/3</a></h3>
 <div class="spec">
-<p><tt>follower(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>follower(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="format_status-2">format_status/2</a></h3>
@@ -148,7 +158,7 @@
 
 <h3 class="function"><a name="leader-3">leader/3</a></h3>
 <div class="spec">
-<p><tt>leader(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>leader(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="log_fold-4">log_fold/4</a></h3>
@@ -163,7 +173,7 @@
 
 <h3 class="function"><a name="pre_vote-3">pre_vote/3</a></h3>
 <div class="spec">
-<p><tt>pre_vote(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>pre_vote(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>
@@ -173,7 +183,7 @@
 
 <h3 class="function"><a name="recover-3">recover/3</a></h3>
 <div class="spec">
-<p><tt>recover(EventType, X2, State) -&gt; any()</tt></p>
+<p><tt>recover(EventType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="send_rpc-2">send_rpc/2</a></h3>
@@ -198,12 +208,12 @@
 
 <h3 class="function"><a name="terminating_follower-3">terminating_follower/3</a></h3>
 <div class="spec">
-<p><tt>terminating_follower(EvtType, Msg, State0) -&gt; any()</tt></p>
+<p><tt>terminating_follower(EvtType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="terminating_leader-3">terminating_leader/3</a></h3>
 <div class="spec">
-<p><tt>terminating_leader(EvtType, Msg, State0) -&gt; any()</tt></p>
+<p><tt>terminating_leader(EvtType, OldState, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="trigger_election-1">trigger_election/1</a></h3>

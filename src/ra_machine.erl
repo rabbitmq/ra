@@ -81,8 +81,8 @@
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, pid()} |
-    {release_cursor, ra_index(), state()} |
-    {metrics_table, atom(), maybe(tuple())}.
+    {release_cursor, ra_index(), state()}.
+
 %% Effects are data structure that can be returned by {@link apply/2} to ask
 %% ra to realise a side-effect in the real works, such as sending a message to a process.
 %%

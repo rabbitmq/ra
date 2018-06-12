@@ -25,6 +25,8 @@
   This commits a join command to the leader log.</td></tr>
 <tr><td valign="top"><a href="#cast-2">cast/2</a></td><td>Cast a message to a node
   This is the least reliable way to interact with a ra node.</td></tr>
+<tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Cast a message to a node with a priority
+  This is the least reliable way to interact with a ra node.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine
   This allows a caller to query the state machine by appending the query
   to the log and returning the result once applied.</td></tr>
@@ -48,10 +50,12 @@
 <tr><td valign="top"><a href="#send_and_await_consensus-2">send_and_await_consensus/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#send_and_await_consensus-3">send_and_await_consensus/3</a></td><td>send a command to the ra node.</td></tr>
 <tr><td valign="top"><a href="#send_and_notify-3">send_and_notify/3</a></td><td>send a command to the ra node using cast.</td></tr>
+<tr><td valign="top"><a href="#send_and_notify-4">send_and_notify/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a distributed ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_local_cluster-3">start_local_cluster/3</a></td><td>Starts a ra cluster on the current erlang node.</td></tr>
 <tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td>Starts a ra node.</td></tr>
+<tr><td valign="top"><a href="#start_node-4">start_node/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#stop_node-1">stop_node/1</a></td><td>Stops a ra node.</td></tr>
 <tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Causes the node to entre the pre-vote and attempt become leader
   It is necessary to call this function when starting a new cluster as a
@@ -76,6 +80,13 @@
 <div class="spec">
 <p><tt>cast(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Command::term()) -&gt; ok</tt><br></p>
 </div><p>Cast a message to a node
+  This is the least reliable way to interact with a ra node. If the node
+  addressed isn't the leader no notification will be issued.</p>
+
+<h3 class="function"><a name="cast-3">cast/3</a></h3>
+<div class="spec">
+<p><tt>cast(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Priority::normal | high, Command::term()) -&gt; ok</tt><br></p>
+</div><p>Cast a message to a node with a priority
   This is the least reliable way to interact with a ra node. If the node
   addressed isn't the leader no notification will be issued.</p>
 
@@ -222,6 +233,11 @@
   <code>{ra_event, ra_node_id(), {applied, [Correlation]}}</code>
  </p>
 
+<h3 class="function"><a name="send_and_notify-4">send_and_notify/4</a></h3>
+<div class="spec">
+<p><tt>send_and_notify(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Priority::high | normal, Command::term(), Correlation::term()) -&gt; ok</tt><br></p>
+</div>
+
 <h3 class="function"><a name="start-0">start/0</a></h3>
 <div class="spec">
 <p><tt>start() -&gt; ok</tt><br></p>
@@ -268,6 +284,11 @@
 </p>
 <p>returns: <code>{ok | error, Error}</code></p>
 </div><p>Starts a ra node</p>
+
+<h3 class="function"><a name="start_node-4">start_node/4</a></h3>
+<div class="spec">
+<p><tt>start_node(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Machine::<a href="ra_machine.html#type-machine">ra_machine:machine()</a>, NodeIds::[<a href="#type-ra_node_id">ra_node_id()</a>]) -&gt; ok | {error, term()}</tt><br></p>
+</div>
 
 <h3 class="function"><a name="stop_node-1">stop_node/1</a></h3>
 <div class="spec">

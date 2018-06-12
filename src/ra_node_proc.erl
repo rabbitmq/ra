@@ -773,7 +773,6 @@ handle_effect({send_vote_requests, VoteRequests}, _, % EvtType
     {State, Actions};
 handle_effect({release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
-    ?INFO("UPDATE RELEASE CURSOr ~w", [Index]),
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect({monitor, process, Pid}, _,
@@ -786,7 +785,7 @@ handle_effect({monitor, process, Pid}, _,
             MRef = erlang:monitor(process, Pid),
             {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
     end;
-handle_effect({monitor, node, Node}, _EvtType,
+handle_effect({monitor, node, Node}, _,
               #state{monitors = Monitors} = State, Actions) ->
     case Monitors of
         #{Node := _} ->
@@ -796,7 +795,7 @@ handle_effect({monitor, node, Node}, _EvtType,
             true = erlang:monitor_node(Node, true),
             {State#state{monitors = Monitors#{Node => undefined}}, Actions}
     end;
-handle_effect({demonitor, Pid}, _EvtType,
+handle_effect({demonitor, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
@@ -806,19 +805,13 @@ handle_effect({demonitor, Pid}, _EvtType,
             % ref not known - do nothing
             {State, Actions}
     end;
-handle_effect({incr_metrics, Table, Ops}, _EvtType,
+handle_effect({incr_metrics, Table, Ops}, _,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
 handle_effect({mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
-    {State, Actions};
-handle_effect({metrics_table, Table, Record}, _,
-              State, Actions) ->
-    % this is a call - hopefully only done on init
-    ok = ra_metrics_ets:make_table(Table),
-    true = ets:insert(Table, Record),
     {State, Actions}.
 
 send_rpcs(State0) ->
