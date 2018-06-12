@@ -80,7 +80,8 @@
     {mod_call, module(), Function :: atom(), [term()]} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
-    {demonitor, pid()} |
+    {demonitor, process, pid()} |
+    {demonitor, node, node()} |
     {release_cursor, ra_index(), state()}.
 
 %% Effects are data structure that can be returned by {@link apply/2} to ask
@@ -107,7 +108,7 @@
 %% <dt><b>monitor</b></dt>
 %% <dd> monitor a process or erlang node </dd>
 %% <dt><b>demonitor</b></dt>
-%% <dd> demonitor a process </dd>
+%% <dd> demonitor a process or node </dd>
 %% <dt><b>release_cursor</b></dt>
 %% <dd> indicate to Ra that none of the preceeding entries contribute to the
 %% current machine state </dd>

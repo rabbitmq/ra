@@ -709,7 +709,7 @@ update_or_remove_sub(CustomerId, #customer{lifetime = once,
         0 ->
             % we're done with this customer
             {maps:remove(CustomerId, Custs), ServiceQueue,
-             [{demonitor, CustomerId}]};
+             [{demonitor, process, CustomerId}]};
         _ ->
             % there are unsettled items so need to keep around
             {maps:update(CustomerId, Cust, Custs), ServiceQueue, []}
@@ -1065,7 +1065,7 @@ completed_customer_yields_demonitor_effect_test() ->
     {State0, [_]} = enq(1, 1, second, test_init(test)),
     {State1, [{monitor, process, _}, _Msg]} = check(Cid, 2, State0),
     {_, Effects} = settle(Cid, 3, 0, State1),
-    ?assertEffect({demonitor, _}, Effects),
+    ?assertEffect({demonitor, _, _}, Effects),
     % release cursor for empty queue
     ?assertEffect({release_cursor, 3, _}, Effects),
     ok.

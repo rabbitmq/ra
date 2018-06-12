@@ -795,7 +795,7 @@ handle_effect({monitor, node, Node}, _,
             true = erlang:monitor_node(Node, true),
             {State#state{monitors = Monitors#{Node => undefined}}, Actions}
     end;
-handle_effect({demonitor, Pid}, _,
+handle_effect({demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
@@ -803,6 +803,15 @@ handle_effect({demonitor, Pid}, _,
             {State#state{monitors = Monitors}, Actions};
         error ->
             % ref not known - do nothing
+            {State, Actions}
+    end;
+handle_effect({demonitor, node, Node}, _,
+              #state{monitors = Monitors0} = State, Actions) ->
+    case maps:take(Node, Monitors0) of
+        {_, Monitors} ->
+            true = erlang:monitor_node(Node, false),
+            {State#state{monitors = Monitors}, Actions};
+        error ->
             {State, Actions}
     end;
 handle_effect({incr_metrics, Table, Ops}, _,

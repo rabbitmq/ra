@@ -209,8 +209,8 @@ is monitoring it will commit a `{down,  pid(), term()}` command to the log that
 the state machine needs to handle. If it detects a monitored node as down or up
 it will commit a `{nodeup | nodedown, node()}` command.
 
-Use `{demonitor, pid()}` to demonitor a process. Currently there is no way to
-demonitor a node.
+Use `{demonitor, process | node, pid() | node()}` to stop monitoring a process
+or a node.
 
 ### Call a function
 

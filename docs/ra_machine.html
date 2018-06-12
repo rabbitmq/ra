@@ -66,7 +66,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
-<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, pid()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</tt></p>
+<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, process, pid()} | {demonitor, node, node()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
