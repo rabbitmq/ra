@@ -6,6 +6,6 @@
 	{applications, [kernel,stdlib,sasl,crypto,aten]},
 	{mod, {ra_app, []}},
 	{env, [
-	{data_dir, "/var/vcap/store/ra/shared"}
+	{data_dir, "/tmp/ra_data"}
 ]}
 ]}.

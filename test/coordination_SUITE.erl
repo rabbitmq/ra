@@ -133,7 +133,7 @@ delete_one_node_cluster(Config) ->
     %% validate there is no data
     Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
     ct:pal("Files  ~p~n", [Files]),
-    [_] = Files,
+    [] = Files,
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 

@@ -130,10 +130,10 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     ?INFO("segment_writer: deleting wal file: ~p", [WalFile]),
     %% temporarily disable wal deletion
     %% TODO: this shoudl be a debug option config?
-    Base = filename:basename(WalFile),
-    BkFile = filename:join([State0#state.data_dir, "wals", Base]),
-    filelib:ensure_dir(BkFile),
-    file:copy(WalFile, BkFile),
+    % Base = filename:basename(WalFile),
+    % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
+    % filelib:ensure_dir(BkFile),
+    % file:copy(WalFile, BkFile),
     _ = file:delete(WalFile),
     {noreply, State};
 handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
