@@ -15,7 +15,7 @@
          send_and_notify/4,
          cast/2,
          cast/3,
-         dirty_query/2,
+         committed_query/2,
          members/1,
          consistent_query/2,
          % cluster management
@@ -364,10 +364,10 @@ cast(ServerRef, Priority, Command) ->
 %% This allows you to run the QueryFun over the the machine state and
 %% return the result. Any ra node can be addressed.
 %% This can return infinitely state results.
--spec dirty_query(NodeId :: ra_node_id(),
+-spec committed_query(NodeId :: ra_node_id(),
                   QueryFun :: fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
-dirty_query(ServerRef, QueryFun) ->
+committed_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
 
 %% @doc Query the state machine

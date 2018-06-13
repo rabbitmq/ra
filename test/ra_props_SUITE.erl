@@ -42,9 +42,9 @@ non_assoc_prop({Ops, Initial}) ->
     [ra:send_and_await_consensus(Leader, Op) || Op <- Ops],
     {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
     timer:sleep(100),
-    {ok, {_, ARes}, _} = ra:dirty_query(A, fun id/1),
-    {ok, {_, BRes}, _} = ra:dirty_query(B, fun id/1),
-    {ok, {_, CRes}, _} = ra:dirty_query(C, fun id/1),
+    {ok, {_, ARes}, _} = ra:committed_query(A, fun id/1),
+    {ok, {_, BRes}, _} = ra:committed_query(B, fun id/1),
+    {ok, {_, CRes}, _} = ra:committed_query(C, fun id/1),
     terminate_cluster(Cluster),
     % assert all nodes have the same final state
     Expected == ARes andalso Expected == BRes andalso Expected == CRes.

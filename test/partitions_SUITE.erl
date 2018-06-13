@@ -138,7 +138,7 @@ validate_machine_state(Nodes) ->
     % give the cluster a bit of time to settle first
     timer:sleep(1000),
     MacStates = [begin
-                     {ok, S, _} = ra:dirty_query(N, fun ra_lib:id/1),
+                     {ok, S, _} = ra:committed_query(N, fun ra_lib:id/1),
                      S
                  end || N <- Nodes],
     H = hd(MacStates),

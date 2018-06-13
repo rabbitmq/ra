@@ -23,7 +23,7 @@ all_tests() ->
      send_and_notify,
      send_and_notify_reject,
      cast,
-     dirty_query,
+     committed_query,
      members,
      consistent_query,
      node_catches_up,
@@ -311,13 +311,13 @@ cast(Config) ->
     {ok, {_IdxTrm, 15}, _} = ra:consistent_query(A, fun (X) -> X end),
     terminate_cluster(Cluster).
 
-dirty_query(Config) ->
+committed_query(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                {simple, fun erlang:'+'/2, 9}, Config),
-    {ok, {{_, _}, 9}, _} = ra:dirty_query(B, fun(S) -> S end),
+    {ok, {{_, _}, 9}, _} = ra:committed_query(B, fun(S) -> S end),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 5,
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
-    {ok, {{_, Term}, 14}, _} = ra:dirty_query(Leader, fun(S) -> S end),
+    {ok, {{_, Term}, 14}, _} = ra:committed_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
 members(Config) ->
@@ -369,9 +369,9 @@ node_catches_up(Config) ->
     {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point the node should be caught up
-    {ok, {_, Res}, _} = ra:dirty_query(N1, fun ra_lib:id/1),
-    {ok, {_, Res}, _} = ra:dirty_query(N2, fun ra_lib:id/1),
-    {ok, {_, Res}, _} = ra:dirty_query(N3, fun ra_lib:id/1),
+    {ok, {_, Res}, _} = ra:committed_query(N1, fun ra_lib:id/1),
+    {ok, {_, Res}, _} = ra:committed_query(N2, fun ra_lib:id/1),
+    {ok, {_, Res}, _} = ra:committed_query(N3, fun ra_lib:id/1),
     % check that the message isn't delivered multiple times
     terminate_cluster([N3 | InitialNodes]).
 

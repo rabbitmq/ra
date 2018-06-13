@@ -27,6 +27,9 @@
   This is the least reliable way to interact with a ra node.</td></tr>
 <tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Cast a message to a node with a priority
   This is the least reliable way to interact with a ra node.</td></tr>
+<tr><td valign="top"><a href="#committed_query-2">committed_query/2</a></td><td>query the machine state on any node
+  This allows you to run the QueryFun over the the machine state and
+  return the result.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine
   This allows a caller to query the state machine by appending the query
   to the log and returning the result once applied.</td></tr>
@@ -36,9 +39,6 @@
 <tr><td valign="top"><a href="#delete_cluster-2">delete_cluster/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_node-1">delete_node/1</a></td><td>Deletes a ra node
   The node is forcefully deleted.</td></tr>
-<tr><td valign="top"><a href="#dirty_query-2">dirty_query/2</a></td><td>query the machine state on any node
-  This allows you to run the QueryFun over the the machine state and
-  return the result.</td></tr>
 <tr><td valign="top"><a href="#leave_and_terminate-1">leave_and_terminate/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leave_and_terminate-2">leave_and_terminate/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Query the members of a cluster.</td></tr>
@@ -90,6 +90,14 @@
   This is the least reliable way to interact with a ra node. If the node
   addressed isn't the leader no notification will be issued.</p>
 
+<h3 class="function"><a name="committed_query-2">committed_query/2</a></h3>
+<div class="spec">
+<p><tt>committed_query(NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term())) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
+</div><p>query the machine state on any node
+  This allows you to run the QueryFun over the the machine state and
+  return the result. Any ra node can be addressed.
+  This can return infinitely state results.</p>
+
 <h3 class="function"><a name="consistent_query-2">consistent_query/2</a></h3>
 <div class="spec">
 <p><tt>consistent_query(Node::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term())) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
@@ -125,14 +133,6 @@
 <p>returns: <code>{ok | error, nodedown}</code></p>
 </div><p>Deletes a ra node
   The node is forcefully deleted.</p>
-
-<h3 class="function"><a name="dirty_query-2">dirty_query/2</a></h3>
-<div class="spec">
-<p><tt>dirty_query(NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term())) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
-</div><p>query the machine state on any node
-  This allows you to run the QueryFun over the the machine state and
-  return the result. Any ra node can be addressed.
-  This can return infinitely state results.</p>
 
 <h3 class="function"><a name="leave_and_terminate-1">leave_and_terminate/1</a></h3>
 <div class="spec">

@@ -131,7 +131,7 @@ cast_command(ServerRef, Priority, Cmd) ->
 -spec query(ra_node_id(), query_fun(), dirty | consistent) ->
     {ok, {ra_idxterm(), term()}, ra_node_id()}.
 query(ServerRef, QueryFun, dirty) ->
-    gen_statem:call(ServerRef, {dirty_query, QueryFun});
+    gen_statem:call(ServerRef, {committed_query, QueryFun});
 query(ServerRef, QueryFun, consistent) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 5000).
@@ -275,9 +275,9 @@ leader(EventType, flush_commands,
     {State, Actions} = handle_effects(Effects, EventType,
                                       State0#state{node_state = NodeState}),
     {keep_state, State#state{delayed_commands = []}, Actions};
-leader({call, From}, {dirty_query, QueryFun},
+leader({call, From}, {committed_query, QueryFun},
        #state{node_state = NodeState} = State) ->
-    Reply = perform_dirty_query(QueryFun, leader, NodeState),
+    Reply = perform_committed_query(QueryFun, leader, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{node_state = NodeState} = State) ->
@@ -379,9 +379,9 @@ candidate(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-candidate({call, From}, {dirty_query, QueryFun},
+candidate({call, From}, {committed_query, QueryFun},
           #state{node_state = NodeState} = State) ->
-    Reply = perform_dirty_query(QueryFun, candidate, NodeState),
+    Reply = perform_committed_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
@@ -436,9 +436,9 @@ pre_vote(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-pre_vote({call, From}, {dirty_query, QueryFun},
+pre_vote({call, From}, {committed_query, QueryFun},
           #state{node_state = NodeState} = State) ->
-    Reply = perform_dirty_query(QueryFun, pre_vote, NodeState),
+    Reply = perform_committed_query(QueryFun, pre_vote, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
@@ -502,9 +502,9 @@ follower(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-follower({call, From}, {dirty_query, QueryFun},
+follower({call, From}, {committed_query, QueryFun},
          #state{node_state = NodeState} = State) ->
-    Reply = perform_dirty_query(QueryFun, follower, NodeState),
+    Reply = perform_committed_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 follower({call, From}, trigger_election, State) ->
     ?INFO("~w: election triggered by ~w", [id(State), element(1, From)]),
@@ -607,9 +607,9 @@ terminating_follower(EvtType, Msg, State0) ->
 
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
-await_condition({call, From}, {dirty_query, QueryFun},
+await_condition({call, From}, {committed_query, QueryFun},
                 #state{node_state = NodeState} = State) ->
-    Reply = perform_dirty_query(QueryFun, follower, NodeState),
+    Reply = perform_committed_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
@@ -713,12 +713,12 @@ handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
         ra_node:handle_await_condition(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
 
-perform_dirty_query(QueryFun, leader, #{machine_state := MacState,
+perform_committed_query(QueryFun, leader, #{machine_state := MacState,
                                         last_applied := Last,
                                         id := Leader,
                                         current_term := Term}) ->
     {ok, {{Last, Term}, QueryFun(MacState)}, Leader};
-perform_dirty_query(QueryFun, _StateName, #{machine_state := MacState,
+perform_committed_query(QueryFun, _StateName, #{machine_state := MacState,
                                             last_applied := Last,
                                             current_term := Term} = NodeState) ->
     Leader = maps:get(leader_id, NodeState, not_known),
