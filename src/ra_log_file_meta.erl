@@ -33,9 +33,9 @@
 -spec init(file:filename()) -> state().
 init(Fn) ->
     ok = filelib:ensure_dir(Fn),
-    {ok, Fd} = file:open(Fn, [binary, raw, read, write]),
+    {ok, Fd} = ra_file_handle:open(Fn, [binary, raw, read, write]),
     % expand file
-    {ok, _} = file:position(Fd, ?VOTED_FOR_NODE_OFFS + ?ATOM_SIZE),
+    {ok, _} = ra_file_handle:position(Fd, ?VOTED_FOR_NODE_OFFS + ?ATOM_SIZE),
     ok = file:truncate(Fd),
     % TODO: check version in header
     #state{fd = Fd}.
@@ -55,7 +55,7 @@ store(voted_for, undefined, #state{fd = Fd}) ->
     Data = <<0:16/integer>>,
     Ops = [{?VOTED_FOR_NAME_OFFS, Data},
            {?VOTED_FOR_NODE_OFFS, Data}],
-    ok = file:pwrite(Fd, Ops);
+    ok = ra_file_handle:pwrite(Fd, Ops);
 store(voted_for, Name, #state{fd = Fd}) when is_atom(Name) ->
     write_atom(Fd, Name, ?VOTED_FOR_NAME_OFFS).
 
@@ -80,23 +80,23 @@ fetch(last_applied, #state{fd = Fd}) ->
 
 -spec sync(state()) -> ok.
 sync(#state{fd = Fd}) ->
-    ok = file:sync(Fd).
+    ok = ra_file_handle:sync(Fd).
 
 
 -spec close(state()) -> ok.
 close(#state{fd = Fd}) ->
-    ok = file:sync(Fd),
-    _ = file:close(Fd).
+    ok = ra_file_handle:sync(Fd),
+    _ = ra_file_handle:close(Fd).
 
 %%% internal
 
 
 write_integer(Fd, Int, Offs) ->
     Data = <<Int:64/integer>>,
-    ok = file:pwrite(Fd, Offs, Data).
+    ok = ra_file_handle:pwrite(Fd, Offs, Data).
 
 read_integer(Fd, Offs) ->
-    {ok, <<Int:64/integer>>} = file:pread(Fd, Offs, 8),
+    {ok, <<Int:64/integer>>} = ra_file_handle:pread(Fd, Offs, 8),
     Int.
 
 write_atom(Fd, A, Offs) ->
@@ -108,10 +108,10 @@ write_atom(Fd, A, Offs) ->
                   [{Offs, <<0:1/integer, ASize:15/integer>>},
                    {Offs + 2, AData}]
           end,
-    ok = file:pwrite(Fd, Ops).
+    ok = ra_file_handle:pwrite(Fd, Ops).
 
 read_atom(Fd, Offs) ->
-    case file:pread(Fd, Offs, ?ATOM_SIZE) of
+    case ra_file_handle:pread(Fd, Offs, ?ATOM_SIZE) of
         {ok, <<0:1/integer, 0:15/integer,_/binary>>} -> % zero length
             undefined;
         {ok, <<1:1/integer, 0:15/integer,_/binary>>} -> % empty atom

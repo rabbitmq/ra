@@ -238,7 +238,7 @@ loop_wait(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0#state.wal),
+            cleanup(State0),
             exit(Reason);
         Msg ->
             Debug1 = handle_debug_in(Debug0, Msg),
@@ -259,7 +259,7 @@ loop_batched(State0, Parent, Debug0) ->
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
-            cleanup(State0#state.wal),
+            cleanup(State0),
             exit(Reason);
         Msg ->
             Debug1 = handle_debug_in(Debug0, Msg),
@@ -273,10 +273,10 @@ loop_batched(State0, Parent, Debug0) ->
                         Parent, Debug)
     end.
 
-cleanup(#wal{fd = undefined}) ->
+cleanup(#state{wal = #wal{fd = undefined}}) ->
     ok;
-cleanup(#wal{fd = Fd}) ->
-    _ = file:sync(Fd),
+cleanup(#state{wal = #wal{fd = Fd}}) ->
+    _ = ra_file_handle:sync(Fd),
     ok.
 
 handle_debug_in(Debug, Msg) ->
@@ -372,7 +372,7 @@ append_data(#state{wal = #wal{fd = Fd,
             Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
     case WriteStrat of
         no_delay ->
-            ok = file:write(Fd, Data);
+            ok = ra_file_handle:write(Fd, Data);
         _ ->
             ok
     end,
@@ -435,11 +435,11 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
 open_file(File, #state{write_strategy = delay_writes_sync,
                        file_modes = Modes0} = State) ->
         Modes = [sync | Modes0],
-        case file:open(File, Modes) of
+        case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
-                ok = file:sync(Fd),
+                ok = ra_file_handle:sync(Fd),
                 State#state{file_modes = Modes,
                             wal = #wal{fd = Fd, filename = File}};
             {error, enotsup} ->
@@ -448,14 +448,14 @@ open_file(File, #state{write_strategy = delay_writes_sync,
                 open_file(File, State#state{write_strategy = delay_writes})
         end;
 open_file(File, #state{file_modes = Modes} = State) ->
-    {ok, Fd} = file:open(File, Modes),
+    {ok, Fd} = ra_file_handle:open(File, Modes),
     State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
 
 close_file(undefined) ->
     ok;
 close_file(Fd) ->
-    ok = file:sync(Fd),
-    file:close(Fd).
+    ok = ra_file_handle:sync(Fd),
+    ra_file_handle:close(Fd).
 
 close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     MemTables = ets:tab2list(OpnMemTbls),
@@ -515,12 +515,12 @@ complete_batch(#state{wal = #wal{fd = Fd},
     TS = os:system_time(millisecond),
     case WriteStrat of
         delay_writes_sync ->
-            ok = file:write(Fd, lists:reverse(Pend));
+            ok = ra_file_handle:write(Fd, lists:reverse(Pend));
         delay_writes ->
-            ok = file:write(Fd, lists:reverse(Pend)),
-            ok = file:sync(Fd);
+            ok = ra_file_handle:write(Fd, lists:reverse(Pend)),
+            ok = ra_file_handle:sync(Fd);
         no_delay ->
-            ok = file:sync(Fd)
+            ok = ra_file_handle:sync(Fd)
     end,
 
     SyncTS = os:system_time(millisecond),
@@ -651,7 +651,7 @@ system_continue(Parent, Debug, State) ->
     loop_batched(State, Parent, Debug).
 
 system_terminate(Reason, _Parent, _Debug, State) ->
-    cleanup(State#state.wal),
+    cleanup(State),
     exit(Reason).
 
 write_debug(Dev, Event, Name) ->

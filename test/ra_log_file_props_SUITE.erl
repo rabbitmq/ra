@@ -158,7 +158,8 @@ write_prop(Dir, TestCase) ->
        begin
            {queued, Log0} = ra_log_file:write(
                              Entries,
-                             ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                             ra_log_file:init(
+                               #{data_dir => Dir, uid => TestCase})),
            {LogEntries, Log} = ra_log_file:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",

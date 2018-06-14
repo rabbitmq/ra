@@ -56,8 +56,9 @@ init_per_group(ra_log_file, Config) ->
                       end,
                       UId = atom_to_binary(TestCase, utf8),
                       ra_directory:register_name(UId, self(), TestCase),
-                      ra_log:init(ra_log_file, #{data_dir => PrivDir,
-                                                 uid => UId})
+                      ra_log:init(ra_log_file,
+                                  #{data_dir => PrivDir,
+                                    uid => UId})
               end,
     [{init_fun, InitFun} | Config].
 
