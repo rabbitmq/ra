@@ -62,7 +62,20 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
+% init_per_group(_, Config) ->
+%     PrivDir = ?config(priv_dir, Config),
+%     _ = application:load(ra),
+%     ok = application:set_env(ra, data_dir, PrivDir),
+%     application:ensure_all_started(ra),
+%     application:ensure_all_started(lg),
+%     Config.
+
+% end_per_group(_, Config) ->
+%     _ = application:stop(ra),
+%     Config.
+
 init_per_testcase(TestCase, Config) ->
+    ok = setup_log(),
     [{test_case, TestCase} | Config].
 
 end_per_testcase(_TestCase, Config) ->
@@ -73,6 +86,48 @@ id(X) -> X.
 
 ra_node_init(Conf) ->
     ra_node:recover(element(1, ra_node:init(Conf))).
+
+setup_log() ->
+    ok = meck:new(ra_log, []),
+    meck:expect(ra_log, init, fun(C) -> ra_log_memory:init(C) end),
+    meck:expect(ra_log, write_meta, fun ra_log_memory:write_meta/3),
+    meck:expect(ra_log, write_meta,
+                fun (K, V, L, _) ->
+                        ra_log_memory:write_meta(K, V, L)
+                end),
+    meck:expect(ra_log, read_meta, fun ra_log_memory:read_meta/2),
+    meck:expect(ra_log, sync_meta, fun ra_log_memory:sync_meta/1),
+    meck:expect(ra_log, read_meta, fun (K, L, D) ->
+                                           ra_lib:default(
+                                             ra_log_memory:read_meta(K, L), D)
+                                   end),
+    meck:expect(ra_log, read_snapshot, fun ra_log_memory:read_snapshot/1),
+    meck:expect(ra_log, snapshot_index_term, fun ra_log_memory: snapshot_index_term/1),
+    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/2),
+    meck:expect(ra_log, take, fun ra_log_memory:take/3),
+    meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/1),
+    meck:expect(ra_log, append_sync,
+                fun({Idx, Term, _} = E, L) ->
+                        L1 = ra_log_memory:append(E, L),
+                        ra_log_memory:handle_event({written, {Idx, Idx, Term}}, L1)
+                end),
+    meck:expect(ra_log, write_config, fun ra_log_memory:write_config/2),
+    meck:expect(ra_log, next_index, fun ra_log_memory:next_index/1),
+    meck:expect(ra_log, append, fun ra_log_memory:append/2),
+    meck:expect(ra_log, write, fun ra_log_memory:write/2),
+    meck:expect(ra_log, handle_event, fun ra_log_memory:handle_event/2),
+    meck:expect(ra_log, last_written, fun ra_log_memory:last_written/1),
+    meck:expect(ra_log, last_index_term, fun ra_log_memory:last_index_term/1),
+    meck:expect(ra_log, set_last_index, fun ra_log_memory:set_last_index/2),
+    meck:expect(ra_log, fetch_term, fun ra_log_memory:fetch_term/2),
+    meck:expect(ra_log, exists,
+                fun ({Idx, Term}, L) ->
+                        case ra_log_memory:fetch_term(Idx, L) of
+                            {Term, Log} -> {true, Log};
+                            {_, Log} -> {false, Log}
+                        end
+                end),
+    ok.
 
 init(_Config) ->
     #{id := Id,
@@ -85,24 +140,22 @@ init(_Config) ->
     InitConf = #{cluster_id => init,
                  id => Id,
                  uid => UId,
-                 log_module => ra_log_memory,
-                 log_init_args => #{},
+                 log_init_args => #{data_dir => "", uid => <<>>},
                  machine => Machine,
                  initial_nodes => []}, % init without known peers
     % new
     #{current_term := 0,
       voted_for := undefined} = ra_node_init(InitConf),
     % previous data
-    {ok, Log1} = ra_log:write_meta(voted_for, some_node, Log0),
-    {ok, Log} = ra_log:write_meta(current_term, CurrentTerm, Log1),
-    ok = meck:new(ra_log, [passthrough]),
-    meck:expect(ra_log, init, fun (_, _) -> Log end),
+    Log1 = ra_log:write_meta(voted_for, some_node, Log0),
+    Log = ra_log:write_meta(current_term, CurrentTerm, Log1),
+    meck:expect(ra_log, init, fun (_) -> Log end),
     #{current_term := 5,
       voted_for := some_node} = ra_node_init(InitConf),
     % snapshot
     Snapshot = {3, 5, Cluster, "hi1+2+3"},
     LogS = ra_log:install_snapshot(Snapshot, Log),
-    meck:expect(ra_log, init, fun (_, _) -> LogS end),
+    meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
       machine_state := "hi1+2+3",
@@ -114,19 +167,19 @@ init_restores_cluster_changes(_Config) ->
     InitConf = #{cluster_id => init_restores_cluster_changes,
                  id => n1,
                  uid => <<"n1">>,
-                 log_module => ra_log_memory,
-                 log_init_args => #{},
+                 log_init_args => #{data_dir => "", uid => <<>>},
                  machine => {simple, fun erlang:'+'/2, 0},
                  initial_nodes => []}, % init without known peers
     % new
     {leader, State00, _} =
-        ra_node:handle_candidate(#request_vote_result{term = 0,
+        ra_node:handle_candidate(#request_vote_result{term = 1,
                                                       vote_granted = true},
                                  (ra_node_init(InitConf))#{votes => 0,
+                                                           current_term => 1,
                                                            voted_for => n1}),
-    {leader, State0 = #{cluster := Cluster0}, [_, _, {next_event, Next}]} =
+    {leader, State0 = #{cluster := Cluster0}, _} =
         ra_node:handle_leader({command, noop}, State00),
-    {leader, State, _} = ra_node:handle_leader(Next, State0),
+    {leader, State, _} = ra_node:handle_leader(written_evt({1, 1, 1}), State0),
     ?assert(maps:size(Cluster0) =:= 1),
 
     % n2 joins
@@ -136,8 +189,8 @@ init_restores_cluster_changes(_Config) ->
                                          n2, await_consensus}}, State),
     ?assert(maps:size(Cluster) =:= 2),
     % intercept ra_log:init call to simulate persisted log data
-    ok = meck:new(ra_log, [passthrough]),
-    meck:expect(ra_log, init, fun (_, _) -> Log0 end),
+    % ok = meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, init, fun (_) -> Log0 end),
 
     #{cluster := #{n1 := _, n2 := _}} = ra_node_init(InitConf),
     ok.
@@ -182,8 +235,8 @@ follower_aer_1(_Config) ->
                                prev_log_term = 0, leader_commit = 0,
                                entries = [entry(1, 1, one)]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
-                          commit_index := 0, last_applied := 0},
-     _} = ra_node:handle_follower(AER1, Init),
+                          commit_index := 0, last_applied := 0}, _} =
+    ra_node:handle_follower(AER1, Init),
 
     % AER with index [2], leader_commit = 1, commit_index = 1
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 1,
@@ -192,7 +245,7 @@ follower_aer_1(_Config) ->
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 0,
                           machine_state := <<>>},
-     [{next_event, _}]} = ra_node:handle_follower(AER2, State1),
+     _} = ra_node:handle_follower(AER2, State1),
 
     % {written, 1} -> last_applied: 1 - replies with last_index = 1, next_index = 3
     {follower, State3 = #{leader_id := n1, current_term := 1,
@@ -210,7 +263,7 @@ follower_aer_1(_Config) ->
     {follower, State4 = #{leader_id := n1, current_term := 1,
                           commit_index := 3, last_applied := 1,
                           machine_state := one},
-     [{next_event, _}]} = ra_node:handle_follower(AER3, State3),
+     _} = ra_node:handle_follower(AER3, State3),
 
     % {written, 2} -> last_applied: 2, commit_index = 3 reply = 2, next_index = 4
     {follower, State5 = #{leader_id := n1, current_term := 1,
@@ -255,7 +308,7 @@ follower_aer_2(_Config) ->
                                entries = [entry(1, 1, one)]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
                           commit_index := 0, last_applied := 0},
-     [{next_event, _Next}]} = ra_node:handle_follower(AER1, Init),
+     _} = ra_node:handle_follower(AER1, Init),
 
     % {written, 1} -> last_applied: 0, reply: last_applied = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
@@ -285,7 +338,7 @@ follower_aer_3(_Config) ->
                                entries = [entry(1, 1, one)]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 0},
-     [{next_event, _Next}]} = ra_node:handle_follower(AER1, Init),
+     _} = ra_node:handle_follower(AER1, Init),
     % {written, 1} -> last_applied: 1 - reply: last_index = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 1,
@@ -314,7 +367,7 @@ follower_aer_3(_Config) ->
                                           entry(4, 1, for)
                                          ]},
     {follower, State4 = #{leader_id := n1, current_term := 1,
-                          commit_index := 3, last_applied := 1}, [_]}
+                          commit_index := 3, last_applied := 1}, _}
     = ra_node:handle_follower(AER3, State3),
     % {written, 4} -> last_applied: 3 - reply: last_index = 4, next_index = 5
     {follower, State5 = #{leader_id := n1, current_term := 1,
@@ -358,7 +411,7 @@ follower_aer_4(_Config) ->
                                          ]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
                           commit_index := 4, last_applied := 0},
-     [{next_event, _Next}]} = ra_node:handle_follower(AER1, Init),
+     _} = ra_node:handle_follower(AER1, Init),
     % {written, 4} -> last_applied = 4, commit_index = 4
     {follower, _State2 = #{leader_id := n1, current_term := 1,
                            commit_index := 4, last_applied := 4,
@@ -466,13 +519,13 @@ follower_handles_append_entries_rpc(_Config) ->
                              entries = [{2, 4, {'$usr', Self, <<"hi">>,
                                                 after_log_append}}]},
 
-    {follower,  #{log := {ra_log_memory, Log}},
+    {follower,  #{log := Log},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             next_index = 3, last_index = 2,
                                             last_term = 4}}}, _Metric0]}
     = begin
-          {follower, Inter3, [{next_event, {ra_log_event, {written, {2, 2, 4}}}}]}
-          = ra_node:handle_follower(AE, State#{last_applied => 1}),
+          {follower, Inter3, _} =
+              ra_node:handle_follower(AE, State#{last_applied => 1}),
           ra_node:handle_follower({ra_log_event, {written, {2, 2, 4}}}, Inter3)
       end,
     [{0, 0, undefined},
@@ -482,20 +535,19 @@ follower_handles_append_entries_rpc(_Config) ->
     % if leader_commit > the last entry received ensure last_applied does not
     % match commit_index
     % ExpectedLogEntry = usr(<<"hi4">>),
-    {follower, #{log := {ra_log_memory, _},
-                 commit_index := 4, last_applied := 4,
+    {follower, #{commit_index := 4, last_applied := 4,
                  machine_state := <<"hi4">>},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             last_index = 4,
                                             last_term = 5}}}, _Metrics1]}
     = begin
-          {follower, Inter4, [{next_event, {ra_log_event, {written, WrIdxTerm}}}]}
+          {follower, Inter4, _}
         = ra_node:handle_follower(
             EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
                    machine_state => usr(<<"hi1">>)}),
-          ra_node:handle_follower({ra_log_event, {written, WrIdxTerm}}, Inter4)
+          ra_node:handle_follower(written_evt({4, 4, 5}), Inter4)
       end,
     ok.
 
@@ -508,10 +560,10 @@ follower_catchup_condition(_Config) ->
                                   leader_commit = 3},
 
     % from follower to await condition
-    {await_condition, State = #{condition := _}, [_AppendEntryReply]}
-    = ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 5,
-                                                         prev_log_index = 4},
-                              State0),
+    {await_condition, State = #{condition := _}, [_AppendEntryReply]} =
+        ra_node:handle_follower(EmptyAE#append_entries_rpc{term = 5,
+                                                           prev_log_index = 4},
+                                State0),
 
     % append entry with a lower leader term should not enter await condition
     % even if prev_log_index is higher than last index
@@ -569,7 +621,7 @@ wal_down_condition(_Config) ->
                                   prev_log_term = 5,
                                   leader_commit = 3},
 
-    meck:new(ra_log, [passthrough]),
+    % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, write, fun (_Es, _L) -> {error, wal_down} end),
     meck:expect(ra_log, can_write, fun (_L) -> false end),
 
@@ -794,8 +846,8 @@ higher_term_detected(_Config) ->
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
                                          next_index = 4,
                                          last_index = 3, last_term = 5}},
-    {ok, ExpectLog0} = ra_log:write_meta(current_term, IncomingTerm, Log),
-    {ok, ExpectLog} = ra_log:write_meta(voted_for, undefined, ExpectLog0),
+    ExpectLog0 = ra_log:write_meta(current_term, IncomingTerm, Log),
+    ExpectLog = ra_log:write_meta(voted_for, undefined, ExpectLog0),
     {follower, #{current_term := IncomingTerm,
                  log := ExpectLog}, []} = ra_node:handle_leader(AEReply, State),
     {follower, #{current_term := IncomingTerm,
@@ -896,8 +948,7 @@ leader_node_join(_Config) ->
                                 prev_log_index = 3,
                                 prev_log_term = 5,
                                 leader_commit = 3}}]},
-     _,
-     {next_event, {ra_log_event, {written, {4, 4, 5}}}}] = Effects,
+     _] = Effects,
     ok.
 
 leader_node_leave(_Config) ->
@@ -938,11 +989,13 @@ leader_is_removed(_Config) ->
     {leader, State1, _} =
         ra_node:handle_leader({command, {'$ra_leave', self(), n1, await_consensus}},
                               State),
+    {leader, State1b, _} =
+        ra_node:handle_leader(written_evt({4, 4, 5}), State1),
 
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true, next_index = 5,
                                     last_index = 4, last_term = 5},
-    {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1),
+    {leader, State2, _} = ra_node:handle_leader({n2, AEReply}, State1b),
     % after committing the new entry the leader steps down
     {stop, #{commit_index := 4}, _} = ra_node:handle_leader({n3, AEReply}, State2),
     ok.
@@ -968,11 +1021,14 @@ follower_cluster_change(_Config) ->
                  cluster_index_term := {4, 5}},
      [{cast, n1, {n2, #append_entries_reply{}}}, _Metrics]} =
         begin
-            {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AE, State),
-            ra_node:handle_follower(Next, Int)
+            {follower, Int, _} = ra_node:handle_follower(AE, State),
+            ra_node:handle_follower(written_evt({4, 4, 5}), Int)
         end,
 
     ok.
+
+written_evt(E) ->
+    {ra_log_event, {written, E}}.
 
 leader_applies_new_cluster(_Config) ->
     OldCluster = #{n1 => #{next_index => 4, match_index => 3},
@@ -987,6 +1043,8 @@ leader_applies_new_cluster(_Config) ->
                cluster := #{n1 := _, n2 := _,
                             n3 := _, n4 := _} } = State1, _} =
         ra_node:handle_leader(Command, State),
+    {leader, State1b, _} =
+        ra_node:handle_leader(written_evt({4, 4, 5}), State1),
 
     Command2 = {command, {'$ra_join', self(), n5, await_consensus}},
     % additional cluster change commands are not applied whilst
@@ -995,7 +1053,7 @@ leader_applies_new_cluster(_Config) ->
                cluster := #{n1 := _, n2 := _,
                             n3 := _, n4 := _},
                pending_cluster_changes := [_]} = State2, _} =
-        ra_node:handle_leader(Command2, State1),
+        ra_node:handle_leader(Command2, State1b),
 
 
     % replies coming in
@@ -1060,8 +1118,7 @@ is_new(_Config) ->
              id => {ra, node()},
              uid => <<"ra">>,
              initial_nodes => [],
-             log_module => ra_log_memory,
-             log_init_args => #{},
+             log_init_args => #{data_dir => "", uid => <<>>},
              machine => {simple, fun erlang:'+'/2, 0}},
     {NewState, _} = ra_node:init(Args),
     true = ra_node:is_new(NewState),
@@ -1203,8 +1260,8 @@ snapshotted_follower_received_append_entries(_Config) ->
     {follower, _FState, [{cast, n1, {n3, #append_entries_reply{success = true}}},
                          _Metrics]} =
         begin
-            {follower, Int, [{next_event, Next}]} = ra_node:handle_follower(AER, FState1),
-            ra_node:handle_follower(Next, Int)
+            {follower, Int, _} = ra_node:handle_follower(AER, FState1),
+            ra_node:handle_follower(written_evt({4, 4, 2}), Int)
         end,
     ok.
 
@@ -1213,14 +1270,16 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     N2NextIndex = 3,
     Log = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
-                      end, {ra_log_memory, ra_log_memory:init(#{})},
+                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, noop},
                        {2, 2, {'$usr', pid, {enq, apple}, after_log_append}},
                        {3, 5, {2, {'$usr', pid, {enq, pear}, after_log_append}}}]),
     Leader0 = #{cluster =>
                 #{n1 => new_peer_with(#{match_index => 0}), % current leader in term 2
-                  n2 => new_peer_with(#{match_index => 0,next_index => N2NextIndex}), % stale peer - previous leader
-                  n3 => new_peer_with(#{match_index => 3,next_index => 4,
+                  n2 => new_peer_with(#{match_index => 0,
+                                        next_index => N2NextIndex}), % stale peer - previous leader
+                  n3 => new_peer_with(#{match_index => 3,
+                                        next_index => 4,
                                         commit_index => 3})}, % uptodate peer
                 cluster_change_permitted => true,
                 cluster_index_term => {0,0},
@@ -1249,7 +1308,7 @@ leader_receives_install_snapshot_result(_Config) ->
     Term = 1,
     Log0 = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
-                      end, {ra_log_memory, ra_log_memory:init(#{})},
+                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, noop}, {2, 1, noop},
                        {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
                        {4, 1, {'$usr',pid, {enq,pear}, after_log_append}}]),
@@ -1296,8 +1355,7 @@ init_nodes(NodeIds, Machine) ->
                                  id => NodeId,
                                  uid => atom_to_binary(NodeId, utf8),
                                  initial_nodes => NodeIds,
-                                 log_module => ra_log_memory,
-                                 log_init_args => #{},
+                                 log_init_args => #{data_dir => "", uid => <<>>},
                                  machine => Machine},
                         Acc#{NodeId => {follower, ra_node_init(Args), []}}
                 end, #{}, NodeIds).
@@ -1316,14 +1374,13 @@ empty_state(NumNodes, Id) ->
                    id => Id,
                    uid => atom_to_binary(Id, utf8),
                    initial_nodes => Nodes,
-                   log_module => ra_log_memory,
-                   log_init_args => #{},
+                   log_init_args => #{data_dir => "", uid => <<>>},
                    machine => {simple, fun (E, _) -> E end, <<>>}}). % just keep last applied value
 
 base_state(NumNodes) ->
     Log = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
-                      end, {ra_log_memory, ra_log_memory:init(#{})},
+                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, usr(<<"hi1">>)},
                        {2, 3, usr(<<"hi2">>)},
                        {3, 5, usr(<<"hi3">>)}]),

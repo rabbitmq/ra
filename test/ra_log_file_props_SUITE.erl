@@ -156,11 +156,10 @@ write_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        begin
-           {queued, Log0} = ra_log_file:write(
-                             Entries,
-                             ra_log_file:init(
-                               #{data_dir => Dir, uid => TestCase})),
-           {LogEntries, Log} = ra_log_file:take(1, length(Entries), Log0),
+           {ok, Log0} = ra_log:write(
+                          Entries,
+                          ra_log:init(#{data_dir => Dir, uid => TestCase})),
+           {LogEntries, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
                                [LogEntries, Log]),
@@ -170,7 +169,7 @@ write_prop(Dir, TestCase) ->
 append_all([], Log) ->
     Log;
 append_all([Entry | Entries], Log0) ->
-    {queued, Log} = ra_log_file:append(Entry, Log0),
+    Log = ra_log:append(Entry, Log0),
     append_all(Entries, Log).
 
 write_missing_entry(Config) ->
@@ -184,8 +183,8 @@ write_missing_entry_prop(Dir, TestCase) ->
        ?FORALL(
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
-              Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
-              Reply = ra_log_file:write(Head ++ Tail, Log),
+              Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+              Reply = ra_log:write(Head ++ Tail, Log),
               reset(Log),
               ?WHENFAIL(ct:pal("Reply: ~p~n", [Reply]),
                         case Reply of
@@ -205,12 +204,12 @@ write_overwrite_entry_prop(Dir, TestCase) ->
        ?FORALL(
           {Head, {Idx, Term, _Value} = _Entry, _Tail}, slice_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
               NewEntry = [{Idx, Term, <<"overwrite">>}],
-              {queued, Log} = ra_log_file:write(NewEntry, Log0),
-              {LogEntries, Log1} = ra_log_file:take(1, length(Entries), Log),
+              {ok, Log} = ra_log:write(NewEntry, Log0),
+              {LogEntries, Log1} = ra_log:take(1, length(Entries), Log),
               reset(Log1),
               ?WHENFAIL(io:format("Head: ~p~n New entry: ~p~n"
                                   "Entries taken from the log: ~p~n"
@@ -230,10 +229,10 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
        ?FORALL(
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Head,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              Reply = ra_log_file:write(Tail, Log0),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              Reply = ra_log:write(Tail, Log0),
               reset(Log0),
               ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
                         case Reply of
@@ -254,15 +253,15 @@ append_missing_entry_prop(Dir, TestCase) ->
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               Log0 = append_all(Head,
-                               ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                               ra_log:init(#{data_dir => Dir, uid => TestCase})),
               Failed = try
-                           ra_log_file:append(hd(Tail), Log0),
+                           ra_log:append(hd(Tail), Log0),
                            false
                        catch
                            exit:{integrity_error, _} ->
                                true
                        end,
-              {LogEntries, Log} = ra_log_file:take(1, length(Head), Log0),
+              {LogEntries, Log} = ra_log:take(1, length(Head), Log0),
               reset(Log),
               ?WHENFAIL(io:format("Failed: ~p~nHead: ~p~n Tail: ~p~n"
                                   "Entries taken from the log: ~p~n"
@@ -280,8 +279,8 @@ write_index_starts_zero_prop(Dir, TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_zero_gen(),
        begin
-           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
-           Reply = ra_log_file:write([Entry], Log),
+           Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+           Reply = ra_log:write([Entry], Log),
            reset(Log),
            ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
                      case Reply of
@@ -304,8 +303,8 @@ append_prop(Dir, TestCase) ->
        begin
            Log0 = append_all(
                    Entries,
-                   ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-           {LogEntries, Log} = ra_log_file:take(1, length(Entries), Log0),
+                   ra_log:init(#{data_dir => Dir, uid => TestCase})),
+           {LogEntries, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
                                [LogEntries, Log]),
@@ -323,11 +322,11 @@ append_overwrite_entry_prop(Dir, TestCase) ->
        ?FORALL(
           {_Head, {Idx, Term, _Value} = _Entry, _Tail}, slice_gen(Entries),
           begin
-              {queued, Log} = ra_log_file:write(
+              {ok, Log} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
               Failed = try
-                           ra_log_file:append({Idx, Term, <<"overwrite">>}, Log),
+                           ra_log:append({Idx, Term, <<"overwrite">>}, Log),
                            false
                        catch
                            exit:{integrity_error, _} ->
@@ -347,9 +346,9 @@ append_index_starts_one_prop(Dir, TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_gen(),
        begin
-           Log = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+           Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
            Failed = try
-                       ra_log_file:append(Entry, Log),
+                       ra_log:append(Entry, Log),
                        false
                    catch
                        exit:{integrity_error, _} ->
@@ -370,10 +369,10 @@ take_prop(Dir, TestCase) ->
        ?FORALL(
           {Start, Num}, range_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                  Entries,
-                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Selected, Log} = ra_log_file:take(Start, Num, Log0),
+                                 ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Selected, Log} = ra_log:take(Start, Num, Log0),
               Expected = lists:sublist(Entries, Start, Num),
               reset(Log),
               ?WHENFAIL(io:format("Selected: ~p~nExpected: ~p~n",
@@ -392,10 +391,10 @@ take_out_of_range_prop(Dir, TestCase) ->
        ?FORALL(
           {Start, Num}, out_of_range_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Reply, Log} = ra_log_file:take(Start, Num, Log0),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Reply, Log} = ra_log:take(Start, Num, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Start: ~p Num: ~p~nReply: ~p~n", [Start, Num, Reply]),
                         Reply == [])
@@ -412,10 +411,10 @@ fetch_prop(Dir, TestCase) ->
        ?FORALL(
           {_Head, {Idx, _Term, _Value} = Entry, _Tail}, slice_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Got, Log} = ra_log_file:fetch(Idx, Log0),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Got, Log} = ra_log:fetch(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Got, Entry]),
                         Entry == Got)
@@ -432,10 +431,10 @@ fetch_out_of_range_prop(Dir, TestCase) ->
        ?FORALL(
           {Start, _Num}, out_of_range_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Reply, Log} = ra_log_file:fetch(Start, Log0),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Reply, Log} = ra_log:fetch(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: undefined~n", [Reply]),
                         Reply == undefined)
@@ -450,9 +449,9 @@ last_index_term_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(0),
        begin
-           {queued, Log} = ra_log_file:write(
+           {ok, Log} = ra_log:write(
                              Entries,
-                             ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                             ra_log:init(#{data_dir => Dir, uid => TestCase})),
            {LastIdx, LastTerm} = case Entries of
                                      [] ->
                                          {0, 0};
@@ -460,7 +459,7 @@ last_index_term_prop(Dir, TestCase) ->
                                          {LI, LT, _} = lists:last(Entries),
                                          {LI, LT}
                                  end,
-           {Idx, Term} = ra_log_file:last_index_term(Log),
+           {Idx, Term} = ra_log:last_index_term(Log),
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [{Idx, Term}, {LastIdx, LastTerm}]),
                      (LastIdx == Idx) and (LastTerm == Term))
@@ -477,10 +476,10 @@ fetch_term_prop(Dir, TestCase) ->
        ?FORALL(
           {_Head, {Idx, ExpectedTerm, _}, _Tail}, slice_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Term, Log} = ra_log_file:fetch_term(Idx, Log0),
+                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Term, Log} = ra_log:fetch_term(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Term, ExpectedTerm]),
                         (ExpectedTerm == Term))
@@ -497,10 +496,10 @@ fetch_out_of_range_term_prop(Dir, TestCase) ->
        ?FORALL(
           {Start, _}, out_of_range_gen(Entries),
           begin
-              {queued, Log0} = ra_log_file:write(
+              {ok, Log0} = ra_log:write(
                                  Entries,
-                                 ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-              {Term, Log} = ra_log_file:fetch_term(Start, Log0),
+                                 ra_log:init(#{data_dir => Dir, uid => TestCase})),
+              {Term, Log} = ra_log:fetch_term(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p for index: ~p~n", [Term, Start]),
                         (undefined == Term) orelse ((0 == Term) and (Start == 0)))
@@ -515,11 +514,11 @@ next_index_term_prop(Dir, TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        begin
-           {queued, Log} = ra_log_file:write(
+           {ok, Log} = ra_log:write(
                               Entries,
-                              ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                              ra_log:init(#{data_dir => Dir, uid => TestCase})),
            {LastIdx, _LastTerm, _} = lists:last(Entries),
-           Idx = ra_log_file:next_index(Log),
+           Idx = ra_log:next_index(Log),
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Idx, LastIdx + 1]),
                      LastIdx + 1 == Idx)
@@ -539,10 +538,10 @@ read_write_meta_prop(Dir, TestCase) ->
        Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
-                            ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
+                            ra_log:init(#{data_dir => Dir, uid => TestCase})),
            %% Ensure we overwrite the duplicates before checking the writes
            Meta = dict:to_list(dict:from_list(Meta0)),
-           Result = [{K, V, ra_log_file:read_meta(K, Log)} || {K, V} <- Meta],
+           Result = [{K, V, ra_log:read_meta(K, Log)} || {K, V} <- Meta],
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p~n", [Result]),
                      lists:all(fun({_K, V, Value}) ->
@@ -560,14 +559,14 @@ sync_meta_prop(Dir, TestCase) ->
        Meta0, list(meta_data()),
        begin
            Log = write_meta(Meta0,
-                            ra_log_file:init(#{data_dir => Dir, uid => TestCase})),
-           ok == ra_log_file:sync_meta(Log)
+                            ra_log:init(#{data_dir => Dir, uid => TestCase})),
+           ok == ra_log:sync_meta(Log)
        end).
 
 write_meta([], Log) ->
     Log;
 write_meta([{Key, Value} | Rest], Log0) ->
-    {ok, Log} = ra_log_file:write_meta(Key, Value, Log0),
+    Log = ra_log:write_meta(Key, Value, Log0),
     write_meta(Rest, Log).
 
 last_written_with_wal(Config) ->
@@ -601,7 +600,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -625,17 +624,17 @@ last_written_with_wal_prop(Dir, TestCase) ->
                                  (start_wal, {_, _, _, wal_up} = Acc) ->
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
-                                      {error, {integrity_error, _}} = ra_log_file:write([Entry], Acc0),
+                                      {error, {integrity_error, _}} = ra_log:write([Entry], Acc0),
                                       Acc;
                                  (Entry, {Acc0, _, _, wal_down} = Acc) ->
-                                      {error, wal_down} = ra_log_file:write([Entry], Acc0),
+                                      {error, wal_down} = ra_log:write([Entry], Acc0),
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
-                                      {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                      {ok, Acc} = ra_log:write([Entry], Acc0),
                                       {Acc, Last0, Idx, St}
                               end, {Log0, {0, 0}, 0, wal_up}, All),
-              Got = ra_log_file:last_written(Log),
-              {Written, Log1} = ra_log_file:take(1, LastIdx, Log),
+              Got = ra_log:last_written(Log),
+              {Written, Log1} = ra_log:take(1, LastIdx, Log),
               reset(Log1),
               ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
                                   [Got, Last, Written, All]),
@@ -659,7 +658,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -678,14 +677,14 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
                                  (start_segment_writer, {_, _, _, sw_up} = Acc) ->
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, _, LastIdx, _} = Acc) when Idx > LastIdx + 1 ->
-                                      {error, {integrity_error, _}} = ra_log_file:write([Entry], Acc0),
+                                      {error, {integrity_error, _}} = ra_log:write([Entry], Acc0),
                                       Acc;
                                  ({Idx, _, _} = Entry, {Acc0, Last0, _LastIdx, St}) ->
-                                      {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                      {ok, Acc} = ra_log:write([Entry], Acc0),
                                       {Acc, Last0, Idx, St}
                               end, {Log0, {0, 0}, 0, sw_up}, All),
-              Got = ra_log_file:last_written(Log),
-              {Written, Log1} = ra_log_file:take(1, LastIdx, Log),
+              Got = ra_log:last_written(Log),
+              {Written, Log1} = ra_log:take(1, LastIdx, Log),
               reset(Log1),
               ?WHENFAIL(ct:pal("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
                                   [Got, Last, Written, All]),
@@ -709,9 +708,9 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase,
+              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase,
                                         resend_window => 2}),
-              ra_log_file:take(1, 10, Log0),
+              ra_log:take(1, 10, Log0),
               {Log, _Last, Ts} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -730,12 +729,12 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                                             end,
                                       {Acc, Last0, get_timestamp()};
                                  (Entry, {Acc0, Last0, Ts}) ->
-                                      case ra_log_file:write([Entry], Acc0) of
-                                          {queued, Acc} ->
+                                      case ra_log:write([Entry], Acc0) of
+                                          {ok, Acc} ->
                                               {Acc, Last0, Ts};
                                           {error, wal_down} ->
                                               wait_for_wal(50, 0),
-                                              {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                              {ok, Acc} = ra_log:write([Entry], Acc0),
                                               {Acc, Last0, Ts}
                                       end
                               end, {Log0, {0, 0}, get_timestamp()}, All),
@@ -744,16 +743,16 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               %% some entries after it, so it needs time to recover.
               timer:sleep(time_diff_to(Ts, 3000)),
               % write an entry to trigger resend protocol if required
-              {LastIdx, LastTerm} = ra_log_file:last_index_term(Log),
+              {LastIdx, LastTerm} = ra_log:last_index_term(Log),
               E = {LastIdx+1, LastTerm, <<>>},
               ActuallyLastIdxTerm = {LastIdx+1, LastTerm},
-              {queued, Log1a} = ra_log_file:write([E], Log),
+              {ok, Log1a} = ra_log:write([E], Log),
               Log1 = deliver_log_events(Log1a, 500),
               % Log1c =  deliver_log_events(Log1b, 500),
               %% Consume all events
               % {Log1, Last1} = consume_events(Log1b, Last),
               %% Request last written
-              LastWritten = ra_log_file:last_written(Log1),
+              LastWritten = ra_log:last_written(Log1),
               %% Request entries available, which should be all generated by this test
               {EIdx, ETerm, _} = lists:last(Entries),
               LastEntry = {EIdx, ETerm},
@@ -761,7 +760,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                                                       ets:tab2list(ra_log_open_mem_tables),
                                                       ets:tab2list(ra_log_closed_mem_tables)
                                                      ]),
-              {Written, Log2} = ra_log_file:take(1, EIdx, Log1),
+              {Written, Log2} = ra_log:take(1, EIdx, Log1),
               %% We got all the data, can reset now
               basic_reset(Log2),
               ?WHENFAIL(ct:pal("Last written entry: ~p; actually last idx term: ~p;"
@@ -808,9 +807,9 @@ last_written_prop(Dir, TestCase) ->
           begin
               flush(),
               Actions = lists:zip3(Entries, Waits, Consumes),
-              Log0 = ra_log_file:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
               {Log, Last} = lists:foldl(fun({Entry, Wait, Consume}, {Acc0, Last0}) ->
-                                                {queued, Acc} = ra_log_file:write([Entry], Acc0),
+                                                {ok, Acc} = ra_log:write([Entry], Acc0),
                                                 timer:sleep(Wait),
                                                 case Consume of
                                                     true ->
@@ -819,7 +818,7 @@ last_written_prop(Dir, TestCase) ->
                                                         {Acc, Last0}
                                                 end
                                 end, {Log0, {0, 0}}, Actions),
-              Got = ra_log_file:last_written(Log),
+              Got = ra_log:last_written(Log),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p~n",
                                   [Got, Last, Actions]),
@@ -837,7 +836,7 @@ flush() ->
 deliver_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
-            Log = ra_log_file:handle_event(Evt, Log0),
+            Log = ra_log:handle_event(Evt, Log0),
             deliver_log_events(Log, Timeout)
     after Timeout ->
             Log0
@@ -846,7 +845,7 @@ deliver_log_events(Log0, Timeout) ->
 consume_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log_file:handle_event(Evt, Log0),
+            Log = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 0 ->
             {Log0, Last}
@@ -855,7 +854,7 @@ consume_events(Log0, Last) ->
 consume_all_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log_file:handle_event(Evt, Log0),
+            Log = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 15000 ->
             {Log0, Last}
@@ -885,12 +884,12 @@ run_proper_noshrink(Fun, Args, NumTests) ->
 			      {on_output, fun(".", _) -> ok; % don't print the '.'s on new lines
 					     (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A) end}])).
 basic_reset(Log) ->
-    ra_log_file:write([{0, 0, empty}], Log),
+    ra_log:write([{0, 0, empty}], Log),
     receive
         {ra_log_event, {written, {_, 0, 0}}} ->
             ok
     end,
-    ra_log_file:close(Log).
+    ra_log:close(Log).
 
 reset(Log) ->
     supervisor:restart_child(ra_log_wal_sup, ra_log_file_segment_writer),

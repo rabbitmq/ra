@@ -58,15 +58,16 @@ start() ->
 start_local_cluster(Num, Name, Machine) ->
     [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
                            || N <- lists:seq(1, Num)],
-    Conf0 = #{log_module => ra_log_memory,
-              log_init_args => #{},
+    Conf0 = #{log_init_args => #{},
               initial_nodes => Nodes,
               cluster_id => Name,
               machine => Machine},
     Res = [begin
                UId = atom_to_binary(element(1, Id), utf8),
-               {ok, _Pid} = ra_node_proc:start_link(Conf0#{id => Id,
-                                                           uid => UId}),
+               {ok, _Pid} = ra_node_proc:start_link(
+                              Conf0#{id => Id,
+                                     log_init_args => #{uid => UId},
+                                     uid => UId}),
                Id
            end || Id <- Nodes],
     ok = ra:trigger_election(Node1),
@@ -185,7 +186,6 @@ start_node(ClusterId, NodeId, Machine, NodeIds) ->
              id => NodeId,
              uid => U,
              initial_nodes => NodeIds,
-             log_module => ra_log_file,
              log_init_args => #{uid => U},
              machine => Machine},
     start_node(Conf).

@@ -69,7 +69,6 @@ start_ra_cluster(#{nodes := Nodes}) ->
                    uid => UId,
                    cluster_id => Name,
                    initial_nodes => Nodes,
-                   log_module => ra_log_file,
                    log_init_args => #{uid => UId},
                    machine => {module, ra_fifo, #{}}},
         io:format("Starting ra node ~p~n", [{Name, Node}]),

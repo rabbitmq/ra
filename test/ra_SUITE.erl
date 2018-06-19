@@ -73,7 +73,6 @@ init_per_group(_G, Config) ->
                           Conf = #{cluster_id => TestCase,
                                    id => {Name, node()},
                                    uid => UId,
-                                   log_module => ra_log_file,
                                    log_init_args => #{uid => UId},
                                    initial_nodes => Nodes,
                                    machine => Machine,

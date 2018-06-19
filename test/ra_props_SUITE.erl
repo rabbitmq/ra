@@ -25,34 +25,43 @@ init_per_suite(Config) ->
     application:ensure_all_started(ra),
     Config.
 
+init_per_testcase(non_assoc, Config) ->
+    Cluster = ra:start_local_cluster(3, "test",
+                                     {simple, fun non_assoc_apply/2, 0}),
+    [{ra_cluster, Cluster} | Config].
+
+end_per_testcase(_, Config) ->
+    terminate_cluster(?config(ra_cluster, Config)),
+    Config.
+
 end_per_suite(Config) ->
     application:stop(ra),
     Config.
 
 %% this test mixes associative with non-associative operations to tests that
 %% all nodes apply operations in the same order
-non_assoc_prop({Ops, Initial}) ->
+non_assoc_prop([A, B, C], {Ops, Initial}) ->
     ct:pal("non_assoc_prop Ops: ~p Initial: ~p~n", [Ops, Initial]),
-    [A, B, C] = Cluster = ra:start_local_cluster(3, "test",
-                                                 {simple, fun non_assoc_apply/2,
-                                                  Initial}),
     Expected = lists:foldl(fun non_assoc_apply/2, Initial, Ops),
-    % identity operation to ensure cluster is ready
-    {ok, _, Leader} = ra:send_and_await_consensus(A, {add, 0}),
+    % set cluster to
+    {ok, _, Leader} = ra:send_and_await_consensus(A, {set, Initial}),
     [ra:send_and_await_consensus(Leader, Op) || Op <- Ops],
     {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
     timer:sleep(100),
     {ok, {_, ARes}, _} = ra:committed_query(A, fun id/1),
     {ok, {_, BRes}, _} = ra:committed_query(B, fun id/1),
     {ok, {_, CRes}, _} = ra:committed_query(C, fun id/1),
-    terminate_cluster(Cluster),
+    % ct:pal("Result ~p ~p ~p Expected ~p Initial ~p~n",
+    %        [ARes, BRes, CRes, Expected, Initial]),
     % assert all nodes have the same final state
     Expected == ARes andalso Expected == BRes andalso Expected == CRes.
 
-non_assoc(_Config) ->
+non_assoc(Config) ->
     run_proper(
       fun () ->
-              ?FORALL(N, {list(op()), integer(1, 1000)}, non_assoc_prop(N))
+              Cluster = ?config(ra_cluster, Config),
+              ?FORALL(N, {list(op()), integer(1, 1000)},
+                      non_assoc_prop(Cluster, N))
       end, [], 25).
 
 id(X) -> X.
@@ -60,7 +69,8 @@ id(X) -> X.
 non_assoc_apply({add, N}, State) -> State + N;
 non_assoc_apply({subtract, N}, State) -> State - N;
 non_assoc_apply({divide, N}, State) -> State / N;
-non_assoc_apply({mult, N}, State) -> State * N.
+non_assoc_apply({mult, N}, State) -> State * N;
+non_assoc_apply({set, N}, _) -> N.
 
 terminate_cluster(Nodes) ->
     [gen_statem:stop(P, normal, 2000) || {P, _} <- Nodes].

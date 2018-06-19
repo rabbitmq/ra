@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-ra_log">ra_log()</a></h3>
-<p><tt>ra_log() = {Module::module(), <a href="#type-ra_log_state">ra_log_state()</a>}</tt></p>
+<p><tt>ra_log() = #state{uid = <a href="#type-ra_uid">ra_uid()</a>, first_index = <a href="#type-ra_index">ra_index()</a>, last_index = -1 | <a href="#type-ra_index">ra_index()</a>, last_term = <a href="#type-ra_term">ra_term()</a>, last_written_index_term = <a href="#type-ra_idxterm">ra_idxterm()</a>, segment_refs = [<a href="#type-ra_segment_ref">ra_segment_ref()</a>], open_segments = #{}, directory = list(), kv = <a href="ra_log_file_meta.html#type-state">ra_log_file_meta:state()</a>, snapshot_state = <a href="#type-maybe">maybe</a>({<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>)}), snapshot_index_in_progress = <a href="#type-maybe">maybe</a>(<a href="#type-ra_index">ra_index()</a>), cache = #{}, wal = atom(), last_resend_time = <a href="#type-maybe">maybe</a>(integer()), resend_window_seconds = integer()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_log_event">ra_log_event()</a></h3>
@@ -24,15 +24,11 @@
 
 
 <h3 class="typedecl"><a name="type-ra_log_init_args">ra_log_init_args()</a></h3>
-<p><tt>ra_log_init_args() = #{atom() =&gt; term()}</tt></p>
+<p><tt>ra_log_init_args() = #{data_dir =&gt; string(), uid := <a href="#type-ra_uid">ra_uid()</a>, wal =&gt; atom(), resend_window =&gt; integer()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_log_snapshot">ra_log_snapshot()</a></h3>
 <p><tt>ra_log_snapshot() = {<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-ra_cluster">ra_cluster()</a>, term()}</tt></p>
-
-
-<h3 class="typedecl"><a name="type-ra_log_state">ra_log_state()</a></h3>
-<p><tt>ra_log_state() = term()</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_meta_key">ra_meta_key()</a></h3>
@@ -53,7 +49,7 @@
 <tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch_term-2">fetch_term/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_event-2">handle_event/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-2">init/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#install_snapshot-2">install_snapshot/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#last_index_term-1">last_index_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#last_written-1">last_written/1</a></td><td></td></tr>
@@ -80,7 +76,7 @@
 
 <h3 class="function"><a name="append-2">append/2</a></h3>
 <div class="spec">
-<p><tt>append(Entry::<a href="#type-log_entry">log_entry()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; {queued, <a href="#type-ra_log">ra_log()</a>} | {written, <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
+<p><tt>append(Entry::<a href="#type-log_entry">log_entry()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a> | no_return()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="append_sync-2">append_sync/2</a></h3>
@@ -90,17 +86,17 @@
 
 <h3 class="function"><a name="can_write-1">can_write/1</a></h3>
 <div class="spec">
-<p><tt>can_write(State::<a href="#type-ra_log">ra_log()</a>) -&gt; boolean()</tt><br></p>
+<p><tt>can_write(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="close-1">close/1</a></h3>
 <div class="spec">
-<p><tt>close(Log::<a href="#type-ra_log">ra_log()</a>) -&gt; ok</tt><br></p>
+<p><tt>close(State::<a href="#type-ra_log">ra_log()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="delete_everything-1">delete_everything/1</a></h3>
 <div class="spec">
-<p><tt>delete_everything(X1::{module(), Dir::<a href="file.html#type-filename">file:filename()</a>}) -&gt; ok</tt><br></p>
+<p><tt>delete_everything(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="exists-2">exists/2</a></h3>
@@ -110,37 +106,37 @@
 
 <h3 class="function"><a name="fetch-2">fetch/2</a></h3>
 <div class="spec">
-<p><tt>fetch(Idx::<a href="#type-ra_index">ra_index()</a>, Log::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-log_entry">log_entry()</a>), <a href="#type-ra_log_state">ra_log_state()</a>}</tt><br></p>
+<p><tt>fetch(Idx::<a href="#type-ra_index">ra_index()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-log_entry">log_entry()</a>), <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="fetch_term-2">fetch_term/2</a></h3>
 <div class="spec">
-<p><tt>fetch_term(Idx::<a href="#type-ra_index">ra_index()</a>, Log::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>), <a href="#type-ra_log_state">ra_log_state()</a>}</tt><br></p>
+<p><tt>fetch_term(Idx::<a href="#type-ra_index">ra_index()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>), <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="handle_event-2">handle_event/2</a></h3>
 <div class="spec">
-<p><tt>handle_event(Evt::<a href="#type-ra_log_event">ra_log_event()</a>, Log::<a href="#type-ra_log_state">ra_log_state()</a>) -&gt; <a href="#type-ra_log_state">ra_log_state()</a></tt><br></p>
+<p><tt>handle_event(X1::<a href="ra_log.html#type-ra_log_event">ra_log:ra_log_event()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
-<h3 class="function"><a name="init-2">init/2</a></h3>
+<h3 class="function"><a name="init-1">init/1</a></h3>
 <div class="spec">
-<p><tt>init(Mod::atom(), Args::<a href="#type-ra_log_init_args">ra_log_init_args()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
+<p><tt>init(Conf::<a href="#type-ra_log_init_args">ra_log_init_args()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="install_snapshot-2">install_snapshot/2</a></h3>
 <div class="spec">
-<p><tt>install_snapshot(Snapshot::<a href="#type-ra_log_snapshot">ra_log_snapshot()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
+<p><tt>install_snapshot(Snapshot::<a href="ra_log.html#type-ra_log_snapshot">ra_log:ra_log_snapshot()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="last_index_term-1">last_index_term/1</a></h3>
 <div class="spec">
-<p><tt>last_index_term(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_idxterm">ra_idxterm()</a>)</tt><br></p>
+<p><tt>last_index_term(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_idxterm">ra_idxterm()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="last_written-1">last_written/1</a></h3>
 <div class="spec">
-<p><tt>last_written(Log::<a href="#type-ra_log_state">ra_log_state()</a>) -&gt; <a href="#type-ra_idxterm">ra_idxterm()</a></tt><br></p>
+<p><tt>last_written(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_idxterm">ra_idxterm()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="next_index-1">next_index/1</a></h3>
@@ -150,12 +146,12 @@
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(State::<a href="#type-ra_log">ra_log()</a>) -&gt; map()</tt><br></p>
+<p><tt>overview(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="read_config-1">read_config/1</a></h3>
 <div class="spec">
-<p><tt>read_config(X1::{module(), Dir::<a href="file.html#type-filename">file:filename()</a>}) -&gt; {ok, <a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>} | not_found</tt><br></p>
+<p><tt>read_config(Dir) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="read_meta-2">read_meta/2</a></h3>
@@ -170,17 +166,17 @@
 
 <h3 class="function"><a name="read_snapshot-1">read_snapshot/1</a></h3>
 <div class="spec">
-<p><tt>read_snapshot(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_log_snapshot">ra_log_snapshot()</a>)</tt><br></p>
+<p><tt>read_snapshot(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="ra_log.html#type-ra_log_snapshot">ra_log:ra_log_snapshot()</a>)</tt><br></p>
 </div>
 
 <h3 class="function"><a name="release_resources-1">release_resources/1</a></h3>
 <div class="spec">
-<p><tt>release_resources(State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
+<p><tt>release_resources(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="set_last_index-2">set_last_index/2</a></h3>
 <div class="spec">
-<p><tt>set_last_index(Idx::<a href="#type-ra_index">ra_index()</a>, X2::<a href="#type-ra_log_state">ra_log_state()</a>) -&gt; {ok, <a href="#type-ra_log_state">ra_log_state()</a>} | {not_found, <a href="#type-ra_log_state">ra_log_state()</a>}</tt><br></p>
+<p><tt>set_last_index(Idx::<a href="#type-ra_index">ra_index()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; {ok, <a href="#type-ra_log">ra_log()</a>} | {not_found, <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="snapshot_index_term-1">snapshot_index_term/1</a></h3>
@@ -195,32 +191,32 @@
 
 <h3 class="function"><a name="take-3">take/3</a></h3>
 <div class="spec">
-<p><tt>take(Start::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer(), State::<a href="#type-ra_log">ra_log()</a>) -&gt; {[<a href="#type-log_entry">log_entry()</a>], <a href="#type-ra_log_state">ra_log_state()</a>}</tt><br></p>
+<p><tt>take(Start::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer(), State::<a href="#type-ra_log">ra_log()</a>) -&gt; {[<a href="#type-log_entry">log_entry()</a>], <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="update_release_cursor-4">update_release_cursor/4</a></h3>
 <div class="spec">
-<p><tt>update_release_cursor(Idx::<a href="#type-ra_index">ra_index()</a>, Cluster::<a href="#type-ra_cluster">ra_cluster()</a>, MachineState::term(), State::<a href="#type-ra_log_state">ra_log_state()</a>) -&gt; <a href="#type-ra_log_state">ra_log_state()</a></tt><br></p>
+<p><tt>update_release_cursor(Idx::<a href="#type-ra_index">ra_index()</a>, Cluster::<a href="#type-ra_cluster">ra_cluster()</a>, MachineState::term(), State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="write-2">write/2</a></h3>
 <div class="spec">
-<p><tt>write(Entries::[<a href="#type-log_entry">log_entry()</a>], State::<a href="#type-ra_log">ra_log()</a>) -&gt; {queued, <a href="#type-ra_log">ra_log()</a>} | {written, <a href="#type-ra_log">ra_log()</a>} | {error, {integrity_error, term()} | wal_down}</tt><br></p>
+<p><tt>write(Entries::[<a href="#type-log_entry">log_entry()</a>], State::<a href="#type-ra_log">ra_log()</a>) -&gt; {ok, <a href="#type-ra_log">ra_log()</a>} | {error, {integrity_error, term()} | wal_down}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="write_config-2">write_config/2</a></h3>
 <div class="spec">
-<p><tt>write_config(Config::<a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; ok</tt><br></p>
+<p><tt>write_config(Config, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="write_meta-3">write_meta/3</a></h3>
 <div class="spec">
-<p><tt>write_meta(Key::<a href="#type-ra_meta_key">ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log">ra_log()</a>) -&gt; {ok, <a href="#type-ra_log">ra_log()</a>} | {error, term()}</tt><br></p>
+<p><tt>write_meta(Key::<a href="#type-ra_meta_key">ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log">ra_log()</a>) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="write_meta-4">write_meta/4</a></h3>
 <div class="spec">
-<p><tt>write_meta(Key::<a href="#type-ra_meta_key">ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log">ra_log()</a>, Sync::boolean()) -&gt; {ok, <a href="#type-ra_log">ra_log()</a>} | {error, term()}</tt><br></p>
+<p><tt>write_meta(Key::<a href="#type-ra_meta_key">ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log">ra_log()</a>, Sync::boolean()) -&gt; <a href="#type-ra_log">ra_log()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="write_sync-2">write_sync/2</a></h3>

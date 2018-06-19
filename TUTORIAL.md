@@ -19,10 +19,10 @@
 
     ```
     NodeId = {node1, node()},
+    UId = <<"node1">>,
     Config = #{id => NodeId,
                uid => <<"node1">>,
-               log_module => ra_log_memory,
-               log_init_args => [{node1, node()}, {node2, node()}, {node3, node()}],
+               log_init_args => #{uid => UId},
                initial_nodes => [{node1, node()}, {node2, node()}, {node3, node()}],
                machine => {simple, fun erlang:'+'/2, 0}}, % the "apply" function + the initial state
     ```

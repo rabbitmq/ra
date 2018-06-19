@@ -300,7 +300,6 @@ ra_fifo_client_discard(Config) ->
     Conf = #{cluster_id => ClusterId,
              id => NodeId,
              uid => UId,
-             log_module => ra_log_file,
              log_init_args => #{data_dir => PrivDir, uid => UId},
              initial_nodes => [],
              machine => {module, ra_fifo,
@@ -719,7 +718,6 @@ conf(ClusterId, UId, NodeId, _, Peers) ->
     #{cluster_id => ClusterId,
       id => NodeId,
       uid => UId,
-      log_module => ra_log_file,
       log_init_args => #{uid => UId},
       initial_nodes => Peers,
       machine => {module, ra_fifo, #{}}}.

@@ -65,7 +65,6 @@ conf({Name, _Node} = NodeId, Nodes) ->
       id => NodeId,
       uid => UId,
       initial_nodes => Nodes,
-      log_module => ra_log_file,
       log_init_args => #{uid => UId},
       machine => {module, ra_fifo, #{}}}.
 

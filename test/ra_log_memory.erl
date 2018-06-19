@@ -1,5 +1,5 @@
 -module(ra_log_memory).
--behaviour(ra_log).
+
 -export([init/1,
          close/1,
          append/2,
@@ -53,17 +53,17 @@ close(_State) ->
     ok.
 
 -spec append(Entry::log_entry(), State::ra_log_memory_state()) ->
-    {written, ra_log_memory_state()} | no_return().
+    ra_log_memory_state() | no_return().
 append({Idx, Term, Data}, #state{last_index = LastIdx,
                                  entries = Log} = State)
   when Idx > LastIdx ->
-    {written, State#state{last_index = Idx,
-                          entries = Log#{Idx => {Term, Data}}}};
+    State#state{last_index = Idx,
+                entries = Log#{Idx => {Term, Data}}};
 append(_Entry, _State) ->
     exit({integrity_error, undefined}).
 
 -spec write(Entries :: [log_entry()], State::ra_log_memory_state()) ->
-    {written, ra_log_memory_state()} |
+    {ok, ra_log_memory_state()} |
     {error, {integrity_error, term()}}.
 write([{FirstIdx, _, _} | _] = Entries,
       #state{last_index = LastIdx, entries = Log0} = State)
@@ -78,7 +78,7 @@ write([{FirstIdx, _, _} | _] = Entries,
     {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
                                            {Acc#{Idx => {Term, Data}}, Idx}
                                    end, {Log1, FirstIdx}, Entries),
-    {written, State#state{last_index = LastInIdx,
+    {ok, State#state{last_index = LastInIdx,
                           entries = Log}};
 write([{FirstIdx, _, _} | _] = Entries,
       #state{snapshot = Snapshot, entries = Log0} = State)
@@ -86,8 +86,8 @@ write([{FirstIdx, _, _} | _] = Entries,
     {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
                                            {Acc#{Idx => {Term, Data}}, Idx}
                                    end, {Log0, FirstIdx}, Entries),
-    {written, State#state{last_index = LastInIdx,
-                          entries = Log}};
+    {ok, State#state{last_index = LastInIdx,
+                     entries = Log}};
 write(_Entries, _State) ->
     {error, {integrity_error, undefined}}.
 
@@ -219,9 +219,9 @@ update_release_cursor(_Idx, _Cluster, _MacState, State) ->
 
 -spec write_meta(Key :: ra_log:ra_meta_key(), Value :: term(),
                  State :: ra_log_memory_state()) ->
-    {ok,  ra_log_memory_state()} | {error, term()}.
+    ra_log_memory_state() | {error, term()}.
 write_meta(Key, Value, #state{meta = Meta} = State) ->
-    {ok, State#state{meta = Meta#{Key => Value}}}.
+    State#state{meta = Meta#{Key => Value}}.
 
 sync_meta(_Log) ->
     ok.

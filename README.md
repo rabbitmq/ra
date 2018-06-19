@@ -29,11 +29,6 @@ The following Raft features are implemented:
  * Log compaction (with limitations and RabbitMQ-specific extensions)
  * Snapshot installation
 
-There are two storage backends:
-
-* `ra_log_memory`: an in-memory log backend useful for testing
-* `ra_log_file`: a disk-based backend
-
 
 ## Use Cases
 

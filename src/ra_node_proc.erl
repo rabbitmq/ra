@@ -256,7 +256,9 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                cast -> undefined;
                {call, F} -> F
            end,
-    Cmd = {CmdType, From , Data, ReplyMode},
+    Cmd = {CmdType, From, Data, ReplyMode},
+    %% if there are no delayed commands, queue a state timeout to flush
+    %% them
     Actions = case Delayed of
                   [] ->
                       [{state_timeout, 0, flush_commands}];

@@ -43,7 +43,7 @@ prepare_restart_rpc(RaName) ->
             Dir = ra_env:data_dir(UId),
             % TODO this cannot work with another log implementation
             % can it be made generic without already knowing the config state?
-            ra_log_file:read_config(Dir)
+            ra_log:read_config(Dir)
     end.
 
 -spec stop_node(RaNodeId :: ra_node_id()) -> ok | {error, term()}.

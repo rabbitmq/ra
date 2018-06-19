@@ -95,7 +95,6 @@
 -type ra_node_config() :: #{id := ra_node_id(),
                             uid := ra_uid(),
                             cluster_id := ra_cluster_id(),
-                            log_module := ra_log_memory | ra_log_file,
                             log_init_args := ra_log:ra_log_init_args(),
                             initial_nodes := [ra_node_id()],
                             machine := ra_machine:machine(),
@@ -126,11 +125,10 @@ init(#{id := Id,
        uid := UId,
        cluster_id := _ClusterId,
        initial_nodes := InitialNodes,
-       log_module := LogMod,
        log_init_args := LogInitArgs,
        machine := Machine} = Config) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
-    Log0 = ra_log:init(LogMod, LogInitArgs),
+    Log0 = ra_log:init(LogInitArgs),
     ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     LastApplied = ra_log:read_meta(last_applied, Log0, 0),
@@ -217,7 +215,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
               State0 = #{current_term := Term, id := Id}) ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~w saw command from unknown peer ~w~n", [Id, PeerId]),
+            ?WARN("~w saw append_entries_reply from unknown peer ~w~n",
+                  [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
             % TODO: strictly speaking we should not need to take a max here?
@@ -252,7 +251,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
                 id := Id} = State0) when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~w saw command from unknown peer ~w~n", [Id, PeerId]),
+            ?WARN("~w saw append_entries_reply from unknown peer ~w~n",
+                  [Id, PeerId]),
             {leader, State0, []};
         _ ->
             ?INFO("~w leader saw append_entries_reply for term ~b abdicates term: ~b!~n",
@@ -314,25 +314,13 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             ?WARN("~w command ~W NOT appended to log, "
                   "cluster_change_permitted ~w~n", [Id, Cmd, 5, CCP]),
             {leader, State, []};
-        {Status, Idx, Term, State0}  ->
+        {ok, Idx, Term, State0} ->
             % ?INFO("~p ~p command appended to log at ~p term ~p~n",
             %      [Id, Cmd, Idx, Term]),
-            {State1, Effects0} =
-                case Status of
-                    written ->
-                        % fake written event
-                        {State0,
-                         [{next_event,
-                           {ra_log_event, {written, {Idx, Idx, Term}}}}]};
-                    queued ->
-                        {State0, []}
-                end,
             % Only "pipeline" in response to a command
-            % Observation: pipelining and "urgent" flag go together?
-            {State, Rpcs} = make_pipelined_rpcs(State1),
+            {State, Rpcs} = make_pipelined_rpcs(State0),
             Effects1 = [{send_rpcs, Rpcs},
-                        {incr_metrics, ra_metrics, [{2, 1}]}
-                        | Effects0],
+                        {incr_metrics, ra_metrics, [{2, 1}]}],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
@@ -350,7 +338,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
     {State0, Effects0} = lists:foldl(
                            fun(C, {S0, E}) ->
-                                   {queued, I, T, S} = append_log_leader(C, S0),
+                                   {ok, I, T, S} = append_log_leader(C, S0),
                                    case C of
                                        {_, From, _, after_log_append} ->
                                            {S, [{reply, From , {I, T}} | E]};
@@ -377,7 +365,8 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
   when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~w: saw command from unknown peer ~w~n", [Id, PeerId]),
+            ?WARN("~w: saw install_snapshot_result from unknown peer ~w~n",
+                  [Id, PeerId]),
             {leader, State0, []};
         _ ->
             ?INFO("~w: leader saw install_snapshot_result for term ~b"
@@ -612,16 +601,7 @@ handle_follower(#append_entries_rpc{term = Term,
                     State = State1#{commit_index => min(LeaderCommit, LastIdx),
                                     leader_id => LeaderId},
                     case ra_log:write(Entries, Log1) of
-                        {written, Log} ->
-                            % schedule a written next_event
-                            % we can use last idx here as the log store
-                            % is now fullly up to date.
-                            FinalState = State#{log => Log},
-                            {LIdx, LTerm} = last_idx_term(FinalState),
-                            {follower, FinalState,
-                             [{next_event, {ra_log_event,
-                                            {written, {LIdx, LIdx, LTerm}}}}]};
-                        {queued, Log} ->
+                        {ok, Log} ->
                             {follower, State#{log => Log}, []};
                         {error, wal_down} ->
                             {await_condition,
@@ -1003,8 +983,7 @@ persist_last_applied(#{persisted_last_applied := L,
     % do nothing
     State;
 persist_last_applied(#{last_applied := L, log := Log0} = State) ->
-    {ok, Log} = ra_log:write_meta(last_applied, L, Log0, false),
-    State#{log => Log,
+    State#{log => ra_log:write_meta(last_applied, L, Log0, false),
            persisted_last_applied => L}.
 
 
@@ -1167,7 +1146,7 @@ update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
 
 update_meta(Updates, #{log := Log0} = State) ->
     {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
-                              {ok, Acc} = ra_log:write_meta(K, V, Acc0, false),
+                              Acc = ra_log:write_meta(K, V, Acc0, false),
                               {maps:put(K, V, State0), Acc}
                       end, {State, Log0}, Updates),
     ok = ra_log:sync_meta(Log),
@@ -1181,12 +1160,13 @@ update_term(_, State) ->
     State.
 
 last_idx_term(#{log := Log}) ->
-    case ra_log:last_index_term(Log) of
-        {Idx, Term} ->
-            {Idx, Term};
-        undefined ->
-            ra_log:snapshot_index_term(Log)
-    end.
+    ra_log:last_index_term(Log).
+    % case ra_log:last_index_term(Log) of
+    %     {Idx, Term} ->
+    %         {Idx, Term};
+    %     undefined ->
+    %         ra_log:snapshot_index_term(Log)
+    % end.
 
 %% § 5.4.1 Raft determines which of two logs is more up-to-date by comparing
 %% the index and term of the last entries in the logs. If the logs have last
@@ -1388,12 +1368,8 @@ append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),
-    case ra_log:append({NextIdx, Term, Cmd}, Log0) of
-        {queued, Log} ->
-            {queued, NextIdx, Term, State#{log => Log}};
-        {written, Log} ->
-            {written, NextIdx, Term, State#{log => Log}}
-    end.
+    Log = ra_log:append({NextIdx, Term, Cmd}, Log0),
+    {ok, NextIdx, Term, State#{log => Log}}.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
                         {_, State = #{cluster_index_term := {Idx, CITTerm}}})
@@ -1415,7 +1391,8 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                     {_, State}) ->
-    {{Idx, Term}, State#{cluster => Cluster, cluster_index_term => {Idx, Term}}};
+    {{Idx, Term}, State#{cluster => Cluster,
+                         cluster_index_term => {Idx, Term}}};
 pre_append_log_follower({Idx, _, _}, {_, State}) ->
     {Idx, State}.
 
@@ -1429,9 +1406,10 @@ append_cluster_change(Cluster, From, ReplyMode,
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
-    % TODO: can we even do this async?
-    Log = ra_log:append_sync({NextIdx, Term, Command}, Log0),
-    {written, NextIdx, Term,
+    % TODO: is it safe to do change the cluster config with an async write?
+    % what happens if the write fails?
+    Log = ra_log:append({NextIdx, Term, Command}, Log0),
+    {ok, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,
             cluster_change_permitted => false,

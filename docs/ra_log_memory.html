@@ -12,7 +12,6 @@
 <h1>Module ra_log_memory</h1>
 <ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
 
-<p><b>Behaviours:</b> <a href="ra_log.html"><tt>ra_log</tt></a>.</p>
 
 <h2><a name="types">Data Types</a></h2>
 
@@ -58,7 +57,7 @@
 
 <h3 class="function"><a name="append-2">append/2</a></h3>
 <div class="spec">
-<p><tt>append(Entry::<a href="#type-log_entry">log_entry()</a>, State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; {written, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>} | no_return()</tt><br></p>
+<p><tt>append(Entry::<a href="#type-log_entry">log_entry()</a>, State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; <a href="#type-ra_log_memory_state">ra_log_memory_state()</a> | no_return()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="can_write-1">can_write/1</a></h3>
@@ -178,7 +177,7 @@
 
 <h3 class="function"><a name="write-2">write/2</a></h3>
 <div class="spec">
-<p><tt>write(Entries::[<a href="#type-log_entry">log_entry()</a>], State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; {written, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>} | {error, {integrity_error, term()}}</tt><br></p>
+<p><tt>write(Entries::[<a href="#type-log_entry">log_entry()</a>], State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; {ok, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>} | {error, {integrity_error, term()}}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="write_config-2">write_config/2</a></h3>
@@ -188,7 +187,7 @@
 
 <h3 class="function"><a name="write_meta-3">write_meta/3</a></h3>
 <div class="spec">
-<p><tt>write_meta(Key::<a href="ra_log.html#type-ra_meta_key">ra_log:ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; {ok, <a href="#type-ra_log_memory_state">ra_log_memory_state()</a>} | {error, term()}</tt><br></p>
+<p><tt>write_meta(Key::<a href="ra_log.html#type-ra_meta_key">ra_log:ra_meta_key()</a>, Value::term(), State::<a href="#type-ra_log_memory_state">ra_log_memory_state()</a>) -&gt; <a href="#type-ra_log_memory_state">ra_log_memory_state()</a> | {error, term()}</tt><br></p>
 </div>
 <hr>
 

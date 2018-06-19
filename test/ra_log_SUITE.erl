@@ -10,8 +10,7 @@
 
 all() ->
     [
-     {group, ra_log_memory},
-     {group, ra_log_file}
+     {group, tests}
     ].
 
 all_tests() ->
@@ -30,8 +29,7 @@ all_tests() ->
 
 groups() ->
     [
-     {ra_log_memory, [], all_tests()},
-     {ra_log_file, [], [
+     {tests, [], [
                         init_close_init,
                         write_recover_then_overwrite,
                         write_overwrite_then_recover,
@@ -39,10 +37,7 @@ groups() ->
                         | all_tests()]}
     ].
 
-init_per_group(ra_log_memory, Config) ->
-    InitFun = fun (_) -> ra_log:init(ra_log_memory, #{}) end,
-    [{init_fun, InitFun} | Config];
-init_per_group(ra_log_file, Config) ->
+init_per_group(tests, Config) ->
     PrivDir = ?config(priv_dir, Config),
     _ = application:load(ra),
     ok = application:set_env(ra, data_dir, PrivDir),
@@ -56,9 +51,7 @@ init_per_group(ra_log_file, Config) ->
                       end,
                       UId = atom_to_binary(TestCase, utf8),
                       ra_directory:register_name(UId, self(), TestCase),
-                      ra_log:init(ra_log_file,
-                                  #{data_dir => PrivDir,
-                                    uid => UId})
+                      ra_log:init(#{data_dir => PrivDir, uid => UId})
               end,
     [{init_fun, InitFun} | Config].
 
@@ -112,13 +105,9 @@ append_then_fetch_no_wait(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
-    Log1 = case ra_log:append(Entry, Log0) of
-               {written, L} -> L;
-               {queued, L} ->
-                   % check last written hasn't been incremented
-                   {0, 0} = ra_log:last_written(L),
-                   L
-           end,
+    Log1 = ra_log:append(Entry, Log0),
+    % check last written hasn't been incremented
+    {0, 0} = ra_log:last_written(Log1),
     % log entry should be immediately visible to allow
     % leaders to send append entries for entries not yet
     % flushed
@@ -252,11 +241,11 @@ last(Config) ->
 
 meta(Config) ->
     Log0 = ?config(ra_log, Config),
-    {ok, Log1} = ra_log:write_meta(current_term, 87, Log0),
+    Log1 = ra_log:write_meta(current_term, 87, Log0),
     87 = ra_log:read_meta(current_term, Log1),
-    {ok, Log2} = ra_log:write_meta(last_applied, 42, Log1),
+    Log2 = ra_log:write_meta(last_applied, 42, Log1),
     42 = ra_log:read_meta(last_applied, Log2),
-    {ok, Log} = ra_log:write_meta(voted_for, cream, Log2),
+    Log = ra_log:write_meta(voted_for, cream, Log2),
     cream = ra_log:read_meta(voted_for, Log),
     ok.
 
@@ -281,8 +270,8 @@ snapshot(Config) ->
     {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
     Snapshot = ra_log:read_snapshot(Log),
     % initialise another log
-    LogB = ra_log:init(ra_log_file, #{data_dir => ?config(priv_dir, Config),
-                                      uid => <<"snapshot">>}),
+    LogB = ra_log:init(#{data_dir => ?config(priv_dir, Config),
+                         uid => <<"snapshot">>}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
     {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),
     Snapshot = ra_log:read_snapshot(LogB),
@@ -295,7 +284,7 @@ init_close_init(Config) ->
     Log0 = ?config(ra_log, Config),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(2, "entry2", Log1),
-    {ok, Log} = ra_log:write_meta(current_term, 2, Log2),
+    Log = ra_log:write_meta(current_term, 2, Log2),
     ok = ra_log:close(Log),
     LogA = InitFun(init_close_init),
     {2, 2} = ra_log:last_index_term(LogA),

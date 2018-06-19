@@ -250,7 +250,6 @@ make_node_ra_config(Name, Nodes, Node, Machine, DataDir) ->
       id => {Name, Node},
       uid => atom_to_binary(Name, utf8),
       initial_nodes => [{Name, N} || N <- Nodes],
-      log_module => ra_log_file,
       log_init_args =>
       #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
         uid => atom_to_binary(Name, utf8)},
