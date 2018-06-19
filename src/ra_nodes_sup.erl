@@ -74,8 +74,8 @@ delete_node_rpc(RaName) ->
     %% TODO: better handle and report errors
     UId = ra_directory:registered_name_from_node_name(RaName),
     Dir = ra_env:data_dir(UId),
-    ok = ra_log_file_segment_writer:release_segments(
-           ra_log_file_segment_writer, UId),
+    ok = ra_log_segment_writer:release_segments(
+           ra_log_segment_writer, UId),
     supervisor:terminate_child(?MODULE, UId),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of

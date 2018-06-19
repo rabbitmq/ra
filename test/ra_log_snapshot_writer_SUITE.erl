@@ -1,4 +1,4 @@
--module(ra_log_file_snapshot_writer_SUITE).
+-module(ra_log_snapshot_writer_SUITE).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -40,10 +40,10 @@ init_per_testcase(TestCase, Config) ->
 
 write_snapshot(Config) ->
     Dir = ?config(data_dir, Config),
-    _ = ra_log_file_snapshot_writer:start_link(),
+    _ = ra_log_snapshot_writer:start_link(),
     Snapshot = {10, 5, [node1], some_data},
     Self = self(),
-    ok = ra_log_file_snapshot_writer:write_snapshot(Self, Dir, Snapshot),
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot),
     receive
         {ra_log_event, {snapshot_written, {10, 5}, _}} ->
             % TODO: validate snapshot
@@ -55,7 +55,7 @@ write_snapshot(Config) ->
     end,
     % Write a second snapshot
     Snapshot2 = {20, 6, [node1, node2], some_data2},
-    ok = ra_log_file_snapshot_writer:write_snapshot(Self, Dir, Snapshot2),
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot2),
     receive
         {ra_log_event, {snapshot_written, {20, 6}, _}} ->
             % TODO: validate snapshot
@@ -71,8 +71,8 @@ write_snapshot(Config) ->
 
 write_snapshot_call(Config) ->
     Dir = ?config(data_dir, Config),
-    _ = ra_log_file_snapshot_writer:start_link(),
+    _ = ra_log_snapshot_writer:start_link(),
     Snapshot = {10, 5, [node1], some_data},
-    {ok, File} = ra_log_file_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    {ok, File} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
     ?assert(filelib:is_file(File)),
     ok.

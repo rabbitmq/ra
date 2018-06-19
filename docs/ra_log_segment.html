@@ -2,21 +2,21 @@
 <html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module ra_log_file_segment</title>
+<title>Module ra_log_segment</title>
 <link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
 </head>
 <body bgcolor="white">
 <div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <hr>
 
-<h1>Module ra_log_file_segment</h1>
+<h1>Module ra_log_segment</h1>
 <ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
 
 
 <h2><a name="types">Data Types</a></h2>
 
-<h3 class="typedecl"><a name="type-ra_log_file_segment_options">ra_log_file_segment_options()</a></h3>
-<p><tt>ra_log_file_segment_options() = #{max_count =&gt; non_neg_integer(), mode =&gt; append | read}</tt></p>
+<h3 class="typedecl"><a name="type-ra_log_segment_options">ra_log_segment_options()</a></h3>
+<p><tt>ra_log_segment_options() = #{max_count =&gt; non_neg_integer(), mode =&gt; append | read}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
@@ -71,7 +71,7 @@
 
 <h3 class="function"><a name="open-2">open/2</a></h3>
 <div class="spec">
-<p><tt>open(Filename::<a href="file.html#type-filename_all">file:filename_all()</a>, Options::<a href="#type-ra_log_file_segment_options">ra_log_file_segment_options()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</tt><br></p>
+<p><tt>open(Filename::<a href="file.html#type-filename_all">file:filename_all()</a>, Options::<a href="#type-ra_log_segment_options">ra_log_segment_options()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="range-1">range/1</a></h3>

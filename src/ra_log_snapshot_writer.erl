@@ -1,4 +1,4 @@
--module(ra_log_file_snapshot_writer).
+-module(ra_log_snapshot_writer).
 
 -behaviour(gen_server).
 

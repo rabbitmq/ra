@@ -64,7 +64,7 @@
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
                 max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
-                segment_writer = ra_log_file_segment_writer :: atom(),
+                segment_writer = ra_log_segment_writer :: atom(),
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
                 % No further writes are allowed until the missing
@@ -126,7 +126,7 @@ force_roll_over(Wal) ->
 %% Once the current .wal file is full a new one is closed. All the entries in
 %% ra_log_open_mem_tables are moved to ra_log_closed_mem_tables so that writers
 %% can still locate the tables whilst they are being flushed ot disk. The
-%% ra_log_file_segment_writer is notified of all the mem tables written to during
+%% ra_log_segment_writer is notified of all the mem tables written to during
 %% the lifetime of the .wal file and will begin writing these to on-disk segment
 %% files. Once it has finished the current set of mem_tables it will delete the
 %% corresponding .wal file.
@@ -162,7 +162,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
      || I <- lists:seq(0, ?METRICS_WINDOW_SIZE-1)],
     % wait for the segment writer to process anything in flight
     #{segment_writer := SegWriter} = Conf,
-    ok = ra_log_file_segment_writer:await(SegWriter),
+    ok = ra_log_segment_writer:await(SegWriter),
 
     Debug0 = sys:debug_options(Options),
     {State, Debug} = recover_wal(Dir, Conf, Debug0),
@@ -205,7 +205,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     true = ets:insert(ra_log_closed_mem_tables, Closed),
     % send all the mem tables to segment writer for processing
     % This could result in duplicate segments
-    [ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, M,F)
+    [ok = ra_log_segment_writer:accept_mem_tables(TblWriter, M,F)
      || {_, M, F} <- All],
 
     Modes = [raw, append, binary],
@@ -474,7 +474,7 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
     true = ets:delete_all_objects(OpnMemTbls),
 
     % notify segment_writer of new unflushed memtables
-    ok = ra_log_file_segment_writer:accept_mem_tables(TblWriter, MemTables,
+    ok = ra_log_segment_writer:accept_mem_tables(TblWriter, MemTables,
                                                       Filename),
     ok.
 
@@ -496,7 +496,7 @@ open_mem_table(UId) ->
     NodeName = ra_directory:what_node(UId),
     Tid = ets:new(NodeName, [set, {read_concurrency, true}, public]),
     % immediately give away ownership to ets process
-    true = ra_log_file_ets:give_away(Tid),
+    true = ra_log_ets:give_away(Tid),
     Tid.
 
 start_batch(State) ->
@@ -634,12 +634,11 @@ send_write(Wal, Msg) ->
 
 
 merge_conf_defaults(Conf) ->
-    maps:merge(#{segment_writer => ra_log_file_segment_writer,
+    maps:merge(#{segment_writer => ra_log_segment_writer,
                  max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
                  max_writer_entries_per_wal => ?MAX_WRITER_ENTRIES_PER_WAL,
                  compute_checksums => true,
-                 write_strategy => delay_writes},
-               Conf).
+                 write_strategy => delay_writes}, Conf).
 
 to_binary(Term) ->
     term_to_binary(Term).

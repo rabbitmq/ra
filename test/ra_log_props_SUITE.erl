@@ -1,4 +1,4 @@
--module(ra_log_file_props_SUITE).
+-module(ra_log_props_SUITE).
 -compile(export_all).
 
 -include_lib("proper/include/proper.hrl").
@@ -657,7 +657,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
-              _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
+              _ = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
               Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
@@ -667,12 +667,12 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
                                       {Acc1, Last1} = consume_events(Acc0, Last0),
                                       {Acc1, Last1, LastIdx, St};
                                  (stop_segment_writer, {Acc0, Last0, LastIdx, sw_up}) ->
-                                      ok = supervisor:terminate_child(ra_log_file_sup, ra_log_file_segment_writer),
+                                      ok = supervisor:terminate_child(ra_log_sup, ra_log_segment_writer),
                                       {Acc0, Last0, LastIdx, sw_down};
                                  (stop_segment_writer, {_, _, _, sw_down} = Acc) ->
                                       Acc;
                                  (start_segment_writer, {Acc0, Last0, LastIdx, sw_down}) ->
-                                      {ok, _} = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
+                                      {ok, _} = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
                                       {Acc0, Last0, LastIdx, sw_up};
                                  (start_segment_writer, {_, _, _, sw_up} = Acc) ->
                                       Acc;
@@ -707,7 +707,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
-              _ = supervisor:restart_child(ra_log_file_sup, ra_log_file_segment_writer),
+              _ = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
               Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase,
                                         resend_window => 2}),
               ra_log:take(1, 10, Log0),
@@ -719,7 +719,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
                                       Acc1 = deliver_log_events(Acc0, 500),
                                       {Acc1, Last0, Ts};
                                  (crash_segment_writer, {Acc0, Last0, _Ts}) ->
-                                      Acc = case whereis(ra_log_file_segment_writer) of
+                                      Acc = case whereis(ra_log_segment_writer) of
                                                 undefined ->
                                                     Acc0;
                                                 P ->
@@ -892,6 +892,6 @@ basic_reset(Log) ->
     ra_log:close(Log).
 
 reset(Log) ->
-    supervisor:restart_child(ra_log_wal_sup, ra_log_file_segment_writer),
+    supervisor:restart_child(ra_log_wal_sup, ra_log_segment_writer),
     supervisor:restart_child(ra_log_wal_sup, ra_log_wal),
     basic_reset(Log).

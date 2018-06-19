@@ -14,12 +14,12 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    Ets = #{id => ra_log_file_ets,
-            start => {ra_log_file_ets, start_link, []}},
+    Ets = #{id => ra_log_ets,
+            start => {ra_log_ets, start_link, []}},
     SupFlags = #{strategy => one_for_all, intensity => 1, period => 5},
-    RaLogFileSup = #{id => ra_log_file_sup,
+    RaLogFileSup = #{id => ra_log_sup,
                      type => supervisor,
-                     start => {ra_log_file_sup, start_link, []}},
+                     start => {ra_log_sup, start_link, []}},
     RaNodesSup = #{id => ra_nodes_sup,
                    type => supervisor,
                    start => {ra_nodes_sup, start_link, []}},

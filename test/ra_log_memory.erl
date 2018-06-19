@@ -147,7 +147,7 @@ set_last_index(Idx, #state{last_written = {LWIdx, _}} = State0) ->
 -spec last_written(ra_log_memory_state()) -> ra_idxterm().
 last_written(#state{last_written = LastWritten}) ->
     % we could just use the last index here but we need to "fake" it to
-    % remain api compatible with  ra_log_file, for now at least.
+    % remain api compatible with  ra_log, for now at least.
     LastWritten.
 
 -spec handle_event(ra_log:ra_log_event(), ra_log_memory_state()) ->

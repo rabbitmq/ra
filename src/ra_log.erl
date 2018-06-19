@@ -61,9 +61,9 @@
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          segment_refs = [] :: [ra_segment_ref()],
-         open_segments = #{} :: #{file:filename() => ra_log_file_segment:state()},
+         open_segments = #{} :: #{file:filename() => ra_log_segment:state()},
          directory :: list(),
-         kv :: ra_log_file_meta:state(),
+         kv :: ra_log_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
          % if this is set a snapshot write is in progress for the
          % index specified
@@ -102,10 +102,10 @@ init(#{uid := UId} = Conf) ->
     Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
     Meta = filename:join(Dir, "meta.dat"),
     ok = filelib:ensure_dir(Meta),
-    Kv = ra_log_file_meta:init(Meta),
+    Kv = ra_log_meta:init(Meta),
 
     % initialise metrics for this node
-    true = ets:insert(ra_log_file_metrics, {UId, 0, 0, 0, 0}),
+    true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
 
@@ -176,14 +176,14 @@ recover_range(UId) ->
                  end,
     ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
     % 2. check segments
-    SegFiles = ra_log_file_segment_writer:my_segments(UId),
+    SegFiles = ra_log_segment_writer:my_segments(UId),
     SegRefs =
     [begin
          %% ?INFO("ra_log: recovering ~p~n", [S]),
-         {ok, Seg} = ra_log_file_segment:open(S, #{mode => read}),
-         {F, L} = ra_log_file_segment:range(Seg),
+         {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
+         {F, L} = ra_log_segment:range(Seg),
          %% ?INFO("ra_log: recovered ~p ~p~n", [S, {F, L}]),
-         ok = ra_log_file_segment:close(Seg),
+         ok = ra_log_segment:close(Seg),
          {F, L, S}
      end || S <- lists:reverse(SegFiles)],
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
@@ -203,9 +203,9 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 close(#state{kv = Kv, open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
-    [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
+    [_ = ra_log_segment:close(S) || S <- maps:values(OpenSegs)],
     % close also fsyncs
-    _ = ra_log_file_meta:close(Kv),
+    _ = ra_log_meta:close(Kv),
     ok.
 
 -spec append(Entry :: log_entry(), State :: ra_log()) ->
@@ -384,9 +384,9 @@ handle_event({snapshot_written, {Idx, Term}, File},
                 ?INFO("~s: snapshot_written at ~b. Obsolete segments ~p",
                       [UId, Idx, Obsolete]),
                 % close any open segments
-                [ok = ra_log_file_segment:close(S)
+                [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
-                ok = ra_log_file_segment_writer:delete_segments(UId, Idx,
+                ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                                 Obsolete),
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
@@ -449,7 +449,7 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
 install_snapshot({Idx, Term, _, _} = Snapshot,
                  #state{directory = Dir} = State) ->
     % syncronous call when follower receives a snapshot
-    {ok, File} = ra_log_file_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    {ok, File} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
     handle_event({snapshot_written, {Idx, Term}, File},
     State#state{last_index = Idx,
                 last_written_index_term = {Idx, Term}}).
@@ -513,7 +513,7 @@ update_release_cursor(Idx, Cluster, MachineState,
 -spec read_meta(Key :: ra_meta_key(),
                 State :: ra_log()) -> maybe(term()).
 read_meta(Key, #state{kv = Kv}) ->
-    ra_log_file_meta:fetch(Key, Kv).
+    ra_log_meta:fetch(Key, Kv).
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log(),
                 Default :: term()) -> term().
@@ -528,11 +528,11 @@ write_meta(Key, Value, Log) ->
 -spec write_meta(Key :: ra_meta_key(), Value :: term(),
                  State :: ra_log(), Sync :: boolean()) -> ra_log().
 write_meta(Key, Value, #state{kv = Kv} = Log, true) ->
-    ok = ra_log_file_meta:store(Key, Value, Kv),
+    ok = ra_log_meta:store(Key, Value, Kv),
     ok = sync_meta(Log),
     Log;
 write_meta(Key, Value, #state{kv = Kv} = Log, false) ->
-    ok = ra_log_file_meta:store(Key, Value, Kv),
+    ok = ra_log_meta:store(Key, Value, Kv),
     Log.
 
 append_sync({Idx, Term, _} = Entry, Log0) ->
@@ -559,7 +559,7 @@ write_sync(Entries, Log0) ->
     end.
 -spec sync_meta(State :: ra_log()) -> ok.
 sync_meta(#state{kv = Kv}) ->
-    ok = ra_log_file_meta:sync(Kv),
+    ok = ra_log_meta:sync(Kv),
     ok.
 
 can_write(#state{wal = Wal}) ->
@@ -621,7 +621,7 @@ delete_everything(#state{directory = Dir} = Log) ->
 release_resources(#state{open_segments = OpenSegs} = State) ->
     % deliberately ignoring return value
     % close all open segments
-    [_ = ra_log_file_segment:close(S) || S <- maps:values(OpenSegs)],
+    [_ = ra_log_segment:close(S) || S <- maps:values(OpenSegs)],
     State#state{open_segments = #{}}.
 
 %%% Local functions
@@ -652,7 +652,7 @@ truncate_cache(Idx, #state{cache = Cache0} = State) ->
     State#state{cache = Cache}.
 
 update_metrics(Id, Ops) ->
-    _ = ets:update_counter(ra_log_file_metrics, Id, Ops),
+    _ = ets:update_counter(ra_log_metrics, Id, Ops),
     ok.
 
 open_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
@@ -743,7 +743,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
               Seg = case Open of
                         #{Fn := S} -> S;
                         _ ->
-                            {ok, S} = ra_log_file_segment:open(Fn,
+                            {ok, S} = ra_log_segment:open(Fn,
                                                                #{mode => read}),
                             S
                     end,
@@ -753,7 +753,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
               Start = max(Start0, From),
               Num = End - Start + 1,
               New = [ra_lib:update_element(3, E, fun binary_to_term/1)
-                     || E <- ra_log_file_segment:read(Seg, Start, Num)],
+                     || E <- ra_log_segment:read(Seg, Start, Num)],
               % TODO: should we really validate Num was read?
               Num = length(New),
               Rem = case Start of
@@ -773,11 +773,11 @@ segment_term_query0(Idx, [{From, To, Filename} | _Tail], Open)
   when Idx >= From andalso Idx =< To ->
     case Open of
         #{Filename := Seg} ->
-            Term = ra_log_file_segment:term_query(Seg, Idx),
+            Term = ra_log_segment:term_query(Seg, Idx),
             {Term, Open};
         _ ->
-            {ok, Seg} = ra_log_file_segment:open(Filename, #{mode => read}),
-            Term = ra_log_file_segment:term_query(Seg, Idx),
+            {ok, Seg} = ra_log_segment:open(Filename, #{mode => read}),
+            Term = ra_log_segment:term_query(Seg, Idx),
             {Term, Open#{Filename => Seg}}
     end;
 segment_term_query0(Idx, [_ | Tail], Open) ->
@@ -898,7 +898,7 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
     end.
 
 write_snapshot(Snapshot, #state{directory = Dir} = State) ->
-    ok = ra_log_file_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
+    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
     State#state{snapshot_index_in_progress = element(1, Snapshot)}.
 
 %%%% TESTS

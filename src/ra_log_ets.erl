@@ -1,4 +1,4 @@
--module(ra_log_file_ets).
+-module(ra_log_ets).
 -behaviour(gen_server).
 
 -export([start_link/0,
@@ -15,7 +15,7 @@
 
 -record(state, {}).
 
-%%% ra_log_file_ets - owns mem_table ETS tables
+%%% ra_log_ets - owns mem_table ETS tables
 
 %%%===================================================================
 %%% API functions

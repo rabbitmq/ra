@@ -49,21 +49,21 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     G = ?config(write_strategy, Config),
     Dir = filename:join([PrivDir, G, TestCase]),
-    {ok, Ets} = ra_log_file_ets:start_link(),
+    {ok, Ets} = ra_log_ets:start_link(),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     WalConf = #{dir => Dir, write_strategy => G},
     _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics, [named_table, public, {write_concurrency, true}]),
     ra_file_handle:start_link(),
-    [{ra_log_file_ets, Ets},
+    [{ra_log_ets, Ets},
      {writer_id, {UId, self()}},
      {test_case, TestCase},
      {wal_conf, WalConf},
      {wal_dir, Dir} | Config].
 
 end_per_testcase(_TestCase, Config) ->
-    proc_lib:stop(?config(ra_log_file_ets, Config)),
+    proc_lib:stop(?config(ra_log_ets, Config)),
     Config.
 
 basic_log_writes(Config) ->
@@ -248,8 +248,8 @@ roll_over(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     NumWrites = 5,
-    meck:new(ra_log_file_segment_writer, [passthrough]),
-    meck:expect(ra_log_file_segment_writer, await,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_size_bytes
     {ok, Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
@@ -292,8 +292,8 @@ recover_truncated_write(Config) ->
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
-    meck:new(ra_log_file_segment_writer, [passthrough]),
-    meck:expect(ra_log_file_segment_writer, await,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     {ok, _Pid} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
@@ -316,8 +316,8 @@ recover_after_roll_over(Config) ->
     Data = <<42:256/unit:8>>,
     Conf = Conf0#{segment_writer => self(),
                   max_wal_size_bytes => byte_size(Data) * 75},
-    meck:new(ra_log_file_segment_writer, [passthrough]),
-    meck:expect(ra_log_file_segment_writer, await, fun(_) -> ok end),
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
@@ -339,8 +339,8 @@ recover(Config) ->
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
-    meck:new(ra_log_file_segment_writer, [passthrough]),
-    meck:expect(ra_log_file_segment_writer, await, fun(_) -> ok end),
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
@@ -417,7 +417,7 @@ stop_profile(Config) ->
 
 
 % mem table read functions
-% the actual logic is implemented in ra_log_file
+% the actual logic is implemented in ra_log
 mem_tbl_read(Id, Idx) ->
     case ets:lookup(ra_log_open_mem_tables, Id) of
         [{_, Fst, _, _}] = Tids when Idx >= Fst ->

@@ -1,4 +1,4 @@
--module(ra_log_file_SUITE).
+-module(ra_log_2_SUITE).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -138,7 +138,7 @@ read_one(Config) ->
     {[_], Log} = ra_log:take(1, 5, Log2),
     % read out of range
     {[], Log} = ra_log:take(5, 5, Log2),
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_file_metrics, UId),
+    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_metrics, UId),
     % read two entries
     ?assert(M1 + M2 + M3 + M4 =:= 1),
     ra_log:close(Log),
@@ -179,7 +179,7 @@ validate_sequential_reads(Config) ->
                          {_, Reds} = process_info(self(), reductions),
                          {Reds - Reds0, L}
                  end),
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, UId),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_metrics, UId),
     ?assert(M1 + M2 + M3 + M4 =:= 1000),
 
     ct:pal("validate_sequential_reads COLD took ~pms Reductions: ~p~nMetrics: ~p",
@@ -219,7 +219,7 @@ validate_reads_for_overlapped_writes(Config) ->
     Log7 = validate_read(1, 200, 1, Log6),
     Log8 = validate_read(200, 551, 2, Log7),
 
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_file_metrics, UId),
+    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_metrics, UId),
     ct:pal("Metrics: ~p", [Metrics]),
     ?assert(M1 + M2 + M3 + M4 =:= 550),
     ra_log:close(Log8),
@@ -325,7 +325,7 @@ recover_bigly(Config) ->
     % ra_log:close(Log1),
     application:stop(ra),
     application:ensure_all_started(ra),
-    % ra_log_file_segment_writer:await(),
+    % ra_log_segment_writer:await(),
     Log = ra_log:init(#{data_dir => Dir, uid => UId}),
     {9999, 1} = ra_log:last_written(Log),
     {9999, 1} = ra_log:last_index_term(Log),
@@ -370,11 +370,11 @@ wal_crash_recover(Config) ->
                               resend_window => 1}),
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
-    ok = proc_lib:stop(ra_log_file_segment_writer),
+    ok = proc_lib:stop(ra_log_segment_writer),
     % write someting
     timer:sleep(100),
     Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
-    ok = proc_lib:stop(ra_log_file_segment_writer),
+    ok = proc_lib:stop(ra_log_segment_writer),
     Log3 = write_n(75, 100, 2, Log2),
     Log4 = deliver_all_log_events(Log3, 250),
     % wait long enough for the resend window to pass
@@ -494,7 +494,7 @@ snapshot_installation(Config) ->
     ok.
 
 update_release_cursor(Config) ->
-    % ra_log_file should initiate shapshot if segments can be released
+    % ra_log should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
@@ -528,7 +528,7 @@ update_release_cursor(Config) ->
     ok.
 
 missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
-    % ra_log_file should initiate shapshot if segments can be released
+    % ra_log should initiate shapshot if segments can be released
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
@@ -663,7 +663,7 @@ deliver_written_log_events(Log0, Timeout) ->
 validate_rolled_reads(_Config) ->
     % 1. configure WAL to low roll over limit
     % 2. append enough entries to ensure it has rolled over
-    % 3. pass all log events received to ra_log_file
+    % 3. pass all log events received to ra_log
     % 4. validate all entries can be read
     % 5. check there is only one .wal file
     exit(not_implemented).

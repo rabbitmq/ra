@@ -1,4 +1,4 @@
--module(ra_log_file_segment).
+-module(ra_log_segment).
 
 -export([open/1,
          open/2,
@@ -42,12 +42,12 @@
          pending = [] :: [{non_neg_integer(), binary()}]
         }).
 
--type ra_log_file_segment_options() :: #{max_count => non_neg_integer(),
+-type ra_log_segment_options() :: #{max_count => non_neg_integer(),
                                          mode => append | read}.
 -opaque state() :: #state{}.
 
 -export_type([state/0,
-              ra_log_file_segment_options/0]).
+              ra_log_segment_options/0]).
 
 -spec open(Filename :: file:filename_all()) ->
     {ok, state()} | {error, term()}.
@@ -55,7 +55,7 @@ open(Filename) ->
     open(Filename, #{}).
 
 -spec open(Filename :: file:filename_all(),
-           Options :: ra_log_file_segment_options()) ->
+           Options :: ra_log_segment_options()) ->
     {ok, state()} | {error, term()}.
 open(Filename, Options) ->
     AbsFilename = filename:absname(Filename),
@@ -75,7 +75,9 @@ process_file(true, Mode, Filename, Fd, _Options) ->
     case read_header(Fd) of
         {ok, MaxCount} ->
             IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
-            {NumIndexRecords, DataOffset, Range, Index} = recover_index(Fd, MaxCount),
+            {NumIndexRecords, DataOffset, Range, Index} =
+                recover_index(Fd, MaxCount),
+            IndexOffset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
             {ok, #state{version = 1,
                         max_count = MaxCount,
                         filename = Filename,
@@ -84,7 +86,7 @@ process_file(true, Mode, Filename, Fd, _Options) ->
                         mode = Mode,
                         data_start = ?HEADER_SIZE + IndexSize,
                         data_offset = DataOffset,
-                        index_offset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
+                        index_offset = IndexOffset,
                         range = Range,
                         % TODO: we don't need an index in memory in append mode
                         index = Index}};
@@ -125,7 +127,6 @@ append(#state{%fd = Fd,
                           DataOffset:32/integer, Length:32/integer,
                           Checksum:32/integer>>,
             Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
-            % ok = file:pwrite(Fd, [{DataOffset, Data}, {IndexOffset, IndexData}]),
             Range = update_range(Range0, Index),
             % fsync is done explicitly
             {ok, State#state{index_offset = IndexOffset + ?INDEX_RECORD_SIZE,
@@ -282,7 +283,7 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
     % trim index entries if Idx goes "backwards"
     Index = case Idx < LastIdx of
                 true -> maps:filter(fun (K, _) when K > Idx -> false;
-                                        (_,_) -> true
+                                        (_, _) -> true
                                     end, Index0);
                 false -> Index0
             end,

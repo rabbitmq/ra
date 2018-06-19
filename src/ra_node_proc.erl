@@ -668,8 +668,8 @@ terminate(Reason, StateName,
     _ = ra_node:terminate(NodeState, Reason),
     case Reason of
         {shutdown, delete} ->
-            _ = ra_log_file_segment_writer:release_segments(
-                  ra_log_file_segment_writer, UId),
+            _ = ra_log_segment_writer:release_segments(
+                  ra_log_segment_writer, UId),
             _ = ra_directory:unregister_name(UId);
         _ -> ok
     end,

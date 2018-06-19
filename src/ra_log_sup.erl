@@ -1,4 +1,4 @@
--module(ra_log_file_sup).
+-module(ra_log_sup).
 
 -behaviour(supervisor).
 
@@ -18,8 +18,8 @@ init([]) ->
     SegmentMaxEntries = application:get_env(ra, segment_max_entries, 4096),
     SegWriterConf = #{data_dir => DataDir,
                       segment_conf => #{max_count => SegmentMaxEntries}},
-    SegWriter = #{id => ra_log_file_segment_writer,
-                  start => {ra_log_file_segment_writer, start_link,
+    SegWriter = #{id => ra_log_segment_writer,
+                  start => {ra_log_segment_writer, start_link,
                             [SegWriterConf]}},
     WalConf = #{dir => DataDir},
     SupFlags = #{strategy => one_for_all, intensity => 5, period => 5},

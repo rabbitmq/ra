@@ -37,7 +37,7 @@ make_table(Table) when is_atom(Table) ->
 %%%===================================================================
 
 init([]) ->
-    _ = ets:new(ra_log_file_metrics, [named_table, set, public,
+    _ = ets:new(ra_log_metrics, [named_table, set, public,
                                       {write_concurrency, true},
                                       {read_concurrency, true}]),
     {ok, #state{}}.

@@ -1,4 +1,4 @@
--module(ra_log_file_meta).
+-module(ra_log_meta).
 
 -export([init/1,
          store/3,
