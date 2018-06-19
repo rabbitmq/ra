@@ -95,7 +95,7 @@
 -type applied_mfa() :: {module(), atom(), list()}.
 % represents a partially applied module call
 
--define(SHADOW_COPY_INTERVAL, 128).
+-define(SHADOW_COPY_INTERVAL, 4096).
 % metrics tuple format:
 % {Key, Ready, Pending, Total}
 
@@ -151,7 +151,8 @@
          dead_letter_handler :: maybe(applied_mfa()),
          cancel_customer_handler :: maybe(applied_mfa()),
          become_leader_handler :: maybe(applied_mfa()),
-         metrics_handler :: maybe(applied_mfa())
+         metrics_handler :: maybe(applied_mfa()),
+         prefix_msg_count = 0 :: non_neg_integer()
         }).
 
 -opaque state() :: #state{}.
@@ -239,7 +240,8 @@ apply(_RaftId, {return, MsgIds, CustomerId},
             {State, []}
     end;
 apply(_RaftIdx, {checkout, {dequeue, _}, {_Tag, _Pid}},
-      #state{messages = M} = State0) when map_size(M) == 0 ->
+      #state{messages = M,
+             prefix_msg_count = 0} = State0) when map_size(M) == 0 ->
     %% TODO do we need metric visibility of empty get requests?
     {State0, [], {dequeue, empty}};
 apply(RaftIdx, {checkout, {dequeue, settled}, CustomerId}, State0) ->
@@ -537,7 +539,9 @@ return(CustomerId, MsgNumMsgs, #customer{lifetime = Life} = Cust0, Checked,
                    Cust0#customer{checked_out = Checked}
            end,
     {Custs, SQ, Effects0} = update_or_remove_sub(CustomerId, Cust, Custs0, SQ0),
-    State1 = lists:foldl(fun({MsgNum, Msg}, S0) ->
+    State1 = lists:foldl(fun(dummy, #state{prefix_msg_count = MsgCount} = S0) ->
+                                 S0#state{prefix_msg_count = MsgCount + 1};
+                            ({MsgNum, Msg}, S0) ->
                                  return_one(MsgNum, Msg, S0)
                          end, State0, MsgNumMsgs),
     checkout(State1#state{customers = Custs,
@@ -661,22 +665,37 @@ next_checkout_message(#state{returns = Returns,
             end
     end.
 
-checkout_one(#state{messages = Messages0,
-                    service_queue = SQ0,
+take_next_msg(#state{prefix_msg_count = 0,
+                     messages = Messages0} = State0) ->
+    {NextMsgInId, State} = next_checkout_message(State0),
+    %% messages are available
+    case maps:take(NextMsgInId, Messages0) of
+        {IdxMsg, Messages} ->
+            {{NextMsgInId, IdxMsg}, State#state{messages = Messages}};
+        error ->
+            error
+    end;
+take_next_msg(#state{prefix_msg_count = MsgCount} = State) ->
+    {dummy, State#state{prefix_msg_count = MsgCount - 1}}.
+
+send_msg_effect(dummy, CPid, CTag, Next) ->
+    [{send_msg, CPid, {delivery, CTag, [{Next, dummy}]}}];
+send_msg_effect({_, {_, Msg}}, CPid, CTag, Next) ->
+    [{send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}].
+
+checkout_one(#state{service_queue = SQ0,
                     customers = Custs0} = InitState) ->
     case queue:out(SQ0) of
         {{value, {CTag, CPid} = CustomerId}, SQ1} ->
-            {NextMsgInId, State0} = next_checkout_message(InitState),
-            %% messages are available
-            case maps:take(NextMsgInId, Messages0) of
-                {{_, Msg} = IdxMsg, Messages} ->
+            case take_next_msg(InitState) of
+                {CustomerMsg, State0} ->
                     %% there are customers waiting to be serviced
                     %% process customer checkout
                     case maps:get(CustomerId, Custs0, undefined) of
                         #customer{checked_out = Checked0,
                                   next_msg_id = Next,
                                   seen = Seen} = Cust0 ->
-                            Checked = maps:put(Next, {NextMsgInId, IdxMsg},
+                            Checked = maps:put(Next, CustomerMsg,
                                                Checked0),
                             Cust = Cust0#customer{checked_out = Checked,
                                                   next_msg_id = Next+1,
@@ -685,10 +704,8 @@ checkout_one(#state{messages = Messages0,
                                 update_or_remove_sub(CustomerId, Cust,
                                                      Custs0, SQ1),
                             State = State0#state{service_queue = SQ,
-                                                 messages = Messages,
                                                  customers = Custs},
-                            {State, [{send_msg, CPid, {delivery, CTag,
-                                                       [{Next, Msg}]}}]};
+                            {State, send_msg_effect(CustomerMsg, CPid, CTag, Next)};
                         undefined ->
                             %% customer did not exist but was queued, recurse
                             checkout_one(InitState#state{service_queue = SQ1})
@@ -815,14 +832,13 @@ run_log(Num, Max, Gen, State0) ->
     {_, E} = Gen(Num),
     run_log(Num+1, Max, Gen, element(1, apply(Num, E, State0))).
 
-dehydrate_state(#state{messages = Messages0} = State) ->
-    %% replace all message bodies with a nil marker
-    %% as effects will never be actioned for these again
-    Messages = maps:map(fun (_K, {I, {H, _}}) ->
-                                {I, {H, nil}}
-                        end, Messages0),
-    State#state{messages = Messages,
-                ra_indexes = ra_fifo_index:empty()}.
+dehydrate_state(#state{messages = Messages0,
+                       prefix_msg_count = MsgCount} = State) ->
+    State#state{messages = #{},
+                ra_indexes = ra_fifo_index:empty(),
+                low_msg_num = undefined,
+                returns = queue:new(),
+                prefix_msg_count = maps:size(Messages0) + MsgCount}.
 
 
 -ifdef(TEST).
@@ -1222,8 +1238,8 @@ run_snapshot_test0(Name, Commands) ->
                                     end, Entries),
          {S, _} = run_log(SnapState, Filtered),
          % assert log can be restored from any release cursor index
-         % ?debugFmt("Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
-         %           [SnapIdx, S, State, SnapState, Filtered]),
+         % ?debugFmt("Name ~p Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
+         %           [Name, SnapIdx, S, State, SnapState, Filtered]),
          ?assertEqual(State, S)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],
     ok.
