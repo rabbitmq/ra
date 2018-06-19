@@ -35,7 +35,17 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     _ = file:make_dir(Dir),
+    _ = ets:new(ra_open_file_metrics,
+                [named_table, public, {write_concurrency, true}]),
+    _ = ets:new(ra_io_metrics,
+                [named_table, public, {write_concurrency, true}]),
+    ra_file_handle:start_link(),
     [{test_case, TestCase}, {data_dir, Dir} | Config].
+
+end_per_testcase(_, Config) ->
+    exit(whereis(ra_file_handle), normal),
+    Config.
+
 
 open_close_persists_max_count(Config) ->
     Dir = ?config(data_dir, Config),

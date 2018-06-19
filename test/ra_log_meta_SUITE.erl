@@ -34,7 +34,16 @@ end_per_group(_, Config) ->
 init_per_testcase(TestCase, Config) ->
     Dir = ?config(priv_dir, Config),
     File = filename:join(Dir, atom_to_list(TestCase)),
+    _ = ets:new(ra_open_file_metrics,
+                [named_table, public, {write_concurrency, true}]),
+    _ = ets:new(ra_io_metrics,
+                [named_table, public, {write_concurrency, true}]),
+    ra_file_handle:start_link(),
     [{file, File} |  Config].
+
+end_per_testcase(_, Config) ->
+    exit(whereis(ra_file_handle), normal),
+    Config.
 
 init(Config) ->
     Kv = ra_log_meta:init(?config(file, Config)),
