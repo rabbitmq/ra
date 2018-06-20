@@ -210,6 +210,7 @@ recover(enter, _OldState, State = #state{name = Name}) ->
     {keep_state, State};
 recover(_EventType, go, State = #state{node_state = NodeState0}) ->
     NodeState = ra_node:recover(NodeState0),
+    erlang:garbage_collect(),
     % New cluster starts should be coordinated and elections triggered
     % explicitly hence if this is a new one we wait here.
     % Else we set an election timer
