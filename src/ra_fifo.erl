@@ -248,18 +248,18 @@ apply(RaftIdx, {checkout, {dequeue, settled}, CustomerId}, Effects0, State0) ->
     % TODO: this clause could probably be optimised
     State1 = update_customer(CustomerId, {once, 1}, State0),
     % turn send msg effect into reply
-    {ok, State2, [{send_msg, _, {_, _, [{MsgId, _} = M]}}]} = checkout_one([], State1),
+    {success, _, MsgId, Msg, State2} = checkout_one(State1),
     % immediately settle
     {State, Effects} = apply(RaftIdx, {settle, [MsgId], CustomerId},
                              Effects0, State2),
-    {State, Effects, {dequeue, M}};
+    {State, Effects, {dequeue, {MsgId, Msg}}};
 apply(_RaftIdx, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
       Effects0, State0) ->
     State1 = update_customer(Customer, {once, 1}, State0),
-    {State, Reply} = case checkout_one([], State1) of
-                         {ok, S, [{send_msg, _, {_, _, [M]}}]} ->
-                             {S, M};
-                         {none, S, []} ->
+    {State, Reply} = case checkout_one(State1) of
+                         {success, _, MsgId, Msg, S} ->
+                             {S, {MsgId, Msg}};
+                         S ->
                              {S, empty}
                      end,
     {State, [{monitor, process, Pid} | Effects0], {dequeue, Reply}};
@@ -269,8 +269,8 @@ apply(_RaftIdx, {checkout, cancel, CustomerId}, Effects0, State0) ->
     % TODO: here we should really demonitor the pid but _only_ if it has no
     % other customers or enqueuers.
     {State, Effects};
-apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = Customer}, Effects0, State0) ->
-    State1 = update_customer(Customer, Spec, State0),
+apply(_RaftIdx, {checkout, Spec, {_Tag, Pid} = CustomerId}, Effects0, State0) ->
+    State1 = update_customer(CustomerId, Spec, State0),
     {State, Effects} = checkout(State1, Effects0),
     {State, [{monitor, process, Pid} | Effects]};
 apply(RaftIdx, purge, Effects0, #state{customers = Custs0,
@@ -641,11 +641,17 @@ return_one(MsgNum, {RaftId, {Header0, RawMsg}},
 
 
 checkout(State, Effects) ->
-    checkout0(checkout_one(Effects, State)).
+    checkout0(checkout_one(State), Effects, #{}).
 
-checkout0({ok, State, Effects}) ->
-    checkout0(checkout_one(Effects, State));
-checkout0({none, State, Effects}) ->
+checkout0({success, CustomerId, MsgId, Msg, State}, Effects, Acc0) ->
+    Acc = maps:update_with(CustomerId,
+                           fun (M) -> [{MsgId, Msg} | M] end,
+                           [{MsgId, Msg}], Acc0),
+    checkout0(checkout_one(State), Effects, Acc);
+checkout0(State, Effects0, Acc) ->
+    Effects = maps:fold(fun (C, Msgs, Ef) ->
+                                [send_msg_effect(C, lists:reverse(Msgs)) | Ef]
+                        end, Effects0, Acc),
     {State, Effects}.
 
 
@@ -684,15 +690,15 @@ take_next_msg(#state{prefix_msg_count = 0,
 take_next_msg(#state{prefix_msg_count = MsgCount} = State) ->
     {dummy, State#state{prefix_msg_count = MsgCount - 1}}.
 
-send_msg_effect(dummy, CPid, CTag, Next) ->
-    {send_msg, CPid, {delivery, CTag, [{Next, dummy}]}};
-send_msg_effect({_, {_, Msg}}, CPid, CTag, Next) ->
-    {send_msg, CPid, {delivery, CTag, [{Next, Msg}]}}.
+% send_msg_effect(dummy, {CPid, Next}, CTag) ->
+%     {send_msg, CPid, {delivery, CTag, [{Next, dummy}]}};
+send_msg_effect({CTag, CPid}, Msgs) ->
+    {send_msg, CPid, {delivery, CTag, Msgs}}.
 
-checkout_one(Effects, #state{service_queue = SQ0,
-                             customers = Custs0} = InitState) ->
+checkout_one(#state{service_queue = SQ0,
+                    customers = Custs0} = InitState) ->
     case queue:out(SQ0) of
-        {{value, {CTag, CPid} = CustomerId}, SQ1} ->
+        {{value, CustomerId}, SQ1} ->
             case take_next_msg(InitState) of
                 {CustomerMsg, State0} ->
                     %% there are customers waiting to be serviced
@@ -701,8 +707,7 @@ checkout_one(Effects, #state{service_queue = SQ0,
                         #customer{checked_out = Checked0,
                                   next_msg_id = Next,
                                   seen = Seen} = Cust0 ->
-                            Checked = maps:put(Next, CustomerMsg,
-                                               Checked0),
+                            Checked = maps:put(Next, CustomerMsg, Checked0),
                             Cust = Cust0#customer{checked_out = Checked,
                                                   next_msg_id = Next+1,
                                                   seen = Seen+1},
@@ -711,19 +716,20 @@ checkout_one(Effects, #state{service_queue = SQ0,
                                                      Custs0, SQ1, []),
                             State = State0#state{service_queue = SQ,
                                                  customers = Custs},
-                            {ok, State,
-                             [send_msg_effect(CustomerMsg, CPid, CTag, Next)
-                              | Effects]};
+                            Msg = case CustomerMsg of
+                                      dummy -> dummy;
+                                      {_, {_, M}} -> M
+                                  end,
+                            {success, CustomerId, Next, Msg, State};
                         undefined ->
                             %% customer did not exist but was queued, recurse
-                            checkout_one(Effects,
-                                         InitState#state{service_queue = SQ1})
+                            checkout_one(InitState#state{service_queue = SQ1})
                     end;
                 error ->
-                    {none, InitState, Effects}
+                    InitState
             end;
         _ ->
-            {none, InitState, Effects}
+            InitState
     end.
 
 
@@ -968,17 +974,10 @@ out_of_order_enqueue_test() ->
     ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects4),
     {_State5, Effects5} = enq(5, 2, second, State4),
     % assert two deliveries were now made
-    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, second}}]}}, Effects5),
-    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, third}}]}}, Effects5),
-    % assert order of deliveries
-    Deliveries = lists:filtermap(
-                   fun({send_msg, _, {delivery,_, [{_, {_, M}}]}}) ->
-                           {true, M};
-                      (_) ->
-                           false
-                   end, lists:reverse(Effects5)),
-    [second, third, fourth] = Deliveries,
-
+    ?debugFmt("Effects5 ~n~p~n", [Effects5]),
+    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, second}},
+                                               {_, {_, third}},
+                                               {_, {_, fourth}}]}}, Effects5),
     ok.
 
 out_of_order_first_enqueue_test() ->
