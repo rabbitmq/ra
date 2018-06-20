@@ -194,7 +194,7 @@ recover(#{id := Id,
                                      %% up a long list of effects than then
                                      %% we throw away
                                      %% on node startup (queue recovery)
-                                     setelement(3,
+                                     setelement(4,
                                                 apply_with(Machine, E, S), [])
                              end,
                              State0),
@@ -1231,58 +1231,65 @@ apply_to(ApplyTo, #{machine := Machine} = State) ->
     apply_to(ApplyTo, fun(E, S) -> apply_with(Machine, E, S) end, State).
 
 apply_to(ApplyTo, ApplyFun, State) ->
-    apply_to(ApplyTo, ApplyFun, 0, [], State).
+    apply_to(ApplyTo, ApplyFun, 0, #{}, [], State).
 
-apply_to(ApplyTo, ApplyFun, NumApplied, Effects,
+apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
          #{last_applied := LastApplied,
            machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
     To = min(LastApplied + 1 + 1024, ApplyTo),
     case fetch_entries(LastApplied + 1, To, State0) of
         {[], State} ->
+            %% reverse list before consing the notifications to ensure
+            %% notifications are processed first
+            Effects = make_notify_effects(Notifys0, lists:reverse(Effects0)),
             {State, Effects, NumApplied};
         {Entries, State1} ->
-            {State, MacState, NewEffects, Notifys} =
-                lists:foldl(ApplyFun, {State1, MacState0, [], #{}}, Entries),
-            NotifyEffects = make_notify_effects(Notifys),
-            {AppliedTo, _, _} = lists:last(Entries),
+            {AppliedTo, State, MacState, Effects, Notifys} =
+                lists:foldl(ApplyFun, {LastApplied, State1, MacState0,
+                                       Effects0, Notifys0}, Entries),
+            % Effects = make_notify_effects(Notifys, Effects1),
+            % {AppliedTo,_, _} = lists:last(Entries),
             % ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
             apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
-                     Effects ++ NotifyEffects ++ NewEffects,
-                     State#{last_applied => AppliedTo,
-                            machine_state => MacState})
+                     Notifys, Effects, State#{last_applied => AppliedTo,
+                                              machine_state => MacState})
     end;
-apply_to(_, _, NumApplied, Effects, State) -> % ApplyTo
+apply_to(_, _, NumApplied, Notifys, Effects0, State) -> % ApplyTo
+    %% reverse list before consing the notifications to ensure
+    %% notifications are processed first
+    Effects = make_notify_effects(Notifys, lists:reverse(Effects0)),
     {State, Effects, NumApplied}.
 
-make_notify_effects(Nots) ->
-    [{notify, Pid, lists:reverse(Corrs)}
-     || {Pid, Corrs} <- maps:to_list(Nots)].
+make_notify_effects(Nots, Effects) ->
+    maps:fold(fun (Pid, Corrs, Acc) ->
+                      [{notify, Pid, lists:reverse(Corrs)} | Acc]
+              end, Effects, Nots).
 
 apply_with(Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},
-           {State, MacSt, Effects0, Notifys0}) ->
-    case ra_machine:apply(Machine, Idx, Cmd, MacSt) of
-        {NextMacSt, Efx} ->
+           {_, State, MacSt, Effects0, Notifys0}) ->
+    case ra_machine:apply(Machine, Idx, Cmd, Effects0, MacSt) of
+        {NextMacSt, Effects1} ->
             % apply returned no reply so use IdxTerm as reply value
             {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
-                                           Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx, Notifys};
-        {NextMacSt, Efx, Reply} ->
+                                           Effects1, Notifys0),
+            {Idx, State, NextMacSt, Effects, Notifys};
+        {NextMacSt, Effects1, Reply} ->
             % apply returned a return value
             {Effects, Notifys} = add_reply(From, Reply, ReplyType,
-                                           Effects0, Notifys0),
-            {State, NextMacSt, Effects ++ Efx, Notifys}
+                                           Effects1, Notifys0),
+            {Idx, State, NextMacSt, Effects, Notifys}
     end;
 apply_with(_, % Machine
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
-           {State, MacSt, Effects0, Notifys0}) ->
+           {_, State, MacSt, Effects0, Notifys0}) ->
     {Effects, Notifys} = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
                                    ReplyType, Effects0, Notifys0),
-    {State, MacSt, Effects, Notifys};
+    {Idx, State, MacSt, Effects, Notifys};
 apply_with(_Machine,
            {Idx, Term, {'$ra_cluster_change', From, _New, ReplyType}},
-           {State0, MacSt, Effects0, Notifys0}) ->
+           {_, State0, MacSt, Effects0, Notifys0}) ->
     ?INFO("~w: applying ra cluster change to ~w~n",
           [id(State0), maps:keys(_New)]),
     {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
@@ -1290,29 +1297,29 @@ apply_with(_Machine,
     State = State0#{cluster_change_permitted => true},
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
-    {State1, MacSt, Effects1, Notifys};
+    {Idx, State1, MacSt, Effects1, Notifys};
 apply_with(_, % Machine
-           {_, Term, noop}, % Idx
-           {State0 = #{current_term := Term}, MacSt, Effects, Notifys}) ->
+           {Idx, Term, noop}, % Idx
+           {_, State0 = #{current_term := Term}, MacSt, Effects, Notifys}) ->
     ?INFO("~w: enabling ra cluster changes in ~b~n", [id(State0), Term]),
     State = State0#{cluster_change_permitted => true},
-    {State, MacSt, Effects, Notifys};
+    {Idx, State, MacSt, Effects, Notifys};
 apply_with(Machine,
            {Idx, _, {'$ra_cluster', From, delete, ReplyType}},
-           {State0, MacSt, Effects0, Notifys0}) ->
+           {_, State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
-    {Effects, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
-    NotifyEffects = make_notify_effects(Notifys),
-    TEffects = ra_machine:eol_effects(Machine, MacSt),
+    {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
+    Effects = make_notify_effects(Notifys, Effects1),
+    EOLEffects = ra_machine:eol_effects(Machine, MacSt),
     % non-local return to be caught by ra_node_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},
-    throw({delete_and_terminate, State, NotifyEffects ++ TEffects ++ Effects});
-apply_with(_, Cmd, Acc) ->
+    throw({delete_and_terminate, State, EOLEffects ++ Effects});
+apply_with(_, {Idx, _, _} = Cmd, Acc) ->
     % TODO: uh why a catch all here? try to remove this and see if it breaks
     ?WARN("~p: apply_with: unhandled command: ~W~n",
-          [id(element(1, Acc)), Cmd, 8]),
-    Acc.
+          [id(element(2, Acc)), Cmd, 10]),
+    setelement(1, Acc, Idx).
 
 add_next_cluster_change(Effects,
                         #{pending_cluster_changes := [C | Rest]} = State) ->

@@ -1249,7 +1249,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                                   last_config = Config, data = []},
     {follower, FState1, _} = ra_node:handle_follower(ISRpc, FState0),
 
-    Cmd = usr_cmd({enc, banana}),
+    Cmd = usr({enc, banana}),
     AER = #append_entries_rpc{entries = [{4, 2, Cmd}],
                               leader_id = n1,
                               term = Term,

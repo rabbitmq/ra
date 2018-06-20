@@ -17,11 +17,14 @@ implemented:
 `init/1` returns the initial state when a new instance of the state machine
 is created. It takes an arbitrary map of configuration parameters.
 
-`apply/3` is the primary function that is called for every command in the
-raft log. It takes the raft index (more on that later), a command and the
+`apply/4` is the primary function that is called for every command in the
+raft log. It takes the raft index (more on that later), a command, a list
+of effects and the
 current state and either returns the new state and a list of effects (more on
 effects later) or the new state, effects _and_ a reply that can be returned
 to the caller _if_ they issued a synchronous call (see: `ra:send_and_await_consensus`).
+Effects should be prepended to the incoming effects list. Ra will reverse
+the list of effects for each batch of applied entries before processing.
 
 There are also some optional callbacks that advanced state machines may choose to
 implement.

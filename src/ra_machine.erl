@@ -9,10 +9,12 @@
 %% Initialize a new machine state.
 %%
 %%<br></br>
-%% <code>-callback apply(Index :: ra_index(), {@link command()}, State) ->
+%% <code>-callback apply(Index :: ra_index(), {@link command()}, effects(), State) ->
 %%    {State, effects()} | {State, {@link effects()}, {@link reply()}}</code>
 %%
-%% Applies each entry to the state machine.
+%% Applies each entry to the state machine. Effects should be prepended to the
+%% incoming list of effects. Ra will reverse the list of effects before
+%% processing.
 %%
 %%<br></br>
 %% <code>-callback leader_effects(state()) -> effects().</code>
@@ -44,7 +46,7 @@
 
 
 -export([init/2,
-         apply/4,
+         apply/5,
          leader_effects/2,
          eol_effects/2,
          tick/3,
@@ -146,7 +148,7 @@
 
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
--callback 'apply'(Index :: ra_index(), command(), State) ->
+-callback 'apply'(Index :: ra_index(), command(), effects(), State) ->
     {State, effects()} | {State, effects(), reply()}.
 
 -callback leader_effects(state()) -> effects().
@@ -164,11 +166,11 @@ init({module, Mod, Args}, Name) ->
 init({simple, _Fun, InitialState}, _Name) ->
     {InitialState, []}.
 
--spec apply(machine(), ra_index(), command(), State) ->
+-spec apply(machine(), ra_index(), command(), effects(), State) ->
     {State, effects()} | {State, effects(), reply()}.
-apply({module, Mod, _}, Idx, Cmd, State) ->
-    Mod:apply(Idx, Cmd, State);
-apply({simple, Fun, _InitialState}, _Idx, Cmd, State) ->
+apply({module, Mod, _}, Idx, Cmd, Effects, State) ->
+    Mod:apply(Idx, Cmd, Effects, State);
+apply({simple, Fun, _InitialState}, _Idx, Cmd, _Effects, State) ->
     {Fun(Cmd, State), []}.
 
 -spec leader_effects(machine(), state()) -> effects().

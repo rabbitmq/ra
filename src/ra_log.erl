@@ -735,7 +735,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
     lists:foldl(
       fun(_, {_, undefined, _} = Acc) ->
               Acc;
-         ({From, _, _}, {_, {_Start0, End}, _} = Acc)
+         ({From, _, _}, {_, {_, End}, _} = Acc)
            when From > End ->
               Acc;
          ({From, To, Fn}, {Open, {Start0, End}, Entries})
@@ -743,8 +743,7 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
               Seg = case Open of
                         #{Fn := S} -> S;
                         _ ->
-                            {ok, S} = ra_log_segment:open(Fn,
-                                                               #{mode => read}),
+                            {ok, S} = ra_log_segment:open(Fn, #{mode => read}),
                             S
                     end,
 

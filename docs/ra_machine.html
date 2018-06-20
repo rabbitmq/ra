@@ -24,10 +24,12 @@
   <p>Initialize a new machine state.</p>
  
  <p><br>
-  <code>-callback apply(Index :: ra_index(), <a href="#type-command"><code>command()</code></a>, State) -&gt;
+  <code>-callback apply(Index :: ra_index(), <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
      {State, effects()} | {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
-  <p>Applies each entry to the state machine.</p>
+  <p>Applies each entry to the state machine. Effects should be prepended to the  
+incoming list of effects. Ra will reverse the list of effects before  
+processing.</p>
  
  <p><br>
   <code>-callback leader_effects(state()) -&gt; effects().</code></p>
@@ -97,7 +99,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p>  the command type for a given machine implementation</p>
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#eol_effects-2">eol_effects/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
 <tr><td valign="top"><a href="#leader_effects-2">leader_effects/2</a></td><td></td></tr>
@@ -108,9 +110,9 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="apply-4">apply/4</a></h3>
+<h3 class="function"><a name="apply-5">apply/5</a></h3>
 <div class="spec">
-<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Cmd::<a href="#type-command">command()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>} | {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
+<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Cmd::<a href="#type-command">command()</a>, Effects::<a href="#type-effects">effects()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>} | {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="eol_effects-2">eol_effects/2</a></h3>
