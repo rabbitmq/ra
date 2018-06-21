@@ -38,7 +38,8 @@ all_tests() ->
      snapshot_installation,
      update_release_cursor,
      missed_closed_tables_are_deleted_at_next_opportunity,
-     transient_writer_is_handled
+     transient_writer_is_handled,
+     read_opt
     ].
 
 groups() ->
@@ -225,6 +226,25 @@ validate_reads_for_overlapped_writes(Config) ->
     ra_log:close(Log8),
     ok.
 
+read_opt(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
+    % write a segment and roll 1 - 299 - term 1
+    Num = 4096 * 5,
+    Log1 = write_and_roll(1, Num, 1, Log0, 5000),
+    %% read small batch of the latest entries
+    {_, Log} = ra_log:take(1, Num, Log1),
+    {Time, _} = timer:tc(fun () ->
+                                 _ = erlang:statistics(exact_reductions),
+                                 ra_log:take(1, Num, Log)
+                         end),
+    Reds = erlang:statistics(exact_reductions),
+    ct:pal("read took ~w Reduction ~w~n", [Time / 1000, Reds]),
+    ok.
+
+
+
 cache_overwrite_then_take(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
@@ -319,7 +339,7 @@ recover_bigly(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
     Log1 = write_n(1, 10000, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 5),
+    Log2 = deliver_all_log_events(Log1, 50),
     {9999, 1} = ra_log:last_index_term(Log2),
     {9999, 1} = ra_log:last_written(Log2),
     % ra_log:close(Log1),
@@ -607,9 +627,12 @@ append_and_roll_no_deliver(From, To, Term, Log0) ->
     Log1.
 
 write_and_roll(From, To, Term, Log0) ->
+    write_and_roll(From, To, Term, Log0, 200).
+
+write_and_roll(From, To, Term, Log0, Timeout) ->
     Log1 = write_n(From, To, Term, Log0),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    deliver_all_log_events(Log1, 200).
+    deliver_all_log_events(Log1, Timeout).
 
 write_and_roll_no_deliver(From, To, Term, Log0) ->
     Log1 = write_n(From, To, Term, Log0),
@@ -636,7 +659,7 @@ deliver_all_log_events(Log0, Timeout) ->
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
             Log = ra_log:handle_event(Evt, Log0),
-            deliver_all_log_events(Log, 100)
+            deliver_all_log_events(Log, Timeout)
     after Timeout ->
               Log0
     end.

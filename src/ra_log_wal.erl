@@ -311,15 +311,17 @@ write_data(Id, Idx, Term, Data0, Trunc,
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
-    % fixed overhead = 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
+    % fixed overhead =
+    % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
     DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
         true ->
             {State, Dbg} = roll_over(State00, Dbg0),
-            % TODO: there is some redundant computation performed by recursing here
-            % it probably doesn't matter as it only happens when a wal file fills up
+            % TODO: there is some redundant computation performed by
+            % recursing here it probably doesn't matter as it only happens
+            % when a wal file fills up
             write_data(Id, Idx, Term, Data0, Trunc, State, Dbg);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
@@ -334,8 +336,8 @@ write_data(Id, Idx, Term, Data0, Trunc,
                        Checksum:32/integer,
                        EntryDataLen:32/integer,
                        Entry/binary>>,
-            {append_data(State0, Id, Idx, Term, Data0, DataSize, Record, Trunc),
-             Dbg0}
+            {append_data(State0, Id, Idx, Term, Data0,
+                         DataSize, Record, Trunc), Dbg0}
     end.
 
 handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},

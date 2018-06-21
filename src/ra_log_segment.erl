@@ -5,6 +5,7 @@
          append/4,
          sync/1,
          read/3,
+         read_cons/5,
          term_query/2,
          close/1,
          range/1,
@@ -109,8 +110,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
-append(#state{%fd = Fd,
-              index_offset = IndexOffset,
+append(#state{index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
@@ -155,12 +155,22 @@ sync(#state{fd = Fd, pending = Pend} = State) ->
 
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
-read(#state{fd = Fd, mode = read, index = Index}, Idx0, Num) ->
+read(State, Idx, Num) ->
     % TODO: should we better indicate when records aren't found?
     % This depends on the semantics we want from a segment
-    {Locs, Metas} = read_locs(Idx0 + Num - 1, Idx0, Index, {[], []}),
+    read_cons(State, Idx, Num, fun ra_lib:id/1, []).
+
+
+-spec read_cons(state(), ra_index(), Num :: non_neg_integer(),
+                fun((binary()) -> term()), Acc) ->
+    Acc when Acc :: [{ra_index(), ra_term(), binary()}].
+read_cons(#state{fd = Fd, mode = read, index = Index}, Idx,
+          Num, Fun, Acc) ->
+    % TODO: should we better indicate when records aren't found?
+    % This depends on the semantics we want from a segment
+    {Locs, Metas} = read_locs(Idx, Idx + Num, Index, {[], []}),
     {ok, Datas} = ra_file_handle:pread(Fd, Locs),
-    combine(Metas, Datas, []).
+    combine_with(Metas, Datas, Fun, Acc).
 
 -spec term_query(state(), Idx :: ra_index()) ->
     maybe(ra_term()).
@@ -171,23 +181,28 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
+combine_with([], [], _, Acc) ->
+    Acc;
+combine_with([{_, _, Crc} = Meta | MetaTail],
+             [Data | DataTail], Fun, Acc) ->
+    % TODO: make checksum check optional
+    case erlang:crc32(Data) of
+        Crc -> ok;
+        _ ->
+            exit(ra_log_segment_crc_check_failure)
+    end,
+    combine_with(MetaTail, DataTail, Fun,
+                 [setelement(3, Meta, Fun(Data)) | Acc]).
 
-combine([], [], Acc) ->
-    lists:reverse(Acc);
-combine([{_, _, _Crc} = Meta | MetaTail],
-        [Data | DataTail], Acc) ->
-    % TODO: optionally validate checksums
-    combine(MetaTail, DataTail, [setelement(3, Meta, Data) | Acc]).
-
-read_locs(Idx, FinalIdx, _Index, Acc) when Idx < FinalIdx ->
+read_locs(Idx, Idx, _, Acc) ->
     Acc;
 read_locs(Idx, FinalIdx, Index, {Locs, Meta} = Acc) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc}} ->
-            read_locs(Idx-1, FinalIdx, Index,
+            read_locs(Idx+1, FinalIdx, Index,
                       {[{Offset, Length} | Locs], [{Idx, Term, Crc} | Meta]});
         _ ->
-            read_locs(Idx-1, FinalIdx, Index, Acc)
+            read_locs(Idx+1, FinalIdx, Index, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).

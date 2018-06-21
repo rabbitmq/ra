@@ -271,7 +271,7 @@ take(Start, Num, #state{uid = UId, first_index = FirstIdx,
                             ok = update_metrics(UId, MetricOps),
                             {Entries2, State};
                         {Entries2, MetricOps2, {S, E} = Rem2} ->
-                            case segment_take(State, Rem2, Entries2) of
+                            case catch segment_take(State, Rem2, Entries2) of
                                 {Open, undefined, Entries} ->
                                     MetricOp = {?METRICS_SEGMENT_POS, E - S + 1},
                                     ok = update_metrics(UId, [MetricOp | MetricOps2]),
@@ -734,11 +734,12 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
              Range, Entries0) ->
     lists:foldl(
       fun(_, {_, undefined, _} = Acc) ->
-              Acc;
+              %% we're done reading
+              throw(Acc);
          ({From, _, _}, {_, {_, End}, _} = Acc)
            when From > End ->
               Acc;
-         ({From, To, Fn}, {Open, {Start0, End}, Entries})
+         ({From, To, Fn}, {Open, {Start0, End}, E0})
            when To >= End ->
               Seg = case Open of
                         #{Fn := S} -> S;
@@ -751,16 +752,15 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
               % index
               Start = max(Start0, From),
               Num = End - Start + 1,
-              New = [ra_lib:update_element(3, E, fun binary_to_term/1)
-                     || E <- ra_log_segment:read(Seg, Start, Num)],
-              % TODO: should we really validate Num was read?
-              Num = length(New),
+              Entries = ra_log_segment:read_cons(Seg, Start, Num,
+                                                 fun binary_to_term/1,
+                                                 E0),
               Rem = case Start of
                         Start0 -> undefined;
                         _ ->
                             {Start0, Start-1}
                     end,
-              {Open#{Fn => Seg}, Rem, New ++ Entries}
+              {Open#{Fn => Seg}, Rem, Entries}
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #state{segment_refs = SegRefs,
