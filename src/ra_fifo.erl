@@ -2,6 +2,8 @@
 
 -behaviour(ra_machine).
 
+-compile(inline_list_funcs).
+-compile(inline).
 -compile({no_auto_import, [apply/3]}).
 
 -include("ra.hrl").
@@ -644,9 +646,10 @@ checkout(State, Effects) ->
     checkout0(checkout_one(State), Effects, #{}).
 
 checkout0({success, CustomerId, MsgId, Msg, State}, Effects, Acc0) ->
+    DelMsg = {MsgId, Msg},
     Acc = maps:update_with(CustomerId,
-                           fun (M) -> [{MsgId, Msg} | M] end,
-                           [{MsgId, Msg}], Acc0),
+                           fun (M) -> [DelMsg | M] end,
+                           [DelMsg], Acc0),
     checkout0(checkout_one(State), Effects, Acc);
 checkout0(State, Effects0, Acc) ->
     Effects = maps:fold(fun (C, Msgs, Ef) ->
@@ -658,23 +661,24 @@ checkout0(State, Effects0, Acc) ->
 next_checkout_message(#state{returns = Returns,
                              low_msg_num = Low0,
                              next_msg_num = NextMsgNum} = State) ->
-    case queue:out(Returns) of
-        {{value, Next}, Rest} ->
-            {Next, State#state{returns = Rest}};
-        {empty, _} ->
+    %% use peek rather than out there as the most likely case is an empty
+    %% queue
+    case queue:peek(Returns) of
+        empty ->
             case Low0 of
                 undefined ->
                     {undefined, State};
                 _ ->
-                    Low = Low0 + 1,
-                    case Low of
+                    case Low0 + 1 of
                         NextMsgNum ->
                             %% the map will be empty after this item is removed
                             {Low0, State#state{low_msg_num = undefined}};
-                        _ ->
+                        Low ->
                             {Low0, State#state{low_msg_num = Low}}
                     end
-            end
+            end;
+        {value, Next} ->
+            {Next, State#state{returns = queue:drop(Returns)}}
     end.
 
 take_next_msg(#state{prefix_msg_count = 0,
@@ -683,30 +687,30 @@ take_next_msg(#state{prefix_msg_count = 0,
     %% messages are available
     case maps:take(NextMsgInId, Messages0) of
         {IdxMsg, Messages} ->
-            {{NextMsgInId, IdxMsg}, State#state{messages = Messages}};
+            {{NextMsgInId, IdxMsg}, State, Messages, 0};
         error ->
             error
     end;
-take_next_msg(#state{prefix_msg_count = MsgCount} = State) ->
-    {dummy, State#state{prefix_msg_count = MsgCount - 1}}.
+take_next_msg(#state{prefix_msg_count = MsgCount,
+                     messages = Messages} = State) ->
+    {dummy, State, Messages, MsgCount - 1}.
 
-% send_msg_effect(dummy, {CPid, Next}, CTag) ->
-%     {send_msg, CPid, {delivery, CTag, [{Next, dummy}]}};
 send_msg_effect({CTag, CPid}, Msgs) ->
     {send_msg, CPid, {delivery, CTag, Msgs}}.
 
 checkout_one(#state{service_queue = SQ0,
                     customers = Custs0} = InitState) ->
-    case queue:out(SQ0) of
-        {{value, CustomerId}, SQ1} ->
+    case queue:peek(SQ0) of
+        {value, CustomerId} ->
             case take_next_msg(InitState) of
-                {CustomerMsg, State0} ->
+                {CustomerMsg, State0, Messages, PrefMsgC} ->
+                    SQ1 = queue:drop(SQ0),
                     %% there are customers waiting to be serviced
                     %% process customer checkout
-                    case maps:get(CustomerId, Custs0, undefined) of
-                        #customer{checked_out = Checked0,
-                                  next_msg_id = Next,
-                                  seen = Seen} = Cust0 ->
+                    case maps:find(CustomerId, Custs0) of
+                        {ok, #customer{checked_out = Checked0,
+                                       next_msg_id = Next,
+                                       seen = Seen} = Cust0} ->
                             Checked = maps:put(Next, CustomerMsg, Checked0),
                             Cust = Cust0#customer{checked_out = Checked,
                                                   next_msg_id = Next+1,
@@ -715,24 +719,37 @@ checkout_one(#state{service_queue = SQ0,
                                 update_or_remove_sub(CustomerId, Cust,
                                                      Custs0, SQ1, []),
                             State = State0#state{service_queue = SQ,
+                                                 messages = Messages,
+                                                 prefix_msg_count = PrefMsgC,
                                                  customers = Custs},
                             Msg = case CustomerMsg of
                                       dummy -> dummy;
                                       {_, {_, M}} -> M
                                   end,
                             {success, CustomerId, Next, Msg, State};
-                        undefined ->
+                        error ->
                             %% customer did not exist but was queued, recurse
                             checkout_one(InitState#state{service_queue = SQ1})
                     end;
                 error ->
                     InitState
             end;
-        _ ->
+        empty ->
             InitState
     end.
 
 
+update_or_remove_sub(CustomerId, #customer{lifetime = auto,
+                                           checked_out = Checked,
+                                           num = Num} = Cust,
+                     Custs, ServiceQueue, Effects) ->
+    case maps:size(Checked) < Num of
+        true ->
+            {maps:put(CustomerId, Cust, Custs),
+             uniq_queue_in(CustomerId, ServiceQueue), Effects};
+        false ->
+            {maps:put(CustomerId, Cust, Custs), ServiceQueue, Effects}
+    end;
 update_or_remove_sub(CustomerId, #customer{lifetime = once,
                                            checked_out = Checked,
                                            num = N, seen = N} = Cust,
@@ -744,23 +761,12 @@ update_or_remove_sub(CustomerId, #customer{lifetime = once,
              [{demonitor, process, CustomerId} | Effects]};
         _ ->
             % there are unsettled items so need to keep around
-            {maps:update(CustomerId, Cust, Custs), ServiceQueue, Effects}
+            {maps:put(CustomerId, Cust, Custs), ServiceQueue, Effects}
     end;
 update_or_remove_sub(CustomerId, #customer{lifetime = once} = Cust,
                      Custs, ServiceQueue, Effects) ->
-    {maps:update(CustomerId, Cust, Custs),
-     uniq_queue_in(CustomerId, ServiceQueue), Effects};
-update_or_remove_sub(CustomerId, #customer{lifetime = auto,
-                                           checked_out = Checked,
-                                           num = Num} = Cust,
-                     Custs, ServiceQueue, Effects) ->
-    case maps:size(Checked) < Num of
-        true ->
-            {maps:update(CustomerId, Cust, Custs),
-             uniq_queue_in(CustomerId, ServiceQueue), Effects};
-        false ->
-            {maps:update(CustomerId, Cust, Custs), ServiceQueue, Effects}
-    end.
+    {maps:put(CustomerId, Cust, Custs),
+     uniq_queue_in(CustomerId, ServiceQueue), Effects}.
 
 uniq_queue_in(Key, Queue) ->
     % TODO: queue:member could surely be quite expensive, however the practical
@@ -823,7 +829,7 @@ perf_test(NumMsg, NumCust) ->
               S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
               _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
               ok
-             end).
+      end).
 
 % profile(File) ->
 %     GzFile = atom_to_list(File) ++ ".gz",
@@ -831,11 +837,11 @@ perf_test(NumMsg, NumCust) ->
 %              GzFile, #{running => false, mode => profile}),
 %     NumMsg = 10000,
 %     NumCust = 500,
-%     EnqGen = fun(N) -> {N, {enqueue, N}} end,
+%     EnqGen = fun(N) -> {N, {enqueue, self(), N, N}} end,
 %     Pid = spawn(fun() -> ok end),
-%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
+%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, {term_to_binary(N), Pid}}} end,
 %     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-%     S0 = run_log(1, NumMsg, EnqGen, element(1, init(size_test))),
+%     S0 = run_log(1, NumMsg, EnqGen, element(1, init(#{name => size_test}))),
 %     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
 %     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
 %     lg:stop().
@@ -1300,13 +1306,13 @@ leader_effects_test() ->
     [{mod_call, m, f, [a, the_name]}] = leader_effects(S0),
     ok.
 
-% performance_test() ->
-%     % just under ~200ms on my machine [Karl]
-%     NumMsgs = 100000,
-%     {Taken, _} = perf_test(NumMsgs, 0),
-%     ?debugFmt("performance_test took ~p ms for ~p messages",
-%               [Taken / 1000, NumMsgs]),
-%     ok.
+performance_test() ->
+    % just under ~200ms on my machine [Karl]
+    NumMsgs = 100000,
+    {Taken, _} = perf_test(NumMsgs, 0),
+    ?debugFmt("performance_test took ~p ms for ~p messages",
+              [Taken / 1000, NumMsgs]),
+    ok.
 
 purge_test() ->
     Cid = {<<"purge_test">>, self()},

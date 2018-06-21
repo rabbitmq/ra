@@ -198,13 +198,14 @@ start_node(ClusterId, NodeId, Machine, NodeIds) ->
 %% data.
 %% @param NodeIds the ra_node_ids of the cluster
 %% @returns `{ok | error, nodedown}'
--spec delete_cluster(NodeIds :: [ra_node_id()]) -> ok | {error, term()}.
+-spec delete_cluster(NodeIds :: [ra_node_id()]) ->
+    {ok, ra_node_id()} | {error, term()}.
 delete_cluster(NodeIds) ->
     delete_cluster(NodeIds, ?DEFAULT_TIMEOUT).
 
 %% @see delete_cluster/1
 -spec delete_cluster(NodeIds :: [ra_node_id()], timeout()) ->
-    {ok, Leader::ra_node_id()} | {error, term()}.
+    {ok, Leader :: ra_node_id()} | {error, term()}.
 delete_cluster(NodeIds, Timeout) ->
     delete_cluster0(NodeIds, Timeout, []).
 

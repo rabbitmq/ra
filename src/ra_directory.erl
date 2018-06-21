@@ -42,7 +42,7 @@ deinit() ->
     _ = dets:close(?REVERSE_TBL),
     ok.
 
--spec register_name(ra_uid(), file:filename(), atom()) -> yes | no.
+-spec register_name(ra_uid(), pid(), atom()) -> yes | no.
 register_name(UId, Pid, RaNodeName) ->
     true = ets:insert(?MODULE, {UId, Pid, RaNodeName}),
     ok = dets:insert(?REVERSE_TBL, {RaNodeName, UId}),
