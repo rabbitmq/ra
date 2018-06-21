@@ -4,7 +4,8 @@
 -export([start_link/0]).
 -export([init/1]).
 
--define(TABLES, [ra_metrics, ra_state, ra_open_file_metrics, ra_io_metrics]).
+-define(TABLES, [ra_metrics, ra_state, ra_open_file_metrics, ra_io_metrics,
+                 ra_customer_utilisation]).
 
 start_link() ->
 	supervisor:start_link({local, ?MODULE}, ?MODULE, []).

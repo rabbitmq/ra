@@ -45,6 +45,9 @@
 -define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
+%% Utilisation average calculations are all in μs.
+-define(USE_AVG_HALF_LIFE, 1000000.0).
+
 -type correlation() :: non_neg_integer().
 
 -type command_reply_mode() :: after_log_append |
@@ -104,7 +107,8 @@
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
-                delayed_commands = [] :: [ra_command_with_from()]}).
+                delayed_commands = [] :: [ra_command_with_from()],
+                use }).
 
 %%%===================================================================
 %%% API
@@ -197,7 +201,9 @@ init(Config0) when is_map(Config0) ->
     {State, Actions0} = handle_effects(InitEffects, cast, State0),
     %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
     %% does not support this. it was fixed in 20.3.2
-    {ok, recover, State, [{state_timeout, 0, go} | Actions0]}.
+    Now = erlang:monotonic_time(micro_seconds),
+    Usage = {inactive, Now, 1, 1.0},
+    {ok, recover, State#state{use = Usage}, [{state_timeout, 0, go} | Actions0]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -328,6 +334,7 @@ leader(info, {NodeEvt, Node},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
+    ets:insert(ra_customer_utilisation, {State0#state.name, utilisation(State0)}),
     State1 = maybe_persist_last_applied(send_rpcs(State0)),
     Effects = ra_node:tick(State1#state.node_state),
     {State, Actions} = handle_effects(Effects, cast, State1),
@@ -682,11 +689,13 @@ terminate(Reason, StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-format_status(Opt, [_PDict, StateName, #state{node_state = NS}]) ->
+format_status(Opt, [_PDict, StateName, #state{node_state = NS,
+                                              use = Use}]) ->
     [{id, ra_node:id(NS)},
      {opt, Opt},
      {raft_state, StateName},
-     {ra_node_state, ra_node:overview(NS)}
+     {ra_node_state, ra_node:overview(NS)},
+     {use, Use}
     ].
 
 %%%===================================================================
@@ -746,7 +755,9 @@ handle_effect({next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect({send_msg, To, Msg}, _, State, Actions) ->
     ok = send_ra_event(To, Msg, machine, State),
-    {State, Actions};
+    {State#state{use = update_use(State#state.use, active)}, Actions};
+handle_effect({use, inactive}, _, State, Actions) ->
+    {State#state{use = update_use(State#state.use, inactive)}, Actions};
 handle_effect({notify, Who, Correlations}, _, State, Actions) ->
     ok = send_ra_event(Who, Correlations, applied, State),
     {State, Actions};
@@ -998,3 +1009,30 @@ send(To, Msg) ->
             ok
     end.
 
+update_use({inactive, _, _, _}   = CUInfo, inactive) ->
+    CUInfo;
+update_use({active,   _, _}      = CUInfo,   active) ->
+    CUInfo;
+update_use({active,   Since,         Avg}, inactive) ->
+    Now = erlang:monotonic_time(micro_seconds),
+    {inactive, Now, Now - Since, Avg};
+update_use({inactive, Since, Active, Avg},   active) ->
+    Now = erlang:monotonic_time(micro_seconds),
+    {active, Now, use_avg(Active, Now - Since, Avg)}.
+
+utilisation(#state{use = {active, Since, Avg}}) ->
+    use_avg(erlang:monotonic_time(micro_seconds) - Since, 0, Avg);
+utilisation(#state{use = {inactive, Since, Active, Avg}}) ->
+    use_avg(Active, erlang:monotonic_time(micro_seconds) - Since, Avg).
+
+use_avg(0, 0, Avg) ->
+    Avg;
+use_avg(Active, Inactive, Avg) ->
+    Time = Inactive + Active,
+    moving_average(Time, ?USE_AVG_HALF_LIFE, Active / Time, Avg).
+
+moving_average(_Time, _HalfLife, Next, undefined) ->
+    Next;
+moving_average(Time,  HalfLife,  Next, Current) ->
+    Weight = math:exp(Time * math:log(0.5) / HalfLife),
+    Next * (1 - Weight) + Current * Weight.
