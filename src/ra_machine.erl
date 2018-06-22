@@ -51,6 +51,7 @@
          eol_effects/2,
          tick/3,
          overview/2,
+         query/3,
          module/1
         ]).
 
@@ -60,13 +61,10 @@
 -type user_command() :: term().
 %% the command type for a given machine implementation
 
--type apply_fun(State) :: fun((user_command(), State) -> State).
-
 -type machine_init_args() :: #{name := atom(), atom() => term()}.
 %% the configuration passed to the init callback
 
--type machine() :: {simple, apply_fun(State), State} |
-                   {module, module(), AddInitArgs :: #{term() => term()}}.
+-type machine() :: {machine, module(), AddInitArgs :: #{term() => term()}}.
 %% Machine configuration.
 %% the `module()' should implement the {@link ra_machine} behaviour.
 
@@ -161,43 +159,37 @@
 
 %% @doc initialise a new machine
 -spec init(machine(), atom()) -> {state(), effects()}.
-init({module, Mod, Args}, Name) ->
-    Mod:init(Args#{name => Name});
-init({simple, _Fun, InitialState}, _Name) ->
-    {InitialState, []}.
+init({machine, Mod, Args}, Name) ->
+    Mod:init(Args#{name => Name}).
 
 -spec apply(machine(), ra_index(), command(), effects(), State) ->
     {State, effects()} | {State, effects(), reply()}.
-apply({module, Mod, _}, Idx, Cmd, Effects, State) ->
-    Mod:apply(Idx, Cmd, Effects, State);
-apply({simple, Fun, _InitialState}, _Idx, Cmd, _Effects, State) ->
-    {Fun(Cmd, State), []}.
+apply({machine, Mod, _}, Idx, Cmd, Effects, State) ->
+    Mod:apply(Idx, Cmd, Effects, State).
 
 -spec leader_effects(machine(), state()) -> effects().
-leader_effects({module, Mod, _}, State) ->
-    ?OPT_CALL(Mod:leader_effects(State), []);
-leader_effects({simple, _, _}, _State) ->
-    [].
+leader_effects({machine, Mod, _}, State) ->
+    ?OPT_CALL(Mod:leader_effects(State), []).
 
 -spec eol_effects(machine(), state()) -> effects().
-eol_effects({module, Mod, _}, State) ->
-    ?OPT_CALL(Mod:eol_effects(State), []);
-eol_effects({simple, _, _}, _State) ->
-    [].
+eol_effects({machine, Mod, _}, State) ->
+    ?OPT_CALL(Mod:eol_effects(State), []).
 
 -spec tick(machine(), milliseconds(), state()) -> effects().
-tick({module, Mod, _}, TimeMs, State) ->
-    ?OPT_CALL(Mod:tick(TimeMs, State), []);
-tick({simple, _, _}, _TimeMs, _State) ->
-    [].
+tick({machine, Mod, _}, TimeMs, State) ->
+    ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
 -spec overview(machine(), state()) -> map().
-overview({module, Mod, Ms}, State) ->
-    ?OPT_CALL(Mod:overview(State), Ms);
-overview({simple, _, _}, _State) ->
-    #{type => simple}.
+overview({machine, Mod, Ms}, State) ->
+    ?OPT_CALL(Mod:overview(State), Ms).
 
--spec module(machine()) -> undefined | module().
-module({module, Mod, _}) -> Mod;
-module(_) -> undefined.
+-spec query(module(), fun((state()) -> Result), state()) ->
+    Result when Result :: term().
+query(Mod, Fun, State) when Mod =/= ra_machine_simple ->
+    Fun(State);
+query(ra_machine_simple, Fun, {simple, _, State}) ->
+    Fun(State).
+
+-spec module(machine()) -> module().
+module({machine, Mod, _}) -> Mod.
 

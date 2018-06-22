@@ -53,7 +53,7 @@ start() ->
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @returns `[ra_node_id()]' after a leader has been elected
 -spec start_local_cluster(non_neg_integer(), atom() | string(),
-                          ra_machine:machine()) ->
+                          ra_node:machine_conf()) ->
     [ra_node_id()].
 start_local_cluster(Num, Name, Machine) ->
     [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
@@ -139,7 +139,7 @@ delete_node(NodeId) ->
 %%
 %% If a cluster could not be formed any nodes that did manage to start are
 %% forcefully deleted.
--spec start_cluster(ra_cluster_id(), ra_machine:machine(), [ra_node_id()]) ->
+-spec start_cluster(ra_cluster_id(), ra_node:machine_conf(), [ra_node_id()]) ->
     {ok, [ra_node_id()], [ra_node_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterId, Machine, NodeIds) ->
@@ -173,7 +173,7 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     end.
 
 -spec start_node(ra_cluster_id(), ra_node_id(),
-                 ra_machine:machine(), [ra_node_id()]) ->
+                 ra_node:machine_conf(), [ra_node_id()]) ->
     ok | {error, term()}.
 start_node(ClusterId, NodeId, Machine, NodeIds) ->
     TS = erlang:system_time(millisecond),

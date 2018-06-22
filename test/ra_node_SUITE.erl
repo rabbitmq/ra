@@ -53,6 +53,8 @@ all() ->
      wal_down_condition
     ].
 
+-define(MACFUN, fun (E, _) -> E end).
+
 groups() ->
     [ {tests, [], all()} ].
 
@@ -132,7 +134,6 @@ setup_log() ->
 init(_Config) ->
     #{id := Id,
       uid := UId,
-      machine := Machine,
       cluster := Cluster,
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
@@ -141,7 +142,7 @@ init(_Config) ->
                  id => Id,
                  uid => UId,
                  log_init_args => #{data_dir => "", uid => <<>>},
-                 machine => Machine,
+                 machine => {simple, ?MACFUN, <<"hi3">>},
                  initial_nodes => []}, % init without known peers
     % new
     #{current_term := 0,
@@ -153,12 +154,12 @@ init(_Config) ->
     #{current_term := 5,
       voted_for := some_node} = ra_node_init(InitConf),
     % snapshot
-    Snapshot = {3, 5, Cluster, "hi1+2+3"},
+    Snapshot = {3, 5, Cluster, {simple, ?MACFUN, "hi1+2+3"}},
     LogS = ra_log:install_snapshot(Snapshot, Log),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
-      machine_state := "hi1+2+3",
+      machine_state := {simple, _, "hi1+2+3"},
       cluster := Cluster,
       voted_for := some_node} = ra_node_init(InitConf),
     ok.
@@ -244,13 +245,13 @@ follower_aer_1(_Config) ->
                                entries = [entry(2, 1, two)]},
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 0,
-                          machine_state := <<>>},
+                          machine_state := {simple, _, <<>>}},
      _} = ra_node:handle_follower(AER2, State1),
 
     % {written, 1} -> last_applied: 1 - replies with last_index = 1, next_index = 3
     {follower, State3 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 1,
-                          machine_state := one},
+                          machine_state := {simple, _, one}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 3,
                                               last_term = 1,
                                               last_index = 1}}}, _]}
@@ -262,13 +263,13 @@ follower_aer_1(_Config) ->
                                entries = [entry(3, 1, tre)]},
     {follower, State4 = #{leader_id := n1, current_term := 1,
                           commit_index := 3, last_applied := 1,
-                          machine_state := one},
+                          machine_state := {simple, _, one}},
      _} = ra_node:handle_follower(AER3, State3),
 
     % {written, 2} -> last_applied: 2, commit_index = 3 reply = 2, next_index = 4
     {follower, State5 = #{leader_id := n1, current_term := 1,
                           commit_index := 3, last_applied := 2,
-                          machine_state := two},
+                          machine_state := {_, _, two}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}}, _]}
@@ -282,7 +283,7 @@ follower_aer_1(_Config) ->
                                entries = []},
     {follower, State6 = #{leader_id := n1, current_term := 1,
                           commit_index := 3, last_applied := 2,
-                          machine_state := two},
+                          machine_state := {simple, _, two}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}} | _]}
@@ -291,7 +292,7 @@ follower_aer_1(_Config) ->
     % {written, 3} -> commit_index = 3, last_applied = 3 : reply last_index = 3
     {follower, #{leader_id := n1, current_term := 1,
                  commit_index := 3, last_applied := 3,
-                 machine_state := tre},
+                 machine_state := {_, _, tre}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 3}}}, _]}
@@ -313,7 +314,7 @@ follower_aer_2(_Config) ->
     % {written, 1} -> last_applied: 0, reply: last_applied = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 0, last_applied := 0,
-                          machine_state := <<>>},
+                          machine_state := {simple, _, <<>>}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}, _]}
@@ -325,7 +326,7 @@ follower_aer_2(_Config) ->
                                entries = []},
     {follower, #{leader_id := n1, current_term := 1,
                  commit_index := 1, last_applied := 1,
-                 machine_state := one},
+                 machine_state := {simple, _, one}},
      _} = ra_node:handle_follower(AER2, State2),
     ok.
 
@@ -342,7 +343,7 @@ follower_aer_3(_Config) ->
     % {written, 1} -> last_applied: 1 - reply: last_index = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
                           commit_index := 1, last_applied := 1,
-                          machine_state := one},
+                          machine_state := {simple, _, one}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}, _]}
@@ -372,7 +373,7 @@ follower_aer_3(_Config) ->
     % {written, 4} -> last_applied: 3 - reply: last_index = 4, next_index = 5
     {follower, State5 = #{leader_id := n1, current_term := 1,
                           commit_index := 3, last_applied := 3,
-                          machine_state := tre},
+                          machine_state := {_, _, tre}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 5,
                                             success = true,
                                             last_term = 1,
@@ -390,7 +391,7 @@ follower_aer_3(_Config) ->
                                           entry(4, 1, for)
                                          ]},
     {follower, #{leader_id := n1, current_term := 1, commit_index := 4,
-                 last_applied := 4, machine_state := for}, _}
+                 last_applied := 4, machine_state := {_, _, for}}, _}
     = ra_node:handle_follower(AER4, State5),
     % TODO: scenario where the batch is partially already seen and partiall not
     % + increments commit_index
@@ -415,7 +416,7 @@ follower_aer_4(_Config) ->
     % {written, 4} -> last_applied = 4, commit_index = 4
     {follower, _State2 = #{leader_id := n1, current_term := 1,
                            commit_index := 4, last_applied := 4,
-                           machine_state := for},
+                           machine_state := {_, _, for}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
                                             last_index = 4}}}, _]}
@@ -536,7 +537,7 @@ follower_handles_append_entries_rpc(_Config) ->
     % match commit_index
     % ExpectedLogEntry = usr(<<"hi4">>),
     {follower, #{commit_index := 4, last_applied := 4,
-                 machine_state := <<"hi4">>},
+                 machine_state := {_, _, <<"hi4">>}},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             last_index = 4,
                                             last_term = 5}}}, _Metrics1]}
@@ -546,7 +547,7 @@ follower_handles_append_entries_rpc(_Config) ->
             EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
-                   machine_state => usr(<<"hi1">>)}),
+                   machine_state => {simple, ?MACFUN, <<"hi1">>}}),
           ra_node:handle_follower(written_evt({4, 4, 5}), Inter4)
       end,
     ok.
@@ -661,7 +662,7 @@ append_entries_reply_success(_Config) ->
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
-                             machine_state => <<"hi1">>},
+                             machine_state => {simple, ?MACFUN, <<"hi1">>}},
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
@@ -678,8 +679,8 @@ append_entries_reply_success(_Config) ->
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 3}},
                commit_index := 3,
                last_applied := 3,
-               machine_state := <<"hi3">>}, [ExpectedEffects, _Metrics]} =
-        ra_node:handle_leader(Msg, State),
+               machine_state := {simple, _, <<"hi3">>}},
+     [ExpectedEffects, _Metrics]} = ra_node:handle_leader(Msg, State),
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
@@ -689,7 +690,7 @@ append_entries_reply_success(_Config) ->
                commit_index := 1,
                last_applied := 1,
                current_term := 7,
-               machine_state := <<"hi1">>}, _} =
+               machine_state := {_, _, <<"hi1">>}}, _} =
         ra_node:handle_leader(Msg1, State#{current_term := 7}),
     ok.
 
@@ -702,7 +703,7 @@ append_entries_reply_no_success(_Config) ->
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
-                             machine_state => <<"hi1">>},
+                             machine_state => {simple, ?MACFUN, <<"hi1">>}},
     % n2 has only seen index 1
     Msg = {n2, #append_entries_reply{term = 5, success = false, next_index = 2,
                                      last_index = 1, last_term = 1}},
@@ -717,7 +718,7 @@ append_entries_reply_no_success(_Config) ->
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 1}},
                commit_index := 1,
                last_applied := 1,
-               machine_state := <<"hi1">>}, ExpectedEffects} =
+               machine_state := {simple, _, <<"hi1">>}}, ExpectedEffects} =
         ra_node:handle_leader(Msg, State),
     ok.
 
@@ -1390,6 +1391,7 @@ base_state(NumNodes) ->
                                      new_peer_with(#{next_index => 4,
                                                      match_index => 3})}
                         end, #{}, lists:seq(1, NumNodes)),
+    MacFun = fun (E, _) -> E end,
     #{id => n1,
       uid => <<"n1">>,
       leader_id => n1,
@@ -1400,8 +1402,10 @@ base_state(NumNodes) ->
       current_term => 5,
       commit_index => 3,
       last_applied => 3,
-      machine => {simple, fun (E, _) -> E end, <<>>}, % just keep last applied value
-      machine_state => <<"hi3">>, % last entry has been applied
+      machine => {machine, ra_machine_simple,
+                  #{simple_fun => MacFun,
+                    initial_state => <<>>}}, % just keep last applied value
+      machine_state => {simple, MacFun, <<"hi3">>}, % last entry has been applied
       log => Log}.
 
 usr_cmd(Data) ->

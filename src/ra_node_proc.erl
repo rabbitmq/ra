@@ -725,16 +725,18 @@ handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
         ra_node:handle_await_condition(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
 
-perform_committed_query(QueryFun, leader, #{machine_state := MacState,
-                                        last_applied := Last,
-                                        id := Leader,
-                                        current_term := Term}) ->
-    {ok, {{Last, Term}, QueryFun(MacState)}, Leader};
-perform_committed_query(QueryFun, _StateName, #{machine_state := MacState,
+perform_committed_query(QueryFun, leader, #{machine := {machine, MacMod, _},
+                                            machine_state := MacState,
                                             last_applied := Last,
-                                            current_term := Term} = NodeState) ->
+                                            id := Leader,
+                                            current_term := Term}) ->
+    {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader};
+perform_committed_query(QueryFun, _, #{machine := {machine, MacMod, _},
+                                       machine_state := MacState,
+                                       last_applied := Last,
+                                       current_term := Term} = NodeState) ->
     Leader = maps:get(leader_id, NodeState, not_known),
-    {ok, {{Last, Term}, QueryFun(MacState)}, Leader}.
+    {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader}.
 
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.

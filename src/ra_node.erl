@@ -92,12 +92,17 @@
 
 -type ra_effects() :: [ra_effect()].
 
+-type simple_apply_fun(State) :: fun((term(), State) -> State).
+
+-type machine_conf() :: {simple, simple_apply_fun(term()), State :: term()}
+                        | {module, module(), map()}.
+
 -type ra_node_config() :: #{id := ra_node_id(),
                             uid := ra_uid(),
                             cluster_id := ra_cluster_id(),
                             log_init_args := ra_log:ra_log_init_args(),
                             initial_nodes := [ra_node_id()],
-                            machine := ra_machine:machine(),
+                            machine := machine_conf(),
                             % TODO: review - only really used for
                             % setting election timeouts
                             broadcast_time => non_neg_integer(), % ms
@@ -108,7 +113,8 @@
 
 -export_type([ra_node_state/0,
               ra_node_config/0,
-              ra_msg/0
+              ra_msg/0,
+              machine_conf/0
              ]).
 
 -define(AER_CHUNK_SIZE, 25).
@@ -126,13 +132,20 @@ init(#{id := Id,
        cluster_id := _ClusterId,
        initial_nodes := InitialNodes,
        log_init_args := LogInitArgs,
-       machine := Machine} = Config) ->
+       machine := MachineConf} = Config) ->
     Name = ra_lib:ra_node_id_to_local_name(Id),
     Log0 = ra_log:init(LogInitArgs),
     ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
     LastApplied = ra_log:read_meta(last_applied, Log0, 0),
     VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
+    Machine = case MachineConf of
+                  {simple, Fun, S} ->
+                      {machine, ra_machine_simple, #{simple_fun => Fun,
+                                                     initial_state => S}};
+                  {module, Mod, Args} ->
+                      {machine, Mod, Args}
+              end,
     {InitialMachineState, InitEffects} = ra_machine:init(Machine, Name),
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log0) of
@@ -1281,10 +1294,11 @@ apply_with(Machine,
                                            Effects1, Notifys0),
             {Idx, State, NextMacSt, Effects, Notifys}
     end;
-apply_with(_, % Machine
+apply_with({machine, MacMod, _}, % Machine
            {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
-    {Effects, Notifys} = add_reply(From, {{Idx, Term}, QueryFun(MacSt)},
+    Result = ra_machine:query(MacMod, QueryFun, MacSt),
+    {Effects, Notifys} = add_reply(From, {{Idx, Term}, Result},
                                    ReplyType, Effects0, Notifys0),
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(_Machine,
