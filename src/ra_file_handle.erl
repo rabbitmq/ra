@@ -40,13 +40,14 @@ pwrite(Fd, LocBytes) ->
     update(io_write, fun() -> file:pwrite(Fd, LocBytes) end).
 
 pwrite(Fd, Location, Bytes) ->
-    update(io_write, iolist_size(Bytes), fun() -> file:pwrite(Fd, Location, Bytes) end).
+    update(io_write, iolist_size(Bytes),
+           fun() -> file:pwrite(Fd, Location, Bytes) end).
 
 pread(Fd, LocBytes) ->
     update(io_read, fun() -> file:pread(Fd, LocBytes) end).
 
 pread(Fd, Location, Number) ->
-    update(io_read, Number, fun() -> file:pread(Fd, Location, Number) end).                    
+    update(io_read, Number, fun() -> file:pread(Fd, Location, Number) end).
 
 update(Op, Bytes, Thunk) ->
     {Time, Res} = timer_tc(Thunk),
@@ -98,7 +99,8 @@ handle_cast({close, Pid}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', MRef, process, Pid, _}, #state{monitors = Monitors0} = State) ->
+handle_info({'DOWN', MRef, process, Pid, _},
+            #state{monitors = Monitors0} = State) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
             ets:delete(ra_open_file_metrics, Pid),

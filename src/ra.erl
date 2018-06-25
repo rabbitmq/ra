@@ -149,7 +149,8 @@ start_cluster(ClusterId, Machine, NodeIds) ->
     % TODO: validate all nodes are on different erlang nodes
     {Started, NotStarted} =
         lists:partition(fun (N) ->
-                                ok =:= start_node(ClusterId, N, Machine, NodeIds)
+                                ok =:= start_node(ClusterId, N,
+                                                  Machine, NodeIds)
                         end, NodeIds),
     case Started of
         [] ->

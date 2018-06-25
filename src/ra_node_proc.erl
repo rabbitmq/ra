@@ -203,7 +203,8 @@ init(Config0) when is_map(Config0) ->
     %% does not support this. it was fixed in 20.3.2
     Now = erlang:monotonic_time(micro_seconds),
     Usage = {inactive, Now, 1, 1.0},
-    {ok, recover, State#state{use = Usage}, [{state_timeout, 0, go} | Actions0]}.
+    {ok, recover, State#state{use = Usage},
+     [{state_timeout, 0, go} | Actions0]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -334,7 +335,8 @@ leader(info, {NodeEvt, Node},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    ets:insert(ra_customer_utilisation, {State0#state.name, utilisation(State0)}),
+    ets:insert(ra_customer_utilisation,
+               {State0#state.name, utilisation(State0)}),
     State1 = maybe_persist_last_applied(send_rpcs(State0)),
     Effects = ra_node:tick(State1#state.node_state),
     {State, Actions} = handle_effects(Effects, cast, State1),
@@ -342,12 +344,7 @@ leader(_, tick_timeout, State0) ->
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {log_fold, Fun, Term}, State) ->
-    case ra_node:log_fold(State#state.node_state, Fun, Term) of
-        {ok, Result, NodeState} ->
-            {keep_state, State#state{node_state = NodeState}, [{reply, From, {ok, Result}}]};
-        {error, Reason, NodeState} ->
-            {keep_state, State#state{node_state = NodeState}, [{reply, From, {error, Reason}}]}
-    end;
+    fold_log(From, Fun, Term, State);
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
@@ -406,12 +403,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
             {State, Actions0} = handle_effects(Effects, EventType, State1),
-            Actions = case Msg of
-                          election_timeout ->
-                              [election_timeout_action(long, State)
-                               | Actions0];
-                          _ -> Actions0
-                      end,
+            Actions = maybe_add_election_timeout(Msg, Actions0, State),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -419,8 +411,8 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
                   [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
-             % node doesn't cause an electable one not to trigger another election
-             % when not using follower timeouts
+             % node doesn't cause an electable one not to trigger
+             % another election when not using follower timeouts
              % TODO: only set this is leader was not detected
              [election_timeout_action(long, State) | Actions]};
         {leader, State1, Effects} ->
@@ -463,12 +455,7 @@ pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
             {State, Actions0} = handle_effects(Effects, EventType, State1),
-            % TODO: refactor this
-            Actions = case Msg of
-                          election_timeout ->
-                              [election_timeout_action(long, State) | Actions0];
-                          _ -> Actions0
-                      end,
+            Actions = maybe_add_election_timeout(Msg, Actions0, State),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -476,9 +463,8 @@ pre_vote(EventType, Msg, State0) ->
                   [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
-             % node doesn't cause an electable one not to trigger another election
-             % when not using follower timeouts
-             % TODO: only set this is leader was not detected
+             % node doesn't cause an electable one not to trigger
+             % another election when not using follower timeouts
              [election_timeout_action(long, State) | Actions]};
         {candidate, State1, Effects} ->
             {State, Actions} = handle_effects(Effects, EventType, State1),
@@ -546,12 +532,7 @@ follower(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
-    case ra_node:log_fold(State#state.node_state, Fun, Term) of
-        {ok, Result, NodeState} ->
-            {keep_state, State#state{node_state = NodeState}, [{reply, From, {ok, Result}}]};
-        {error, Reason, NodeState} ->
-            {keep_state, State#state{node_state = NodeState}, [{reply, From, {error, Reason}}]}
-    end;
+    fold_log(From, Fun, Term, State);
 follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
@@ -624,7 +605,7 @@ await_condition({call, From}, {committed_query, QueryFun},
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
 await_condition({call, From}, trigger_election, State) ->
-    {keep_state, State, [{reply, From ,ok},
+    {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
                 State = #state{leader_monitor = MRef, name = Name}) ->
@@ -1038,3 +1019,18 @@ moving_average(_Time, _HalfLife, Next, undefined) ->
 moving_average(Time,  HalfLife,  Next, Current) ->
     Weight = math:exp(Time * math:log(0.5) / HalfLife),
     Next * (1 - Weight) + Current * Weight.
+
+fold_log(From, Fun, Term, State) ->
+    case ra_node:log_fold(State#state.node_state, Fun, Term) of
+        {ok, Result, NodeState} ->
+            {keep_state, State#state{node_state = NodeState},
+             [{reply, From, {ok, Result}}]};
+        {error, Reason, NodeState} ->
+            {keep_state, State#state{node_state = NodeState},
+             [{reply, From, {error, Reason}}]}
+    end.
+
+maybe_add_election_timeout(election_timeout, Actions, State) ->
+    [election_timeout_action(long, State) | Actions];
+maybe_add_election_timeout(_, Actions, _) ->
+    Actions.

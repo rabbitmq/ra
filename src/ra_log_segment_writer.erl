@@ -22,7 +22,8 @@
 
 -record(state, {data_dir :: file:filename(),
                 segment_conf = #{} :: ra_log_segment:ra_log_segment_options(),
-                active_segments = #{} :: #{ra_uid() => ra_log_segment:state()}}).
+                active_segments = #{} :: #{ra_uid() =>
+                                           ra_log_segment:state()}}).
 
 -include("ra.hrl").
 
@@ -149,7 +150,8 @@ handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
                             ok = ra_log_segment:close(Seg),
                             ok = file:delete(SegmentFile),
                             {noreply,
-                             State0#state{active_segments = maps:remove(Who, ActiveSegments)}};
+                             State0#state{active_segments =
+                                          maps:remove(Who, ActiveSegments)}};
                         _ ->
                             {noreply, State0}
                     end;
@@ -189,8 +191,10 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
     case filelib:is_dir(Dir) of
         true ->
-            %% check that the directory exists - if it does not exist the node has
-            %% never been started or has been deleted and we should just continue
+            %% check that the directory exists -
+            %% if it does not exist the node has
+            %% never been started or has been deleted
+            %% and we should just continue
             Segment0 = case ActiveSegments of
                            #{RaNodeUId := S} -> S;
                            _ -> open_file(Dir, SegConf)
@@ -199,8 +203,9 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
                 undefined ->
                     State;
                 _ ->
-                    {Segment1, Closed0} = append_to_segment(Tid, StartIdx, EndIdx,
-                                                            Segment0, SegConf),
+                    {Segment1, Closed0} =
+                        append_to_segment(Tid, StartIdx, EndIdx,
+                                          Segment0, SegConf),
                     % fsync
                     {ok, Segment} = ra_log_segment:sync(Segment1),
 

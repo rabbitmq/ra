@@ -75,7 +75,8 @@
                 % beyond the available WAL files
                 % all writers seen withing the lifetime of a WAL file
                 % and the last index seen
-                writers = #{} :: #{writer_id() => {in_seq | out_of_seq, ra_index()}},
+                writers = #{} :: #{writer_id() =>
+                                   {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 compute_checksums = false :: boolean(),
                 write_strategy = delay_writs :: wal_write_strategy()
@@ -113,14 +114,16 @@ force_roll_over(Wal) ->
 %% ra_log_wal
 %%
 %% Writes Raft entries to shared persistent storage for multiple "writers"
-%% Fsyncs in batches, typically the write requests received in the mailbox during
+%% Fsyncs in batches, typically the write requests
+%% received in the mailbox during
 %% the previous fsync operation. Notifies all writers after each fsync batch.
 %% Also have got a dynamically increasing max writes limit that grows in order
 %% to trade-off latency for throughput.
 %%
 %% Entries are written to the .wal file as well as a per-writer mem table (ETS).
 %% In order for writers to locate an entry by an index a lookup ETS table
-%% (ra_log_open_mem_tables) keeps the current range of indexes a mem_table as well
+%% (ra_log_open_mem_tables) keeps the current range of indexes
+%% a mem_table as well
 %% as the mem_table tid(). This lookup table is updated on every write.
 %%
 %% Once the current .wal file is full a new one is closed. All the entries in
@@ -193,7 +196,8 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                 [set, named_table, {read_concurrency, true}, private]),
     % compute all closed mem table lookups required so we can insert them
     % all at once, atomically
-    % It needs to be atomic so that readers don't accidentally read partially recovered
+    % It needs to be atomic so that readers don't accidentally
+    % read partially recovered
     % tables mixed with old tables
     All = [begin
                {ok, Data} = file:read_file(F),
@@ -205,7 +209,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     true = ets:insert(ra_log_closed_mem_tables, Closed),
     % send all the mem tables to segment writer for processing
     % This could result in duplicate segments
-    [ok = ra_log_segment_writer:accept_mem_tables(TblWriter, M,F)
+    [ok = ra_log_segment_writer:accept_mem_tables(TblWriter, M, F)
      || {_, M, F} <- All],
 
     Modes = [raw, append, binary],
@@ -236,15 +240,19 @@ extract_file_num([F | _]) ->
 loop_wait(State0, Parent, Debug0) ->
     receive
         {system, From, Request} ->
-            sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
+            sys:handle_system_msg(Request, From, Parent,
+                                  ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
             cleanup(State0),
             exit(Reason);
         Msg ->
-            Debug1 = handle_debug_in(Debug0, Msg),
-            {State, Debug} = handle_msg(Msg, State0, Debug1),
-            loop_batched(State, Parent, Debug)
+            enter_loop_batched(Debug0, Msg, Parent, State0)
     end.
+
+enter_loop_batched(Debug0, Msg, Parent, State0) ->
+    Debug1 = handle_debug_in(Debug0, Msg),
+    {State, Debug} = handle_msg(Msg, State0, Debug1),
+    loop_batched(State, Parent, Debug).
 
 loop_batched(#state{max_batch_size = Written,
                     batch = #batch{writes = Written}} = State0,
@@ -257,14 +265,13 @@ loop_batched(#state{max_batch_size = Written,
 loop_batched(State0, Parent, Debug0) ->
     receive
         {system, From, Request} ->
-            sys:handle_system_msg(Request, From, Parent, ?MODULE, Debug0, State0);
+            sys:handle_system_msg(Request, From, Parent,
+                                  ?MODULE, Debug0, State0);
         {'EXIT', Parent, Reason} ->
             cleanup(State0),
             exit(Reason);
         Msg ->
-            Debug1 = handle_debug_in(Debug0, Msg),
-            {State, Debug} = handle_msg(Msg, State0, Debug1),
-            loop_batched(State, Parent, Debug)
+            enter_loop_batched(Debug0, Msg, Parent, State0)
     after 0 ->
               {State, Debug} = complete_batch(State0, Debug0),
               NewBatchSize = max(?MIN_MAX_BATCH_SIZE,
@@ -355,8 +362,9 @@ handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?WARN("WAL: requesting resend from `~p`, last idx ~b idx received ~b",
-                 [Id, PrevIdx, Idx]),
+            ?WARN("WAL: requesting resend from `~p`, "
+                  "last idx ~b idx received ~b",
+                  [Id, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             {State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}},
              Dbg}
@@ -586,11 +594,9 @@ recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   Idx:64/integer, Term:64/integer,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
-    % first writer appearance in WAL
-    validate_checksum(Checksum, Idx, Term, EntryData),
     Id = binary_to_term(IdData),
-    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
-                            binary_to_term(EntryData), Trunc =:= 1),
+    % first writer appearance in WAL
+    true = validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest,
                     Cache#{IdRef => {Id, <<1:1/integer, IdRef:14/integer>>}});
@@ -601,15 +607,17 @@ recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
     #{IdRef := {Id, _}} = Cache,
+    true = validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc),
 
-    validate_checksum(Checksum, Idx, Term, EntryData),
-
-    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
-                            binary_to_term(EntryData), Trunc =:= 1),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest, Cache);
 recover_records(<<>>, _Cache) ->
     ok.
+
+validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc) ->
+    validate_checksum(Checksum, Idx, Term, EntryData),
+    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
+                            binary_to_term(EntryData), Trunc =:= 1).
 
 validate_checksum(0, _Idx, _Term, _Data) ->
     % checksum not used

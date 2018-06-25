@@ -21,7 +21,8 @@
 -define(LAST_APPLIED_OFFS, 16).
 -define(LAST_APPLIED_SIZE, 8).
 -define(VOTED_FOR_NAME_OFFS, 24).
--define(ATOM_SIZE, 513). % atoms max 255 characters but allow for unicode + length prefix
+% atoms max 255 characters but allow for unicode + length prefix
+-define(ATOM_SIZE, 513).
 -define(VOTED_FOR_NODE_OFFS, ?VOTED_FOR_NAME_OFFS + ?ATOM_SIZE ).
 
 -record(state, {fd :: file:fd()}).
@@ -112,9 +113,9 @@ write_atom(Fd, A, Offs) ->
 
 read_atom(Fd, Offs) ->
     case ra_file_handle:pread(Fd, Offs, ?ATOM_SIZE) of
-        {ok, <<0:1/integer, 0:15/integer,_/binary>>} -> % zero length
+        {ok, <<0:1/integer, 0:15/integer, _/binary>>} -> % zero length
             undefined;
-        {ok, <<1:1/integer, 0:15/integer,_/binary>>} -> % empty atom
+        {ok, <<1:1/integer, 0:15/integer, _/binary>>} -> % empty atom
             '';
         {ok, <<0:1/integer, Len:15/integer, Data:Len/binary, _/binary>>} ->
             % strip trailing null bytes

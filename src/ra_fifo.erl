@@ -81,7 +81,8 @@
                          cancel.
 
 -type protocol() ::
-    {enqueue, Sender :: maybe(pid()), MsgSeq :: maybe(msg_seqno()), Msg :: raw_msg()} |
+    {enqueue, Sender :: maybe(pid()), MsgSeq :: maybe(msg_seqno()),
+     Msg :: raw_msg()} |
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgIds :: [msg_id()], Customer :: customer_id()} |
     {return, MsgIds :: [msg_id()], Customer :: customer_id()} |
@@ -460,7 +461,8 @@ num_checked_out(#state{customers = Custs}) ->
                         maps:size(C) + Acc
                 end, 0, maps:values(Custs)).
 
-cancel_customer(CustomerId, {Effects0, #state{customers = C0, name = Name} = S0}) ->
+cancel_customer(CustomerId,
+                {Effects0, #state{customers = C0, name = Name} = S0}) ->
     case maps:take(CustomerId, C0) of
         {#customer{checked_out = Checked0}, Custs} ->
             S = maps:fold(fun (_, {MsgNum, Msg}, S) ->
@@ -540,7 +542,6 @@ maybe_enqueue(RaftIdx, From, MsgSeqNo, RawMsg, Effects0,
         #enqueuer{next_seqno = Next} when MsgSeqNo =< Next ->
             % duplicate delivery - remove the raft index from the ra_indexes
             % map as it was added earlier
-            % RaIndexes = ra_fifo_index:delete(RaftIdx, State0#state.ra_indexes),
             {duplicate, State0, Effects0}
     end.
 
@@ -828,7 +829,8 @@ maybe_queue_customer(CustomerId, #customer{checked_out = Checked, num = Num},
 
 size_test(NumMsg, NumCust) ->
     EnqGen = fun(N) -> {N, {enqueue, N}} end,
-    CustGen = fun(N) -> {N, {checkout, {auto, 100}, spawn(fun() -> ok end)}} end,
+    CustGen = fun(N) -> {N, {checkout, {auto, 100},
+                             spawn(fun() -> ok end)}} end,
     S0 = run_log(1, NumMsg, EnqGen, init(#{name => size_test})),
     S = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
     S2 = S#state{ra_indexes = ra_fifo_index:map(fun(_, _) -> undefined end,
@@ -841,7 +843,9 @@ perf_test(NumMsg, NumCust) ->
               EnqGen = fun(N) -> {N, {enqueue, self(), N, N}} end,
               Pid = spawn(fun() -> ok end),
               CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, Pid}} end,
-              SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
+              SetlGen = fun(N) ->
+                                {N, {settle, N - NumMsg - NumCust - 1, Pid}}
+                        end,
               S0 = run_log(1, NumMsg, EnqGen,
                            element(1, init(#{name => size_test}))),
               S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
@@ -857,7 +861,8 @@ perf_test(NumMsg, NumCust) ->
 %     NumCust = 500,
 %     EnqGen = fun(N) -> {N, {enqueue, self(), N, N}} end,
 %     Pid = spawn(fun() -> ok end),
-%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg}, {term_to_binary(N), Pid}}} end,
+%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg},
+%     {term_to_binary(N), Pid}}} end,
 %     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
 %     S0 = run_log(1, NumMsg, EnqGen, element(1, init(#{name => size_test}))),
 %     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),

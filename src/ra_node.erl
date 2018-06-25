@@ -162,10 +162,12 @@ init(#{id := Id,
     State0 = #{id => Id,
                uid => UId,
                cluster => Cluster0,
-               % TODO: there may be scenarios when a single node starts up but hasn't
+               % TODO: there may be scenarios when a single node
+               % starts up but hasn't
                % yet re-applied its noop command that we may receive other join
                % commands that can't be applied.
-               % TODO: what if we have snapshotted and there is no `noop` command
+               % TODO: what if we have snapshotted and
+               % there is no `noop` command
                % to be applied in the current term?
                cluster_change_permitted => false,
                cluster_index_term => {0, 0},
@@ -268,14 +270,15 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
                   [Id, PeerId]),
             {leader, State0, []};
         _ ->
-            ?INFO("~w leader saw append_entries_reply for term ~b abdicates term: ~b!~n",
-                 [Id, Term, CurTerm]),
+            ?INFO("~w leader saw append_entries_reply for term ~b "
+                  "abdicates term: ~b!~n",
+                  [Id, Term, CurTerm]),
             {follower, update_term(Term, State0), []}
     end;
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
-                                             last_term = LastTerm}} = _Reply ,
+                                             last_term = LastTerm}},
               State0 = #{id := Id, cluster := Nodes, log := Log0}) ->
     #{PeerId := Peer0 = #{match_index := MI,
                           next_index := NI}} = Nodes,
@@ -299,14 +302,15 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           % non-persistent.
                           % should they turn-into non-voters when this sitution
                           % is detected
-                          ?ERR("~w: leader saw peer return last_index [~b in ~b]"
+                          ?ERR("~w: leader saw peer with last_index [~b in ~b]"
                                " lower than recorded match index [~b]."
                                 "Resetting peer's state to last_index.~n",
                                [Id, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
                       {_EntryTerm, L} ->
-                          ?INFO("~w: leader received last_index ~b from ~w with "
+                          ?INFO("~w: leader received last_index ~b"
+                                " from ~w with "
                                 "term ~b different term ~b~n",
                                 [Id, LastIdx, PeerId, LastTerm, _EntryTerm]),
                           % last_index has a different term or entry does not
@@ -482,15 +486,13 @@ handle_candidate(#request_vote_result{term = Term},
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_result with higher term"
           " received ~b -> ~b", [id(State0), CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}],
-                        State0),
+    State = update_meta(Term, undefined, State0),
     {follower, State, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
                  #{current_term := CurTerm} = State0) when Term >= CurTerm ->
-    State = update_meta([{current_term, Term}, {voted_for, undefined}],
-                        State0),
+    State = update_meta(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{leader_id = LeaderId},
                  #{current_term := CurTerm} = State) ->
@@ -503,16 +505,14 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     ?INFO("~w: candidate append_entries_reply with higher"
           " term received ~b -> ~b~n",
           [id(State0), CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}],
-                        State0),
+    State = update_meta(Term, undefined, State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
     ?INFO("~w: candidate request_vote_rpc with higher term received ~b -> ~b~n",
           [id(State0), CurTerm, Term]),
-    State = update_meta([{current_term, Term}, {voted_for, undefined}],
-                        State0),
+    State = update_meta(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
@@ -719,8 +719,10 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       leader_id = LeaderId,
                                       last_index = LastIndex,
                                       last_term = LastTerm},
-                State = #{id := Id, current_term := CurTerm}) when Term < CurTerm ->
-    ?INFO("~w: install_snapshot old term ~b in ~b~n", [Id, LastIndex, LastTerm]),
+                State = #{id := Id, current_term := CurTerm})
+  when Term < CurTerm ->
+    ?INFO("~w: install_snapshot old term ~b in ~b~n",
+          [Id, LastIndex, LastTerm]),
     % follower receives a snapshot from an old term
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
@@ -898,25 +900,24 @@ make_pipelined_rpcs(MaxBatchSize, #{commit_index := CommitIndex} = State0) ->
                                                      MaxBatchSize, S0),
                       Peer = Peer0#{next_index => LastIdx+1,
                                     commit_index => CommitIndex},
-                      {update_peer(PeerId, Peer,S), [Entry | Entries]}
+                      {update_peer(PeerId, Peer, S), [Entry | Entries]}
               end, {State0, []}, pipelineable_peers(State0)).
 
-% makes empty append entries for peers that aren't pipelineable
 make_rpcs(State) ->
-    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
-                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next,
-                                                                 ?AER_CHUNK_SIZE,
-                                                                 S0),
-                      {S, [Entry | Entries]}
-              end, {State, []}, stale_peers(State)).
+    make_rpcs_for(stale_peers(State), State).
 
+% makes empty append entries for peers that aren't pipelineable
 make_all_rpcs(State) ->
+    make_rpcs_for(peers(State), State).
+
+make_rpcs_for(Peers, State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
-                      {_, Entry, S} = append_entries_or_snapshot(PeerId, Next,
-                                                                 ?AER_CHUNK_SIZE,
-                                                                 S0),
+                      {_, Entry, S} =
+                          append_entries_or_snapshot(PeerId, Next,
+                                                     ?AER_CHUNK_SIZE,
+                                                     S0),
                       {S, [Entry | Entries]}
-              end, {State, []}, peers(State)).
+              end, {State, []}, Peers).
 
 append_entries_or_snapshot(PeerId, Next, MaxBatchSize,
                            #{id := Id, log := Log0,
@@ -952,6 +953,9 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
                #{log := Log0, current_term := Term, id := Id,
                  commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
+    %% TODO: refactor to avoid lists:last call later
+    %% ra_log:take should be able to return the actual number of entries
+    %% read at fixed cost
     {Entries, Log} = ra_log:take(Next, Num, Log0),
     LastIndex = case Entries of
                     [] -> PrevIdx;
@@ -1012,7 +1016,7 @@ terminate(State, _Reason) ->
 
 -spec log_fold(ra_node_state(), fun((term(), State) -> State), State) ->
     {ok, State, ra_node_state()} |
-    {error, term(), ra_node_state()}. 
+    {error, term(), ra_node_state()}.
 log_fold(#{log := Log} = RaState, Fun, State) ->
     Idx = case ra_log:snapshot_index_term(Log) of
               {PrevIdx, _PrevTerm} ->
@@ -1038,15 +1042,14 @@ call_for_election(candidate, #{id := Id,
     PeerIds = peer_ids(State0),
     % increment current term
     {LastIdx, LastTerm} = last_idx_term(State0),
-    Reqs = [{PeerId,
-                     #request_vote_rpc{term = NewTerm,
+    Reqs = [{PeerId, #request_vote_rpc{term = NewTerm,
                                        candidate_id = Id,
                                        last_log_index = LastIdx,
                                        last_log_term = LastTerm}}
-                    || PeerId <- PeerIds],
+            || PeerId <- PeerIds],
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
-    State = update_meta([{current_term, NewTerm}, {voted_for, Id}], State0),
+    State = update_meta(NewTerm, Id, State0),
     {candidate, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
 call_for_election(pre_vote, #{id := Id,
@@ -1054,15 +1057,14 @@ call_for_election(pre_vote, #{id := Id,
     ?INFO("~w: pre_vote election called for in term ~b~n", [Id, Term]),
     PeerIds = peer_ids(State0),
     {LastIdx, LastTerm} = last_idx_term(State0),
-    Reqs = [{PeerId,
-             #pre_vote_rpc{term = Term,
-                           candidate_id = Id,
-                           last_log_index = LastIdx,
-                           last_log_term = LastTerm}}
+    Reqs = [{PeerId, #pre_vote_rpc{term = Term,
+                                   candidate_id = Id,
+                                   last_log_index = LastIdx,
+                                   last_log_term = LastTerm}}
             || PeerId <- PeerIds],
     % vote for self
     VoteForSelf = #pre_vote_result{term = Term, vote_granted = true},
-    State = update_meta([{current_term, Term}, {voted_for, Id}], State0),
+    State = update_meta(Term, Id, State0),
     {pre_vote, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
 
@@ -1157,42 +1159,36 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_meta(Updates, #{log := Log0} = State) ->
-    {State1, Log} = lists:foldl(fun({K, V}, {State0, Acc0}) ->
-                              Acc = ra_log:write_meta(K, V, Acc0, false),
-                              {maps:put(K, V, State0), Acc}
-                      end, {State, Log0}, Updates),
-    ok = ra_log:sync_meta(Log),
-    State1#{log => Log}.
+update_meta(Term, VotedFor, #{log := Log0} = State) ->
+    Log1 = ra_log:write_meta(current_term, Term, Log0, false),
+    Log = ra_log:write_meta(voted_for, VotedFor, Log1, true),
+    State#{log => Log,
+           current_term => Term,
+           voted_for => VotedFor}.
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
-        update_meta([{current_term, Term},
-                     {voted_for, undefined}], State);
+        update_meta(Term, undefined, State);
 update_term(_, State) ->
     State.
 
 last_idx_term(#{log := Log}) ->
     ra_log:last_index_term(Log).
-    % case ra_log:last_index_term(Log) of
-    %     {Idx, Term} ->
-    %         {Idx, Term};
-    %     undefined ->
-    %         ra_log:snapshot_index_term(Log)
-    % end.
 
 %% § 5.4.1 Raft determines which of two logs is more up-to-date by comparing
 %% the index and term of the last entries in the logs. If the logs have last
 %% entries with different terms, then the log with the later term is more
 %% up-to-date. If the logs end with the same term, then whichever log is
 %% longer is more up-to-dat
-is_candidate_log_up_to_date(_Idx, Term, {_LastIdx, LastTerm})
+-spec is_candidate_log_up_to_date(ra_index(), ra_term(), ra_idxterm()) ->
+    boolean().
+is_candidate_log_up_to_date(_, Term, {_, LastTerm})
   when Term > LastTerm ->
     true;
 is_candidate_log_up_to_date(Idx, Term, {LastIdx, Term})
   when Idx >= LastIdx ->
     true;
-is_candidate_log_up_to_date(_Idx, _Term, {_LastIdx, _LastTerm}) ->
+is_candidate_log_up_to_date(_, _, {_, _}) ->
     false.
 
 has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
@@ -1405,7 +1401,8 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
                          cluster_index_term => {Idx, Term}}};
         _ ->
             % revert back to previous cluster
-            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
+            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster,
+                                                        State),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
             pre_append_log_follower(Entry, {Idx, State1})

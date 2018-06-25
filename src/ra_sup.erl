@@ -8,7 +8,7 @@
                  ra_customer_utilisation]).
 
 start_link() ->
-	supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
     [ets:new(Table, [named_table, public, {write_concurrency, true}])
@@ -28,4 +28,4 @@ init([]) ->
              RaFileHandle,
              SnapshotWriter,
              RaSystemSup],
-	{ok, {SupFlags, Procs}}.
+    {ok, {SupFlags, Procs}}.

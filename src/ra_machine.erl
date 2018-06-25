@@ -4,12 +4,14 @@
 %%
 %% == Callbacks ==
 %%
-%% <code>-callback init(Conf :: {@link machine_init_args()}) -> {state(), effects()}'</code>
+%% <code>-callback init(Conf :: {@link machine_init_args()}) ->
+%% {state(), effects()}'</code>
 %%
 %% Initialize a new machine state.
 %%
 %%<br></br>
-%% <code>-callback apply(Index :: ra_index(), {@link command()}, effects(), State) ->
+%% <code>-callback apply(Index :: ra_index(),
+%%                       {@link command()}, effects(), State) ->
 %%    {State, effects()} | {State, {@link effects()}, {@link reply()}}</code>
 %%
 %% Applies each entry to the state machine. Effects should be prepended to the
@@ -85,7 +87,8 @@
     {release_cursor, ra_index(), state()}.
 
 %% Effects are data structure that can be returned by {@link apply/2} to ask
-%% ra to realise a side-effect in the real works, such as sending a message to a process.
+%% ra to realise a side-effect in the real works, such as sending
+%% a message to a process.
 %%
 %% Although both leaders and followers will process the same commands effects
 %% are typically only applied on the leader. The only exception to this is
