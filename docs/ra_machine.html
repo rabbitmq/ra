@@ -19,12 +19,14 @@
  
   <h3><a name="Callbacks">Callbacks</a></h3>
  
-  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt; {state(), effects()}'</code></p>
+  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt;
+  {state(), effects()}'</code></p>
  
   <p>Initialize a new machine state.</p>
  
  <p><br>
-  <code>-callback apply(Index :: ra_index(), <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
+  <code>-callback apply(Index :: ra_index(),
+                        <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
      {State, effects()} | {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
   <p>Applies each entry to the state machine. Effects should be prepended to the  
@@ -54,10 +56,6 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   Optional. A map of overview information. Needs to be efficient.
 <h2><a name="types">Data Types</a></h2>
 
-<h3 class="typedecl"><a name="type-apply_fun">apply_fun()</a></h3>
-<p><tt>apply_fun(State) = fun((<a href="#type-user_command">user_command()</a>, State) -&gt; State)</tt></p>
-
-
 <h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
 <p><tt>builtin_command() = {down, pid(), term()} | {nodeup | nodedown, node()}</tt></p>
 <p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
@@ -76,7 +74,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p>  See: <a href="effect.html"><code>effect</code></a></p>
 
 <h3 class="typedecl"><a name="type-machine">machine()</a></h3>
-<p><tt>machine() = {simple, <a href="#type-apply_fun">apply_fun</a>(State), State} | {module, module(), AddInitArgs::#{term() =&gt; term()}}</tt></p>
+<p><tt>machine() = {machine, module(), AddInitArgs::#{term() =&gt; term()}}</tt></p>
 <p>  Machine configuration.
   the <code>module()</code> should implement the <a href="ra_machine.html"><code>ra_machine</code></a> behaviour.</p>
 
@@ -105,6 +103,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <tr><td valign="top"><a href="#leader_effects-2">leader_effects/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
 </table>
 
@@ -132,12 +131,18 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
-<p><tt>module(X1::<a href="#type-machine">machine()</a>) -&gt; undefined | module()</tt><br></p>
+<p><tt>module(X1::<a href="#type-machine">machine()</a>) -&gt; module()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
 <p><tt>overview(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; map()</tt><br></p>
+</div>
+
+<h3 class="function"><a name="query-3">query/3</a></h3>
+<div class="spec">
+<p><tt>query(Mod::module(), Fun::fun((<a href="#type-state">state()</a>) -&gt; Result), State::<a href="#type-state">state()</a>) -&gt; Result</tt>
+<ul class="definitions"><li><tt>Result = term()</tt></li></ul></p>
 </div>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>

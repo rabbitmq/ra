@@ -15,6 +15,10 @@
 
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
+<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), map()}</tt></p>
+
+
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
 <p><tt>ra_await_condition_fun() = fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_node_state">ra_node_state()</a>) -&gt; boolean())</tt></p>
 
@@ -32,7 +36,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_node_config">ra_node_config()</a></h3>
-<p><tt>ra_node_config() = #{id := <a href="#type-ra_node_id">ra_node_id()</a>, uid := <a href="#type-ra_uid">ra_uid()</a>, cluster_id := <a href="#type-ra_cluster_id">ra_cluster_id()</a>, log_init_args := <a href="ra_log.html#type-ra_log_init_args">ra_log:ra_log_init_args()</a>, initial_nodes := [<a href="#type-ra_node_id">ra_node_id()</a>], machine := <a href="ra_machine.html#type-machine">ra_machine:machine()</a>, broadcast_time =&gt; non_neg_integer(), tick_timeout =&gt; non_neg_integer(), await_condition_timeout =&gt; non_neg_integer()}</tt></p>
+<p><tt>ra_node_config() = #{id := <a href="#type-ra_node_id">ra_node_id()</a>, uid := <a href="#type-ra_uid">ra_uid()</a>, cluster_id := <a href="#type-ra_cluster_id">ra_cluster_id()</a>, log_init_args := <a href="ra_log.html#type-ra_log_init_args">ra_log:ra_log_init_args()</a>, initial_nodes := [<a href="#type-ra_node_id">ra_node_id()</a>], machine := <a href="#type-machine_conf">machine_conf()</a>, broadcast_time =&gt; non_neg_integer(), tick_timeout =&gt; non_neg_integer(), await_condition_timeout =&gt; non_neg_integer()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_node_state">ra_node_state()</a></h3>
@@ -45,6 +49,10 @@
 
 <h3 class="typedecl"><a name="type-ra_state">ra_state()</a></h3>
 <p><tt>ra_state() = leader | follower | candidate | pre_vote | await_condition | delete_and_terminate | stop</tt></p>
+
+
+<h3 class="typedecl"><a name="type-simple_apply_fun">simple_apply_fun()</a></h3>
+<p><tt>simple_apply_fun(State) = fun((term(), State) -&gt; State)</tt></p>
 
 
 <h2><a name="index">Function Index</a></h2>
@@ -97,7 +105,7 @@
 
 <h3 class="function"><a name="handle_leader-2">handle_leader/2</a></h3>
 <div class="spec">
-<p><tt>handle_leader(Reply::<a href="#type-ra_msg">ra_msg()</a>, State0::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_node_state">ra_node_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
+<p><tt>handle_leader(Append_entries_rpc::<a href="#type-ra_msg">ra_msg()</a>, State0::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_node_state">ra_node_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="handle_pre_vote-2">handle_pre_vote/2</a></h3>

@@ -33,6 +33,7 @@
 <tr><td valign="top"><a href="#open-2">open/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#range-1">range/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read-3">read/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read_cons-5">read_cons/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#term_query-2">term_query/2</a></td><td></td></tr>
 </table>
@@ -82,6 +83,12 @@
 <h3 class="function"><a name="read-3">read/3</a></h3>
 <div class="spec">
 <p><tt>read(State::<a href="#type-state">state()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer()) -&gt; [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</tt><br></p>
+</div>
+
+<h3 class="function"><a name="read_cons-5">read_cons/5</a></h3>
+<div class="spec">
+<p><tt>read_cons(State::<a href="#type-state">state()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer(), Fun::fun((binary()) -&gt; term()), Acc) -&gt; Acc</tt>
+<ul class="definitions"><li><tt>Acc = [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</tt></li></ul></p>
 </div>
 
 <h3 class="function"><a name="sync-1">sync/1</a></h3>
