@@ -40,8 +40,12 @@ which has two major shortcomings:
  * Replication algorithm is linear
  * Failure recovery procedure requires expensive topology changes
 
-## Internals
+## Documentation
 
+* Api docs: https://rabbitmq.github.io/ra/
+* How to write a ra statemachine: [doc/STATEMACHINE.md](doc/STATEMACHINE.md)
+
+## Internals
 
 ### Identity
 
