@@ -107,6 +107,8 @@
          last_index :: ra_index(),
          last_term :: ra_term()}).
 
+%% WAL defaults
+-define(WAL_MAX_SIZE_BYTES, 1000 * 1000 * 128).
 
 % primitive logging abstraction
 -define(error, true).

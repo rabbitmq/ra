@@ -8,6 +8,8 @@
 %% Supervisor callbacks
 -export([init/1]).
 
+-include("ra.hrl").
+
 -spec start_link(ra_log_wal:wal_conf()) ->
     {ok, pid()} | ignore | {error, term()}.
 start_link(Conf) ->
@@ -15,8 +17,14 @@ start_link(Conf) ->
 
 init([WalConf0]) ->
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
-    AddModes = [{delayed_write, 1024 * 1024 * 4, 1}],
-    WalConf = maps:merge(#{additional_wal_file_modes => AddModes}, WalConf0),
+    MaxSizeBytes = application:get_env(ra, wal_max_size_bytes,
+                                       ?WAL_MAX_SIZE_BYTES),
+    ComputeChecksums = application:get_env(ra, wal_compute_checksums, true),
+    Strategy = application:get_env(ra, wal_write_strategy, delay_writes),
+    WalConf = maps:merge(#{compute_checksums => ComputeChecksums,
+                           write_strategy => Strategy,
+                           max_size_bytes => MaxSizeBytes},
+                         WalConf0),
     Wal = #{id => ra_log_wal,
             start => {ra_log_wal, start_link, [WalConf, []]}},
     {ok, {SupFlags, [Wal]}}.

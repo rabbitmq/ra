@@ -32,7 +32,7 @@ init(Dir) ->
     ok = filelib:ensure_dir(Dets),
     {ok, ?REVERSE_TBL} = dets:open_file(?REVERSE_TBL,
                                         [{file, Dets},
-                                         {auto_save, 5000},
+                                         {auto_save, 500},
                                          {access, read_write}]),
     ok.
 

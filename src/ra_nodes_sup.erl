@@ -41,7 +41,6 @@ prepare_restart_rpc(RaName) ->
             name_not_registered;
         UId ->
             Dir = ra_env:data_dir(UId),
-            % TODO this cannot work with another log implementation
             % can it be made generic without already knowing the config state?
             ra_log:read_config(Dir)
     end.

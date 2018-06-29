@@ -221,7 +221,7 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
                         _ -> ok
                     catch
                         ErrType:Err ->
-                            ?WARN("ra_log_segment_writer: error sending "
+                            ?INFO("ra_log_segment_writer: error sending "
                                   "ra_log_event to: "
                                   "~s. Error:~n~w:~W~n",
                                   [RaNodeUId, ErrType, Err, 7])

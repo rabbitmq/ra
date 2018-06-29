@@ -52,10 +52,11 @@
 <tr><td valign="top"><a href="#send_and_notify-3">send_and_notify/3</a></td><td>send a command to the ra node using cast.</td></tr>
 <tr><td valign="top"><a href="#send_and_notify-4">send_and_notify/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a new distributed ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_local_cluster-3">start_local_cluster/3</a></td><td>Starts a ra cluster on the current erlang node.</td></tr>
 <tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td>Starts a ra node.</td></tr>
 <tr><td valign="top"><a href="#start_node-4">start_node/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a></td><td>Starts or restarts a ra cluster.</td></tr>
 <tr><td valign="top"><a href="#stop_node-1">stop_node/1</a></td><td>Stops a ra node.</td></tr>
 <tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Causes the node to entre the pre-vote and attempt become leader
   It is necessary to call this function when starting a new cluster as a
@@ -260,7 +261,7 @@
  
   If a cluster could not be formed any nodes that did manage to start are
   forcefully deleted.</p>
-</div><p><p>Starts a distributed ra cluster.</p>
+</div><p><p>Starts a new distributed ra cluster.</p>
  
  </p>
 
@@ -289,6 +290,27 @@
 <div class="spec">
 <p><tt>start_node(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Machine::<a href="ra_node.html#type-machine_conf">ra_node:machine_conf()</a>, NodeIds::[<a href="#type-ra_node_id">ra_node_id()</a>]) -&gt; ok | {error, term()}</tt><br></p>
 </div>
+
+<h3 class="function"><a name="start_or_restart_cluster-3">start_or_restart_cluster/3</a></h3>
+<div class="spec">
+<p><tt>start_or_restart_cluster(ClusterId::<a href="#type-ra_cluster_id">ra_cluster_id()</a>, Machine::<a href="ra_node.html#type-machine_conf">ra_node:machine_conf()</a>, RemNodes::[<a href="#type-ra_node_id">ra_node_id()</a>]) -&gt; {ok, [<a href="#type-ra_node_id">ra_node_id()</a>], [<a href="#type-ra_node_id">ra_node_id()</a>]} | {error, cluster_not_formed}</tt><br></p>
+<p><tt>ClusterId</tt>: the cluster id of the cluster.<br>
+<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+</p>
+<p>returns: <p>
+  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
+  started. A cluster can be successfully started if more than half of the
+  nodes provided could be started. Nodes that could not be started need to
+  be retried periodically using <a href="#start_node-1"><code>start_node/1</code></a></p>
+ 
+  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
+ 
+  If there was no existing cluster and a new cluster could not be formed
+  any nodes that did manage to start are
+  forcefully deleted.</p>
+</div><p><p>Starts or restarts a ra cluster.</p>
+ 
+ </p>
 
 <h3 class="function"><a name="stop_node-1">stop_node/1</a></h3>
 <div class="spec">

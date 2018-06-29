@@ -18,9 +18,6 @@
 -define(MIN_MAX_BATCH_SIZE, 16).
 -define(MAX_MAX_BATCH_SIZE, 16 * 128).
 -define(METRICS_WINDOW_SIZE, 100).
--define(MAX_WAL_SIZE_BYTES, 1000 * 1000 * 128).
-% maximum number of entries for any one writer before requesting flush to disk
--define(MAX_WRITER_ENTRIES_PER_WAL, 4096 * 4).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -55,7 +52,7 @@
 -record(wal, {fd :: maybe(file:io_device()),
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
-              wal_file_size = 0 :: non_neg_integer()}).
+              file_size = 0 :: non_neg_integer()}).
 
 -record(state, {file_num = 0 :: non_neg_integer(),
                 wal :: #wal{} | undefined,
@@ -63,7 +60,7 @@
                 file_modes :: [term()],
                 dir :: string(),
                 max_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                max_wal_size_bytes = ?MAX_WAL_SIZE_BYTES :: non_neg_integer(),
+                max_size_bytes = ?WAL_MAX_SIZE_BYTES :: non_neg_integer(),
                 segment_writer = ra_log_segment_writer :: atom(),
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
@@ -79,17 +76,15 @@
                                    {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 compute_checksums = false :: boolean(),
-                write_strategy = delay_writs :: wal_write_strategy()
+                write_strategy = delay_writes :: wal_write_strategy()
                }).
 
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
-                      max_wal_size_bytes => non_neg_integer(),
-                      %TODO implement
-                      max_writer_entries_per_wal => non_neg_integer(),
+                      max_size_bytes => non_neg_integer(),
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
-                      wal_strategy => wal_write_strategy()}.
+                      write_strategy => wal_write_strategy()}.
 
 -export_type([wal_conf/0,
               wal_write_strategy/0]).
@@ -175,7 +170,7 @@ init(#{dir := Dir} = Conf0, Parent, Options) ->
 
 %% Internal
 
-recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
+recover_wal(Dir, #{max_size_bytes := MaxWalSize,
                    segment_writer := TblWriter,
                    compute_checksums := ComputeChecksum,
                    write_strategy := WriteStrategy},
@@ -201,7 +196,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
     % tables mixed with old tables
     All = [begin
                {ok, Data} = file:read_file(F),
-               ok = recover_records(Data, #{}),
+               ok = try_recover_records(Data, #{}),
                recovering_to_closed(F)
            end || F <- WalFiles],
     % get all the recovered tables and insert them into closed
@@ -218,7 +213,7 @@ recover_wal(Dir, #{max_wal_size_bytes := MaxWalSize,
                          #state{dir = Dir,
                                 file_num = FileNum,
                                 file_modes = Modes,
-                                max_wal_size_bytes = MaxWalSize,
+                                max_size_bytes = MaxWalSize,
                                 compute_checksums = ComputeChecksum,
                                 segment_writer = TblWriter,
                                 write_strategy = WriteStrategy},
@@ -310,9 +305,9 @@ write_data(Id, Idx, Term, Data0, Trunc,
            #state{batch = undefined} = State, Dbg) ->
     write_data(Id, Idx, Term, Data0, Trunc, start_batch(State), Dbg);
 write_data(Id, Idx, Term, Data0, Trunc,
-           #state{max_wal_size_bytes = MaxWalSize,
+           #state{max_size_bytes = MaxWalSize,
                   compute_checksums = ComputeChecksum,
-                  wal = #wal{wal_file_size = FileSize,
+                  wal = #wal{file_size = FileSize,
                              writer_name_cache = Cache0} = Wal} = State00,
           Dbg0) ->
     EntryData = to_binary(Data0),
@@ -375,7 +370,7 @@ handle_msg(rollover, State, Dbg) ->
     roll_over(State, Dbg).
 
 append_data(#state{wal = #wal{fd = Fd,
-                              wal_file_size = FileSize} = Wal,
+                              file_size = FileSize} = Wal,
                    batch = Batch,
                    writers = Writers,
                    write_strategy = WriteStrat} = State,
@@ -388,7 +383,7 @@ append_data(#state{wal = #wal{fd = Fd,
     end,
     true = update_mem_table(ra_log_open_mem_tables, Id, Idx, Term, Entry,
                             Truncate),
-    State#state{wal = Wal#wal{wal_file_size = FileSize + DataSize},
+    State#state{wal = Wal#wal{file_size = FileSize + DataSize},
                 batch = incr_batch(Batch, Id, {Idx, Term}, Data),
                 writers = Writers#{Id => {in_seq, Idx}} }.
 
@@ -524,11 +519,12 @@ complete_batch(#state{wal = #wal{fd = Fd},
                Debug0) ->
     TS = os:system_time(millisecond),
     case WriteStrat of
-        delay_writes_sync ->
-            ok = ra_file_handle:write(Fd, lists:reverse(Pend));
         delay_writes ->
             ok = ra_file_handle:write(Fd, lists:reverse(Pend)),
-            ok = ra_file_handle:sync(Fd);
+            ok = ra_file_handle:sync(Fd),
+            ok;
+        delay_writes_sync ->
+            ok = ra_file_handle:write(Fd, lists:reverse(Pend));
         no_delay ->
             ok = ra_file_handle:sync(Fd)
     end,
@@ -577,15 +573,23 @@ dump_records(<<_:1/integer, 0:1/integer, _:14/integer,
     % TODO: recover writers info, i.e. last index seen
     dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
 dump_records(<<_:1/integer, 1:1/integer, _:14/integer,
-                  _:32/integer,
-                  EntryDataLen:32/integer,
-                  Idx:64/integer, _:64/integer,
-                  EntryData:EntryDataLen/binary,
-                  Rest/binary>>, Entries) ->
+               _:32/integer,
+               EntryDataLen:32/integer,
+               Idx:64/integer, _:64/integer,
+               EntryData:EntryDataLen/binary,
+               Rest/binary>>, Entries) ->
     dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
 dump_records(<<>>, Entries) ->
     Entries.
 
+try_recover_records(Data, Cache) ->
+    try recover_records(Data, Cache) of
+        ok -> ok
+    catch _:_ = Err ->
+              ?INFO("wal: encountered error during recovery: ~w~n"
+                    "Continuing.~n", [Err]),
+              ok
+    end.
 
 recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
                   IdDataLen:16/integer, IdData:IdDataLen/binary,
@@ -645,8 +649,7 @@ send_write(Wal, Msg) ->
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
-                 max_wal_size_bytes => ?MAX_WAL_SIZE_BYTES,
-                 max_writer_entries_per_wal => ?MAX_WRITER_ENTRIES_PER_WAL,
+                 max_size_bytes => ?WAL_MAX_SIZE_BYTES,
                  compute_checksums => true,
                  write_strategy => delay_writes}, Conf).
 

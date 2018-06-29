@@ -45,6 +45,51 @@ which has two major shortcomings:
 * Api docs: https://rabbitmq.github.io/ra/
 * How to write a ra statemachine: [doc/STATEMACHINE.md](doc/STATEMACHINE.md)
 
+## Configuration
+
+* `data_dir`:
+
+A directory name where `ra` will store it's data.
+
+* `wal_max_size_bytes`:
+
+The maximum size of the WAL (Write Ahead Log). Default: 128Mb.
+
+* `wal_compute_checksums`:
+
+Indicate whether the wal should compute and validate checksums. Default: true
+
+* `wal_write_strategy`:
+    - `delay_writes`:
+
+    The default. Actual `write(2)` system calls are delayed until a buffer is
+    due to be
+    flushed. Then it writes all the data in a single call then fsyncs. Fastest but
+    incurs some additional memory use.
+
+    - `delay_writes_sync`:
+
+    Like `delay_writes` but will try to open the file with `O_SYNC` and thus wont
+    need the additional `fsync(2)` system call. If it fails to open the file with this
+    flag this mode falls back to `delay_writes`
+
+    - `no_delay`:
+
+    Each entry is written using `write(2)` as soon as possible. Somewhat slower than
+    `delay_writes` but doesn't need to cache binary data for as long.
+
+
+
+Example:
+
+```
+[{data_dir, "/tmp/ra-data"},
+ {wal_max_size_bytes, 134217728},
+ {wal_compute_checksums, true},
+ {wal_write_strategy, delay_writes},
+]
+```
+
 ## Internals
 
 ### Identity

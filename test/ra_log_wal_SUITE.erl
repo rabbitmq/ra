@@ -64,6 +64,7 @@ init_per_testcase(TestCase, Config) ->
 
 end_per_testcase(_TestCase, Config) ->
     proc_lib:stop(?config(ra_log_ets, Config)),
+    proc_lib:stop(ra_file_handle),
     Config.
 
 basic_log_writes(Config) ->
@@ -252,8 +253,8 @@ roll_over(Config) ->
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_size_bytes
-    {ok, Pid} = ra_log_wal:start_link(Conf#{max_wal_size_bytes => 1024 * NumWrites,
-                                             segment_writer => self()}, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites,
+                                            segment_writer => self()}, []),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
@@ -315,7 +316,7 @@ recover_after_roll_over(Config) ->
     WriterId = ?config(writer_id, Config),
     Data = <<42:256/unit:8>>,
     Conf = Conf0#{segment_writer => self(),
-                  max_wal_size_bytes => byte_size(Data) * 75},
+                  max_size_bytes => byte_size(Data) * 75},
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf, []),

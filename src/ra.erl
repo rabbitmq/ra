@@ -26,6 +26,7 @@
          delete_node/1,
          % cluster operations
          start_cluster/3,
+         start_or_restart_cluster/3,
          delete_cluster/1,
          delete_cluster/2,
 
@@ -123,7 +124,39 @@ stop_node(NodeId) ->
 delete_node(NodeId) ->
     ra_nodes_sup:delete_node(NodeId).
 
-%% @doc Starts a distributed ra cluster.
+%% @doc Starts or restarts a ra cluster.
+%%
+%%
+%% @param ClusterId the cluster id of the cluster.
+%% @param Machine The {@link ra_machine:machine/0} configuration.
+%% @param NodeIds The list of ra node ids.
+%% @returns
+%% `{ok, Started, NotStarted}'  if a cluster could be successfully
+%% started. A cluster can be successfully started if more than half of the
+%% nodes provided could be started. Nodes that could not be started need to
+%% be retried periodically using {@link start_node/1}
+%%
+%% `{error, cluster_not_formed}' if a cluster could not be started.
+%%
+%% If there was no existing cluster and a new cluster could not be formed
+%% any nodes that did manage to start are
+%% forcefully deleted.
+-spec start_or_restart_cluster(ra_cluster_id(), ra_node:machine_conf(), [ra_node_id()]) ->
+    {ok, [ra_node_id()], [ra_node_id()]} |
+    {error, cluster_not_formed}.
+start_or_restart_cluster(ClusterId, Machine,
+                         [FirstNode | RemNodes] = NodeIds) ->
+    case ra_nodes_sup:restart_node(FirstNode) of
+        {ok, _} ->
+            %% restart the rest of the nodes
+            [{ok, _} = ra_nodes_sup:restart_node(N) || N <- RemNodes],
+            {ok, NodeIds, []};
+        {error, Err} ->
+            ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
+            start_cluster(ClusterId, Machine, NodeIds)
+    end.
+
+%% @doc Starts a new distributed ra cluster.
 %%
 %%
 %% @param ClusterId the cluster id of the cluster.
