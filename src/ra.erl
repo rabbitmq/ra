@@ -141,7 +141,8 @@ delete_node(NodeId) ->
 %% If there was no existing cluster and a new cluster could not be formed
 %% any nodes that did manage to start are
 %% forcefully deleted.
--spec start_or_restart_cluster(ra_cluster_id(), ra_node:machine_conf(), [ra_node_id()]) ->
+-spec start_or_restart_cluster(ra_cluster_id(), ra_node:machine_conf(),
+                               [ra_node_id()]) ->
     {ok, [ra_node_id()], [ra_node_id()]} |
     {error, cluster_not_formed}.
 start_or_restart_cluster(ClusterId, Machine,

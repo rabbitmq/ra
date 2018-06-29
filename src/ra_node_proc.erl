@@ -984,12 +984,8 @@ send(To, Msg) ->
     % we do not want to block the ra node whilst attempting to set up
     % a TCP connection to a potentially down node.
     case erlang:send(To, Msg, [noconnect, nosuspend]) of
-        ok ->
-            ok;
-        noconnect ->
-            % TODO: we could try to reconnect here in a different processes
-            % but probably best not from a performance point of view
-            ok
+        ok -> ok;
+        _ -> ok
     end.
 
 update_use({inactive, _, _, _}   = CUInfo, inactive) ->
