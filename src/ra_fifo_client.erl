@@ -45,7 +45,9 @@
                                                seq()},
                 priority = high :: high | normal,
                 block_handler = fun() -> ok end :: fun(() -> ok),
-                unblock_handler = fun() -> ok end :: fun(() -> ok)}).
+                unblock_handler = fun() -> ok end :: fun(() -> ok),
+                timeout :: non_neg_integer()
+               }).
 
 -opaque state() :: #state{}.
 
@@ -71,18 +73,22 @@ init(ClusterId, Nodes) ->
 %% @param MaxPending size defining the max number of pending commands.
 -spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer()) -> state().
 init(ClusterId, Nodes, SoftLimit) ->
+    Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
     #state{cluster_id = ClusterId,
            nodes = Nodes,
-           soft_limit = SoftLimit}.
+           soft_limit = SoftLimit,
+           timeout = Timeout}.
 
 -spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
 init(ClusterId, Nodes, SoftLimit, BlockFun, UnblockFun) ->
+    Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
     #state{cluster_id = ClusterId,
            nodes = Nodes,
            block_handler = BlockFun,
            unblock_handler = UnblockFun,
-           soft_limit = SoftLimit}.
+           soft_limit = SoftLimit,
+           timeout = Timeout}.
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this
@@ -151,11 +157,11 @@ enqueue(Msg, State) ->
 -spec dequeue(ra_fifo:customer_tag(),
               Settlement :: settled | unsettled, state()) ->
     {ok, ra_fifo:delivery_msg() | empty, state()} | {error | timeout, term()}.
-dequeue(CustomerTag, Settlement, State0) ->
+dequeue(CustomerTag, Settlement, #state{timeout = Timeout} = State0) ->
     Node = pick_node(State0),
     CustomerId = customer_id(CustomerTag),
     case ra:send_and_await_consensus(Node, {checkout, {dequeue, Settlement},
-                                            CustomerId}) of
+                                            CustomerId}, Timeout) of
         {ok, {dequeue, Reply}, Leader} ->
             {ok, Reply, State0#state{leader = Leader}};
         Err ->
