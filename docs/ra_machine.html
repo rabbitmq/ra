@@ -25,7 +25,7 @@
   <p>Initialize a new machine state.</p>
  
  <p><br>
-  <code>-callback apply(Index :: ra_index(),
+  <code>-callback apply(Meta :: command_meta_data(),
                         <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
      {State, effects()} | {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
@@ -64,6 +64,10 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
 <p><tt>command() = <a href="#type-user_command">user_command()</a> | <a href="#type-builtin_command">builtin_command()</a></tt></p>
 
+
+<h3 class="typedecl"><a name="type-command_meta_data">command_meta_data()</a></h3>
+<p><tt>command_meta_data() = #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</tt></p>
+<p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
 <p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, process, pid()} | {demonitor, node, node()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</tt></p>
@@ -111,7 +115,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="apply-5">apply/5</a></h3>
 <div class="spec">
-<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Cmd::<a href="#type-command">command()</a>, Effects::<a href="#type-effects">effects()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>} | {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
+<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-command_meta_data">command_meta_data()</a>, Cmd::<a href="#type-command">command()</a>, Effects::<a href="#type-effects">effects()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>} | {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="eol_effects-2">eol_effects/2</a></h3>

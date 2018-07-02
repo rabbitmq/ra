@@ -861,7 +861,8 @@ wal_down_condition(_Msg, #{log := Log}) ->
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := Id, leader_id := LeaderId,
                                  current_term := Term,
-                                 log := Log} = State0) ->
+                                 log := Log} = State0)
+  when LeaderId =/= undefined ->
     % as writes are async we can't use the index of the last available entry
     % in the log as they may not have been fully persisted yet
     % Take the smaller of the two values as commit index may be higher
@@ -882,7 +883,10 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {follower, State, [cast_reply(Id, LeaderId, Reply),
                                {incr_metrics, ra_metrics, [{3, Applied}]}
                                | Effects]}
-    end.
+    end;
+evaluate_commit_index_follower(State) ->
+    %% when no leader is known
+    {follower, State, []}.
 
 filter_follower_effects(Effects) ->
     lists:filter(fun ({release_cursor, _, _}) -> true;
@@ -1278,7 +1282,8 @@ make_notify_effects(Nots, Effects) ->
 apply_with(Machine,
            {Idx, Term, {'$usr', From, Cmd, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
-    case ra_machine:apply(Machine, Idx, Cmd, Effects0, MacSt) of
+    Meta = #{index => Idx, term => Term},
+    case ra_machine:apply(Machine, Meta, Cmd, Effects0, MacSt) of
         {NextMacSt, Effects1} ->
             % apply returned no reply so use IdxTerm as reply value
             {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,

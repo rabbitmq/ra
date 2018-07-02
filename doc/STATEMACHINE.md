@@ -10,7 +10,7 @@ implemented:
 ```erlang
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
--callback 'apply'(Index :: ra_index(), command(), State) ->
+-callback 'apply'(Meta :: command_meta_data(), command(), State) ->
     {State, effects()} | {State, effects(), reply()}.
 ```
 
@@ -18,8 +18,8 @@ implemented:
 is created. It takes an arbitrary map of configuration parameters.
 
 `apply/4` is the primary function that is called for every command in the
-raft log. It takes the raft index (more on that later), a command, a list
-of effects and the
+raft log. It takes a meta data map containing the raft index and term (more on that later),
+a command, a list of effects and the
 current state and either returns the new state and a list of effects (more on
 effects later) or the new state, effects _and_ a reply that can be returned
 to the caller _if_ they issued a synchronous call (see: `ra:send_and_await_consensus`).

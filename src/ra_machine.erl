@@ -10,7 +10,7 @@
 %% Initialize a new machine state.
 %%
 %%<br></br>
-%% <code>-callback apply(Index :: ra_index(),
+%% <code>-callback apply(Meta :: command_meta_data(),
 %%                       {@link command()}, effects(), State) ->
 %%    {State, effects()} | {State, {@link effects()}, {@link reply()}}</code>
 %%
@@ -127,11 +127,17 @@
 
 -type command() :: user_command() | builtin_command().
 
+-type command_meta_data() :: #{index := ra_index(),
+                               term := ra_term()}.
+%% extensible command meta data map
+
+
 -export_type([machine/0,
               effect/0,
               effects/0,
               reply/0,
-              builtin_command/0]).
+              builtin_command/0,
+              command_meta_data/0]).
 
 -optional_callbacks([leader_effects/1,
                      tick/2,
@@ -149,7 +155,7 @@
 
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
--callback 'apply'(Index :: ra_index(), command(), effects(), State) ->
+-callback 'apply'(command_meta_data(), command(), effects(), State) ->
     {State, effects()} | {State, effects(), reply()}.
 
 -callback leader_effects(state()) -> effects().
@@ -165,7 +171,7 @@
 init({machine, Mod, Args}, Name) ->
     Mod:init(Args#{name => Name}).
 
--spec apply(machine(), ra_index(), command(), effects(), State) ->
+-spec apply(machine(), command_meta_data(), command(), effects(), State) ->
     {State, effects()} | {State, effects(), reply()}.
 apply({machine, Mod, _}, Idx, Cmd, Effects, State) ->
     Mod:apply(Idx, Cmd, Effects, State).

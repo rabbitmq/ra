@@ -83,10 +83,12 @@ become available.</p>
 
 <h3 class="function"><a name="dequeue-3">dequeue/3</a></h3>
 <div class="spec">
-<p><tt>dequeue(CustomerTag::<a href="ra_fifo.html#type-customer_tag">ra_fifo:customer_tag()</a>, Settlement::settled | unsettled, State0::<a href="#type-state">state()</a>) -&gt; {ok, <a href="ra_fifo.html#type-delivery_msg">ra_fifo:delivery_msg()</a> | empty, <a href="#type-state">state()</a>} | {error | timeout, term()}</tt><br></p>
+<p><tt>dequeue(CustomerTag::<a href="ra_fifo.html#type-customer_tag">ra_fifo:customer_tag()</a>, Settlement::settled | unsettled, State::<a href="#type-state">state()</a>) -&gt; {ok, <a href="ra_fifo.html#type-delivery_msg">ra_fifo:delivery_msg()</a> | empty, <a href="#type-state">state()</a>} | {error | timeout, term()}</tt><br></p>
 <p><tt>CustomerTag</tt>: a unique tag to identify this particular customer.<br>
 <tt>Settlement</tt>: either <code>settled</code> or <code>unsettled</code>. When <code>settled</code> no
   further settlement needs to be done.<br>
+<tt>State</tt>: The ra_fifo_client state.
+ <br>
 </p>
 <p>returns: <code>{ok, IdMsg, State}</code> or <code>{error | timeout, term()}</code></p>
 </div><p><p>Dequeue a message from the queue.</p>

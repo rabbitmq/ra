@@ -11,17 +11,17 @@
         ]).
 init(_) -> {[], []}.
 
-apply(Idx, {enq, Msg}, Effects, State) ->
+apply(#{index := Idx}, {enq, Msg}, Effects, State) ->
     {State ++ [{Idx, Msg}], Effects};
-apply(_Idx, {deq, ToPid}, Effects, [{EncIdx, Msg} | State]) ->
+apply(_Meta, {deq, ToPid}, Effects, [{EncIdx, Msg} | State]) ->
     {State, [{send_msg, ToPid, Msg},
              {release_cursor, EncIdx, []}
              | Effects]};
-apply(_Idx, deq, Effects, [{EncIdx, _Msg} | State]) ->
+apply(_Meta, deq, Effects, [{EncIdx, _Msg} | State]) ->
     {State, [{release_cursor, EncIdx, []}
              | Effects]};
 % due to compaction there may not be a dequeue op to do
-apply(_Idx, _, Effects, [] = State) ->
+apply(_Meta, _, Effects, [] = State) ->
     {State, Effects}.
 
 
