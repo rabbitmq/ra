@@ -66,9 +66,9 @@ To implement the `apply/3` function we need to handle each of the commands
 we support.
 
 ```erlang
-apply(_Index, {write, Key, Value}, State) ->
+apply(_Meta, {write, Key, Value}, State) ->
     {maps:put(Key, Value, State), []};
-apply(_Index, {read, Key}, State) ->
+apply(_Meta, {read, Key}, State) ->
     Reply = maps:get(Key, State, undefined),
     {State, [], Reply}.
 ```
