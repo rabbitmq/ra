@@ -195,18 +195,7 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
                   active_segments = ActiveSegments} = State) ->
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
 
-    StartIdx = case ets:lookup(ra_log_snapshot_state, RaNodeUId) of
-                   [{_, SnapIdx}] ->
-                       max(SnapIdx + 1, StartIdx0);
-                   [] ->
-                       StartIdx0
-               end,
-
-    ?INFO("STartIdx ~w~n", [StartIdx]),
     case filelib:is_dir(Dir) of
-        true when StartIdx >= EndIdx ->
-            ok = send_segments(RaNodeUId, Tid, []),
-            State;
         true ->
             %% check that the directory exists -
             %% if it does not exist the node has
@@ -221,17 +210,22 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
                     State;
                 _ ->
                     {Segment1, Closed0} =
-                        append_to_segment(Tid, StartIdx, EndIdx,
+                        append_to_segment(RaNodeUId, Tid, StartIdx0, EndIdx,
                                           Segment0, SegConf),
                     % fsync
                     {ok, Segment} = ra_log_segment:sync(Segment1),
 
                     % notify writerid of new segment update
                     % includes the full range of the segment
-                    Segments = [ra_log_segment:segref(S)
-                                || S <- [Segment | Closed0]],
+                    ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0],
+                    SegRefs = case ra_log_segment:segref(Segment) of
+                                  undefined ->
+                                      ClosedSegRefs;
+                                  SRef ->
+                                      [SRef | ClosedSegRefs]
+                              end,
 
-                    ok = send_segments(RaNodeUId, Tid, Segments),
+                    ok = send_segments(RaNodeUId, Tid, SegRefs),
                     State#state{active_segments =
                                 ActiveSegments#{RaNodeUId => Segment}}
             end;
@@ -239,6 +233,14 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
             ?INFO("segment_writer: skipping segment as directory ~s does "
                   "not exist~n", [Dir]),
             State
+    end.
+
+start_index(RaNodeUId, StartIdx0) ->
+    case ets:lookup(ra_log_snapshot_state, RaNodeUId) of
+        [{_, SnapIdx}] ->
+            max(SnapIdx + 1, StartIdx0);
+        [] ->
+            StartIdx0
     end.
 
 send_segments(RaNodeUId, Tid, Segments) ->
@@ -254,23 +256,32 @@ send_segments(RaNodeUId, Tid, Segments) ->
             ok
     end.
 
-append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
+append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, SegConf) ->
+    StartIdx = start_index(UId, StartIdx0),
     % EndIdx + 1 because FP
-    append_to_segment(Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
+    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
 
-append_to_segment(_Tid, EndIdx, EndIdx, Seg, Closed, _SegConf) ->
+append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _)
+  when StartIdx >= EndIdx ->
     {Seg, Closed};
-append_to_segment(Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
-    [{Idx, Term, Data0}] = ets:lookup(Tid, Idx),
+append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
+    [{_, Term, Data0}] = ets:lookup(Tid, Idx),
     Data = term_to_binary(Data0),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
-            append_to_segment(Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
+            append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
         {error, full} ->
             % close and open a new segment
-            Seg1 = open_successor_segment(Seg0, SegConf),
-            {ok, Seg} = ra_log_segment:append(Seg1, Idx, Term, Data),
-            append_to_segment(Tid, Idx+1, EndIdx, Seg, [Seg0 | Closed], SegConf)
+            Seg = open_successor_segment(Seg0, SegConf),
+            %% re-evaluate snapshot state for the node in case a snapshot
+            %% has completed during segmeng flush
+            StartIdx = start_index(UId, Idx),
+            % recurse
+            % TODO: there is a micro-inefficiency here in that we need to
+            % call term_to_binary and do an ETS lookup again that we have
+            % already done.
+            append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
+                              [Seg0 | Closed], SegConf)
     end.
 
 find_segment_files(Dir) ->

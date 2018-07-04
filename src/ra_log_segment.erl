@@ -219,7 +219,9 @@ max_count(#state{max_count = Max}) ->
 filename(#state{filename = Fn}) ->
     filename:absname(Fn).
 
--spec segref(state()) -> ra_log:segment_ref().
+-spec segref(state()) -> maybe(ra_log:segment_ref()).
+segref(#state{range = undefined}) ->
+    undefined;
 segref(#state{range = {Start, End}, filename = Fn}) ->
     {Start, End, ra_lib:to_string(filename:basename(Fn))}.
 

@@ -23,7 +23,8 @@ all_tests() ->
      overwrite,
      term_query,
      write_many,
-     open_invalid
+     open_invalid,
+     segref
     ].
 
 groups() ->
@@ -66,6 +67,16 @@ open_invalid(Config) ->
     {error, missing_segment_header} = ra_log_segment:open(Fn),
     file:close(Fd),
     ok.
+
+segref(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    undefined = ra_log_segment:segref(Seg0),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    {1, 1, "seg1.seg"} = ra_log_segment:segref(Seg1),
+    ok.
+
 
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
