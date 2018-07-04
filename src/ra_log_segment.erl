@@ -10,7 +10,9 @@
          close/1,
          range/1,
          max_count/1,
-         filename/1]).
+         filename/1,
+         segref/1,
+         is_same_as/2]).
 
 -export([dump_index/1]).
 
@@ -217,6 +219,14 @@ max_count(#state{max_count = Max}) ->
 filename(#state{filename = Fn}) ->
     filename:absname(Fn).
 
+-spec segref(state()) -> ra_log:segment_ref().
+segref(#state{range = {Start, End}, filename = Fn}) ->
+    {Start, End, ra_lib:to_string(filename:basename(Fn))}.
+
+-spec is_same_as(state(), file:filename_all()) -> boolean().
+is_same_as(#state{filename = Fn0}, Fn) ->
+    is_same_filename_all(Fn0, Fn).
+
 -spec close(state()) -> ok.
 close(#state{fd = Fd, mode = append} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
@@ -229,6 +239,13 @@ close(#state{fd = Fd}) ->
     ok.
 
 %%% Internal
+
+is_same_filename_all(Fn, Fn) ->
+    true;
+is_same_filename_all(Fn0, Fn1) ->
+    B0 = filename:basename(Fn0),
+    B1 = filename:basename(Fn1),
+    ra_lib:to_list(B0) == ra_lib:to_list(B1).
 
 update_range(undefined, Idx) ->
     {Idx, Idx};

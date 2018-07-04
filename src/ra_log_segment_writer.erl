@@ -52,21 +52,25 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
 -spec delete_segments(ra_uid(), ra_index(),
-                      [ra_log:ra_segment_ref()]) -> ok.
+                      [file:filename_all()]) -> ok.
 delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
+%% delete segmetns for a ra node. Takes a list of absolute filenames and deletes
+%% all but the latest one immedately and sends the latest one to the segment
+%% writer process to delete in case it is still open.
 -spec delete_segments(atom() | pid(), ra_uid(),
-                      ra_index(), [ra_log:ra_segment_ref()]) -> ok.
+                      ra_index(), [file:filename_all()]) -> ok.
 delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
     % delete all closed segment files
-    [_ = file:delete(F) || {_, _, F} <- SegmentFiles],
+    [_ = file:delete(F) || F <- SegmentFiles],
     gen_server:cast(SegWriter, {delete_segment, Who, SnapIdx, MaybeActive}).
 
 -spec release_segments(atom() | pid(), ra_uid()) -> ok.
 release_segments(SegWriter, Who) ->
     gen_server:call(SegWriter, {release_segments, Who}).
 
+%% returns the absolute filenames of all the segments
 -spec my_segments(ra_uid()) -> [file:filename()].
 my_segments(Who) ->
     my_segments(?MODULE, Who).
@@ -128,7 +132,8 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % TODO: test scenario when node crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
-    ?INFO("segment_writer: deleting wal file: ~p", [WalFile]),
+    ?INFO("segment_writer: deleting wal file: ~p",
+          [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
     %% TODO: this shoudl be a debug option config?
     % Base = filename:basename(WalFile),
@@ -137,12 +142,12 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % file:copy(WalFile, BkFile),
     _ = file:delete(WalFile),
     {noreply, State};
-handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
+handle_cast({delete_segment, Who, Idx, SegmentFile},
             #state{active_segments = ActiveSegments} = State0) ->
     case ActiveSegments of
         #{Who := Seg} ->
-            case ra_log_segment:filename(Seg) of
-                SegmentFile ->
+            case ra_log_segment:is_same_as(Seg, SegmentFile) of
+                true ->
                     % the segment file is the correct one
                     case ra_log_segment:range(Seg) of
                         {_From, To} when To =< Idx ->
@@ -155,7 +160,7 @@ handle_cast({delete_segment, Who, Idx, {_, _, SegmentFile}},
                         _ ->
                             {noreply, State0}
                     end;
-                _ ->
+                false ->
                     %% don't validate the file got deleted as it is possible
                     %% to get multiple requests under high load
                     _ = file:delete(SegmentFile),
@@ -184,12 +189,24 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
+do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
                   active_segments = ActiveSegments} = State) ->
     Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
+
+    StartIdx = case ets:lookup(ra_log_snapshot_state, RaNodeUId) of
+                   [{_, SnapIdx}] ->
+                       max(SnapIdx + 1, StartIdx0);
+                   [] ->
+                       StartIdx0
+               end,
+
+    ?INFO("STartIdx ~w~n", [StartIdx]),
     case filelib:is_dir(Dir) of
+        true when StartIdx >= EndIdx ->
+            ok = send_segments(RaNodeUId, Tid, []),
+            State;
         true ->
             %% check that the directory exists -
             %% if it does not exist the node has
@@ -211,21 +228,10 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
 
                     % notify writerid of new segment update
                     % includes the full range of the segment
-                    Segments = [begin
-                                    {Start, End} = ra_log_segment:range(S),
-                                    {Start, End, ra_log_segment:filename(S)}
-                                end || S <- [Segment | Closed0]],
+                    Segments = [ra_log_segment:segref(S)
+                                || S <- [Segment | Closed0]],
 
-                    Msg = {ra_log_event, {segments, Tid, Segments}},
-                    try ra_directory:send(RaNodeUId, Msg) of
-                        _ -> ok
-                    catch
-                        ErrType:Err ->
-                            ?INFO("ra_log_segment_writer: error sending "
-                                  "ra_log_event to: "
-                                  "~s. Error:~n~w:~W~n",
-                                  [RaNodeUId, ErrType, Err, 7])
-                    end,
+                    ok = send_segments(RaNodeUId, Tid, Segments),
                     State#state{active_segments =
                                 ActiveSegments#{RaNodeUId => Segment}}
             end;
@@ -233,6 +239,19 @@ do_segment({RaNodeUId, StartIdx, EndIdx, Tid},
             ?INFO("segment_writer: skipping segment as directory ~s does "
                   "not exist~n", [Dir]),
             State
+    end.
+
+send_segments(RaNodeUId, Tid, Segments) ->
+    Msg = {ra_log_event, {segments, Tid, Segments}},
+    try ra_directory:send(RaNodeUId, Msg) of
+        _ -> ok
+    catch
+        ErrType:Err ->
+            ?INFO("ra_log_segment_writer: error sending "
+                  "ra_log_event to: "
+                  "~s. Error:~n~w:~W~n",
+                  [RaNodeUId, ErrType, Err, 7]),
+            ok
     end.
 
 append_to_segment(Tid, StartIdx, EndIdx, Seg, SegConf) ->
@@ -272,7 +291,7 @@ open_file(Dir, SegConf) ->
                    Fn = filename:join(Dir, F),
                    _ = file:make_dir(Dir),
                    Fn;
-               [F | _Old] ->
+               [F | _] ->
                    F
            end,
     %% there is a small chance we'll get here without the target directory

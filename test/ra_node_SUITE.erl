@@ -40,10 +40,6 @@ all() ->
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
-     % TODO: make scenario tests more reliable - one day
-     % take_snapshot,
-     % send_snapshot,
-     % past_leader_overwrites_entry,
      follower_aer_1,
      follower_aer_2,
      follower_aer_3,

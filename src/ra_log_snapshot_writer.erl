@@ -76,6 +76,8 @@ write_snapshot(Dir, Snapshot) ->
             File = ra_lib:zpad_filename_incr(LastFile),
             ok = write(File, Snapshot),
             % delete old snapshots
+            %
+            % TODO: should this be done by the ra process?
             [file:delete(F) || F <- Old],
             {ok, File}
     end.

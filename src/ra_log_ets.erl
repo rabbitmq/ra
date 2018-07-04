@@ -34,12 +34,22 @@ give_away(Tid) ->
 
 init([]) ->
     process_flag(trap_exit, true),
+    TableFlags =  [named_table,
+                   {read_concurrency, true},
+                   {write_concurrency, true},
+                   public],
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
-    _ = ets:new(ra_log_open_mem_tables,
-                [set, named_table, {read_concurrency, true}, public]),
-    _ = ets:new(ra_log_closed_mem_tables,
-                [bag, named_table, {read_concurrency, true}, public]),
+    _ = ets:new(ra_log_open_mem_tables, [set | TableFlags]),
+    _ = ets:new(ra_log_closed_mem_tables, [bag | TableFlags]),
+
+    %% Table for ra processes to record their current snapshot index so that
+    %% other processes such as the segment writer can use this value to skip
+    %% stale records and avoid flushing unnecessary data to disk.
+    %% This is written from the ra process so will need write_concurrency.
+    %% {RaUId, ra_index()}
+    _ = ets:new(ra_log_snapshot_state, [set | TableFlags]),
+
     DataDir = ra_env:data_dir(),
     ra_directory:init(DataDir),
     {ok, #state{}}.

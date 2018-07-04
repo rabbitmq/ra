@@ -42,15 +42,16 @@
 -define(METRICS_SEGMENT_POS, 5).
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
+-define(SNAPSHOT_INTERVAL, 2048).
 
 -type ra_meta_key() :: atom().
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
--type ra_segment_ref() :: {From :: ra_index(), To :: ra_index(),
-                           File :: file:filename()}.
+-type segment_ref() :: {From :: ra_index(), To :: ra_index(),
+                        File :: string()}.
 -type ra_log_event() :: {written, {From :: ra_index(),
                                    To :: ra_index(),
                                    ToTerm :: ra_term()}} |
-                        {segments, ets:tid(), [ra_segment_ref()]} |
+                        {segments, ets:tid(), [segment_ref()]} |
                         {resend_write, ra_index()} |
                         {snapshot_written, ra_idxterm(), file:filename()}.
 
@@ -60,11 +61,12 @@
          last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
-         segment_refs = [] :: [ra_segment_ref()],
-         open_segments = #{} :: #{file:filename() => ra_log_segment:state()},
+         segment_refs = [] :: [segment_ref()],
+         open_segments = #{} :: #{string() => ra_log_segment:state()},
          directory :: list(),
          kv :: ra_log_meta:state(),
-         snapshot_state :: maybe({ra_index(), ra_term(), maybe(file:filename())}),
+         snapshot_state :: maybe({ra_index(), ra_term(),
+                                  maybe(file:filename())}),
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
@@ -85,7 +87,7 @@
               ra_log/0,
               ra_meta_key/0,
               ra_log_snapshot/0,
-              ra_segment_ref/0,
+              segment_ref/0,
               ra_log_event/0
              ]).
 
@@ -181,10 +183,10 @@ recover_range(UId) ->
     [begin
          %% ?INFO("ra_log: recovering ~p~n", [S]),
          {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
-         {F, L} = ra_log_segment:range(Seg),
+         SegRef = ra_log_segment:segref(Seg),
          %% ?INFO("ra_log: recovered ~p ~p~n", [S, {F, L}]),
          ok = ra_log_segment:close(Seg),
-         {F, L, S}
+         SegRef
      end || S <- lists:reverse(SegFiles)],
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
     Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
@@ -368,12 +370,13 @@ handle_event({segments, Tid, NewSegs},
                  snapshot_index_in_progress = undefined};
 handle_event({snapshot_written, {Idx, Term}, File},
              #state{uid = UId, open_segments = OpenSegs0,
+                    directory = Dir,
                     segment_refs = SegRefs0} = State0) ->
     % delete any segments outside of first_index
     {SegRefs, OpenSegs} =
         % all segments created prior to the first reclaimable should be
         % reclaimed even if they have a more up to date end point
-        case lists:partition(fun({_From, To, _}) when To > Idx -> true;
+        case lists:partition(fun({_, To, _}) when To > Idx -> true;
                                 (_) -> false
                              end, SegRefs0) of
             {_, []} ->
@@ -381,15 +384,18 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("~s: snapshot_written at ~b. Obsolete segments ~p",
+                ?INFO("~s: snapshot_written at ~b. Obsolete segments ~w",
                       [UId, Idx, Obsolete]),
                 % close any open segments
                 [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
+                ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
                 ok = ra_log_segment_writer:delete_segments(UId, Idx,
-                                                                Obsolete),
+                                                           ObsoleteFiles),
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
+    true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
+    ?INFO("SNAP AT ~w~n", [Idx]),
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
@@ -466,27 +472,29 @@ read_snapshot(#state{snapshot_state = {_, _, File}}) ->
             undefined
     end.
 
--spec snapshot_index_term(State :: ra_log()) ->
-    maybe(ra_idxterm()).
+-spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
 snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
     {Idx, Term};
 snapshot_index_term(_State) ->
     undefined.
 
--spec update_release_cursor(Idx :: ra_index(),
-                            Cluster :: ra_cluster(),
-                            MachineState :: term(),
-                            State :: ra_log()) ->
+-spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
+                            MachineState :: term(), State :: ra_log()) ->
     ra_log().
-update_release_cursor(_Idx, _Cluster, _MachineState,
-                      #state{snapshot_index_in_progress = SIIP } = State)
+update_release_cursor(_, _, _, %% Idx, Cluster, MacState
+                      #state{snapshot_index_in_progress = SIIP} = State)
   when is_integer(SIIP) ->
     % if a snapshot is in progress don't even evaluate
     % new segments will always set snapshot_index_in_progress = undefined
     % to ensure liveliness in case a snapshot_written message is lost.
     State;
 update_release_cursor(Idx, Cluster, MachineState,
-                      #state{segment_refs = SegRefs} = State0) ->
+                      #state{segment_refs = SegRefs,
+                             snapshot_state = SnapState} = State0) ->
+    SnapIdx = case SnapState of
+                  undefined -> 0;
+                  {I, _, _} -> I
+              end,
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
     % Check here if any segments can be release.
@@ -496,15 +504,27 @@ update_release_cursor(Idx, Cluster, MachineState,
             % segments can be cleared up
             % take a snapshot at the release_cursor
             {Term, State} = fetch_term(Idx, State0),
-            % TODO: here we use the current cluster configuration in the snapshot,
-            % _not_ the configuration at the snapshot point. Given cluster changes
+            % TODO: here we use the current cluster configuration in
+            % the snapshot,
+            % _not_ the configuration at the snapshot point.
+            % Given cluster changes
             % are applied as they are received I cannot think of any scenarios
-            % where this can cause a problem. That said there may well be :dragons:
-            % here.
+            % where this can cause a problem. That said there may
+            % well be :dragons: here.
             % The MachineState is a dehydrated version of the state at
             % the release_cursor point.
             ok = sync_meta(State),
             write_snapshot({Idx, Term, Cluster, MachineState}, State);
+        false when Idx > SnapIdx + ?SNAPSHOT_INTERVAL ->
+            %% periodically take snapshots event if segments cannot be cleared
+            %% up
+            case fetch_term(Idx, State0) of
+                {undefined, State} ->
+                    State;
+                {Term, State} ->
+                    ok = sync_meta(State),
+                    write_snapshot({Idx, Term, Cluster, MachineState}, State)
+            end;
         false ->
             State0
     end.
@@ -730,7 +750,9 @@ lookup_range(Tid, Start, End, Acc) when End > Start ->
     lookup_range(Tid, Start, End-1, [Entry | Acc]).
 
 
-segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
+segment_take(#state{segment_refs = SegRefs,
+                    open_segments = OpenSegs,
+                    directory = Dir},
              Range, Entries0) ->
     lists:foldl(
       fun(_, {_, undefined, _} = Acc) ->
@@ -744,7 +766,9 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
               Seg = case Open of
                         #{Fn := S} -> S;
                         _ ->
-                            {ok, S} = ra_log_segment:open(Fn, #{mode => read}),
+                            AbsFn = filename:join(Dir, Fn),
+                            {ok, S} = ra_log_segment:open(AbsFn,
+                                                          #{mode => read}),
                             S
                     end,
 
@@ -764,24 +788,26 @@ segment_take(#state{segment_refs = SegRefs, open_segments = OpenSegs},
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #state{segment_refs = SegRefs,
+                               directory = Dir,
                                open_segments = OpenSegs} = State) ->
-    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs),
+    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Dir),
     {Result, State#state{open_segments = Open}}.
 
-segment_term_query0(Idx, [{From, To, Filename} | _Tail], Open)
+segment_term_query0(Idx, [{From, To, Filename} | _], Open, Dir)
   when Idx >= From andalso Idx =< To ->
     case Open of
         #{Filename := Seg} ->
             Term = ra_log_segment:term_query(Seg, Idx),
             {Term, Open};
         _ ->
-            {ok, Seg} = ra_log_segment:open(Filename, #{mode => read}),
+            AbsFn = filename:join(Dir, Filename),
+            {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read}),
             Term = ra_log_segment:term_query(Seg, Idx),
             {Term, Open#{Filename => Seg}}
     end;
-segment_term_query0(Idx, [_ | Tail], Open) ->
-    segment_term_query0(Idx, Tail, Open);
-segment_term_query0(_Idx, [], Open) ->
+segment_term_query0(Idx, [_ | Tail], Open, Dir) ->
+    segment_term_query0(Idx, Tail, Open, Dir);
+segment_term_query0(_Idx, [], Open, _) ->
     {undefined, Open}.
 
 

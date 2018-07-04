@@ -524,15 +524,21 @@ update_release_cursor(Config) ->
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
     Log2 = ra_log:update_release_cursor(127, #{n1 => #{}, n2 => #{}},
-                                             initial_state, Log1),
+                                        initial_state, Log1),
+
     Log3 = deliver_all_log_events(Log2, 500),
+    %% now the snapshot_written should have been delivered and the
+    %% snapshot state table updated
+    [{UId, 127}] = ets:lookup(ra_log_snapshot_state, UId),
     % this should delete a single segment
     [_] = find_segments(Config),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
     Log4 = ra_log:update_release_cursor(149, #{n1 => #{}, n2 => #{}},
-                                             initial_state, Log3b),
+                                        initial_state, Log3b),
     Log5 = deliver_all_log_events(Log4, 500),
+
+    [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
 
     % no segments should remain
     [] =  find_segments(Config),
@@ -581,7 +587,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
 
     % then update the release cursor
     Log6 = ra_log:update_release_cursor(154, #{n1 => #{}, n2 => #{}},
-                                             initial_state, Log5),
+                                        initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
     [] = find_segments(Config),

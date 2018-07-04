@@ -11,6 +11,7 @@
          iter_maybe/2,
          % cohercion
          to_list/1,
+         to_string/1,
          to_atom/1,
          ra_node_id_to_local_name/1,
          ra_node_id_node/1,
@@ -66,6 +67,12 @@ to_list(B) when is_binary(B) ->
 to_list(I) when is_integer(I) ->
     integer_to_list(I);
 to_list(L) when is_list(L) ->
+    L.
+
+-spec to_string(binary() | string()) -> string().
+to_string(B) when is_binary(B) ->
+    binary_to_list(B);
+to_string(L) when is_list(L) ->
     L.
 
 -spec to_atom(atom() | list() | binary()) -> atom().

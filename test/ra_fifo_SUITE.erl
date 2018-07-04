@@ -41,7 +41,8 @@ all_tests() ->
      test_queries,
      log_fold,
      recover,
-     recover_after_kill
+     recover_after_kill,
+     snapshot_should_suppress_segment_write
     ].
 
 groups() ->
@@ -74,6 +75,21 @@ init_per_testcase(TestCase, Config) ->
      {uid3, atom_to_binary(NodeName3, utf8)},
      {node_id3, {NodeName3, node()}}
      | Config].
+
+snapshot_should_suppress_segment_write(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    NodeId = ?config(node_id, Config),
+    % UId = ?config(uid, Config),
+    ok = start_cluster(ClusterId, [NodeId], #{shadow_copy_interval => 128}),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {_F1, _} = enq_deq_n(2048, F0),
+
+    ra_log_wal:force_roll_over(ra_log_wal),
+    % create segment the segment will trigger a snapshot
+    timer:sleep(1000),
+
+    % {ok, FState2} = ra_fifo_client:enqueue(one, FState1),
+    ok.
 
 ra_fifo_client_basics(Config) ->
     ClusterId = ?config(cluster_id, Config),
@@ -804,8 +820,11 @@ validate_process_down(Name, Num) ->
             validate_process_down(Name, Num-1)
     end.
 
-start_cluster(ClusterId, NodeIds) ->
+start_cluster(ClusterId, NodeIds, RaFifoConfig) ->
     {ok, NodeIds, _} = ra:start_cluster(ClusterId,
-                                        {module, ra_fifo, #{}},
+                                        {module, ra_fifo, RaFifoConfig},
                                         NodeIds),
     ok.
+
+start_cluster(ClusterId, NodeIds) ->
+    start_cluster(ClusterId, NodeIds, #{}).
