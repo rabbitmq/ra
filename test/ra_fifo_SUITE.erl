@@ -41,8 +41,8 @@ all_tests() ->
      test_queries,
      log_fold,
      recover,
-     recover_after_kill,
-     snapshot_should_suppress_segment_write
+     recover_after_kill
+     % snapshot_should_suppress_segment_write
     ].
 
 groups() ->
@@ -76,20 +76,20 @@ init_per_testcase(TestCase, Config) ->
      {node_id3, {NodeName3, node()}}
      | Config].
 
-snapshot_should_suppress_segment_write(Config) ->
-    ClusterId = ?config(cluster_id, Config),
-    NodeId = ?config(node_id, Config),
-    % UId = ?config(uid, Config),
-    ok = start_cluster(ClusterId, [NodeId], #{shadow_copy_interval => 128}),
-    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
-    {_F1, _} = enq_deq_n(2048, F0),
+% snapshot_should_suppress_segment_write(Config) ->
+%     ClusterId = ?config(cluster_id, Config),
+%     NodeId = ?config(node_id, Config),
+%     % UId = ?config(uid, Config),
+%     ok = start_cluster(ClusterId, [NodeId], #{shadow_copy_interval => 128}),
+%     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+%     {_F1, _} = enq_deq_n(256, F0),
 
-    ra_log_wal:force_roll_over(ra_log_wal),
-    % create segment the segment will trigger a snapshot
-    timer:sleep(1000),
+%     ra_log_wal:force_roll_over(ra_log_wal),
+%     % create segment the segment will trigger a snapshot
+%     timer:sleep(1000),
 
-    % {ok, FState2} = ra_fifo_client:enqueue(one, FState1),
-    ok.
+%     % {ok, FState2} = ra_fifo_client:enqueue(one, FState1),
+%     ok.
 
 ra_fifo_client_basics(Config) ->
     ClusterId = ?config(cluster_id, Config),
@@ -157,9 +157,10 @@ ra_fifo_client_return(Config) ->
 
     F00 = ra_fifo_client:init(ClusterId, [NodeId, NodeId2]),
     {ok, F0} = ra_fifo_client:enqueue(1, msg1, F00),
-    {ok, F} = ra_fifo_client:enqueue(2, msg2, F0),
-    {ok, {MsgId, _}, F1} = ra_fifo_client:dequeue(<<"tag">>, unsettled, F),
-    {ok, _F2} = ra_fifo_client:return(<<"tag">>, [MsgId], F1),
+    {ok, F1} = ra_fifo_client:enqueue(2, msg2, F0),
+    {_, F2} = process_ra_events(F1, 100),
+    {ok, {MsgId, _}, F} = ra_fifo_client:dequeue(<<"tag">>, unsettled, F2),
+    {ok, _F2} = ra_fifo_client:return(<<"tag">>, [MsgId], F),
 
     ra:stop_node(NodeId),
     ok.
@@ -222,16 +223,17 @@ ra_fifo_client_detects_lost_delivery(Config) ->
     NodeId = ?config(node_id, Config),
     ok = start_cluster(ClusterId, [NodeId]),
 
-    F00 = ra_fifo_client:init(ClusterId, [NodeId]),
-    {ok, F0} = ra_fifo_client:checkout(<<"tag">>, 10, F00),
-    {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    F000 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F00} = ra_fifo_client:enqueue(msg1, F000),
+    {_, F0} = process_ra_events(F00, 100),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
     {ok, F2} = ra_fifo_client:enqueue(msg2, F1),
     {ok, F3} = ra_fifo_client:enqueue(msg3, F2),
     % lose first delivery
     receive
         {ra_event, _, {machine, {delivery, _, [{_, {_, msg1}}]}}} ->
             ok
-    after 250 ->
+    after 500 ->
               exit(await_delivery_timeout)
     end,
 
@@ -359,6 +361,7 @@ ra_fifo_client_untracked_enqueue(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
 
     ok = ra_fifo_client:untracked_enqueue(ClusterId, [NodeId], msg1),
+    timer:sleep(100),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, {_, {_, msg1}}, _} = ra_fifo_client:dequeue(<<"tag">>, settled, F0),
     ra:stop_node(NodeId),
@@ -386,7 +389,8 @@ test_queries(Config) ->
     P = spawn(fun () ->
                   F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
                   {ok, F1} = ra_fifo_client:enqueue(m1, F0),
-                  {ok, _F2} = ra_fifo_client:enqueue(m2, F1),
+                  {ok, F2} = ra_fifo_client:enqueue(m2, F1),
+                  process_ra_events(F2, 100),
                   receive stop ->  ok end
           end),
     F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
@@ -418,9 +422,12 @@ ra_fifo_client_dequeue(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     F1 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, empty, F1b} = ra_fifo_client:dequeue(Tag, settled, F1),
-    {ok, F2} = ra_fifo_client:enqueue(msg1, F1b),
+    {ok, F2_} = ra_fifo_client:enqueue(msg1, F1b),
+    {_, F2} = process_ra_events(F2_, 100),
+
     {ok, {0, {_, msg1}}, F3} = ra_fifo_client:dequeue(Tag, settled, F2),
-    {ok, F4} = ra_fifo_client:enqueue(msg2, F3),
+    {ok, F4_} = ra_fifo_client:enqueue(msg2, F3),
+    {_, F4} = process_ra_events(F4_, 100),
     {ok, {MsgId, {_, msg2}}, F5} = ra_fifo_client:dequeue(Tag, unsettled, F4),
     {ok, _F6} = ra_fifo_client:settle(Tag, [MsgId], F5),
     ra:stop_node(NodeId),
@@ -521,6 +528,7 @@ cluster_is_deleted(Config) ->
     ok = start_cluster(ClusterId, [NodeId]),
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
+    {_, F2} = process_ra_events(F1, 100),
     {ok, _} = ra:delete_cluster([NodeId]),
     % validate
     ok = validate_process_down(element(1, NodeId), 50),
@@ -528,7 +536,7 @@ cluster_is_deleted(Config) ->
     false = filelib:is_dir(Dir),
     [] = supervisor:which_children(ra_nodes_sup),
     % validate an end of life is emitted
-    eol = process_ra_events(F1, 250),
+    eol = process_ra_events(F2, 250),
     ok.
 
 cluster_is_deleted_with_node_down(Config) ->
@@ -725,10 +733,11 @@ enq_deq_n(0, F0, Acc) ->
     {F, Acc};
 enq_deq_n(N, F, Acc) ->
     {ok, F1} = ra_fifo_client:enqueue(N, F),
-    {ok, {_, {_, Deq}}, F2} = ra_fifo_client:dequeue(term_to_binary(N), settled, F1),
+    {_, F2} = process_ra_events(F1, 10),
+    {ok, {_, {_, Deq}}, F3} = ra_fifo_client:dequeue(term_to_binary(N), settled, F2),
 
-    {_, F3} = process_ra_events(F2, 5),
-    enq_deq_n(N-1, F3, [Deq | Acc]).
+    {_, F4} = process_ra_events(F3, 5),
+    enq_deq_n(N-1, F4, [Deq | Acc]).
 
 conf(ClusterId, UId, NodeId, _, Peers) ->
     #{cluster_id => ClusterId,
@@ -762,6 +771,7 @@ process_ra_events(State, Acc, Wait) ->
 process_ra_events0(State0, Acc, Wait, DeliveryFun) ->
     receive
         {ra_event, From, Evt} ->
+            % ct:pal("ra event ~w~n", [Evt]),
             case ra_fifo_client:handle_ra_event(From, Evt, State0) of
                 {internal, _, State} ->
                     process_ra_events0(State, Acc, Wait, DeliveryFun);

@@ -107,7 +107,8 @@
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
-                delayed_commands = [] :: [ra_command_with_from()],
+                delayed_commands = queue:new() ::
+                                        queue:queue(ra_command_with_from()),
                 use }).
 
 %%%===================================================================
@@ -265,26 +266,39 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                {call, F} -> F
            end,
     Cmd = {CmdType, From, Data, ReplyMode},
-    %% if there are no delayed commands, queue a state timeout to flush
-    %% them
-    Actions = case Delayed of
-                  [] ->
-                      [{state_timeout, 0, flush_commands}];
-                  _ ->
-                      []
-              end,
-    {keep_state, State0#state{delayed_commands = [Cmd | Delayed]}, Actions};
+    %% if there are no prior delayed commands
+    %% (and thus no action queued to do so)
+    %% queue a state timeout to flush them
+    %% We use a cast to ourselves instead of a zero timeout as we want to
+    %% get onto the back of the erlang mailbox not just the current gen_statem
+    %% event buffer.
+    case queue:is_empty(Delayed) of
+        true ->
+            ok = gen_statem:cast(self(), flush_commands);
+        false ->
+            ok
+    end,
+    {keep_state, State0#state{delayed_commands = queue:in(Cmd, Delayed)}, []};
 leader(EventType, flush_commands,
        #state{node_state = NodeState0,
-              delayed_commands = Delayed} = State0) ->
+              delayed_commands = Delayed0} = State0) ->
 
-    %% write all delayed commands
+    {DelQ, Delayed} = queue_take(25, Delayed0),
+
+    % ?INFO("flushing commands ~w~n", [Delayed]),
+    %% write a batch of delayed commands
     {leader, NodeState, Effects} =
-        ra_node:handle_leader({commands, lists:reverse(Delayed)}, NodeState0),
+        ra_node:handle_leader({commands, Delayed}, NodeState0),
 
     {State, Actions} = handle_effects(Effects, EventType,
-                                      State0#state{node_state = NodeState}),
-    {keep_state, State#state{delayed_commands = []}, Actions};
+                                       State0#state{node_state = NodeState}),
+    case queue:is_empty(DelQ) of
+        true ->
+            ok;
+        false ->
+            ok = gen_statem:cast(self(), flush_commands)
+    end,
+    {keep_state, State#state{delayed_commands = DelQ}, Actions};
 leader({call, From}, {committed_query, QueryFun},
        #state{node_state = NodeState} = State) ->
     Reply = perform_committed_query(QueryFun, leader, NodeState),
@@ -682,6 +696,19 @@ format_status(Opt, [_PDict, StateName, #state{node_state = NS,
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+queue_take(N, Q) ->
+    queue_take(N, Q, []).
+
+queue_take(0, Q, Acc) ->
+    {Q, lists:reverse(Acc)};
+queue_take(N, Q0, Acc) ->
+    case queue:out(Q0) of
+        {{value, I}, Q} ->
+            queue_take(N-1, Q, [I | Acc]);
+        {empty, _} ->
+            {Q0, lists:reverse(Acc)}
+    end.
 
 handle_leader(Msg, #state{node_state = NodeState0} = State) ->
     case catch ra_node:handle_leader(Msg, NodeState0) of
