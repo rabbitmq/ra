@@ -225,6 +225,8 @@ recover_wal(Dir, #{max_size_bytes := MaxWalSize,
     % delete all open ets tables
     [true = ets:delete(Tid) || {_, _, _, Tid} <- Open],
     true = ets:delete(ra_log_recover_mem_tables),
+    %% force garbage cleanup
+    true = erlang:garbage_collect(),
     StateDbg.
 
 extract_file_num([]) ->
@@ -321,6 +323,8 @@ write_data(Id, Idx, Term, Data0, Trunc,
     case FileSize + DataSize > MaxWalSize of
         true ->
             {State, Dbg} = roll_over(State00, Dbg0),
+            %% force garbage cleanup
+            true = erlang:garbage_collect(),
             % TODO: there is some redundant computation performed by
             % recursing here it probably doesn't matter as it only happens
             % when a wal file fills up

@@ -141,6 +141,9 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
     _ = file:delete(WalFile),
+    %% ensure we release any bin refs that might have been acquired during
+    %% segment write
+    true = erlang:garbage_collect(),
     {noreply, State};
 handle_cast({delete_segment, Who, Idx, SegmentFile},
             #state{active_segments = ActiveSegments} = State0) ->

@@ -1471,11 +1471,11 @@ increment_commit_index(State = #{current_term := CurrentTerm}) ->
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State) of
-        {CurrentTerm, Log}  ->
+        {CurrentTerm, Log} ->
             State#{commit_index => PotentialNewCommitIndex,
                    log => Log};
-        _ ->
-            State
+        {_, Log} ->
+            State#{log => Log}
     end.
 
 
