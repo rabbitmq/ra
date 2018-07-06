@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant WR as Writer
+    participant N as Ra Node
+    participant W as WAL
+    participant S as Segment Writer
+    WR->>+N: {command, A}
+    N-X+W: {write, index: 1, data: A}
+    W->W: fsync
+    W-XN: {written, index: 1}
+    N->>WR: command_appended
+    deactivate N
+    deactivate W
+    loop until full
+        W->W: write()
+    end
+    W-X+S: {segments, [index: 1]}
+    Note right of S: mem_tables -> segments
+    S -X N: {segments, [index : 1, segment: "/some/file/name"]}
+    deactivate S

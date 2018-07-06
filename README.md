@@ -44,6 +44,7 @@ which has two major shortcomings:
 
 * Api docs: https://rabbitmq.github.io/ra/
 * How to write a ra statemachine: [doc/STATEMACHINE.md](doc/STATEMACHINE.md)
+* Log implementation: [doc/LOG.md](doc/LOG.md)
 
 ## Configuration
 
