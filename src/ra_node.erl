@@ -1125,16 +1125,16 @@ peers(#{id := Id, cluster := Nodes}) ->
 pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
     NextIdx  = ra_log:next_index(Log),
-    maps:filter(fun (_Id, #{next_index := NI,
-                            match_index := MI}) when NI < NextIdx ->
+    maps:filter(fun (_, #{next_index := NI,
+                          match_index := MI}) when NI < NextIdx ->
                         % there are unsent items
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
-                    (_Id, #{commit_index := CI,
-                            next_index := NI,
-                            match_index := MI}) when CI < CommitIndex ->
+                    (_, #{commit_index := CI,
+                          next_index := NI,
+                          match_index := MI}) when CI < CommitIndex ->
                         % the commit index has been updated
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
-                    (_Id, _) ->
+                    (_, _) ->
                         false
                 end, peers(State)).
 

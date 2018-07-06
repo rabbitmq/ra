@@ -174,8 +174,7 @@ read_cons(#state{fd = Fd, mode = read, index = Index}, Idx,
     {ok, Datas} = ra_file_handle:pread(Fd, Locs),
     combine_with(Metas, Datas, Fun, Acc).
 
--spec term_query(state(), Idx :: ra_index()) ->
-    maybe(ra_term()).
+-spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
 term_query(#state{index = Index}, Idx) ->
     case Index of
         #{Idx := {Term, _, _, _}} ->
