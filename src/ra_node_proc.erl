@@ -524,21 +524,22 @@ follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
          #state{leader_monitor = MRef} = State) ->
+    ?WARN("~w: Leader monitor down with ~W, setting election timeout~n",
+          [id(State), Info, 8]),
     case Info of
         noconnection ->
-            handle_leader_down(State);
+            {keep_state, State#state{leader_monitor = undefined},
+             [election_timeout_action(short, State)]};
         _ ->
-            ?WARN("~w: Leader monitor down with ~W, setting election timeout~n",
-                  [id(State), Info, 8]),
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(really_short, State)]}
     end;
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~p: Leader node ~p may be down, setting election timeout",
+            ?WARN("~w: Leader node ~w may be down, setting election timeout",
                   [id(State), Node]),
-            handle_leader_down(State);
+            {keep_state, State, [election_timeout_action(long, State)]};
         _ ->
             {keep_state, State}
     end;
@@ -963,25 +964,6 @@ config_defaults() ->
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_nodes => []
      }.
-
-handle_leader_down(#state{leader_monitor = Mon} = State) ->
-    Leader = leader_id(State),
-    % ping leader to check if up
-    % TODO: this can be replaced by a pre-vote phase
-    case ra_node_proc:ping(Leader, 100) of
-        {pong, leader} ->
-            % leader is not down
-            ok = ra_lib:iter_maybe(Mon, fun erlang:demonitor/1),
-            {keep_state,
-             State#state{leader_monitor = monitor(process, Leader)},
-             []};
-        _PingRes ->
-            ?INFO("~w: Leader ~w appears down. Ping returned: ~w~n"
-                  " Setting election timeout~n",
-                  [id(State), Leader, _PingRes]),
-            {keep_state, State#state{leader_monitor = undefined},
-             [election_timeout_action(short, State)]}
-    end.
 
 maybe_redirect(From, Msg, #state{pending_commands = Pending,
                                  leader_monitor = LeaderMon} = State) ->
