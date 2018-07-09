@@ -67,6 +67,7 @@
          kv :: ra_log_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
+         snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
@@ -81,6 +82,7 @@
 -type ra_log_init_args() :: #{data_dir => string(),
                               uid := ra_uid(),
                               wal => atom(),
+                              snapshot_interval => non_neg_integer(),
                               resend_window => integer()}.
 
 -export_type([ra_log_init_args/0,
@@ -110,6 +112,7 @@ init(#{uid := UId} = Conf) ->
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
+    SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
 
     % create subdir for log id
     % TODO: safely encode UId for use a directory name
@@ -139,6 +142,7 @@ init(#{uid := UId} = Conf) ->
                       last_index = max(SnapIdx, LastIdx0),
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
+                      snapshot_interval = SnapInterval,
                       kv = Kv,
                       wal = Wal,
                       resend_window_seconds = ResendWindow},
@@ -229,7 +233,7 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
              snapshot_state = SnapState} = State00)
   when FstIdx =< LastIdx + 1 andalso FstIdx >= 0 ->
     case SnapState of
-        {SnapIdx, _, _} when FstIdx =:= SnapIdx +1 ->
+        {SnapIdx, _, _} when FstIdx =:= SnapIdx + 1 ->
             % it is the next entry after a snapshot
             % we need to tell the wal to truncate as we
             % are not going to receive any entries prior to the snapshot
@@ -313,10 +317,13 @@ set_last_index(Idx, #state{last_written_index_term = {LWIdx0, _}} = State0) ->
 -spec handle_event(ra_log:ra_log_event(), ra_log()) ->
     ra_log().
 handle_event({written, {FromIdx, ToIdx, Term}},
-             #state{last_written_index_term = {LastWrittenIdx, _}} = State0)
-  when FromIdx =< LastWrittenIdx + 1 ->
-    % We need to ignore any written events for the same index but in a prior term
-    % if we do not we may end up confirming to a leader writes that have not yet
+             #state{last_written_index_term = {LastWrittenIdx0,
+                                               LastWrittenTerm0},
+                    snapshot_state = SnapState} = State0)
+  when FromIdx =< LastWrittenIdx0 + 1 ->
+    % We need to ignore any written events for the same index
+    % but in a prior term if we do not we may end up confirming
+    % to a leader writes that have not yet
     % been fully flushed
     case fetch_term(ToIdx, State0) of
         {Term, State} ->
@@ -325,9 +332,19 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % 10ms worth of entries
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}});
+        {undefined, State} when FromIdx =< element(1, SnapState) ->
+            % A snapshot happened before the written event came in
+            % This can only happen on a leader when consensus is achieved by
+            % followers returning appending the entry and the leader committing
+            % and processing a snapshot before the written event comes in.
+            % ensure last_written_index_term does not go backwards
+            LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
+                                  max(LastWrittenTerm0, Term)},
+            State#state{last_written_index_term = LastWrittenIdxTerm};
         {_X, State} ->
-            ?INFO("~s: written event did not find term ~p found ~p",
-                  [State#state.uid, {ToIdx, Term}, _X]),
+            ?INFO("~s: written event did not find term ~b for index ~b "
+                  "found ~w",
+                  [State#state.uid, Term, ToIdx, _X]),
             State
     end;
 handle_event({written, {FromIdx, _ToIdx, _Term}},
@@ -385,7 +402,7 @@ handle_event({snapshot_written, {Idx, Term}, File},
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
                 ?INFO("~s: snapshot_written at ~b. Obsolete segments ~w",
-                      [UId, Idx, Obsolete]),
+                      [UId, Idx, ObsoleteKeys]),
                 % close any open segments
                 [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
@@ -395,7 +412,6 @@ handle_event({snapshot_written, {Idx, Term}, File},
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
     true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
-    ?INFO("SNAP AT ~w~n", [Idx]),
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
@@ -457,8 +473,8 @@ install_snapshot({Idx, Term, _, _} = Snapshot,
     % syncronous call when follower receives a snapshot
     {ok, File} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
     handle_event({snapshot_written, {Idx, Term}, File},
-    State#state{last_index = Idx,
-                last_written_index_term = {Idx, Term}}).
+                 State#state{last_index = Idx,
+                             last_written_index_term = {Idx, Term}}).
 
 -spec read_snapshot(State :: ra_log()) ->
     maybe(ra_log:ra_log_snapshot()).
@@ -490,11 +506,12 @@ update_release_cursor(_, _, _, %% Idx, Cluster, MacState
     State;
 update_release_cursor(Idx, Cluster, MachineState,
                       #state{segment_refs = SegRefs,
-                             snapshot_state = SnapState} = State0) ->
-    SnapIdx = case SnapState of
-                  undefined -> 0;
-                  {I, _, _} -> I
-              end,
+                             snapshot_state = SnapState,
+                             snapshot_interval = SnapInter} = State0) ->
+    SnapLimit = case SnapState of
+                    undefined -> SnapInter;
+                    {I, _, _} -> I + SnapInter
+                end,
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
     % Check here if any segments can be release.
@@ -515,7 +532,7 @@ update_release_cursor(Idx, Cluster, MachineState,
             % the release_cursor point.
             ok = sync_meta(State),
             write_snapshot({Idx, Term, Cluster, MachineState}, State);
-        false when Idx > SnapIdx + ?SNAPSHOT_INTERVAL ->
+        false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
             %% up
             case fetch_term(Idx, State0) of
