@@ -508,7 +508,12 @@ handle_delivery(Leader, {delivery, Tag, [{FstId, _} | _] = IdMsgs} = Del0,
             {Del, State0#state{customer_deliveries =
                                maps:put(Tag, LastId, CDels0)}};
         Prev when FstId =< Prev ->
-            exit(duplicate_delivery_not_impl);
+            case lists:dropwhile(fun({Id, _}) -> Id =< Prev end, IdMsgs) of
+                [] ->
+                    {internal, [], State0};
+                IdMsgs2 ->
+                    handle_delivery(Leader, {delivery, Tag, IdMsgs2}, State0)
+            end;
         _ when FstId =:= 0 ->
             % the very first delivery
             {Del0, State0#state{customer_deliveries =

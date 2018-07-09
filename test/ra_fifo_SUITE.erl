@@ -41,7 +41,8 @@ all_tests() ->
      test_queries,
      log_fold,
      recover,
-     recover_after_kill
+     recover_after_kill,
+     duplicate_delivery
      % snapshot_should_suppress_segment_write
     ].
 
@@ -182,6 +183,40 @@ ra_fifo_returns_correlation(Config) ->
     after 2000 ->
               exit(await_msg_timeout)
     end,
+    ra:stop_node(NodeId),
+    ok.
+
+duplicate_delivery(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    NodeId = ?config(node_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
+    {ok, F2} = ra_fifo_client:enqueue(corr1, msg1, F1),
+    Fun = fun Loop(S0) ->
+            receive
+                {ra_event, Frm, E} = Evt ->
+                    case ra_fifo_client:handle_ra_event(Frm, E, S0) of
+                        {internal, [corr1], S1} ->
+                            Loop(S1);
+                        {_Del, S1} ->
+                            %% repeat event delivery
+                            self() ! Evt,
+                            %% check that then next received delivery doesn't
+                            %% repeat or crash
+                            receive
+                                {ra_event, F, E1} ->
+                                    case ra_fifo_client:handle_ra_event(F, E1, S1) of
+                                        {internal, [], S2} ->
+                                            S2
+                                    end
+                            end
+                    end
+            after 2000 ->
+                      exit(await_msg_timeout)
+            end
+        end,
+    Fun(F2),
     ra:stop_node(NodeId),
     ok.
 

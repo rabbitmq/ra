@@ -149,7 +149,7 @@ Ra tries to make use as much of native erlang failure detection facilities as it
 
 This only works well in crash-stop scenarios. For network partition scenarios it would rely on distributed erlang to detect the partition which could easily take up to a minute to happen which is too slow.
 
-The `ra` application provides a node failure detector that uses monitors erlang nodes. When it suspects an erlang node is down it notifies local `ra` nodes of this. If this erlang node is the node of the currently known `ra` leader the follower will start an election.
+The `ra` application provides a [node failure detector](https://github.com/rabbitmq/aten) that uses monitors erlang nodes. When it suspects an erlang node is down it notifies local `ra` nodes of this. If this erlang node is the node of the currently known `ra` leader the follower will start an election.
 
 
 ## Copyright and License
