@@ -61,10 +61,9 @@ delete_segments(Who, SnapIdx, SegmentFiles) ->
 %% writer process to delete in case it is still open.
 -spec delete_segments(atom() | pid(), ra_uid(),
                       ra_index(), [file:filename_all()]) -> ok.
-delete_segments(SegWriter, Who, SnapIdx, [MaybeActive | SegmentFiles]) ->
+delete_segments(SegWriter, Who, SnapIdx, SegmentFiles) ->
     % delete all closed segment files
-    [_ = file:delete(F) || F <- SegmentFiles],
-    gen_server:cast(SegWriter, {delete_segment, Who, SnapIdx, MaybeActive}).
+    gen_server:cast(SegWriter, {delete_segments, Who, SnapIdx, SegmentFiles}).
 
 -spec release_segments(atom() | pid(), ra_uid()) -> ok.
 release_segments(SegWriter, Who) ->
@@ -145,8 +144,9 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     %% segment write
     true = erlang:garbage_collect(),
     {noreply, State};
-handle_cast({delete_segment, Who, Idx, SegmentFile},
+handle_cast({delete_segments, Who, Idx, [SegmentFile | SegmentFiles]},
             #state{active_segments = ActiveSegments} = State0) ->
+    [_ = file:delete(F) || F <- SegmentFiles],
     case ActiveSegments of
         #{Who := Seg} ->
             case ra_log_segment:is_same_as(Seg, SegmentFile) of
