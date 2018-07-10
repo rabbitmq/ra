@@ -300,7 +300,7 @@ apply(#{index := RaftIdx}, purge, Effects0,
                                       messages = #{},
                                       returns = queue:new(),
                                       low_msg_num = undefined}, Effects1),
-    {State, Effects, {purge, Total}};
+    {State, [garbage_collection | Effects], {purge, Total}};
 apply(_, {down, CustomerPid, noconnection},
       Effects0, #state{customers = Custs0,
                        enqueuers = Enqs0} = State0) ->

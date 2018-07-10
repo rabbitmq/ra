@@ -891,6 +891,7 @@ evaluate_commit_index_follower(State) ->
 filter_follower_effects(Effects) ->
     lists:filter(fun ({release_cursor, _, _}) -> true;
                      ({incr_metrics, _, _}) -> true;
+                     (garbage_collection) -> true;
                      (_) -> false
                  end, Effects).
 

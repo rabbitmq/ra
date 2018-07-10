@@ -84,7 +84,8 @@
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
-    {release_cursor, ra_index(), state()}.
+    {release_cursor, ra_index(), state()} |
+    garbage_collection.
 
 %% Effects are data structure that can be returned by {@link apply/2} to ask
 %% ra to realise a side-effect in the real works, such as sending
