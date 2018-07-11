@@ -218,7 +218,7 @@ recover(enter, _OldState, State = #state{name = Name}) ->
     {keep_state, State};
 recover(_EventType, go, State = #state{node_state = NodeState0}) ->
     NodeState = ra_node:recover(NodeState0),
-    erlang:garbage_collect(),
+    true = erlang:garbage_collect(),
     % New cluster starts should be coordinated and elections triggered
     % explicitly hence if this is a new one we wait here.
     % Else we set an election timer
@@ -354,6 +354,7 @@ leader(_, tick_timeout, State0) ->
     State1 = maybe_persist_last_applied(send_rpcs(State0)),
     Effects = ra_node:tick(State1#state.node_state),
     {State, Actions} = handle_effects(Effects, cast, State1),
+    true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -545,6 +546,7 @@ follower(info, {node_event, Node, down}, State) ->
     end;
 follower(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
+    true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
@@ -801,7 +803,7 @@ handle_effect({release_cursor, Index, MacState}, _EvtType,
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect(garbage_collection, _EvtType, State, Actions) ->
-    erlang:garbage_collect(),
+    treu = erlang:garbage_collect(),
     {State, Actions};
 handle_effect({monitor, process, Pid}, _,
               #state{monitors = Monitors} = State, Actions) ->

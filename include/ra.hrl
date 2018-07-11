@@ -108,7 +108,7 @@
          last_term :: ra_term()}).
 
 %% WAL defaults
--define(WAL_MAX_SIZE_BYTES, 1000 * 1000 * 128).
+-define(WAL_MAX_SIZE_BYTES, 1024 * 1024 * 1024).
 
 % primitive logging abstraction
 -define(error, true).

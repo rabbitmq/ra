@@ -16,7 +16,7 @@
 -include("ra.hrl").
 
 -define(MIN_MAX_BATCH_SIZE, 16).
--define(MAX_MAX_BATCH_SIZE, 16 * 128).
+-define(MAX_MAX_BATCH_SIZE, 16 * 128 * 2).
 -define(METRICS_WINDOW_SIZE, 100).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
@@ -235,6 +235,7 @@ extract_file_num([F | _]) ->
     ra_lib:zpad_extract_num(filename:basename(F)).
 
 loop_wait(State0, Parent, Debug0) ->
+    true = erlang:garbage_collect(),
     receive
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent,
@@ -331,17 +332,17 @@ write_data(Id, Idx, Term, Data0, Trunc,
             write_data(Id, Idx, Term, Data0, Trunc, State, Dbg);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-            Entry = <<Idx:64/integer,
-                      Term:64/integer,
-                      EntryData/binary>>,
+            Entry = [<<Idx:64/integer,
+                       Term:64/integer>>,
+                     EntryData],
             Checksum = case ComputeChecksum of
                            true -> erlang:adler32(Entry);
                            false -> 0
                        end,
-            Record = <<HeaderData/binary,
-                       Checksum:32/integer,
-                       EntryDataLen:32/integer,
-                       Entry/binary>>,
+            Record = [HeaderData,
+                      <<Checksum:32/integer,
+                        EntryDataLen:32/integer>>,
+                      Entry],
             {append_data(State0, Id, Idx, Term, Data0,
                          DataSize, Record, Trunc), Dbg0}
     end.

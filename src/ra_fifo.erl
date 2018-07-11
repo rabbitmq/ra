@@ -879,10 +879,14 @@ run_log(Num, Max, Gen, State0) ->
     run_log(Num+1, Max, Gen, element(1, apply(meta(Num), E, [], State0))).
 
 dehydrate_state(#state{messages = Messages0,
+                       customers = Customers,
                        prefix_msg_count = MsgCount} = State) ->
     State#state{messages = #{},
                 ra_indexes = ra_fifo_index:empty(),
                 low_msg_num = undefined,
+                customers = maps:map(fun (_, C) ->
+                                             C#customer{checked_out = #{}}
+                                     end, Customers),
                 returns = queue:new(),
                 prefix_msg_count = maps:size(Messages0) + MsgCount}.
 
@@ -1232,11 +1236,11 @@ enq_deq_return_snapshot_recover_test() ->
     Commands = [
                 {enqueue, self(), 1, one},
                 {enqueue, self(), 2, two},
-                {checkout, {dequeue, unsettled}, Cid},
-                {return, [0], Cid},
-                {enqueue, self(), 3, two},
                 {checkout, {dequeue, unsettled}, Oth},
+                {checkout, {dequeue, unsettled}, Cid},
                 {settle, [0], Oth},
+                {return, [0], Cid},
+                {enqueue, self(), 3, three},
                 purge
               ],
     run_snapshot_test(?FUNCTION_NAME, Commands).

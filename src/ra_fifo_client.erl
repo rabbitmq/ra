@@ -482,8 +482,11 @@ seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
 seq_applied(_Seq, Acc) ->
     Acc.
 
-do_resends(From, To, State) ->
-    lists:foldl(fun resend/2, State, lists:seq(From, To)).
+do_resends(From, To, State) when From =< To ->
+    ?INFO("doing resends From ~w  To ~w~n", [From, To]),
+    lists:foldl(fun resend/2, State, lists:seq(From, To));
+do_resends(_, _, State) ->
+    State.
 
 % resends a command with a new sequence number
 resend(OldSeq, #state{pending = Pending0, leader = Leader} = State) ->

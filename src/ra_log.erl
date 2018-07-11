@@ -42,7 +42,7 @@
 -define(METRICS_SEGMENT_POS, 5).
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
--define(SNAPSHOT_INTERVAL, 2048).
+-define(SNAPSHOT_INTERVAL, 4096).
 
 -type ra_meta_key() :: atom().
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
