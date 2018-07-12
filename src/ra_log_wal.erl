@@ -285,8 +285,7 @@ cleanup(#state{wal = #wal{fd = Fd}}) ->
     ok.
 
 handle_debug_in(Debug, Msg) ->
-    sys:handle_debug(Debug, fun write_debug/3,
-                     ?MODULE, {in, Msg}).
+    sys:handle_debug(Debug, fun write_debug/3, ?MODULE, {in, Msg}).
 
 serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
     T = case Trunc of true -> 1; false -> 0 end,
@@ -299,9 +298,11 @@ serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
             BinId = <<1:1/integer, Next:14/integer>>,
             IdData = term_to_binary(Id),
             IdDataLen = byte_size(IdData),
-            MarkerId = <<T:1/integer, 0:1/integer, Next:14/integer,
-                         IdDataLen:16/integer, IdData/binary>>,
-            {MarkerId, byte_size(MarkerId), {Next+1, Cache#{Id => BinId}}}
+            Prefix = <<T:1/integer, 0:1/integer, Next:14/integer,
+                       IdDataLen:16/integer>>,
+            MarkerId = [Prefix, IdData],
+            {MarkerId, 4 + IdDataLen,
+             {Next+1, Cache#{Id => BinId}}}
     end.
 
 write_data(Id, Idx, Term, Data0, Trunc,
@@ -324,8 +325,6 @@ write_data(Id, Idx, Term, Data0, Trunc,
     case FileSize + DataSize > MaxWalSize of
         true ->
             {State, Dbg} = roll_over(State00, Dbg0),
-            %% force garbage cleanup
-            true = erlang:garbage_collect(),
             % TODO: there is some redundant computation performed by
             % recursing here it probably doesn't matter as it only happens
             % when a wal file fills up
@@ -340,8 +339,7 @@ write_data(Id, Idx, Term, Data0, Trunc,
                            false -> 0
                        end,
             Record = [HeaderData,
-                      <<Checksum:32/integer,
-                        EntryDataLen:32/integer>>,
+                      <<Checksum:32/integer, EntryDataLen:32/integer>>,
                       Entry],
             {append_data(State0, Id, Idx, Term, Data0,
                          DataSize, Record, Trunc), Dbg0}
