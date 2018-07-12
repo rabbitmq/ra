@@ -24,7 +24,7 @@
 
 -include("ra.hrl").
 
--define(SOFT_LIMIT, 1024).
+-define(SOFT_LIMIT, 256).
 
 -type seq() :: non_neg_integer().
 
