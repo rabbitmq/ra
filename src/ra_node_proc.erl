@@ -204,6 +204,8 @@ init(Config0) when is_map(Config0) ->
     %% does not support this. it was fixed in 20.3.2
     Now = erlang:monotonic_time(micro_seconds),
     Usage = {inactive, Now, 1, 1.0},
+    %% monitor nodes so that we can handle both nodeup and nodedown events
+    ok = net_kernel:monitor_nodes(true),
     {ok, recover, State#state{use = Usage},
      [{state_timeout, 0, go} | Actions0]}.
 
@@ -822,7 +824,8 @@ handle_effect({monitor, node, Node}, _,
             % monitor is already in place - do nothing
             {State, Actions};
         _ ->
-            true = erlang:monitor_node(Node, true),
+            %% no need to actually monitor anything as we've always monitoring
+            %% all visible nodes
             {State#state{monitors = Monitors#{Node => undefined}}, Actions}
     end;
 handle_effect({demonitor, process, Pid}, _,
@@ -839,7 +842,6 @@ handle_effect({demonitor, node, Node}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Node, Monitors0) of
         {_, Monitors} ->
-            true = erlang:monitor_node(Node, false),
             {State#state{monitors = Monitors}, Actions};
         error ->
             {State, Actions}
