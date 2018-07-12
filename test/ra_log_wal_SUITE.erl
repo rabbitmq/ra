@@ -118,16 +118,16 @@ write_many(Config) ->
     Conf = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false,
-                                               max_wal_size => 1024 * 1024 * 1024},
+                                               max_size_bytes => 1024 * 1024 * 1024},
                                          []),
     Data = crypto:strong_rand_bytes(1024),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
-    {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
     {_, GarbBefore} = erlang:process_info(WalPid, garbage_collection),
     {_, MemBefore} = erlang:process_info(WalPid, memory),
     {_, BinBefore} = erlang:process_info(WalPid, binary),
+    {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
 
     {Taken, _} =
         timer:tc(
@@ -142,10 +142,10 @@ write_many(Config) ->
                             throw(written_timeout)
                   end
           end),
+    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
     {_, BinAfter} = erlang:process_info(WalPid, binary),
     {_, MemAfter} = erlang:process_info(WalPid, memory),
     {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
-    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
     ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
     ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),

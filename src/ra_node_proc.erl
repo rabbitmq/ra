@@ -803,7 +803,7 @@ handle_effect({release_cursor, Index, MacState}, _EvtType,
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
 handle_effect(garbage_collection, _EvtType, State, Actions) ->
-    treu = erlang:garbage_collect(),
+    true = erlang:garbage_collect(),
     {State, Actions};
 handle_effect({monitor, process, Pid}, _,
               #state{monitors = Monitors} = State, Actions) ->
