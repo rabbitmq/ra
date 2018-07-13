@@ -1202,6 +1202,10 @@ pre_vote_election(_Config) ->
     {pre_vote, #{votes := 2} = State1, []}
         = ra_node:handle_pre_vote(Reply, State),
 
+    %% different token is ignored
+    {pre_vote, #{votes := 1}, []}
+        = ra_node:handle_pre_vote(Reply#pre_vote_result{token = make_ref()},
+                                  State),
     % denied
     NegResult = #pre_vote_result{term = 5, token = Token,
                                  vote_granted = false},
