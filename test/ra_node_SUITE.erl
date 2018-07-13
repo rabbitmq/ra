@@ -36,6 +36,7 @@ all() ->
      follower_cluster_change,
      leader_applies_new_cluster,
      leader_appends_cluster_change_then_steps_before_applying_it,
+     leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
@@ -1214,6 +1215,22 @@ leader_receives_pre_vote(_Config) ->
     % leader abdicates for higher term
     {follower, #{current_term := 6}, _}
         = ra_node:handle_leader(PreVoteRpc#pre_vote_rpc{term = 6}, State),
+    ok.
+
+leader_receives_install_snapshot_rpc(_Config) ->
+    % leader step down when receiving an install snapshot rpc with a higher
+    % term
+    State  = #{current_term := Term,
+               last_applied := Idx} = (base_state(5))#{votes => 1},
+    ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = n5,
+                                  last_index = Idx, last_term = Term,
+                                  last_config = #{}, data = []},
+    {follower, #{}, [{next_event, {n5, ISRpc}}]}
+        = ra_node:handle_leader({n5, ISRpc}, State),
+    % leader ignores lower term
+    {leader, State, _}
+        = ra_node:handle_leader({n5, ISRpc#install_snapshot_rpc{term = Term-1}},
+                                State),
     ok.
 
 follower_installs_snapshot(_Config) ->

@@ -412,6 +412,20 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             Effects = [{send_rpcs, Rpcs}],
             {leader, State, Effects}
     end;
+handle_leader({PeerId, #install_snapshot_rpc{term = Term}} = Evt,
+              #{current_term := CurTerm,
+                id := Id} = State0) when Term > CurTerm ->
+    case peer(PeerId, State0) of
+        undefined ->
+            ?WARN("~w saw install_snapshot_rpc from unknown peer ~w~n",
+                  [Id, PeerId]),
+            {leader, State0, []};
+        _ ->
+            ?INFO("~w leader saw install_snapshot_rpc for term ~b "
+                  "abdicates term: ~b!~n",
+                  [Id, Term, CurTerm]),
+            {follower, update_term(Term, State0), [{next_event, Evt}]}
+    end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm} = State0) when Term > CurTerm ->
     ?INFO("~w leader saw append_entries_rpc for term ~b abdicates term: ~b!~n",
