@@ -198,20 +198,41 @@ election_timeout(_Config) ->
     Msg = election_timeout,
 
     % follower
-    PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
-                               last_log_index = 3, last_log_term = 5},
-    PreVoteForSelfEvent = {next_event, cast,
-                           #pre_vote_result{term = 5, vote_granted = true}},
-    {pre_vote, #{current_term := 5, votes := 0},
-     [PreVoteForSelfEvent, {send_vote_requests, [{n2, PreVoteRpc},
-                                                 {n3, PreVoteRpc}]}]} =
+    % PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
+    %                            token = Token,
+    %                            last_log_index = 3, last_log_term = 5},
+    % PreVoteForSelfEvent = {next_event, cast,
+    %                        #pre_vote_result{term = 5,
+    %                                         token = Token,
+    %                                         vote_granted = true}},
+    {pre_vote, #{current_term := 5, votes := 0,
+                 pre_vote_token := Token},
+     [{next_event, cast, #pre_vote_result{term = 5, token = Token,
+                                          vote_granted = true}},
+      {send_vote_requests,
+       [{n2, #pre_vote_rpc{term = 5, token = Token,
+                           last_log_index = 3,
+                           last_log_term = 5,
+                           candidate_id = n1}},
+        {n3, _}]}]} =
         ra_node:handle_follower(Msg, State),
 
     % pre_vote
-    {pre_vote, #{current_term := 5, votes := 0},
-     [PreVoteForSelfEvent, {send_vote_requests, [{n2, PreVoteRpc},
-                                                 {n3, PreVoteRpc}]}]} =
+    {pre_vote, #{current_term := 5, votes := 0,
+                 pre_vote_token := Token1},
+     [{next_event, cast, #pre_vote_result{term = 5, token = Token1,
+                                          vote_granted = true}},
+      {send_vote_requests,
+       [{n2, #pre_vote_rpc{term = 5, token = Token1,
+                           last_log_index = 3,
+                           last_log_term = 5,
+                           candidate_id = n1}},
+        {n3, _}]}]} =
         ra_node:handle_pre_vote(Msg, State),
+
+
+    %% assert tokens are not the same
+    ?assertNotEqual(Token, Token1),
 
     % candidate
     VoteRpc = #request_vote_rpc{term = 6, candidate_id = n1,
@@ -766,29 +787,34 @@ follower_request_vote(_Config) ->
 follower_pre_vote(_Config) ->
     State = base_state(3),
     Term = 5,
+    Token = make_ref(),
     Msg = #pre_vote_rpc{candidate_id = n2, term = Term, last_log_index = 3,
-                        last_log_term = 5},
+                        token = Token, last_log_term = 5},
     % success
     {follower, #{current_term := Term},
-     [{reply, #pre_vote_result{term = Term, vote_granted = true}}]} =
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}}]} =
         ra_node:handle_follower(Msg, State),
 
     % fail due to lower term
     {follower, #{current_term := 5},
-     [{reply, #pre_vote_result{term = 5, vote_granted = false}}]} =
+     [{reply, #pre_vote_result{term = 5, token = Token,
+                               vote_granted = false}}]} =
     ra_node:handle_follower(Msg#pre_vote_rpc{term = 4}, State),
 
      % reject when candidate last log entry has a lower term
      % still update current term if incoming is higher
     {follower, #{current_term := 6},
-     [{reply, #pre_vote_result{term = 6, vote_granted = false}}]} =
+     [{reply, #pre_vote_result{term = 6, token = Token,
+                               vote_granted = false}}]} =
     ra_node:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
                                              term = 6},
                             State),
 
     % grant vote when candidate last log entry has same term but is longer
     {follower, #{current_term := 5},
-     [{reply, #pre_vote_result{term = 5, vote_granted = true}}]} =
+     [{reply, #pre_vote_result{term = 5, token = Token,
+                               vote_granted = true}}]} =
     ra_node:handle_follower(Msg#pre_vote_rpc{last_log_index = 4},
                             State),
      ok.
@@ -796,13 +822,15 @@ follower_pre_vote(_Config) ->
 pre_vote_receives_pre_vote(_Config) ->
     State = base_state(3),
     Term = 5,
+    Token = make_ref(),
     Msg = #pre_vote_rpc{candidate_id = n2, term = Term, last_log_index = 3,
-                        last_log_term = 5},
+                        token = Token, last_log_term = 5},
     % success - pre vote still returns other pre vote requests
     % else we could have a dead-lock with a two process cluster with
     % both peers in pre-vote state
     {pre_vote, #{current_term := Term},
-     [{reply, #pre_vote_result{term = Term, vote_granted = true}}]} =
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}}]} =
         ra_node:handle_pre_vote(Msg, State),
     ok.
 
@@ -1167,18 +1195,22 @@ candidate_election(_Config) ->
         = ra_node:handle_candidate(Reply, State1).
 
 pre_vote_election(_Config) ->
-    State = (base_state(5))#{votes => 1},
-    Reply = #pre_vote_result{term = 5, vote_granted = true},
+    Token = make_ref(),
+    State = (base_state(5))#{votes => 1,
+                             pre_vote_token => Token},
+    Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
     {pre_vote, #{votes := 2} = State1, []}
         = ra_node:handle_pre_vote(Reply, State),
 
     % denied
-    NegResult = #pre_vote_result{term = 5, vote_granted = false},
+    NegResult = #pre_vote_result{term = 5, token = Token,
+                                 vote_granted = false},
     {pre_vote, #{votes := 2}, []}
         = ra_node:handle_pre_vote(NegResult, State1),
 
     % newer term should make pre_vote revert to follower
-    HighTermResult = #pre_vote_result{term = 6, vote_granted = false},
+    HighTermResult = #pre_vote_result{term = 6, token = Token,
+                                      vote_granted = false},
     {follower, #{current_term := 6, votes := 0}, []}
         = ra_node:handle_pre_vote(HighTermResult, State1),
 
@@ -1187,7 +1219,9 @@ pre_vote_election(_Config) ->
      #{current_term := 6}, _} = ra_node:handle_pre_vote(Reply, State1).
 
 pre_vote_election_reverts(_Config) ->
-    State = (base_state(5))#{votes => 1},
+    Token = make_ref(),
+    State = (base_state(5))#{votes => 1,
+                             pre_vote_token => Token},
     % request vote with higher term
     VoteRpc = #request_vote_rpc{term = 6, candidate_id = n2,
                                 last_log_index = 3, last_log_term = 5},
@@ -1207,8 +1241,10 @@ pre_vote_election_reverts(_Config) ->
 leader_receives_pre_vote(_Config) ->
     % leader should reply immediately with append entries if it receives
     % a pre_vote
+    Token = make_ref(),
     State = (base_state(5))#{votes => 1},
     PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
+                               token = Token,
                                last_log_index = 3, last_log_term = 5},
     {leader, #{}, [{send_rpcs, _}]}
         = ra_node:handle_leader(PreVoteRpc, State),

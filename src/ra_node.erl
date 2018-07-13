@@ -54,7 +54,8 @@
       machine => ra_machine:machine(),
       machine_state => term(),
       condition => ra_await_condition_fun(),
-      condition_timeout_effects => [ra_effect()]
+      condition_timeout_effects => [ra_effect()],
+      pre_vote_token => reference()
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -557,8 +558,10 @@ handle_pre_vote(#pre_vote_result{term = Term},
     % higher term always reverts?
     State = update_term(Term, State0),
     {follower, State#{votes => 0}, []};
-handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true},
+handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
+                                 token = Token},
                 #{current_term := Term, votes := Votes,
+                  pre_vote_token := Token,
                   cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
@@ -1074,20 +1077,25 @@ call_for_election(candidate, #{id := Id,
 call_for_election(pre_vote, #{id := Id,
                               current_term := Term} = State0) ->
     ?INFO("~w: pre_vote election called for in term ~b~n", [Id, Term]),
+    Token = make_ref(),
     PeerIds = peer_ids(State0),
     {LastIdx, LastTerm} = last_idx_term(State0),
     Reqs = [{PeerId, #pre_vote_rpc{term = Term,
+                                   token = Token,
                                    candidate_id = Id,
                                    last_log_index = LastIdx,
                                    last_log_term = LastTerm}}
             || PeerId <- PeerIds],
     % vote for self
-    VoteForSelf = #pre_vote_result{term = Term, vote_granted = true},
+    VoteForSelf = #pre_vote_result{term = Term, token = Token,
+                                   vote_granted = true},
     State = update_meta(Term, Id, State0),
-    {pre_vote, State#{leader_id => undefined, votes => 0},
+    {pre_vote, State#{leader_id => undefined, votes => 0,
+                      pre_vote_token => Token},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
 
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
+                                         token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
                  #{current_term := CurTerm}= State0)
@@ -1099,22 +1107,30 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             ?INFO("~w: granting pre-vote for ~w with last indexterm ~w"
                   "for term ~b previous term was ~b~n",
                   [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
-            Reply = #pre_vote_result{term = Term, vote_granted = true},
+            Reply = #pre_vote_result{term = Term,
+                                     token = Token,
+                                     vote_granted = true},
             {FsmState, State#{voted_for => Cand}, [{reply, Reply}]};
         false ->
             ?INFO("~w: declining pre-vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
                   "Last log entry idxterm seen was: ~w~n",
                   [id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
-            Reply = #pre_vote_result{term = Term, vote_granted = false},
+            Reply = #pre_vote_result{term = Term,
+                                     token = Token,
+                                     vote_granted = false},
             {FsmState, State, [{reply, Reply}]}
     end;
-process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = _Cand},
+process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
+                                         token = Token,
+                                         candidate_id = _Cand},
                 #{current_term := CurTerm} = State)
   when Term < CurTerm ->
     ?INFO("~w declining pre-vote to ~w for term ~b, current term ~b~n",
           [id(State), _Cand, Term, CurTerm]),
-    Reply = #pre_vote_result{term = CurTerm, vote_granted = false},
+    Reply = #pre_vote_result{term = CurTerm,
+                             token = Token,
+                             vote_granted = false},
     {FsmState, State, [{reply, Reply}]}.
 
 new_peer() ->
