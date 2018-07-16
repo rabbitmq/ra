@@ -253,17 +253,27 @@ written_event_after_snapshot(Config) ->
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
     Log2 = ra_log:update_release_cursor(2, #{}, <<"one+two">>, Log1b),
-    Log3 = receive
-               {ra_log_event, {snapshot_written, {2, 1}, _} = Evt} ->
-                   ra_log:handle_event(Evt, Log2)
-           after 500 ->
-                   exit(snapshot_written_timeout)
-           end,
+    {Snap1, Log3} = receive
+                        {ra_log_event, {snapshot_written, {2, 1}, F, _} = Evt} ->
+                            {F, ra_log:handle_event(Evt, Log2)}
+                    after 500 ->
+                              exit(snapshot_written_timeout)
+                    end,
     Log4 = deliver_all_log_events(Log3, 100),
-    Log5  = ra_log:append({3, 1, <<"two">>}, Log4),
+    true = filelib:is_file(Snap1),
+    Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
+    Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     deliver_all_log_events(Log5, 100),
+    Log7 = ra_log:update_release_cursor(4, #{}, <<"one+two+three+four">>, Log6),
+    {Snap2, _Log7} = receive
+                         {ra_log_event, {snapshot_written, {4, 1}, S, _} = E} ->
+                             {S, ra_log:handle_event(E, Log7)}
+                     after 500 ->
+                               exit(snapshot_written_timeout)
+                     end,
+    false = filelib:is_file(Snap1),
+    true = filelib:is_file(Snap2),
     ok.
-
 
 cache_overwrite_then_take(Config) ->
     Dir = ?config(wal_dir, Config),

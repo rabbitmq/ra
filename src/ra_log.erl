@@ -53,7 +53,10 @@
                                    ToTerm :: ra_term()}} |
                         {segments, ets:tid(), [segment_ref()]} |
                         {resend_write, ra_index()} |
-                        {snapshot_written, ra_idxterm(), file:filename()}.
+                        {snapshot_written,
+                         ra_idxterm(),
+                         File :: file:filename(),
+                         Old :: [file:filename()]}.
 
 -record(state,
         {uid :: ra_uid(),
@@ -385,7 +388,7 @@ handle_event({segments, Tid, NewSegs},
                  % re-enable snapshots based on release cursor updates
                  % in case snapshot_written was lost
                  snapshot_index_in_progress = undefined};
-handle_event({snapshot_written, {Idx, Term}, File},
+handle_event({snapshot_written, {Idx, Term}, File, Old},
              #state{uid = UId, open_segments = OpenSegs0,
                     directory = Dir,
                     segment_refs = SegRefs0} = State0) ->
@@ -401,8 +404,9 @@ handle_event({snapshot_written, {Idx, Term}, File},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("~s: snapshot_written at ~b. Obsolete segments ~w",
-                      [UId, Idx, ObsoleteKeys]),
+                ?INFO("~s: Snapshot written at index ~b in term ~b. ~b"
+                      " obsolete segments~n",
+                      [UId, Idx, Term, length(ObsoleteKeys)]),
                 % close any open segments
                 [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
@@ -412,6 +416,7 @@ handle_event({snapshot_written, {Idx, Term}, File},
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
     true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
+    [file:delete(F) || F <- Old],
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
@@ -471,8 +476,8 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
 install_snapshot({Idx, Term, _, _} = Snapshot,
                  #state{directory = Dir} = State) ->
     % syncronous call when follower receives a snapshot
-    {ok, File} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
-    handle_event({snapshot_written, {Idx, Term}, File},
+    {ok, File, Old} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    handle_event({snapshot_written, {Idx, Term}, File, Old},
                  State#state{last_index = Idx,
                              last_written_index_term = {Idx, Term}}).
 

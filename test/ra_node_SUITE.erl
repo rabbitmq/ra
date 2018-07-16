@@ -1399,6 +1399,7 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_index = 2,
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
+                                    commit_index := 2,
                                     next_index := 5}}},
      [{send_rpcs, Rpcs}]} = ra_node:handle_leader({n3, ISR}, Leader),
     ?assert(lists:any(fun({n3,

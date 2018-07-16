@@ -401,6 +401,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
         Peer0 = #{next_index := NI} ->
             State1 = update_peer(PeerId,
                                  Peer0#{match_index => LastIndex,
+                                        commit_index => LastIndex,
                                         % leader might have pipelined
                                         % append entries
                                         % since snapshot was sent
@@ -762,13 +763,14 @@ handle_follower(#install_snapshot_rpc{term = Term,
     % follower receives a snapshot to be installed
     Log = ra_log:install_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
     % TODO: should we also update metadata?
-    State = State0#{log => Log,
-                    current_term => Term,
-                    commit_index => LastIndex,
-                    last_applied => LastIndex,
-                    cluster => Cluster,
-                    machine_state => Data,
-                    leader_id => LeaderId},
+    State1 = State0#{log => Log,
+                     current_term => Term,
+                     commit_index => LastIndex,
+                     last_applied => LastIndex,
+                     cluster => Cluster,
+                     machine_state => Data,
+                     leader_id => LeaderId},
+    State = persist_last_applied(State1),
 
     % TODO: reply on snapshot written confirmation?
     Reply = #install_snapshot_result{term = CurTerm,

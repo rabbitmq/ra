@@ -45,9 +45,9 @@ write_snapshot(Config) ->
     Self = self(),
     ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot),
     receive
-        {ra_log_event, {snapshot_written, {10, 5}, _}} ->
+        {ra_log_event, {snapshot_written, {10, 5}, File, []}} ->
             % TODO: validate snapshot
-            {ok, Data} = file:read_file(filename:join(Dir, "00000001.snapshot")),
+            {ok, Data} = file:read_file(File),
             Snapshot = binary_to_term(Data),
             ok
     after 2000 ->
@@ -57,10 +57,10 @@ write_snapshot(Config) ->
     Snapshot2 = {20, 6, [node1, node2], some_data2},
     ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot2),
     receive
-        {ra_log_event, {snapshot_written, {20, 6}, _}} ->
+        {ra_log_event, {snapshot_written, {20, 6}, File2, [Old]}} ->
             % TODO: validate snapshot
-            false = filelib:is_file(filename:join(Dir, "00000001.snapshot")),
-            {ok, Data2} = file:read_file(filename:join(Dir, "00000002.snapshot")),
+            true = filelib:is_file(Old),
+            {ok, Data2} = file:read_file(File2),
             Snapshot2 = binary_to_term(Data2),
             ok
     after 2000 ->

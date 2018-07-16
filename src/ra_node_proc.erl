@@ -239,7 +239,7 @@ recover(_, _, State) ->
     % `next_event` from init
     {keep_state, State, {postpone, true}}.
 
-leader(enter, _OldState, State = #state{name = Name}) ->
+leader(enter, _, State = #state{name = Name}) ->
     ets:insert(ra_state, {Name, leader}),
     {keep_state, State};
 leader(EventType, {leader_call, Msg}, State) ->
@@ -392,7 +392,7 @@ leader(EventType, Msg, State0) ->
             end
     end.
 
-candidate(enter, _OldState, State = #state{name = Name}) ->
+candidate(enter, _, State = #state{name = Name}) ->
     ets:insert(ra_state, {Name, candidate}),
     {keep_state, State};
 candidate({call, From}, {leader_call, Msg},
@@ -444,7 +444,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     end.
 
 
-pre_vote(enter, _OldState, State = #state{name = Name}) ->
+pre_vote(enter, _, State = #state{name = Name}) ->
     ets:insert(ra_state, {Name, pre_vote}),
     {keep_state, State};
 pre_vote({call, From}, {leader_call, Msg},
@@ -491,7 +491,7 @@ pre_vote(EventType, Msg, State0) ->
              [election_timeout_action(long, State) | Actions]}
     end.
 
-follower(enter, _OldState, State = #state{name = Name}) ->
+follower(enter, _, State = #state{name = Name}) ->
     ets:insert(ra_state, {Name, follower}),
     {keep_state, State};
 follower({call, From}, {leader_call, Msg}, State) ->
@@ -581,7 +581,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, terminating_follower, State, Actions}
     end.
 
-terminating_leader(enter, _OldState, State = #state{name = Name}) ->
+terminating_leader(enter, _, State = #state{name = Name}) ->
     ets:insert(ra_state, {Name, terminating_leader}),
     {keep_state, State};
 terminating_leader(_EvtType, {command, _, _}, State0) ->

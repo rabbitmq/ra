@@ -61,8 +61,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 handle_write_snapshot(From, Dir, {Index, Term, _, _} = Snapshot) ->
-    {ok, File} = write_snapshot(Dir, Snapshot),
-    From ! {ra_log_event, {snapshot_written, {Index, Term}, File}},
+    {ok, File, Old} = write_snapshot(Dir, Snapshot),
+    From ! {ra_log_event, {snapshot_written, {Index, Term}, File, Old}},
     ok.
 
 write_snapshot(Dir, Snapshot) ->
@@ -71,15 +71,11 @@ write_snapshot(Dir, Snapshot) ->
             % no snapshots - initialise snapshot counter
             File = filename:join(Dir, ra_lib:zpad_filename("", "snapshot", 1)),
             ok = write(File, Snapshot),
-            {ok, File};
+            {ok, File, []};
         [LastFile | _] = Old ->
             File = ra_lib:zpad_filename_incr(LastFile),
             ok = write(File, Snapshot),
-            % delete old snapshots
-            %
-            % TODO: should this be done by the ra process?
-            [file:delete(F) || F <- Old],
-            {ok, File}
+            {ok, File, Old}
     end.
 
 write(File, Snapshot) ->
