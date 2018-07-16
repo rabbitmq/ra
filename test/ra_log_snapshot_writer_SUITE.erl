@@ -73,6 +73,6 @@ write_snapshot_call(Config) ->
     Dir = ?config(data_dir, Config),
     _ = ra_log_snapshot_writer:start_link(),
     Snapshot = {10, 5, [node1], some_data},
-    {ok, File} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    {ok, File, _} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
     ?assert(filelib:is_file(File)),
     ok.
