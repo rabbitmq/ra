@@ -1240,6 +1240,13 @@ pre_vote_election_reverts(_Config) ->
     AETerm6 = AE#append_entries_rpc{term = 6},
     {follower, #{current_term := 6, votes := 0}, [{next_event, AETerm6}]}
         = ra_node:handle_pre_vote(AETerm6, State),
+
+    % install snapshot rpc
+    ISR = #install_snapshot_rpc{term = 5, leader_id = n2,
+                                last_index = 3, last_term = 5,
+                                last_config = #{}, data = []},
+    {follower, #{current_term := 5, votes := 0}, [{next_event, ISR}]}
+        = ra_node:handle_pre_vote(ISR, State),
     ok.
 
 leader_receives_pre_vote(_Config) ->

@@ -558,6 +558,10 @@ handle_pre_vote(#pre_vote_result{term = Term},
     % higher term always reverts?
     State = update_term(Term, State0),
     {follower, State#{votes => 0}, []};
+handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
+                #{current_term := CurTerm} = State0)
+  when Term >= CurTerm ->
+    {follower, State0#{votes => 0}, [{next_event, ISR}]};
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
                 #{current_term := Term, votes := Votes,
