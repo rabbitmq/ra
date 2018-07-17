@@ -161,7 +161,7 @@ ping(ServerRef, Timeout) ->
 
 leader_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, {leader_call, Msg},
-                              {dirty_timeout, Timeout}) of
+                              Timeout) of
         {redirect, Leader} ->
             leader_call(Leader, Msg, Timeout);
         {error, _} = E ->
