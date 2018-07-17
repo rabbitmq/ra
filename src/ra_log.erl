@@ -416,6 +416,7 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
                 {Active, maps:without(ObsoleteKeys, OpenSegs0)}
         end,
     true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
+    %% delete old files
     [file:delete(F) || F <- Old],
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,

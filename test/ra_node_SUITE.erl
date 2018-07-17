@@ -1272,11 +1272,11 @@ leader_receives_install_snapshot_rpc(_Config) ->
     ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = n5,
                                   last_index = Idx, last_term = Term,
                                   last_config = #{}, data = []},
-    {follower, #{}, [{next_event, {n5, ISRpc}}]}
-        = ra_node:handle_leader({n5, ISRpc}, State),
+    {follower, #{}, [{next_event, ISRpc}]}
+        = ra_node:handle_leader(ISRpc, State),
     % leader ignores lower term
     {leader, State, _}
-        = ra_node:handle_leader({n5, ISRpc#install_snapshot_rpc{term = Term-1}},
+        = ra_node:handle_leader(ISRpc#install_snapshot_rpc{term = Term - 1},
                                 State),
     ok.
 

@@ -414,13 +414,14 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             Effects = [{send_rpcs, Rpcs}],
             {leader, State, Effects}
     end;
-handle_leader({PeerId, #install_snapshot_rpc{term = Term}} = Evt,
+handle_leader(#install_snapshot_rpc{term = Term,
+                                    leader_id = Leader} = Evt,
               #{current_term := CurTerm,
                 id := Id} = State0) when Term > CurTerm ->
-    case peer(PeerId, State0) of
+    case peer(Leader, State0) of
         undefined ->
-            ?WARN("~w saw install_snapshot_rpc from unknown peer ~w~n",
-                  [Id, PeerId]),
+            ?WARN("~w saw install_snapshot_rpc from unknown leader ~w~n",
+                  [Id, Leader]),
             {leader, State0, []};
         _ ->
             ?INFO("~w leader saw install_snapshot_rpc for term ~b "
@@ -757,7 +758,8 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       last_config = Cluster,
                                       data = Data},
                 State0 = #{id := Id, log := Log0,
-                           current_term := CurTerm}) when Term >= CurTerm ->
+                           current_term := CurTerm})
+  when Term >= CurTerm ->
     ?INFO("~w: installing snapshot at index ~b in term ~b~n",
           [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
