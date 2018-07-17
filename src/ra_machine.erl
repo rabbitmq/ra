@@ -190,8 +190,8 @@ tick({machine, Mod, _}, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
 -spec overview(machine(), state()) -> map().
-overview({machine, Mod, Ms}, State) ->
-    ?OPT_CALL(Mod:overview(State), Ms).
+overview({machine, Mod, _}, State) ->
+    ?OPT_CALL(Mod:overview(State), State).
 
 -spec query(module(), fun((state()) -> Result), state()) ->
     Result when Result :: term().
