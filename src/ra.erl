@@ -34,7 +34,9 @@
          remove_node/2,
          trigger_election/1,
          leave_and_terminate/1,
-         leave_and_terminate/2
+         leave_and_terminate/2,
+         leave_and_delete_node/1,
+         leave_and_delete_node/2
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -307,6 +309,25 @@ leave_and_terminate(ServerRef, NodeId) ->
         {ok, _, _} ->
             ?ERR("~p has left the building. terminating", [NodeId]),
             stop_node(NodeId)
+    end.
+
+% safe way to delete an active node from a cluster
+leave_and_delete_node(NodeId) ->
+    leave_and_delete_node(NodeId, NodeId).
+
+-spec leave_and_delete_node(ra_node_id(), ra_node_id()) ->
+    ok | timeout | {error, no_proc}.
+leave_and_delete_node(ServerRef, NodeId) ->
+    LeaveCmd = {'$ra_leave', NodeId, await_consensus},
+    case ra_node_proc:command(ServerRef, LeaveCmd, ?DEFAULT_TIMEOUT) of
+        {timeout, Who} ->
+            ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
+            timeout;
+        {error, no_proc} = Err ->
+            Err;
+        {ok, _, _} ->
+            ?ERR("~p has left the building. terminating", [NodeId]),
+            delete_node(NodeId)
     end.
 
 %% @see send/3
