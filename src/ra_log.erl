@@ -424,7 +424,6 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("Obsolete Keys ~w~n", [Obsolete]),
                 % close any open segments
                 [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
