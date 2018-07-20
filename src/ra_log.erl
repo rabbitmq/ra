@@ -362,7 +362,6 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
 handle_event({segments, Tid, NewSegs},
              #state{uid = UId,
                     open_segments = Open0,
-                    directory = Dir,
                     segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
     % mem_table cleanup
