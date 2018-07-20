@@ -151,14 +151,14 @@ init(#{id := Id,
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log0) of
             undefined ->
-                {1, make_cluster(Id, InitialNodes),
+                {0, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
             {Idx, Term, Clu, MacSt} ->
-                %% +1 as the snapshot is the last index before the first index
-                {Idx + 1, Clu, MacSt, {Idx, Term}}
+                %% the snapshot is the last index before the first index
+                {Idx, Clu, MacSt, {Idx, Term}}
         end,
 
-    CommitIndex = max(LastApplied, FirstIndex - 1),
+    CommitIndex = max(LastApplied, FirstIndex),
 
     State0 = #{id => Id,
                uid => UId,
@@ -176,7 +176,7 @@ init(#{id := Id,
                current_term => CurrentTerm,
                voted_for => VotedFor,
                commit_index => CommitIndex,
-               last_applied => FirstIndex - 1, %% needs -1 as fetches with +1
+               last_applied => FirstIndex,
                persisted_last_applied => LastApplied,
                log => Log0,
                machine => Machine,
@@ -991,6 +991,8 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
                     [] -> PrevIdx;
                     _ ->
                         {LastIdx, _, _} = lists:last(Entries),
+                        %% assertion
+                        {Next, _, _} = hd(Entries),
                         LastIdx
                 end,
     {LastIndex,
@@ -1163,7 +1165,7 @@ peers(#{id := Id, cluster := Nodes}) ->
 % returns the peers that should receive piplined entries
 pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
-    NextIdx  = ra_log:next_index(Log),
+    NextIdx = ra_log:next_index(Log),
     maps:filter(fun (_, #{next_index := NI,
                           match_index := MI}) when NI < NextIdx ->
                         % there are unsent items
@@ -1289,14 +1291,16 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
          #{last_applied := LastApplied,
            machine_state := MacState0} = State0)
   when ApplyTo > LastApplied ->
-    To = min(LastApplied + 1 + 1024, ApplyTo),
-    case fetch_entries(LastApplied + 1, To, State0) of
+    From = LastApplied + 1,
+    To = min(From + 1024, ApplyTo),
+    case fetch_entries(From, To, State0) of
         {[], State} ->
             %% reverse list before consing the notifications to ensure
             %% notifications are processed first
             Effects = make_notify_effects(Notifys0, lists:reverse(Effects0)),
             {State, Effects, NumApplied};
-        {Entries, State1} ->
+        %% assert first item read is from
+        {[{From, _, _} | _] = Entries, State1} ->
             {AppliedTo, State, MacState, Effects, Notifys} =
                 lists:foldl(ApplyFun, {LastApplied, State1, MacState0,
                                        Effects0, Notifys0}, Entries),

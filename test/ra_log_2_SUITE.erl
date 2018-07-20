@@ -40,7 +40,8 @@ all_tests() ->
      missed_closed_tables_are_deleted_at_next_opportunity,
      transient_writer_is_handled,
      read_opt,
-     written_event_after_snapshot
+     written_event_after_snapshot,
+     updated_segment_can_be_read
     ].
 
 groups() ->
@@ -263,8 +264,8 @@ written_event_after_snapshot(Config) ->
     true = filelib:is_file(Snap1),
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
-    deliver_all_log_events(Log5, 100),
-    Log7 = ra_log:update_release_cursor(4, #{}, <<"one+two+three+four">>, Log6),
+    Log6b = deliver_all_log_events(Log6, 100),
+    Log7 = ra_log:update_release_cursor(4, #{}, <<"one+two+three+four">>, Log6b),
     {Snap2, _Log7} = receive
                          {ra_log_event, {snapshot_written, {4, 1}, S, _} = E} ->
                              {S, ra_log:handle_event(E, Log7)}
@@ -273,6 +274,29 @@ written_event_after_snapshot(Config) ->
                      end,
     false = filelib:is_file(Snap1),
     true = filelib:is_file(Snap2),
+    ok.
+
+updated_segment_can_be_read(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{data_dir => Dir, uid => UId,
+                         snapshot_interval => 1}),
+    %% append a few entrie
+    Log1 = append_and_roll(1, 5, 1, Log0),
+    Log2 = deliver_all_log_events(Log1, 200),
+    %% read some, this will open the segment with the an index of entries
+    %% 1 - 4
+    {Entries, Log3} = ra_log:take(1, 25, Log2),
+    %% append a few more itmes and process the segments
+    Log4 = append_and_roll(5, 16, 1, Log3),
+    % this should return all entries
+    {Entries1, _} = ra_log:take(1, 15, Log4),
+    ct:pal("Entries: ~p~n", [Entries]),
+    ct:pal("Entries1: ~p~n", [Entries1]),
+    ct:pal("Metrics ~p", [ets:tab2list(ra_log_metrics)]),
+    ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
+    ?assertEqual(15, length(Entries1)),
+    % l18 = length(Entries1),
     ok.
 
 cache_overwrite_then_take(Config) ->
@@ -697,6 +721,19 @@ deliver_all_log_events(Log0, Timeout) ->
             ct:pal("log evt: ~p", [Evt]),
             Log = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events(Log, Timeout)
+    after Timeout ->
+              Log0
+    end.
+
+deliver_all_log_events_except_segments(Log0, Timeout) ->
+    receive
+        {ra_log_event, {segments, _, _} = Evt} ->
+            ct:pal("log evt dropping: ~p", [Evt]),
+            deliver_all_log_events_except_segments(Log0, Timeout);
+        {ra_log_event, Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            Log = ra_log:handle_event(Evt, Log0),
+            deliver_all_log_events_except_segments(Log, Timeout)
     after Timeout ->
               Log0
     end.

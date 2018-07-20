@@ -141,7 +141,7 @@ init(#{uid := UId} = Conf) ->
                               {I, T, _} -> {I, T}
                           end,
     State000 = #state{directory = Dir, uid = UId,
-                      first_index = max(SnapIdx, FirstIdx),
+                      first_index = max(SnapIdx + 1, FirstIdx),
                       last_index = max(SnapIdx, LastIdx0),
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
@@ -360,7 +360,10 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
          [UId, FromIdx, Expected]),
     resend_from(Expected, State0);
 handle_event({segments, Tid, NewSegs},
-             #state{uid = UId, segment_refs = SegmentRefs} = State0) ->
+             #state{uid = UId,
+                    open_segments = Open0,
+                    directory = Dir,
+                    segment_refs = SegmentRefs} = State0) ->
     % Append new segment refs
     % mem_table cleanup
     % any closed mem tables older than the one just having been flushed should
@@ -382,9 +385,27 @@ handle_event({segments, Tid, NewSegs},
          % Then delete the actual ETS table
          true = ets:delete(T)
      end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
+    %% check if any of the segrefs refer to open segment and re-load their
+    %% new indexs if so
+    Open = lists:foldl(fun ({_, _, F}, Acc0) ->
+                               case maps:take(F, Acc0) of
+                                   {S0, Acc} ->
+                                       %% TODO: this could result in unecessary
+                                       %% file handle churn but may not be worth
+                                       %% optimising
+                                       %% Alternative would be something like:
+                                       %% ra_log_segment:reload_index/1
+                                       ok = ra_log_segment:close(S0),
+                                       Acc;
+                                   error ->
+                                       Acc0
+                               end
+                       end, Open0, SegmentRefs),
+
     % compact seg ref list so that only the latest range for a segment
     % file has an entry
     State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
+                 open_segments = Open,
                  % re-enable snapshots based on release cursor updates
                  % in case snapshot_written was lost
                  snapshot_index_in_progress = undefined};
@@ -393,28 +414,30 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
                     directory = Dir,
                     segment_refs = SegRefs0} = State0) ->
     % delete any segments outside of first_index
-    {SegRefs, OpenSegs} =
+    {SegRefs, OpenSegs, NumObsolete} =
         % all segments created prior to the first reclaimable should be
         % reclaimed even if they have a more up to date end point
         case lists:partition(fun({_, To, _}) when To > Idx -> true;
                                 (_) -> false
                              end, SegRefs0) of
             {_, []} ->
-                {SegRefs0, OpenSegs0};
+                {SegRefs0, OpenSegs0, 0};
             {Active, Obsolete} ->
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                ?INFO("~s: Snapshot written at index ~b in term ~b. ~b"
-                      " obsolete segments~n",
-                      [UId, Idx, Term, length(ObsoleteKeys)]),
+                ?INFO("Obsolete Keys ~w~n", [Obsolete]),
                 % close any open segments
                 [ok = ra_log_segment:close(S)
                  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
                 ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
                 ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                            ObsoleteFiles),
-                {Active, maps:without(ObsoleteKeys, OpenSegs0)}
+                {Active, maps:without(ObsoleteKeys, OpenSegs0),
+                 length(ObsoleteKeys)}
         end,
+    ?INFO("~s: Snapshot written at index ~b in term ~b. ~b"
+          " obsolete segments~n",
+          [UId, Idx, Term, NumObsolete]),
     true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
     %% delete old files
     [file:delete(F) || F <- Old],
@@ -435,9 +458,6 @@ next_index(#state{last_index = LastIdx}) ->
 
 -spec fetch(ra_index(), ra_log()) ->
     {maybe(log_entry()), ra_log()}.
-fetch(Idx, #state{last_index = Last, first_index = First} = State)
-  when Idx > Last orelse Idx < First ->
-    {undefined, State};
 fetch(Idx, State0) ->
     case take(Idx, 1, State0) of
         {[], State} ->
@@ -908,7 +928,8 @@ resend_from0(Idx, #state{last_resend_time = LastResend,
 compact_seg_refs(SegRefs) ->
     lists:reverse(
       lists:foldl(fun ({_, _, File} = S, Acc) ->
-                          case lists:any(fun({_, _, F}) when F =:= File -> true;
+                          case lists:any(fun({_, _, F}) when F =:= File ->
+                                                 true;
                                             (_) -> false
                                          end, Acc) of
                               true -> Acc;

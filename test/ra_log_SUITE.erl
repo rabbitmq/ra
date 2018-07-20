@@ -273,7 +273,7 @@ snapshot(Config) ->
     LogB = ra_log:init(#{data_dir => ?config(priv_dir, Config),
                          uid => <<"snapshot">>}),
     {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
-    {LastTerm, _} = ra_log:fetch_term(LastIdx, LogB),
+    {undefined, _} = ra_log:fetch_term(LastIdx, LogB),
     Snapshot = ra_log:read_snapshot(LogB),
     ok.
 
