@@ -140,7 +140,8 @@ init(#{uid := UId} = Conf) ->
                               undefined -> {-1, -1};
                               {I, T, _} -> {I, T}
                           end,
-    State000 = #state{directory = Dir, uid = UId,
+    State000 = #state{directory = Dir,
+                      uid = UId,
                       first_index = max(SnapIdx + 1, FirstIdx),
                       last_index = max(SnapIdx, LastIdx0),
                       segment_refs = SegRefs,
@@ -808,9 +809,12 @@ segment_take(#state{segment_refs = SegRefs,
                         #{Fn := S} -> S;
                         _ ->
                             AbsFn = filename:join(Dir, Fn),
-                            {ok, S} = ra_log_segment:open(AbsFn,
-                                                          #{mode => read}),
-                            S
+                            case ra_log_segment:open(AbsFn, #{mode => read}) of
+                                {ok, S} -> S;
+                                {error, Err} ->
+                                    exit({ra_log_failed_to_open_file, Err,
+                                          AbsFn})
+                            end
                     end,
 
               % actual start point cannot be prior to first segment

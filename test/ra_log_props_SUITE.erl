@@ -54,8 +54,11 @@ end_per_suite(Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    application:stop(ra),
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
+    ok = application:set_env(ra, data_dir, Dir),
+    application:start(ra),
     % register(TestCase, self()),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
@@ -709,7 +712,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
               Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase,
-                                        resend_window => 2}),
+                                   resend_window => 2}),
               ra_log:take(1, 10, Log0),
               {Log, _Last, Ts} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
@@ -836,6 +839,7 @@ flush() ->
 deliver_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
+            ct:pal("ra_log_evt: ~w~n", [Evt]),
             Log = ra_log:handle_event(Evt, Log0),
             deliver_log_events(Log, Timeout)
     after Timeout ->
