@@ -158,8 +158,6 @@ sync(#state{fd = Fd, pending = Pend} = State) ->
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
 read(State, Idx, Num) ->
-    % TODO: should we better indicate when records aren't found?
-    % This depends on the semantics we want from a segment
     read_cons(State, Idx, Num, fun ra_lib:id/1, []).
 
 
@@ -168,8 +166,6 @@ read(State, Idx, Num) ->
     Acc when Acc :: [{ra_index(), ra_term(), binary()}].
 read_cons(#state{fd = Fd, mode = read, index = Index}, Idx,
           Num, Fun, Acc) ->
-    % TODO: should we better indicate when records aren't found?
-    % This depends on the semantics we want from a segment
     {Locs, Metas} = read_locs(Idx, Idx + Num, Index, {[], []}),
     {ok, Datas} = ra_file_handle:pread(Fd, Locs),
     combine_with(Metas, Datas, Fun, Acc).
@@ -186,7 +182,7 @@ combine_with([], [], _, Acc) ->
     Acc;
 combine_with([{_, _, Crc} = Meta | MetaTail],
              [Data | DataTail], Fun, Acc) ->
-    % TODO: make checksum check optional
+    % TODO: make checksum check optional?
     case erlang:crc32(Data) of
         Crc -> ok;
         _ ->

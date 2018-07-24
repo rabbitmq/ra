@@ -163,7 +163,7 @@ init(#{id := Id,
     State0 = #{id => Id,
                uid => UId,
                cluster => Cluster0,
-               % TODO: there may be scenarios when a single node
+               % There may be scenarios when a single node
                % starts up but hasn't
                % yet re-applied its noop command that we may receive other join
                % commands that can't be applied.
@@ -235,14 +235,12 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                   [Id, PeerId]),
             {leader, State0, []};
         Peer0 = #{match_index := MI, next_index := NI} ->
-            % TODO: strictly speaking we should not need to take a max here?
-            % assert?
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
             {State, Rpcs} = make_pipelined_rpcs(State2),
-            % TODO: rpcs need to be issued _AFTER_ machine effects or there is
+            % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
             Effects = Effects0 ++ [{send_rpcs, Rpcs},
@@ -371,7 +369,6 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     Log = ra_log:handle_event(Evt, Log0),
     {State1, Effects, Applied} = evaluate_quorum(State0#{log => Log}),
-    % TODO: should we send rpcs in case commit_index was incremented?
     {State, Rpcs} = make_pipelined_rpcs(State1),
     {leader, State, [{send_rpcs, Rpcs},
                      {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
@@ -764,7 +761,6 @@ handle_follower(#install_snapshot_rpc{term = Term,
           [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
     Log = ra_log:install_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
-    % TODO: should we also update metadata?
     State1 = State0#{log => Log,
                      current_term => Term,
                      commit_index => LastIndex,
@@ -774,7 +770,6 @@ handle_follower(#install_snapshot_rpc{term = Term,
                      leader_id => LeaderId},
     State = persist_last_applied(State1),
 
-    % TODO: reply on snapshot written confirmation?
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
@@ -1180,13 +1175,10 @@ pipelineable_peers(#{commit_index := CommitIndex,
                 end, peers(State)).
 
 % peers that could need an update
-% TODO: introduce a last_seen timestamp to avoid sending additional message
-% in high-load scenarios
 stale_peers(#{commit_index := CommitIndex} = State) ->
     maps:filter(fun (_Id, #{next_index := NI,
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
-                        % TODO: now() - last_seen > ?RCP_INTERVAL_MS
                         true;
                     (_Id, #{commit_index := CI}) when CI < CommitIndex ->
                         % the commit index has been updated
@@ -1374,7 +1366,7 @@ apply_with(Machine,
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ Effects});
 apply_with(_, {Idx, _, _} = Cmd, Acc) ->
-    % TODO: uh why a catch all here? try to remove this and see if it breaks
+    % TODO: remove to make more strics, ideally we should not need a catch all
     ?WARN("~p: apply_with: unhandled command: ~W~n",
           [id(element(2, Acc)), Cmd, 10]),
     setelement(1, Acc, Idx).
@@ -1415,7 +1407,7 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
     case OldCluster of
         #{JoiningNode := _} ->
             % already a member do nothing
-            % TODO: reply?
+            % TODO: reply? If we don't reply the caller may block until timeout
             {not_appended, State};
         _ ->
             Cluster = OldCluster#{JoiningNode => new_peer()},

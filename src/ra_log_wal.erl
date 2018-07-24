@@ -18,6 +18,7 @@
 -define(MIN_MAX_BATCH_SIZE, 16).
 -define(MAX_MAX_BATCH_SIZE, 16 * 128 * 2).
 -define(METRICS_WINDOW_SIZE, 100).
+-define(CURRENT_VERSION, 1).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -195,7 +196,7 @@ recover_wal(Dir, #{max_size_bytes := MaxWalSize,
     % read partially recovered
     % tables mixed with old tables
     All = [begin
-               {ok, Data} = file:read_file(F),
+               Data = open_existing(F),
                ok = try_recover_records(Data, #{}),
                recovering_to_closed(F)
            end || F <- WalFiles],
@@ -445,6 +446,7 @@ open_file(File, #state{write_strategy = delay_writes_sync,
         Modes = [sync | Modes0],
         case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
+                ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
                 ok = ra_file_handle:sync(Fd),
@@ -457,6 +459,7 @@ open_file(File, #state{write_strategy = delay_writes_sync,
         end;
 open_file(File, #state{file_modes = Modes} = State) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
+    ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>),
     State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
 
 close_file(undefined) ->
@@ -563,8 +566,18 @@ incr_batch(#batch{writes = Writes,
                 pending = [Data | Pend]}.
 
 wal2list(File) ->
-    {ok, Data} = file:read_file(File),
+    Data = open_existing(File),
     dump_records(Data, []).
+
+open_existing(File) ->
+    case file:read_file(File) of
+        {ok, <<?CURRENT_VERSION:8/unsigned, Data/binary>>} ->
+            %% the only version currently supported
+            Data;
+        {ok, <<UnknownVersion:8/unsigned, _/binary>>} ->
+            exit({unknown_wal_version, UnknownVersion})
+    end.
+
 
 dump_records(<<_:1/integer, 0:1/integer, _:14/integer,
                IdDataLen:16/integer, _:IdDataLen/binary,
