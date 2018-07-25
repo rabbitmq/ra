@@ -10,7 +10,8 @@
          my_segments/1,
          my_segments/2,
          await/0,
-         await/1
+         await/1,
+         overview/0
         ]).
 
 -export([init/1,
@@ -18,7 +19,8 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3]).
+         code_change/3
+         ]).
 
 -record(state, {data_dir :: file:filename(),
                 segment_conf = #{} :: ra_log_segment:ra_log_segment_options(),
@@ -78,6 +80,11 @@ my_segments(Who) ->
 my_segments(SegWriter, Who) ->
     gen_server:call(SegWriter, {my_segments, Who}, infinity).
 
+-spec overview() -> #{}.
+overview() ->
+    gen_server:call(?MODULE, overview).
+
+
 % used to wait for the segment writer to finish processing anything in flight
 await() ->
     await(?MODULE).
@@ -123,7 +130,9 @@ handle_call({my_segments, Who}, _From,
             #state{data_dir = DataDir} = State) ->
     Dir = filename:join(DataDir, ra_lib:to_list(Who)),
     SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
-    {reply, SegFiles, State}.
+    {reply, SegFiles, State};
+handle_call(overview, _From, State) ->
+    {reply, get_overview(State), State}.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
@@ -188,9 +197,16 @@ terminate(_Reason, #state{active_segments = ActiveSegments}) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+get_overview(#state{active_segments = Active,
+                    segment_conf = Conf}) ->
+    #{active_segments => maps:size(Active),
+      segment_conf => Conf
+     }.
 
 do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,

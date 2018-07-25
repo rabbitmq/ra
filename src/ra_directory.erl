@@ -9,7 +9,8 @@
          what_node/1,
          registered_name_from_node_name/1,
          whereis_node_name/1,
-         send/2
+         send/2,
+         overview/0
          ]).
 
 -export_type([
@@ -96,3 +97,15 @@ send(Name, Msg) ->
             _ = erlang:send(Pid, Msg),
             Pid
     end.
+
+overview() ->
+    Dir = ets:tab2list(ra_directory),
+    States = maps:from_list(ets:tab2list(ra_state)),
+    Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
+    lists:foldl(fun ({UId, Pid, Node}, Acc) ->
+                        Acc#{Node =>
+                             #{uid => UId,
+                               pid => Pid,
+                               state => maps:get(Node, States, undefined),
+                               snapshot_state => maps:get(UId, Snaps, undefined)}}
+                end, #{}, Dir).

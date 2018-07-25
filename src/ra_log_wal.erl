@@ -7,6 +7,7 @@
          init/3,
          system_continue/3,
          system_terminate/4,
+         system_get_state/1,
          write_debug/3]).
 
 -export([wal2list/1]).
@@ -681,6 +682,20 @@ system_continue(Parent, Debug, State) ->
 system_terminate(Reason, _Parent, _Debug, State) ->
     cleanup(State),
     exit(Reason).
+
+system_get_state(#state{write_strategy = Strat,
+                        compute_checksums = Cs,
+                        max_size_bytes = MaxSize,
+                        writers = Writers,
+                        wal = #wal{file_size = FSize,
+                                   filename = Fn}}) ->
+    ?INFO("systemn_get_state", []),
+    {ok, #{write_strategy => Strat,
+           compute_checksums => Cs,
+           writers => maps:size(Writers),
+           filename => filename:basename(Fn),
+           current_size => FSize,
+           max_size_bytes => MaxSize}}.
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).

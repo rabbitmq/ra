@@ -36,7 +36,9 @@
          leave_and_terminate/1,
          leave_and_terminate/2,
          leave_and_delete_node/1,
-         leave_and_delete_node/2
+         leave_and_delete_node/2,
+         %%
+         overview/0
         ]).
 
 -type ra_cmd_ret() :: ra_node_proc:ra_cmd_ret().
@@ -329,6 +331,22 @@ leave_and_delete_node(ServerRef, NodeId) ->
             ?ERR("~p has left the building. terminating", [NodeId]),
             delete_node(NodeId)
     end.
+
+
+%% @doc return a map of overview data of the ra system on the current erlang
+%% node.
+-spec overview() -> map().
+overview() ->
+    #{node => node(),
+      ra_nodes => ra_directory:overview(),
+      wal => #{max_batch_size =>
+                   lists:max([X || {X, _} <- ets:tab2list(ra_log_wal_metrics)]),
+               status => sys:get_state(ra_log_wal),
+               open_mem_tables => ets:info(ra_log_open_mem_tables, size),
+               closed_mem_tables => ets:info(ra_log_closed_mem_tables, size)
+               },
+      segment_writer => ra_log_segment_writer:overview()
+      }.
 
 %% @see send/3
 -spec send(ra_node_id(), term()) -> ra_cmd_ret().

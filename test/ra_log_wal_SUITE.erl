@@ -24,7 +24,8 @@ all_tests() ->
      roll_over,
      recover,
      recover_after_roll_over,
-     recover_truncated_write
+     recover_truncated_write,
+     system_get_state
     ].
 
 groups() ->
@@ -319,6 +320,14 @@ recover_truncated_write(Config) ->
     [{UId, _, 9, 9, _}] =
         lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
     meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
+system_get_state(Config) ->
+    Conf = ?config(wal_conf, Config),
+    {_UId, _} = ?config(writer_id, Config),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
+    #{write_strategy := _} = sys:get_state(ra_log_wal),
     proc_lib:stop(Pid),
     ok.
 

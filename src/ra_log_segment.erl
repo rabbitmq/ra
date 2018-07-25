@@ -46,7 +46,7 @@
         }).
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
-                                         mode => append | read}.
+                                    mode => append | read}.
 -opaque state() :: #state{}.
 
 -export_type([state/0,

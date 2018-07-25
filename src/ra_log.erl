@@ -812,7 +812,7 @@ segment_take(#state{segment_refs = SegRefs,
                             case ra_log_segment:open(AbsFn, #{mode => read}) of
                                 {ok, S} -> S;
                                 {error, Err} ->
-                                    exit({ra_log_failed_to_open_file, Err,
+                                    exit({ra_log_failed_to_open_segment, Err,
                                           AbsFn})
                             end
                     end,
