@@ -17,15 +17,24 @@
          tick/2,
          overview/1,
          get_checked_out/4,
+         %% aux
+         init_aux/1,
+         handle_aux/6,
          % queries
          query_messages_ready/1,
          query_messages_checked_out/1,
          query_processes/1,
+         query_ra_indexes/1,
+         query_customer_count/1,
+
+         usage/1,
+
+         %% misc
          dehydrate_state/1,
          size_test/2,
          perf_test/2,
-         read_log/0,
-         query_ra_indexes/1
+         read_log/0
+
          % profile/1
          %
         ]).
@@ -101,6 +110,7 @@
 -define(SHADOW_COPY_INTERVAL, 4096).
 % metrics tuple format:
 % {Key, Ready, Pending, Total}
+-define(USE_AVG_HALF_LIFE, 10000.0).
 
 -record(customer,
         {checked_out = #{} :: #{msg_id() => {msg_in_id(), indexed_msg()}},
@@ -266,7 +276,7 @@ apply(_, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
                                   {success, _, MsgId, Msg, S} ->
                                       {S, {MsgId, Msg}, Effects1};
                                   {inactive, S} ->
-                                      {S, empty, [{use, inactive} | Effects1]};
+                                      {S, empty, [{aux, inactive} | Effects1]};
                                   S ->
                                       {S, empty, Effects1}
                               end,
@@ -317,7 +327,7 @@ apply(_, {down, CustomerPid, noconnection},
                     end, Enqs0),
     Effects = case maps:size(Custs) of
                   0 ->
-                      [{use, inactive}, {monitor, node, Node} | Effects0];
+                      [{aux, inactive}, {monitor, node, Node} | Effects0];
                   _ ->
                       [{monitor, node, Node} | Effects0]
               end,
@@ -394,9 +404,9 @@ tick(_Ts, #state{name = Name,
                maps:size(Custs)}, % Customers
     case MH of
         undefined ->
-            [];
+            [{aux, emit}];
         {Mod, Fun, Args} ->
-            [{mod_call, Mod, Fun, Args ++ [Metrics]}]
+            [{mod_call, Mod, Fun, Args ++ [Metrics]}, {aux, emit}]
     end.
 
 -spec overview(state()) -> map().
@@ -421,6 +431,25 @@ get_checked_out(Cid, From, To, #state{customers = Customers}) ->
             []
     end.
 
+init_aux(Name) when is_atom(Name) ->
+    %% TODO: catch specific exeption throw if table already exists
+    ok = ra_machine_ets:create_table(ra_fifo_usage,
+                                     [named_table, set, public,
+                                      {write_concurrency, true}]),
+    Now = erlang:monotonic_time(micro_seconds),
+    {Name, {inactive, Now, 1, 1.0}}.
+
+handle_aux(_, cast, Cmd, {Name, Use0}, Log, _) ->
+    ?INFO("handle aux ~w", [Cmd]),
+    Use = case Cmd of
+              _ when Cmd == active orelse Cmd == inactive ->
+                  update_use(Use0, Cmd);
+              emit ->
+                  true = ets:insert(ra_fifo_usage,
+                                    {Name, utilisation(Use0)}),
+                  Use0
+          end,
+    {no_reply, {Name, Use}, Log}.
 
 %%% Queries
 
@@ -440,6 +469,17 @@ query_processes(#state{enqueuers = Enqs, customers = Custs0}) ->
 query_ra_indexes(#state{ra_indexes = RaIndexes}) ->
     RaIndexes.
 
+query_customer_count(#state{customers = Customers}) ->
+    maps:size(Customers).
+
+%% other
+
+-spec usage(atom()) -> float().
+usage(Name) when is_atom(Name) ->
+    case ets:lookup(ra_fifo_usage, Name) of
+        [] -> 0.0;
+        [{_, Use}] -> Use
+    end.
 
 read_log() ->
     fun({_, _, {'$usr', _, {enqueue, _, _, _}, _}}, {E, C, S, D, R}) ->
@@ -458,6 +498,34 @@ read_log() ->
 
 %%% Internal
 
+update_use({inactive, _, _, _} = CUInfo, inactive) ->
+    CUInfo;
+update_use({active, _, _} = CUInfo, active) ->
+    CUInfo;
+update_use({active, Since, Avg}, inactive) ->
+    Now = erlang:monotonic_time(micro_seconds),
+    {inactive, Now, Now - Since, Avg};
+update_use({inactive, Since, Active, Avg},   active) ->
+    Now = erlang:monotonic_time(micro_seconds),
+    {active, Now, use_avg(Active, Now - Since, Avg)}.
+
+utilisation({active, Since, Avg}) ->
+    use_avg(erlang:monotonic_time(micro_seconds) - Since, 0, Avg);
+utilisation({inactive, Since, Active, Avg}) ->
+    use_avg(Active, erlang:monotonic_time(micro_seconds) - Since, Avg).
+
+use_avg(0, 0, Avg) ->
+    Avg;
+use_avg(Active, Inactive, Avg) ->
+    Time = Inactive + Active,
+    moving_average(Time, ?USE_AVG_HALF_LIFE, Active / Time, Avg).
+
+moving_average(_Time, _, Next, undefined) ->
+    Next;
+moving_average(Time, HalfLife, Next, Current) ->
+    Weight = math:exp(Time * math:log(0.5) / HalfLife),
+    Next * (1 - Weight) + Current * Weight.
+
 num_checked_out(#state{customers = Custs}) ->
     lists:foldl(fun (#customer{checked_out = C}, Acc) ->
                         maps:size(C) + Acc
@@ -473,7 +541,7 @@ cancel_customer(CustomerId,
             Effects = cancel_customer_effects(CustomerId, Name, S, Effects0),
             case maps:size(Custs) of
                 0 ->
-                    {[{use, inactive} | Effects], S#state{customers = Custs}};
+                    {[{aux, inactive} | Effects], S#state{customers = Custs}};
                 _ ->
                     {Effects, S#state{customers = Custs}}
                 end;
@@ -668,12 +736,19 @@ checkout0({success, CustomerId, MsgId, Msg, State}, Effects, Acc0) ->
                            [DelMsg], Acc0),
     checkout0(checkout_one(State), Effects, Acc);
 checkout0({inactive, State}, Effects0, Acc) ->
-    checkout0(State, [{use, inactive} | Effects0], Acc);
+    Effects = append_send_msg_effects(Effects0, Acc),
+    {State, [{aux, inactive} | Effects]};
 checkout0(State, Effects0, Acc) ->
+    Effects = append_send_msg_effects(Effects0, Acc),
+    {State, Effects}.
+
+append_send_msg_effects(Effects, AccMap) when map_size(AccMap) == 0 ->
+    Effects;
+append_send_msg_effects(Effects0, AccMap) ->
     Effects = maps:fold(fun (C, Msgs, Ef) ->
                                 [send_msg_effect(C, lists:reverse(Msgs)) | Ef]
-                        end, Effects0, Acc),
-    {State, Effects}.
+                        end, Effects0, AccMap),
+    [{aux, active} | Effects].
 
 next_checkout_message(#state{returns = Returns,
                              low_msg_num = Low0,
@@ -1042,18 +1117,21 @@ return_non_existent_test() ->
 return_checked_out_test() ->
     Cid = {<<"cid">>, self()},
     {State0, [_, _]} = enq(1, 1, first, test_init(test)),
-    {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
+    {State1, [_Monitor, {aux, active},
+              {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
         check(Cid, 2, State0),
     % return
     {_State2, [_, _]} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
-    % {_, _, {get, {0, first}}} = deq(Cid, 4, State2),
     ok.
 
 return_auto_checked_out_test() ->
     Cid = {<<"cid">>, self()},
     {State00, [_, _]} = enq(1, 1, first, test_init(test)),
     {State0, [_]} = enq(2, 2, second, State00),
-    {State1, [_Monitor, {send_msg, _, {delivery, _, [{MsgId, _}]}}, _]} =
+    % it first active then inactive as the consumer took on but cannot take
+    % any more
+    {State1, [_Monitor, {aux, inactive}, {aux, active},
+              {send_msg, _, {delivery, _, [{MsgId, _}]}} | _]} =
         check_auto(Cid, 2, State0),
     % return should include another delivery
     {_State2, Effects} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
@@ -1080,7 +1158,7 @@ cancelled_checkout_out_test() ->
 down_with_noproc_customer_returns_unsettled_test() ->
     Cid = {<<"down_customer_returns_unsettled_test">>, self()},
     {State0, [_, _]} = enq(1, 1, second, test_init(test)),
-    {State1, [{monitor, process, Pid}, _Del]} = check(Cid, 2, State0),
+    {State1, [{monitor, process, Pid} | _]} = check(Cid, 2, State0),
     {State2, [_, _]} = apply(meta(3), {down, Pid, noproc}, [], State1),
     {_State, Effects} = check(Cid, 4, State2),
     ?assertEffect({monitor, process, _}, Effects),
@@ -1122,7 +1200,7 @@ down_with_noproc_enqueuer_is_cleaned_up_test() ->
 completed_customer_yields_demonitor_effect_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
     {State0, [_, _]} = enq(1, 1, second, test_init(test)),
-    {State1, [{monitor, process, _}, _Msg]} = check(Cid, 2, State0),
+    {State1, [{monitor, process, _} |  _]} = check(Cid, 2, State0),
     {_, Effects} = settle(Cid, 3, 0, State1),
     ?assertEffect({demonitor, _, _}, Effects),
     % release cursor for empty queue
@@ -1167,7 +1245,7 @@ tick_test() ->
     {S3, {_, _}} = deq(4, Cid2, unsettled, S2),
     {S4, _} = apply(meta(5), {return, [MsgId], Cid}, [], S3),
 
-    [{mod_call, _, _, [{test, 1, 1, 2, 1}]}] = tick(1, S4),
+    [{mod_call, _, _, [{test, 1, 1, 2, 1}]}, {aux, emit}] = tick(1, S4),
     ok.
 
 enq_deq_snapshot_recover_test() ->
@@ -1398,5 +1476,23 @@ run_log(InitState, Entries) ->
                                 {Acc, Efx}
                         end
                 end, {InitState, []}, Entries).
+
+
+%% AUX Tests
+
+aux_test() ->
+    _ = ra_machine_ets:start_link(),
+    Aux0 = init_aux(aux_test),
+    {MacState, _} = init(#{name => aux_test}),
+    Log = undefined,
+    {no_reply, Aux, undefined} = handle_aux(leader, cast, active, Aux0,
+                                            Log, MacState),
+    {no_reply, _Aux, undefined} = handle_aux(leader, cast, emit, Aux,
+                                             Log, MacState),
+    [X] = ets:lookup(ra_fifo_usage, aux_test),
+    ?assert(X > 0.0),
+    ok.
+
+
 -endif.
 

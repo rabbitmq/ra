@@ -12,6 +12,7 @@
          handle_pre_vote/2,
          handle_follower/2,
          handle_await_condition/2,
+         handle_aux/4,
          tick/1,
          overview/1,
          is_new/1,
@@ -53,6 +54,7 @@
       stop_after => ra_index(),
       machine => ra_machine:machine(),
       machine_state => term(),
+      aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference()
@@ -181,6 +183,7 @@ init(#{id := Id,
                log => Log0,
                machine => Machine,
                machine_state => MacState,
+               aux_state => ra_machine:init_aux(Machine, Name),
                condition_timeout_effects => []},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a node could restart without any known
@@ -375,6 +378,8 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {leader, State#{log => ra_log:handle_event(Evt, Log0)}, []};
+handle_leader({aux_command, Type, Cmd}, State0) ->
+    handle_aux(leader, Type, Cmd, State0);
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
               #{id := Id, current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -832,6 +837,19 @@ is_fully_replicated(#{commit_index := CI} = State) ->
             MinMI >= CI
     end.
 
+handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
+                                   machine := Machine,
+                                   machine_state := MacState0} = State0) ->
+    case ra_machine:handle_aux(Machine, RaftState, Type, Cmd, Aux0,
+                               Log0, MacState0) of
+        {reply, Reply, Aux, Log} ->
+            {RaftState, State0#{log => Log, aux_state => Aux}, [{reply, Reply}]};
+        {no_reply, Aux, Log} ->
+            {RaftState, State0#{log => Log, aux_state => Aux}, []};
+        undefined ->
+            {RaftState, State0, []}
+    end.
+
 % property helpers
 
 -spec id(ra_node_state()) -> ra_node_id().
@@ -911,6 +929,7 @@ evaluate_commit_index_follower(State) ->
 filter_follower_effects(Effects) ->
     lists:filter(fun ({release_cursor, _, _}) -> true;
                      ({incr_metrics, _, _}) -> true;
+                     ({aux, _}) -> true;
                      (garbage_collection) -> true;
                      (_) -> false
                  end, Effects).

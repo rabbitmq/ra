@@ -54,7 +54,9 @@
          tick/3,
          overview/2,
          query/3,
-         module/1
+         module/1,
+         init_aux/2,
+         handle_aux/7
         ]).
 
 -type state() :: term().
@@ -85,6 +87,7 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {release_cursor, ra_index(), state()} |
+    {aux, term()} |
     garbage_collection.
 
 %% Effects are data structure that can be returned by {@link apply/2} to ask
@@ -143,7 +146,9 @@
 -optional_callbacks([leader_effects/1,
                      tick/2,
                      overview/1,
-                     eol_effects/1
+                     eol_effects/1,
+                     init_aux/1,
+                     handle_aux/6
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -164,6 +169,19 @@
 -callback eol_effects(state()) -> effects().
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
+
+-callback init_aux(Name :: atom()) -> term().
+
+-callback handle_aux(ra_node:ra_state(),
+                     {call, From :: from()} | cast,
+                     Command :: term(),
+                     AuxState,
+                     LogState,
+                     MacState :: state()) ->
+    {reply, Reply :: term(), AuxState, LogState} |
+    {no_reply, AuxState, LogState}
+      when AuxState :: term(),
+           LogState :: ra_log:ra_log().
 
 -callback overview(state()) -> map().
 
@@ -192,6 +210,23 @@ tick({machine, Mod, _}, TimeMs, State) ->
 -spec overview(machine(), state()) -> map().
 overview({machine, Mod, _}, State) ->
     ?OPT_CALL(Mod:overview(State), State).
+
+-spec init_aux(machine(), atom()) -> term().
+init_aux({machine, Mod, _}, Name) ->
+    ?OPT_CALL(Mod:init_aux(Name), undefined).
+
+-spec handle_aux(machine(), ra_node:ra_state(),
+                 {call, From :: from()} | cast,
+                 Command :: term(), AuxState,
+                 LogState, MacState :: state()) ->
+    {reply, Reply :: term(), AuxState, LogState} |
+    {no_reply, AuxState, LogState} |
+    undefined
+      when AuxState :: term(),
+           LogState :: ra_log:ra_log().
+handle_aux({machine, Mod, _}, RaftState, Type, Cmd, Aux, Log, MacState) ->
+    ?OPT_CALL(Mod:handle_aux(RaftState, Type, Cmd, Aux, Log, MacState),
+              undefined).
 
 -spec query(module(), fun((state()) -> Result), state()) ->
     Result when Result :: term().

@@ -48,6 +48,9 @@
 %% Utilisation average calculations are all in μs.
 -define(USE_AVG_HALF_LIFE, 1000000.0).
 
+-define(HANDLE_EFFECTS(Effects, EvtType, State0),
+        handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
+
 -type correlation() :: non_neg_integer().
 
 -type command_reply_mode() :: after_log_append |
@@ -108,8 +111,7 @@
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
                 delayed_commands = queue:new() ::
-                                        queue:queue(ra_command_with_from()),
-                use }).
+                                        queue:queue(ra_command_with_from())}).
 
 %%%===================================================================
 %%% API
@@ -199,15 +201,12 @@ init(Config0) when is_map(Config0) ->
                     tick_timeout = TickTime,
                     await_condition_timeout = AwaitCondTimeout},
     %%?INFO("~w ra_node_proc:init/1:~n~p~n", [Id, ra_node:overview(NodeState)]),
-    {State, Actions0} = handle_effects(InitEffects, cast, State0),
+    {State, Actions0} = ?HANDLE_EFFECTS(InitEffects, cast, State0),
     %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
     %% does not support this. it was fixed in 20.3.2
-    Now = erlang:monotonic_time(micro_seconds),
-    Usage = {inactive, Now, 1, 1.0},
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
-    {ok, recover, State#state{use = Usage},
-     [{state_timeout, 0, go} | Actions0]}.
+    {ok, recover, State, [{state_timeout, 0, go} | Actions0]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -257,7 +256,7 @@ leader(EventType, {command, high, {CmdType, Data, ReplyMode}},
     {leader, NodeState, Effects} =
         ra_node:handle_leader({command, {CmdType, From, Data, ReplyMode}},
                               NodeState0),
-    {State, Actions} = handle_effects(Effects, EventType,
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
                                       State0#state{node_state = NodeState}),
     {keep_state, State, Actions};
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
@@ -292,7 +291,7 @@ leader(EventType, flush_commands,
     {leader, NodeState, Effects} =
         ra_node:handle_leader({commands, Delayed}, NodeState0),
 
-    {State, Actions} = handle_effects(Effects, EventType,
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
                                        State0#state{node_state = NodeState}),
     case queue:is_empty(DelQ) of
         true ->
@@ -324,7 +323,7 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
                                                  {down, Pid, Info}, noreply}},
                                       NodeState0),
             {State, Actions} =
-                handle_effects(Effects, cast,
+                ?HANDLE_EFFECTS(Effects, cast,
                                State0#state{node_state = NodeState,
                                             monitors = Monitors}),
             {keep_state, State, Actions};
@@ -344,18 +343,16 @@ leader(info, {NodeEvt, Node},
                                         {NodeEvt, Node}, noreply}},
                                       NodeState0),
             {State, Actions} =
-                handle_effects(Effects, cast,
+                ?HANDLE_EFFECTS(Effects, cast,
                                State0#state{node_state = NodeState}),
             {keep_state, State, Actions};
         _ ->
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    ets:insert(ra_customer_utilisation,
-               {State0#state.name, utilisation(State0)}),
     State1 = maybe_persist_last_applied(send_rpcs(State0)),
     Effects = ra_node:tick(State1#state.node_state),
-    {State, Actions} = handle_effects(Effects, cast, State1),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({call, From}, trigger_election, State) ->
@@ -365,10 +362,10 @@ leader({call, From}, {log_fold, Fun, Term}, State) ->
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             % demonitor when stepping down
             ok = lists:foreach(fun erlang:demonitor/1,
                                maps:values(State#state.monitors)),
@@ -377,10 +374,10 @@ leader(EventType, Msg, State0) ->
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
-            {State, _Actions} = handle_effects(Effects, EventType, State1),
+            {State, _Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {stop, normal, State};
         {delete_and_terminate, State1, Effects} ->
-            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = send_rpcs(State2),
             case ra_node:is_fully_replicated(State#state.node_state) of
                 true ->
@@ -419,11 +416,11 @@ candidate({call, From}, trigger_election, State) ->
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
-            {State, Actions0} = handle_effects(Effects, EventType, State1),
+            {State, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             Actions = maybe_add_election_timeout(Msg, Actions0, State),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             ?INFO("~w candidate -> follower term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, follower, State,
@@ -433,7 +430,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              % TODO: only set this is leader was not detected
              [election_timeout_action(long, State) | Actions]};
         {leader, State1, Effects} ->
-            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = State2#state{pending_commands = []},
             % inject a bunch of command events to be processed when node
             % becomes leader
@@ -471,11 +468,11 @@ pre_vote({call, From}, trigger_election, State) ->
 pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
-            {State, Actions0} = handle_effects(Effects, EventType, State1),
+            {State, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             Actions = maybe_add_election_timeout(Msg, Actions0, State),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             ?INFO("~w pre_vote -> follower term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, follower, State,
@@ -484,7 +481,7 @@ pre_vote(EventType, Msg, State0) ->
              % another election when not using follower timeouts
              [election_timeout_action(long, State) | Actions]};
         {candidate, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             ?INFO("~w pre_vote -> candidate term: ~b~n",
                   [id(State), current_term(State)]),
             {next_state, candidate, State,
@@ -556,18 +553,18 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
-            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
             {keep_state, State, maybe_set_election_timeout(State, Actions)};
         {pre_vote, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             ?INFO("~w follower -> pre_vote in term: ~b~n",
                   [id(State), current_term(State)]),
             _ = stop_monitor(MRef),
             {next_state, pre_vote, State#state{leader_monitor = undefined},
              [election_timeout_action(long, State) | Actions]};
         {await_condition, State1, Effects} ->
-            {State2, Actions} = handle_effects(Effects, EventType, State1),
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
             ?INFO("~w follower -> await_condition term: ~b~n",
                   [id(State), current_term(State)]),
@@ -577,7 +574,7 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
         {delete_and_terminate, State1, Effects} ->
             ?INFO("~w follower -> terminating_follower term: ~b~n",
                   [id(State1), current_term(State1)]),
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {next_state, terminating_follower, State, Actions}
     end.
 
@@ -646,7 +643,7 @@ await_condition(enter, _OldState, State = #state{name = Name}) ->
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
             ?INFO("~w await_condition -> follower in term: ~b~n",
                   [id(State), current_term(State)]),
@@ -654,7 +651,7 @@ await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
              [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};
         {pre_vote, State1, Effects} ->
-            {State, Actions} = handle_effects(Effects, EventType, State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             ?INFO("~w await_condition -> pre_vote in term: ~b~n",
                   [id(State), current_term(State1)]),
             _ = stop_monitor(MRef),
@@ -689,13 +686,11 @@ terminate(Reason, StateName,
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-format_status(Opt, [_PDict, StateName, #state{node_state = NS,
-                                              use = Use}]) ->
+format_status(Opt, [_PDict, StateName, #state{node_state = NS}]) ->
     [{id, ra_node:id(NS)},
      {opt, Opt},
      {raft_state, StateName},
-     {ra_node_state, ra_node:overview(NS)},
-     {use, Use}
+     {ra_node_state, ra_node:overview(NS)}
     ].
 
 %%%===================================================================
@@ -753,43 +748,47 @@ perform_committed_query(QueryFun, _, #{machine := {machine, MacMod, _},
 
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.
-handle_effects(Effects, EvtType, State0) ->
+handle_effects(RaftState, Effects, EvtType, State0) ->
     lists:foldl(fun(Effect, {State, Actions}) ->
-                        handle_effect(Effect, EvtType, State, Actions)
+                        handle_effect(RaftState, Effect, EvtType, State, Actions)
                 end, {State0, []}, Effects).
 
-handle_effect({send_rpcs, Rpcs}, _, State0, Actions) ->
+handle_effect(_, {send_rpcs, Rpcs}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor
     [?MODULE:send_rpc(To, Rpc) || {To, Rpc} <- Rpcs],
     % TODO: record metrics for sending times
     {State0, Actions};
-handle_effect({next_event, Evt}, EvtType, State, Actions) ->
+handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
-handle_effect({next_event, _, _} = Next, _, State, Actions) ->
+handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
-handle_effect({send_msg, To, Msg}, _, State, Actions) ->
+handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
     ok = send_ra_event(To, Msg, machine, State),
-    {State#state{use = update_use(State#state.use, active)}, Actions};
-handle_effect({use, inactive}, _, State, Actions) ->
-    {State#state{use = update_use(State#state.use, inactive)}, Actions};
-handle_effect({notify, Who, Correlations}, _, State, Actions) ->
+    {State, Actions};
+handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
+    %% TODO: thread through state
+    {_, NodeState, []} = ra_node:handle_aux(RaftState, cast, Cmd,
+                                            State#state.node_state),
+
+    {State#state{node_state = NodeState}, Actions};
+handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     ok = send_ra_event(Who, Correlations, applied, State),
     {State, Actions};
-handle_effect({cast, To, Msg}, _, State, Actions) ->
+handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     ok = gen_cast(To, Msg),
     {State, Actions};
-handle_effect({reply, From, Reply}, _, State, Actions) ->
+handle_effect(_, {reply, From, Reply}, _, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect({reply, Reply}, {call, From}, State, Actions) ->
+handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect({reply, Reply}, _, _, _) ->
+handle_effect(_, {reply, Reply}, _, _, _) ->
     exit({undefined_reply, Reply});
-handle_effect({send_vote_requests, VoteRequests}, _, % EvtType
+handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
               State, Actions) ->
     % transient election processes
     T = {dirty_timeout, 500},
@@ -800,14 +799,14 @@ handle_effect({send_vote_requests, VoteRequests}, _, % EvtType
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
-handle_effect({release_cursor, Index, MacState}, _EvtType,
+handle_effect(_, {release_cursor, Index, MacState}, _EvtType,
               #state{node_state = NodeState0} = State, Actions) ->
     NodeState = ra_node:update_release_cursor(Index, MacState, NodeState0),
     {State#state{node_state = NodeState}, Actions};
-handle_effect(garbage_collection, _EvtType, State, Actions) ->
+handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     {State, Actions};
-handle_effect({monitor, process, Pid}, _,
+handle_effect(_, {monitor, process, Pid}, _,
               #state{monitors = Monitors} = State, Actions) ->
     case Monitors of
         #{Pid := _MRef} ->
@@ -817,7 +816,7 @@ handle_effect({monitor, process, Pid}, _,
             MRef = erlang:monitor(process, Pid),
             {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
     end;
-handle_effect({monitor, node, Node}, _,
+handle_effect(_, {monitor, node, Node}, _,
               #state{monitors = Monitors} = State, Actions) ->
     case Monitors of
         #{Node := _} ->
@@ -828,7 +827,7 @@ handle_effect({monitor, node, Node}, _,
             %% all visible nodes
             {State#state{monitors = Monitors#{Node => undefined}}, Actions}
     end;
-handle_effect({demonitor, process, Pid}, _,
+handle_effect(_, {demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Pid, Monitors0) of
         {MRef, Monitors} ->
@@ -838,7 +837,7 @@ handle_effect({demonitor, process, Pid}, _,
             % ref not known - do nothing
             {State, Actions}
     end;
-handle_effect({demonitor, node, Node}, _,
+handle_effect(_, {demonitor, node, Node}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Node, Monitors0) of
         {_, Monitors} ->
@@ -846,11 +845,11 @@ handle_effect({demonitor, node, Node}, _,
         error ->
             {State, Actions}
     end;
-handle_effect({incr_metrics, Table, Ops}, _,
+handle_effect(_, {incr_metrics, Table, Ops}, _,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
-handle_effect({mod_call, Mod, Fun, Args}, _,
+handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
     {State, Actions}.
@@ -1004,33 +1003,6 @@ send(To, Msg) ->
         _ -> ok
     end.
 
-update_use({inactive, _, _, _}   = CUInfo, inactive) ->
-    CUInfo;
-update_use({active,   _, _}      = CUInfo,   active) ->
-    CUInfo;
-update_use({active,   Since,         Avg}, inactive) ->
-    Now = erlang:monotonic_time(micro_seconds),
-    {inactive, Now, Now - Since, Avg};
-update_use({inactive, Since, Active, Avg},   active) ->
-    Now = erlang:monotonic_time(micro_seconds),
-    {active, Now, use_avg(Active, Now - Since, Avg)}.
-
-utilisation(#state{use = {active, Since, Avg}}) ->
-    use_avg(erlang:monotonic_time(micro_seconds) - Since, 0, Avg);
-utilisation(#state{use = {inactive, Since, Active, Avg}}) ->
-    use_avg(Active, erlang:monotonic_time(micro_seconds) - Since, Avg).
-
-use_avg(0, 0, Avg) ->
-    Avg;
-use_avg(Active, Inactive, Avg) ->
-    Time = Inactive + Active,
-    moving_average(Time, ?USE_AVG_HALF_LIFE, Active / Time, Avg).
-
-moving_average(_Time, _HalfLife, Next, undefined) ->
-    Next;
-moving_average(Time,  HalfLife,  Next, Current) ->
-    Weight = math:exp(Time * math:log(0.5) / HalfLife),
-    Next * (1 - Weight) + Current * Weight.
 
 fold_log(From, Fun, Term, State) ->
     case ra_node:log_fold(State#state.node_state, Fun, Term) of

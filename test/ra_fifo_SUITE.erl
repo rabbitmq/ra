@@ -42,7 +42,8 @@ all_tests() ->
      log_fold,
      recover,
      recover_after_kill,
-     duplicate_delivery
+     duplicate_delivery,
+     usage
      % snapshot_should_suppress_segment_write
     ].
 
@@ -218,6 +219,25 @@ duplicate_delivery(Config) ->
         end,
     Fun(F2),
     ra:stop_node(NodeId),
+    ok.
+
+usage(Config) ->
+    ClusterId = ?config(cluster_id, Config),
+    NodeId = ?config(node_id, Config),
+    ok = start_cluster(ClusterId, [NodeId]),
+    F0 = ra_fifo_client:init(ClusterId, [NodeId]),
+    {ok, F1} = ra_fifo_client:checkout(<<"tag">>, 10, F0),
+    {ok, F2} = ra_fifo_client:enqueue(corr1, msg1, F1),
+    {ok, F3} = ra_fifo_client:enqueue(corr2, msg2, F2),
+    {_, _} = process_ra_events(F3, 50),
+    % force tick and usage stats emission
+    NodeId ! tick_timeout,
+    timer:sleep(50),
+    % ct:pal("ets ~w ~w ~w", [ets:tab2list(ra_fifo_usage), NodeId, UId]),
+    Use = ra_fifo:usage(element(1, NodeId)),
+    ct:pal("Use ~w~n", [Use]),
+    ra:stop_node(NodeId),
+    ?assert(Use > 0.0),
     ok.
 
 ra_fifo_client_resends_lost_command(Config) ->

@@ -439,7 +439,7 @@ cast(ServerRef, Priority, Command) ->
 %% return the result. Any ra node can be addressed.
 %% This can return infinitely state results.
 -spec committed_query(NodeId :: ra_node_id(),
-                  QueryFun :: fun((term()) -> term())) ->
+                      QueryFun :: fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 committed_query(ServerRef, QueryFun) ->
     ra_node_proc:query(ServerRef, QueryFun, dirty).
