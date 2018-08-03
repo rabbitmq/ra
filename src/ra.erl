@@ -15,8 +15,8 @@
          send_and_notify/4,
          cast/2,
          cast/3,
-         committed_query/2,
-         committed_query/3,
+         local_query/2,
+         local_query/3,
          members/1,
          members/2,
          consistent_query/2,
@@ -468,21 +468,21 @@ cast(ServerRef, Priority, Command) ->
     ra_node_proc:cast_command(ServerRef, Priority, Cmd).
 
 %% @doc query the machine state on any node
-%% This allows you to run the QueryFun over the the machine state and
+%% This allows you to run the QueryFun over the node machine state and
 %% return the result. Any ra node can be addressed.
-%% This can return infinitely state results.
--spec committed_query(NodeId :: ra_node_id(),
+%% This can return infinitely stale results.
+-spec local_query(NodeId :: ra_node_id(),
                       QueryFun :: fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
-committed_query(ServerRef, QueryFun) ->
-    committed_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
+local_query(ServerRef, QueryFun) ->
+    local_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
 
--spec committed_query(NodeId :: ra_node_id(),
+-spec local_query(NodeId :: ra_node_id(),
                       QueryFun :: fun((term()) -> term()),
                       Timeout :: timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
-committed_query(ServerRef, QueryFun, Timeout) ->
-    ra_node_proc:query(ServerRef, QueryFun, dirty, Timeout).
+local_query(ServerRef, QueryFun, Timeout) ->
+    ra_node_proc:query(ServerRef, QueryFun, local, Timeout).
 
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query

@@ -65,12 +65,12 @@
 
 <h3 class="function"><a name="write_snapshot-3">write_snapshot/3</a></h3>
 <div class="spec">
-<p><tt>write_snapshot(From, Dir, Snapshot) -&gt; any()</tt></p>
+<p><tt>write_snapshot(From::pid(), Dir::<a href="file.html#type-filename_all">file:filename_all()</a>, Snapshot::<a href="ra_log.html#type-snapshot">ra_log:snapshot()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="write_snapshot_call-2">write_snapshot_call/2</a></h3>
 <div class="spec">
-<p><tt>write_snapshot_call(Dir, Snapshot) -&gt; any()</tt></p>
+<p><tt>write_snapshot_call(Dir::<a href="file.html#type-filename">file:filename()</a>, Snapshot::<a href="ra_log.html#type-snapshot">ra_log:snapshot()</a>) -&gt; {ok, File::<a href="file.html#type-filename">file:filename()</a>, Old::[<a href="file.html#type-filename">file:filename()</a>]}</tt><br></p>
 </div>
 <hr>
 

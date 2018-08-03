@@ -135,10 +135,10 @@ cast_command(ServerRef, Cmd) ->
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
--spec query(ra_node_id(), query_fun(), dirty | consistent, timeout()) ->
+-spec query(ra_node_id(), query_fun(), local | consistent, timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_node_id()}.
-query(ServerRef, QueryFun, dirty, Timeout) ->
-    gen_statem:call(ServerRef, {committed_query, QueryFun}, Timeout);
+query(ServerRef, QueryFun, local, Timeout) ->
+    gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
@@ -300,9 +300,9 @@ leader(EventType, flush_commands,
             ok = gen_statem:cast(self(), flush_commands)
     end,
     {keep_state, State#state{delayed_commands = DelQ}, Actions};
-leader({call, From}, {committed_query, QueryFun},
+leader({call, From}, {local_query, QueryFun},
        #state{node_state = NodeState} = State) ->
-    Reply = perform_committed_query(QueryFun, leader, NodeState),
+    Reply = perform_local_query(QueryFun, leader, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{node_state = NodeState} = State) ->
@@ -400,9 +400,9 @@ candidate(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-candidate({call, From}, {committed_query, QueryFun},
+candidate({call, From}, {local_query, QueryFun},
           #state{node_state = NodeState} = State) ->
-    Reply = perform_committed_query(QueryFun, candidate, NodeState),
+    Reply = perform_local_query(QueryFun, candidate, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
@@ -452,9 +452,9 @@ pre_vote(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-pre_vote({call, From}, {committed_query, QueryFun},
+pre_vote({call, From}, {local_query, QueryFun},
           #state{node_state = NodeState} = State) ->
-    Reply = perform_committed_query(QueryFun, pre_vote, NodeState),
+    Reply = perform_local_query(QueryFun, pre_vote, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
@@ -512,9 +512,9 @@ follower(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-follower({call, From}, {committed_query, QueryFun},
+follower({call, From}, {local_query, QueryFun},
          #state{node_state = NodeState} = State) ->
-    Reply = perform_committed_query(QueryFun, follower, NodeState),
+    Reply = perform_local_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 follower({call, From}, trigger_election, State) ->
     ?INFO("~w: election triggered by ~w", [id(State), element(1, From)]),
@@ -614,9 +614,9 @@ terminating_follower(EvtType, Msg, State0) ->
 
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
-await_condition({call, From}, {committed_query, QueryFun},
+await_condition({call, From}, {local_query, QueryFun},
                 #state{node_state = NodeState} = State) ->
-    Reply = perform_committed_query(QueryFun, follower, NodeState),
+    Reply = perform_local_query(QueryFun, follower, NodeState),
     {keep_state, State, [{reply, From, Reply}]};
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
@@ -733,13 +733,13 @@ handle_await_condition(Msg, #state{node_state = NodeState0} = State) ->
         ra_node:handle_await_condition(Msg, NodeState0),
     {NextState, State#state{node_state = NodeState}, Effects}.
 
-perform_committed_query(QueryFun, leader, #{machine := {machine, MacMod, _},
+perform_local_query(QueryFun, leader, #{machine := {machine, MacMod, _},
                                             machine_state := MacState,
                                             last_applied := Last,
                                             id := Leader,
                                             current_term := Term}) ->
     {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader};
-perform_committed_query(QueryFun, _, #{machine := {machine, MacMod, _},
+perform_local_query(QueryFun, _, #{machine := {machine, MacMod, _},
                                        machine_state := MacState,
                                        last_applied := Last,
                                        current_term := Term} = NodeState) ->

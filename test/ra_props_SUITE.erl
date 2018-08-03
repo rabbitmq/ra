@@ -48,9 +48,9 @@ non_assoc_prop([A, B, C], {Ops, Initial}) ->
     [ra:send_and_await_consensus(Leader, Op) || Op <- Ops],
     {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
     timer:sleep(100),
-    {ok, {_, ARes}, _} = ra:committed_query(A, fun id/1),
-    {ok, {_, BRes}, _} = ra:committed_query(B, fun id/1),
-    {ok, {_, CRes}, _} = ra:committed_query(C, fun id/1),
+    {ok, {_, ARes}, _} = ra:local_query(A, fun id/1),
+    {ok, {_, BRes}, _} = ra:local_query(B, fun id/1),
+    {ok, {_, CRes}, _} = ra:local_query(C, fun id/1),
     % ct:pal("Result ~p ~p ~p Expected ~p Initial ~p~n",
     %        [ARes, BRes, CRes, Expected, Initial]),
     % assert all nodes have the same final state
