@@ -23,6 +23,7 @@
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_node-2">add_node/2</a></td><td>Add a ra node id to a ra cluster's membership configuration
   This commits a join command to the leader log.</td></tr>
+<tr><td valign="top"><a href="#add_node-3">add_node/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#cast-2">cast/2</a></td><td>Cast a message to a node
   This is the least reliable way to interact with a ra node.</td></tr>
 <tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Cast a message to a node with a priority
@@ -30,20 +31,30 @@
 <tr><td valign="top"><a href="#committed_query-2">committed_query/2</a></td><td>query the machine state on any node
   This allows you to run the QueryFun over the the machine state and
   return the result.</td></tr>
+<tr><td valign="top"><a href="#committed_query-3">committed_query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine
   This allows a caller to query the state machine by appending the query
   to the log and returning the result once applied.</td></tr>
+<tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion
   This function commits and end of life command which after each node applies
   it will cause that node to shut down and delete all it's data.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-2">delete_cluster/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_node-1">delete_node/1</a></td><td>Deletes a ra node
   The node is forcefully deleted.</td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_node-1">leave_and_delete_node/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_node-2">leave_and_delete_node/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_node-3">leave_and_delete_node/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leave_and_terminate-1">leave_and_terminate/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leave_and_terminate-2">leave_and_terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#leave_and_terminate-3">leave_and_terminate/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Query the members of a cluster.</td></tr>
+<tr><td valign="top"><a href="#members-2">members/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>return a map of overview data of the ra system on the current erlang
+  node.</td></tr>
 <tr><td valign="top"><a href="#remove_node-2">remove_node/2</a></td><td>Removes a node from the cluster's membership configuration
   This function returns after appending the command to the log.</td></tr>
+<tr><td valign="top"><a href="#remove_node-3">remove_node/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#restart_node-1">restart_node/1</a></td><td>Restarts a previously succesfully started ra node.</td></tr>
 <tr><td valign="top"><a href="#send-2">send/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#send-3">send/3</a></td><td>send a command to the ra node.</td></tr>
@@ -61,6 +72,7 @@
 <tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Causes the node to entre the pre-vote and attempt become leader
   It is necessary to call this function when starting a new cluster as a
   branch new ra node will not automatically enter pre-vote by itself.</td></tr>
+<tr><td valign="top"><a href="#trigger_election-2">trigger_election/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -76,6 +88,12 @@
   the leader will start replicating entries to the new node.
   This function returns after appending the command to the log.
  </p>
+
+<h3 class="function"><a name="add_node-3">add_node/3</a></h3>
+<div class="spec">
+<p><tt>add_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+</div>
+<p><b>See also:</b> <a href="#add_node-2">add_node/2</a>.</p>
 
 <h3 class="function"><a name="cast-2">cast/2</a></h3>
 <div class="spec">
@@ -99,6 +117,11 @@
   return the result. Any ra node can be addressed.
   This can return infinitely state results.</p>
 
+<h3 class="function"><a name="committed_query-3">committed_query/3</a></h3>
+<div class="spec">
+<p><tt>committed_query(NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term()), Timeout::timeout()) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
+</div>
+
 <h3 class="function"><a name="consistent_query-2">consistent_query/2</a></h3>
 <div class="spec">
 <p><tt>consistent_query(Node::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term())) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
@@ -106,6 +129,11 @@
   This allows a caller to query the state machine by appending the query
   to the log and returning the result once applied. This guarantees the
   result is consistent.</p>
+
+<h3 class="function"><a name="consistent_query-3">consistent_query/3</a></h3>
+<div class="spec">
+<p><tt>consistent_query(Node::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::fun((term()) -&gt; term()), Timeout::timeout()) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a> | not_known}</tt><br></p>
+</div>
 
 <h3 class="function"><a name="delete_cluster-1">delete_cluster/1</a></h3>
 <div class="spec">
@@ -135,6 +163,21 @@
 </div><p>Deletes a ra node
   The node is forcefully deleted.</p>
 
+<h3 class="function"><a name="leave_and_delete_node-1">leave_and_delete_node/1</a></h3>
+<div class="spec">
+<p><tt>leave_and_delete_node(NodeId) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="leave_and_delete_node-2">leave_and_delete_node/2</a></h3>
+<div class="spec">
+<p><tt>leave_and_delete_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; ok | timeout | {error, no_proc}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="leave_and_delete_node-3">leave_and_delete_node/3</a></h3>
+<div class="spec">
+<p><tt>leave_and_delete_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; ok | timeout | {error, no_proc}</tt><br></p>
+</div>
+
 <h3 class="function"><a name="leave_and_terminate-1">leave_and_terminate/1</a></h3>
 <div class="spec">
 <p><tt>leave_and_terminate(NodeId) -&gt; any()</tt></p>
@@ -145,10 +188,26 @@
 <p><tt>leave_and_terminate(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; ok | timeout | {error, no_proc}</tt><br></p>
 </div>
 
+<h3 class="function"><a name="leave_and_terminate-3">leave_and_terminate/3</a></h3>
+<div class="spec">
+<p><tt>leave_and_terminate(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; ok | timeout | {error, no_proc}</tt><br></p>
+</div>
+
 <h3 class="function"><a name="members-1">members/1</a></h3>
 <div class="spec">
 <p><tt>members(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; <a href="ra_node_proc.html#type-ra_leader_call_ret">ra_node_proc:ra_leader_call_ret</a>([<a href="#type-ra_node_id">ra_node_id()</a>])</tt><br></p>
 </div><p>Query the members of a cluster</p>
+
+<h3 class="function"><a name="members-2">members/2</a></h3>
+<div class="spec">
+<p><tt>members(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="ra_node_proc.html#type-ra_leader_call_ret">ra_node_proc:ra_leader_call_ret</a>([<a href="#type-ra_node_id">ra_node_id()</a>])</tt><br></p>
+</div>
+
+<h3 class="function"><a name="overview-0">overview/0</a></h3>
+<div class="spec">
+<p><tt>overview() -&gt; #{}</tt><br></p>
+</div><p>return a map of overview data of the ra system on the current erlang
+  node.</p>
 
 <h3 class="function"><a name="remove_node-2">remove_node/2</a></h3>
 <div class="spec">
@@ -159,6 +218,12 @@
 </div><p>Removes a node from the cluster's membership configuration
   This function returns after appending the command to the log.
  </p>
+
+<h3 class="function"><a name="remove_node-3">remove_node/3</a></h3>
+<div class="spec">
+<p><tt>remove_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+</div>
+<p><b>See also:</b> <a href="#remove_node-2">remove_node/2</a>.</p>
 
 <h3 class="function"><a name="restart_node-1">restart_node/1</a></h3>
 <div class="spec">
@@ -330,6 +395,11 @@
   branch new ra node will not automatically enter pre-vote by itself.
   Previously started nodes will however.
  </p>
+
+<h3 class="function"><a name="trigger_election-2">trigger_election/2</a></h3>
+<div class="spec">
+<p><tt>trigger_election(NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; ok</tt><br></p>
+</div>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>

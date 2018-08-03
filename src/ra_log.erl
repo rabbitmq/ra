@@ -43,6 +43,7 @@
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
 -define(SNAPSHOT_INTERVAL, 4096).
+-define(LOG_APPEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
 -type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
@@ -602,7 +603,7 @@ append_sync({Idx, Term, _} = Entry, Log0) ->
     receive
         {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
             ra_log:handle_event(Evt, Log)
-    after 5000 ->
+    after ?LOG_APPEND_TIMEOUT ->
               throw(ra_log_append_timeout)
     end.
 
@@ -613,7 +614,7 @@ write_sync(Entries, Log0) ->
             receive
                 {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
                     ra_log:handle_event(Evt, Log)
-            after 5000 ->
+            after ?LOG_APPEND_TIMEOUT ->
                       throw(ra_log_append_timeout)
             end;
         {error, _} = Err ->

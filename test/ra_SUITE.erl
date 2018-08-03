@@ -215,7 +215,7 @@ start_nodes(Config) ->
     % start second node
     ok = StartNode(N2, [{N1, node()}, {N3, node()}], add_machine()),
     % trigger election
-    ok = ra_node_proc:trigger_election(N1),
+    ok = ra_node_proc:trigger_election(N1, ?DEFAULT_TIMEOUT),
     % a consensus command tells us there is a functioning cluster
     {ok, _, _Leader} = ra:send_and_await_consensus({N1, node()}, 5,
                                                    ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
@@ -246,7 +246,7 @@ node_recovery(Config) ->
     StartNode = ?config(start_node_fun, Config),
     % start the first node and wait a bit
     ok = StartNode(N1, [{N2, node()}, {N3, node()}], add_machine()),
-    ok = ra_node_proc:trigger_election(N1),
+    ok = ra_node_proc:trigger_election(N1, ?DEFAULT_TIMEOUT),
     % start second node
     ok = StartNode(N2, [{N1, node()}, {N3, node()}], add_machine()),
     % a consensus command tells us there is a functioning 2 node cluster
@@ -585,8 +585,8 @@ start_local_cluster(Num, Name, Machine, Config) ->
                               ok = StartNode(N, Nodes0, Machine),
                               Id
                           end || Id = {N, _} <- Nodes0],
-    ok = ra_node_proc:trigger_election(Head),
-    _ = ra_node_proc:state_query(Head, all),
+    ok = ra_node_proc:trigger_election(Head, ?DEFAULT_TIMEOUT),
+    _ = ra_node_proc:state_query(Head, all, ?DEFAULT_TIMEOUT),
     Nodes.
 
 remove_node(Name) ->

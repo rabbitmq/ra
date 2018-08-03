@@ -16,8 +16,11 @@
          cast/2,
          cast/3,
          committed_query/2,
+         committed_query/3,
          members/1,
+         members/2,
          consistent_query/2,
+         consistent_query/3,
          % cluster management
          start_node/1,
          start_node/4,
@@ -31,12 +34,17 @@
          delete_cluster/2,
 
          add_node/2,
+         add_node/3,
          remove_node/2,
+         remove_node/3,
          trigger_election/1,
+         trigger_election/2,
          leave_and_terminate/1,
          leave_and_terminate/2,
+         leave_and_terminate/3,
          leave_and_delete_node/1,
          leave_and_delete_node/2,
+         leave_and_delete_node/3,
          %%
          overview/0
         ]).
@@ -271,8 +279,14 @@ delete_cluster0([], _, Errs) ->
 %% @param NodeId the ra node id of the new node
 -spec add_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 add_node(ServerRef, NodeId) ->
+    add_node(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+
+%% @see add_node/2
+-spec add_node(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
+add_node(ServerRef, NodeId, Timeout) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
-                         ?DEFAULT_TIMEOUT).
+                         Timeout).
+
 
 %% @doc Removes a node from the cluster's membership configuration
 %% This function returns after appending the command to the log.
@@ -281,8 +295,13 @@ add_node(ServerRef, NodeId) ->
 %% @param NodeId the ra node id of the node to remove
 -spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
 remove_node(ServerRef, NodeId) ->
+    remove_node(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+
+%% @see remove_node/2
+-spec remove_node(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
+remove_node(ServerRef, NodeId, Timeout) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append},
-                         ?DEFAULT_TIMEOUT).
+                         Timeout).
 
 %% @doc Causes the node to entre the pre-vote and attempt become leader
 %% It is necessary to call this function when starting a new cluster as a
@@ -292,7 +311,11 @@ remove_node(ServerRef, NodeId) ->
 %% @param NodeId the ra node id of the node to trigger the election on.
 -spec trigger_election(ra_node_id()) -> ok.
 trigger_election(NodeId) ->
-    ra_node_proc:trigger_election(NodeId).
+    trigger_election(NodeId, ?DEFAULT_TIMEOUT).
+
+-spec trigger_election(ra_node_id(), timeout()) -> ok.
+trigger_election(NodeId, Timeout) ->
+    ra_node_proc:trigger_election(NodeId, Timeout).
 
 % safe way to remove an active node from a cluster
 leave_and_terminate(NodeId) ->
@@ -301,8 +324,13 @@ leave_and_terminate(NodeId) ->
 -spec leave_and_terminate(ra_node_id(), ra_node_id()) ->
     ok | timeout | {error, no_proc}.
 leave_and_terminate(ServerRef, NodeId) ->
+    leave_and_terminate(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+
+-spec leave_and_terminate(ra_node_id(), ra_node_id(), timeout()) ->
+    ok | timeout | {error, no_proc}.
+leave_and_terminate(ServerRef, NodeId, Timeout) ->
     LeaveCmd = {'$ra_leave', NodeId, await_consensus},
-    case ra_node_proc:command(ServerRef, LeaveCmd, ?DEFAULT_TIMEOUT) of
+    case ra_node_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
             timeout;
@@ -320,8 +348,13 @@ leave_and_delete_node(NodeId) ->
 -spec leave_and_delete_node(ra_node_id(), ra_node_id()) ->
     ok | timeout | {error, no_proc}.
 leave_and_delete_node(ServerRef, NodeId) ->
+    leave_and_delete_node(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+
+-spec leave_and_delete_node(ra_node_id(), ra_node_id(), timeout()) ->
+    ok | timeout | {error, no_proc}.
+leave_and_delete_node(ServerRef, NodeId, Timeout) ->
     LeaveCmd = {'$ra_leave', NodeId, await_consensus},
-    case ra_node_proc:command(ServerRef, LeaveCmd, ?DEFAULT_TIMEOUT) of
+    case ra_node_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
             timeout;
@@ -442,7 +475,14 @@ cast(ServerRef, Priority, Command) ->
                       QueryFun :: fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 committed_query(ServerRef, QueryFun) ->
-    ra_node_proc:query(ServerRef, QueryFun, dirty).
+    committed_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
+
+-spec committed_query(NodeId :: ra_node_id(),
+                      QueryFun :: fun((term()) -> term()),
+                      Timeout :: timeout()) ->
+    {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
+committed_query(ServerRef, QueryFun, Timeout) ->
+    ra_node_proc:query(ServerRef, QueryFun, dirty, Timeout).
 
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query
@@ -452,12 +492,23 @@ committed_query(ServerRef, QueryFun) ->
                        QueryFun::fun((term()) -> term())) ->
     {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
 consistent_query(Node, QueryFun) ->
-    ra_node_proc:query(Node, QueryFun, consistent).
+    consistent_query(Node, QueryFun, ?DEFAULT_TIMEOUT).
+
+-spec consistent_query(Node::ra_node_id(),
+                       QueryFun::fun((term()) -> term()),
+                       Timeout :: timeout()) ->
+    {ok, {ra_idxterm(), term()}, ra_node_id() | not_known}.
+consistent_query(Node, QueryFun, Timeout) ->
+    ra_node_proc:query(Node, QueryFun, consistent, Timeout).
 
 %% @doc Query the members of a cluster
 -spec members(ra_node_id()) -> ra_node_proc:ra_leader_call_ret([ra_node_id()]).
 members(ServerRef) ->
-    ra_node_proc:state_query(ServerRef, members).
+    members(ServerRef, ?DEFAULT_TIMEOUT).
+
+-spec members(ra_node_id(), timeout()) -> ra_node_proc:ra_leader_call_ret([ra_node_id()]).
+members(ServerRef, Timeout) ->
+    ra_node_proc:state_query(ServerRef, members, Timeout).
 
 %% internal
 

@@ -16,11 +16,11 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-ra_log">ra_log()</a></h3>
-<p><tt>ra_log() = #state{uid = <a href="#type-ra_uid">ra_uid()</a>, first_index = <a href="#type-ra_index">ra_index()</a>, last_index = -1 | <a href="#type-ra_index">ra_index()</a>, last_term = <a href="#type-ra_term">ra_term()</a>, last_written_index_term = <a href="#type-ra_idxterm">ra_idxterm()</a>, segment_refs = [<a href="#type-segment_ref">segment_ref()</a>], open_segments = #{string() =&gt; <a href="ra_log_segment.html#type-state">ra_log_segment:state()</a>}, directory = list(), kv = <a href="ra_log_meta.html#type-state">ra_log_meta:state()</a>, snapshot_state = <a href="#type-maybe">maybe</a>({<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>)}), snapshot_interval = non_neg_integer(), snapshot_index_in_progress = <a href="#type-maybe">maybe</a>(<a href="#type-ra_index">ra_index()</a>), cache = #{<a href="#type-ra_index">ra_index()</a> =&gt; {<a href="#type-ra_term">ra_term()</a>, <a href="#type-log_entry">log_entry()</a>}}, wal = atom(), last_resend_time = <a href="#type-maybe">maybe</a>(integer()), resend_window_seconds = integer()}</tt></p>
+<p><tt>ra_log() = #state{uid = <a href="#type-ra_uid">ra_uid()</a>, first_index = <a href="#type-ra_index">ra_index()</a>, last_index = -1 | <a href="#type-ra_index">ra_index()</a>, last_term = <a href="#type-ra_term">ra_term()</a>, last_written_index_term = <a href="#type-ra_idxterm">ra_idxterm()</a>, segment_refs = [<a href="#type-segment_ref">segment_ref()</a>], open_segments = #{}, directory = list(), kv = <a href="ra_log_meta.html#type-state">ra_log_meta:state()</a>, snapshot_state = <a href="#type-maybe">maybe</a>({<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>)}), snapshot_interval = non_neg_integer(), snapshot_index_in_progress = <a href="#type-maybe">maybe</a>(<a href="#type-ra_index">ra_index()</a>), cache = #{}, wal = atom(), last_resend_time = <a href="#type-maybe">maybe</a>(integer()), resend_window_seconds = integer()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_log_event">ra_log_event()</a></h3>
-<p><tt>ra_log_event() = {written, {From::<a href="#type-ra_index">ra_index()</a>, To::<a href="#type-ra_index">ra_index()</a>, ToTerm::<a href="#type-ra_term">ra_term()</a>}} | {segments, <a href="ets.html#type-tid">ets:tid()</a>, [<a href="#type-segment_ref">segment_ref()</a>]} | {resend_write, <a href="#type-ra_index">ra_index()</a>} | {snapshot_written, <a href="#type-ra_idxterm">ra_idxterm()</a>, <a href="file.html#type-filename">file:filename()</a>}</tt></p>
+<p><tt>ra_log_event() = {written, {From::<a href="#type-ra_index">ra_index()</a>, To::<a href="#type-ra_index">ra_index()</a>, ToTerm::<a href="#type-ra_term">ra_term()</a>}} | {segments, <a href="ets.html#type-tid">ets:tid()</a>, [<a href="#type-segment_ref">segment_ref()</a>]} | {resend_write, <a href="#type-ra_index">ra_index()</a>} | {snapshot_written, <a href="#type-ra_idxterm">ra_idxterm()</a>, File::<a href="file.html#type-filename">file:filename()</a>, Old::[<a href="file.html#type-filename">file:filename()</a>]}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_log_init_args">ra_log_init_args()</a></h3>
@@ -106,7 +106,7 @@
 
 <h3 class="function"><a name="fetch-2">fetch/2</a></h3>
 <div class="spec">
-<p><tt>fetch(Idx::<a href="#type-ra_index">ra_index()</a>, State::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-log_entry">log_entry()</a>), <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
+<p><tt>fetch(Idx::<a href="#type-ra_index">ra_index()</a>, State0::<a href="#type-ra_log">ra_log()</a>) -&gt; {<a href="#type-maybe">maybe</a>(<a href="#type-log_entry">log_entry()</a>), <a href="#type-ra_log">ra_log()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="fetch_term-2">fetch_term/2</a></h3>

@@ -30,9 +30,9 @@
          command/3,
          cast_command/2,
          cast_command/3,
-         query/3,
-         state_query/2,
-         trigger_election/1,
+         query/4,
+         state_query/3,
+         trigger_election/2,
          ping/2,
          log_fold/4
         ]).
@@ -135,27 +135,27 @@ cast_command(ServerRef, Cmd) ->
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
--spec query(ra_node_id(), query_fun(), dirty | consistent) ->
+-spec query(ra_node_id(), query_fun(), dirty | consistent, timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_node_id()}.
-query(ServerRef, QueryFun, dirty) ->
-    gen_statem:call(ServerRef, {committed_query, QueryFun});
-query(ServerRef, QueryFun, consistent) ->
+query(ServerRef, QueryFun, dirty, Timeout) ->
+    gen_statem:call(ServerRef, {committed_query, QueryFun}, Timeout);
+query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
-    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, 5000).
+    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
 
 -spec log_fold(ra_node_id(), fun(), term(), integer()) -> term().
 log_fold(ServerRef, Fun, InitialState, Timeout) ->
     gen_statem:call(ServerRef, {log_fold, Fun, InitialState}, Timeout).
 
 %% used to query the raft state rather than the machine state
--spec state_query(ra_node_id(), all | members | machine) ->
+-spec state_query(ra_node_id(), all | members | machine, timeout()) ->
     ra_leader_call_ret(term()).
-state_query(ServerRef, Spec) ->
-    leader_call(ServerRef, {state_query, Spec}, ?DEFAULT_TIMEOUT).
+state_query(ServerRef, Spec, Timeout) ->
+    leader_call(ServerRef, {state_query, Spec}, Timeout).
 
--spec trigger_election(ra_node_id()) -> ok.
-trigger_election(ServerRef) ->
-    gen_statem:call(ServerRef, trigger_election, ?DEFAULT_TIMEOUT).
+-spec trigger_election(ra_node_id(), timeout()) -> ok.
+trigger_election(ServerRef, Timeout) ->
+    gen_statem:call(ServerRef, trigger_election, Timeout).
 
 -spec ping(ra_node_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerRef, Timeout) ->
