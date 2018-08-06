@@ -115,6 +115,7 @@
                             await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_node_state/0,
+              ra_state/0,
               ra_node_config/0,
               ra_msg/0,
               machine_conf/0
