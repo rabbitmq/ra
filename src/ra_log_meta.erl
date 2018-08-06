@@ -15,12 +15,14 @@
 -type key() :: current_term | voted_for | last_applied.
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.
 
+-define(MAGIC, "RAME").
+-define(VERSION, 1).
 -define(HEADER_SIZE, 8).
--define(CURRENT_TERM_OFFS, 8).
+-define(CURRENT_TERM_OFFS, ?HEADER_SIZE).
 -define(CURRENT_TERM_SIZE, 8).
--define(LAST_APPLIED_OFFS, 16).
+-define(LAST_APPLIED_OFFS, ?CURRENT_TERM_OFFS + ?CURRENT_TERM_SIZE).
 -define(LAST_APPLIED_SIZE, 8).
--define(VOTED_FOR_NAME_OFFS, 24).
+-define(VOTED_FOR_NAME_OFFS, ?LAST_APPLIED_OFFS + ?LAST_APPLIED_SIZE).
 % atoms max 255 characters but allow for unicode + length prefix
 -define(ATOM_SIZE, 513).
 -define(VOTED_FOR_NODE_OFFS, ?VOTED_FOR_NAME_OFFS + ?ATOM_SIZE ).
@@ -34,12 +36,12 @@
 -spec init(file:filename()) -> state().
 init(Fn) ->
     ok = filelib:ensure_dir(Fn),
-    {ok, Fd} = ra_file_handle:open(Fn, [binary, raw, read, write]),
+    {ok, Fd} = open_file(Fn),
     % expand file
     {ok, _} = ra_file_handle:position(Fd, ?VOTED_FOR_NODE_OFFS + ?ATOM_SIZE),
     ok = file:truncate(Fd),
-    % TODO: check version in header
     #state{fd = Fd}.
+
 
 
 -spec store(key(), value(), state()) -> ok.
@@ -120,4 +122,17 @@ read_atom(Fd, Offs) ->
         {ok, <<0:1/integer, Len:15/integer, Data:Len/binary, _/binary>>} ->
             % strip trailing null bytes
             binary_to_atom(Data, utf8)
+    end.
+
+open_file(Fn) ->
+    {ok, Fd} = ra_file_handle:open(Fn, [binary, raw, read, write]),
+    case ra_file_handle:read(Fd, 8) of
+        {ok, <<?MAGIC, ?VERSION:8/unsigned, _Reserved/binary>>} ->
+            %% all is well
+            {ok, Fd};
+        {ok, _} ->
+            exit(unknown_meta_data_format);
+        eof ->
+            ok = ra_file_handle:write(Fd, <<?MAGIC, ?VERSION:8/unsigned>>),
+            {ok, Fd}
     end.

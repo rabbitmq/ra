@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), #{}}</tt></p>
+<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), map()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
@@ -171,7 +171,7 @@
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; #{}</tt><br></p>
+<p><tt>overview(State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; map()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="persist_last_applied-1">persist_last_applied/1</a></h3>
