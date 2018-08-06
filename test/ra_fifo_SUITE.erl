@@ -529,6 +529,7 @@ follower_takes_over_monitor(Config) ->
     timer:sleep(100),
 
     {ok, _F2} = ra_fifo_client:checkout(Tag, 10, F1),
+    timer:sleep(100),
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
                                                              monitored_by),
