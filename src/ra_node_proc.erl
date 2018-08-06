@@ -750,7 +750,8 @@ perform_committed_query(QueryFun, _, #{machine := {machine, MacMod, _},
 % gen_statem 'Actions' to be returned.
 handle_effects(RaftState, Effects, EvtType, State0) ->
     lists:foldl(fun(Effect, {State, Actions}) ->
-                        handle_effect(RaftState, Effect, EvtType, State, Actions)
+                        handle_effect(RaftState, Effect, EvtType,
+                                      State, Actions)
                 end, {State0, []}, Effects).
 
 handle_effect(_, {send_rpcs, Rpcs}, _, State0, Actions) ->

@@ -107,5 +107,6 @@ overview() ->
                              #{uid => UId,
                                pid => Pid,
                                state => maps:get(Node, States, undefined),
-                               snapshot_state => maps:get(UId, Snaps, undefined)}}
+                               snapshot_state => maps:get(UId, Snaps,
+                                                          undefined)}}
                 end, #{}, Dir).

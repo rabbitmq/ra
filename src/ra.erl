@@ -506,7 +506,8 @@ consistent_query(Node, QueryFun, Timeout) ->
 members(ServerRef) ->
     members(ServerRef, ?DEFAULT_TIMEOUT).
 
--spec members(ra_node_id(), timeout()) -> ra_node_proc:ra_leader_call_ret([ra_node_id()]).
+-spec members(ra_node_id(), timeout()) ->
+    ra_node_proc:ra_leader_call_ret([ra_node_id()]).
 members(ServerRef, Timeout) ->
     ra_node_proc:state_query(ServerRef, members, Timeout).
 

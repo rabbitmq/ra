@@ -969,10 +969,10 @@ dehydrate_state(#state{messages = Messages0,
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--define(assertEffect(EfxPat, Effects),
-        ?assertEffect(EfxPat, true, Effects)).
+-define(ASSERT_EFF(EfxPat, Effects),
+        ?ASSERT_EFF(EfxPat, true, Effects)).
 
--define(assertEffect(EfxPat, Guard, Effects),
+-define(ASSERT_EFF(EfxPat, Guard, Effects),
     ?assert(lists:any(fun (EfxPat) when Guard -> true;
                           (_) -> false
                       end, Effects))).
@@ -996,8 +996,8 @@ enq_enq_checkout_test() ->
     {State2, _} = enq(2, 2, second, State1),
     {_State3, Effects} =
         apply(meta(3), {checkout, {once, 2}, Cid}, [], State2),
-    ?assertEffect({monitor, _, _}, Effects),
-    ?assertEffect({send_msg, _, {delivery, _, _}}, Effects),
+    ?ASSERT_EFF({monitor, _, _}, Effects),
+    ?ASSERT_EFF({send_msg, _, {delivery, _, _}}, Effects),
     ok.
 
 enq_enq_deq_test() ->
@@ -1051,31 +1051,31 @@ release_cursor_test() ->
     {State4, _} = settle(Cid, 4, 1, State3),
     {_Final, Effects1} = settle(Cid, 5, 0, State4),
     % empty queue forwards release cursor all the way
-    ?assertEffect({release_cursor, 5, _}, Effects1),
+    ?ASSERT_EFF({release_cursor, 5, _}, Effects1),
     ok.
 
 checkout_enq_settle_test() ->
     Cid = {<<"checkout_enq_settle_test">>, self()},
     {State1, [{monitor, _, _}]} = check(Cid, 1, test_init(test)),
     {State2, Effects0} = enq(2, 1,  first, State1),
-    ?assertEffect({send_msg, _,
-                   {delivery, <<"checkout_enq_settle_test">>,
-                    [{0, {_, first}}]}},
-                  Effects0),
+    ?ASSERT_EFF({send_msg, _,
+                 {delivery, <<"checkout_enq_settle_test">>,
+                  [{0, {_, first}}]}},
+                Effects0),
     {State3, [_Inactive]} = enq(3, 2, second, State2),
     {_, _Effects} = settle(Cid, 4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
-    % ?assertEffect({release_cursor, 2, _}, Effects),
+    % ?ASSERT_EFF({release_cursor, 2, _}, Effects),
     ok.
 
 out_of_order_enqueue_test() ->
     Cid = {<<"out_of_order_enqueue_test">>, self()},
     {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, test_init(test)),
     {State2, Effects2} = enq(2, 1, first, State1),
-    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
+    ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
     % assert monitor was set up
-    ?assertEffect({monitor, _, _}, Effects2),
+    ?ASSERT_EFF({monitor, _, _}, Effects2),
     % enqueue seq num 3 and 4 before 2
     {State3, Effects3} = enq(3, 3, third, State2),
     ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects3),
@@ -1085,7 +1085,7 @@ out_of_order_enqueue_test() ->
     {_State5, Effects5} = enq(5, 2, second, State4),
     % assert two deliveries were now made
     ?debugFmt("Effects5 ~n~p~n", [Effects5]),
-    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, second}},
+    ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, second}},
                                                {_, {_, third}},
                                                {_, {_, fourth}}]}}, Effects5),
     ok.
@@ -1094,7 +1094,7 @@ out_of_order_first_enqueue_test() ->
     Cid = {<<"out_of_order_enqueue_test">>, self()},
     {State1, _} = check_n(Cid, 5, 5, test_init(test)),
     {_State2, Effects2} = enq(2, 10, first, State1),
-    ?assertEffect({monitor, process, _}, Effects2),
+    ?ASSERT_EFF({monitor, process, _}, Effects2),
     ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
     ok.
 
@@ -1102,7 +1102,7 @@ duplicate_enqueue_test() ->
     Cid = {<<"duplicate_enqueue_test">>, self()},
     {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, test_init(test)),
     {State2, Effects2} = enq(2, 1, first, State1),
-    ?assertEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
+    ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
     {_State3, Effects3} = enq(3, 1, first, State2),
     ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects3),
     ok.
@@ -1135,9 +1135,9 @@ return_auto_checked_out_test() ->
         check_auto(Cid, 2, State0),
     % return should include another delivery
     {_State2, Effects} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
-    ?assertEffect({send_msg, _,
-                   {delivery, _, [{_, {#{delivery_count := 1}, first}}]}},
-                  Effects),
+    ?ASSERT_EFF({send_msg, _,
+                 {delivery, _, [{_, {#{delivery_count := 1}, first}}]}},
+                Effects),
     ok.
 
 
@@ -1161,7 +1161,7 @@ down_with_noproc_customer_returns_unsettled_test() ->
     {State1, [{monitor, process, Pid} | _]} = check(Cid, 2, State0),
     {State2, [_, _]} = apply(meta(3), {down, Pid, noproc}, [], State1),
     {_State, Effects} = check(Cid, 4, State2),
-    ?assertEffect({monitor, process, _}, Effects),
+    ?ASSERT_EFF({monitor, process, _}, Effects),
     ok.
 
 down_with_noconnection_marks_suspect_and_node_is_monitored_test() ->
@@ -1170,28 +1170,28 @@ down_with_noconnection_marks_suspect_and_node_is_monitored_test() ->
     Self = self(),
     Node = node(Pid),
     {State0, Effects0} = enq(1, 1, second, test_init(test)),
-    ?assertEffect({monitor, process, P}, P =:= Self, Effects0),
+    ?ASSERT_EFF({monitor, process, P}, P =:= Self, Effects0),
     {State1, Effects1} = check(Cid, 2, State0),
-    ?assertEffect({monitor, process, P}, P =:= Pid, Effects1),
+    ?ASSERT_EFF({monitor, process, P}, P =:= Pid, Effects1),
     % monitor both enqueuer and customer
     % because we received a noconnection we now need to monitor the node
     {State2a, _Effects2a} = apply(meta(3), {down, Pid, noconnection}, [], State1),
     {State2, Effects2} = apply(meta(3), {down, Self, noconnection}, [], State2a),
-    ?assertEffect({monitor, node, _}, Effects2),
+    ?ASSERT_EFF({monitor, node, _}, Effects2),
     ?assertNoEffect({demonitor, process, _}, Effects2),
     % when the node comes up we need to retry the process monitors for the
     % disconnected processes
     {_State3, Effects3} = apply(meta(3), {nodeup, Node}, [], State2),
     % try to re-monitor the suspect processes
-    ?assertEffect({monitor, process, P}, P =:= Pid, Effects3),
-    ?assertEffect({monitor, process, P}, P =:= Self, Effects3),
+    ?ASSERT_EFF({monitor, process, P}, P =:= Pid, Effects3),
+    ?ASSERT_EFF({monitor, process, P}, P =:= Self, Effects3),
     ok.
 
 down_with_noproc_enqueuer_is_cleaned_up_test() ->
     State00 = test_init(test),
     Pid = spawn(fun() -> ok end),
     {State0, Effects0} = apply(meta(1), {enqueue, Pid, 1, first}, [], State00),
-    ?assertEffect({monitor, process, _}, Effects0),
+    ?ASSERT_EFF({monitor, process, _}, Effects0),
     {State1, _Effects1} = apply(meta(3), {down, Pid, noproc}, [], State0),
     % ensure there are no enqueuers
     ?assert(0 =:= maps:size(State1#state.enqueuers)),
@@ -1202,18 +1202,18 @@ completed_customer_yields_demonitor_effect_test() ->
     {State0, [_, _]} = enq(1, 1, second, test_init(test)),
     {State1, [{monitor, process, _} |  _]} = check(Cid, 2, State0),
     {_, Effects} = settle(Cid, 3, 0, State1),
-    ?assertEffect({demonitor, _, _}, Effects),
+    ?ASSERT_EFF({demonitor, _, _}, Effects),
     % release cursor for empty queue
-    ?assertEffect({release_cursor, 3, _}, Effects),
+    ?ASSERT_EFF({release_cursor, 3, _}, Effects),
     ok.
 
 discarded_message_without_dead_letter_handler_is_removed_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
     {State0, [_, _]} = enq(1, 1, first, test_init(test)),
     {State1, Effects1} = check_n(Cid, 2, 10, State0),
-    ?assertEffect({send_msg, _,
-                   {delivery, _, [{0, {#{}, first}}]}},
-                  Effects1),
+    ?ASSERT_EFF({send_msg, _,
+                 {delivery, _, [{0, {#{}, first}}]}},
+                Effects1),
     {_State2, Effects2} = apply(meta(1), {discard, [0], Cid}, [], State1),
     ?assertNoEffect({send_msg, _,
                      {delivery, _, [{0, {#{}, first}}]}},
@@ -1227,13 +1227,13 @@ discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
                           {somemod, somefun, [somearg]}}),
     {State0, [_, _]} = enq(1, 1, first, State00),
     {State1, Effects1} = check_n(Cid, 2, 10, State0),
-    ?assertEffect({send_msg, _,
-                   {delivery, _, [{0, {#{}, first}}]}},
-                  Effects1),
+    ?ASSERT_EFF({send_msg, _,
+                 {delivery, _, [{0, {#{}, first}}]}},
+                Effects1),
     {_State2, Effects2} = apply(meta(1), {discard, [0], Cid}, [], State1),
     % assert mod call effect with appended reason and message
-    ?assertEffect({mod_call, somemod, somefun, [somearg, [{rejected, first}]]},
-                  Effects2),
+    ?ASSERT_EFF({mod_call, somemod, somefun, [somearg, [{rejected, first}]]},
+                Effects2),
     ok.
 
 tick_test() ->

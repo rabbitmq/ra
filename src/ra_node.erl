@@ -844,7 +844,8 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
     case ra_machine:handle_aux(Machine, RaftState, Type, Cmd, Aux0,
                                Log0, MacState0) of
         {reply, Reply, Aux, Log} ->
-            {RaftState, State0#{log => Log, aux_state => Aux}, [{reply, Reply}]};
+            {RaftState, State0#{log => Log, aux_state => Aux},
+             [{reply, Reply}]};
         {no_reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux}, []};
         undefined ->
