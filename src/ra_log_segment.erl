@@ -19,7 +19,8 @@
 -include("ra.hrl").
 
 -define(VERSION, 1).
--define(HEADER_SIZE, (16 div 8) + (16 div 8)). % {
+-define(MAGIC, "RASG").
+-define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
 -define(INDEX_RECORD_SIZE, ((2 * 64 + 3 * 32) div 8)).
 
@@ -323,7 +324,7 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
                      Index#{Idx => {Term, Offset, Length, Crc}}).
 
 write_header(MaxCount, Fd) ->
-    Header = <<?VERSION:16/integer, MaxCount:16/integer>>,
+    Header = <<?MAGIC, ?VERSION:16/integer, MaxCount:16/integer>>,
     {ok, 0} = ra_file_handle:position(Fd, 0),
     ok = ra_file_handle:write(Fd, Header).
 
@@ -332,10 +333,10 @@ read_header(Fd) ->
     case ra_file_handle:read(Fd, ?HEADER_SIZE) of
         {ok, Buffer} ->
             case Buffer of
-                <<1:16/integer, MaxCount:16/integer>> ->
+                <<?MAGIC, ?VERSION:16/integer, MaxCount:16/integer>> ->
                     {ok, MaxCount};
                 _ ->
-                    {error, invalid_segment_version}
+                    {error, invalid_segment_format}
             end;
         eof ->
             {error, missing_segment_header};
