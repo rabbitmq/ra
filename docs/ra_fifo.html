@@ -92,11 +92,14 @@
 <tr><td valign="top"><a href="#dehydrate_state-1">dehydrate_state/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#eol_effects-1">eol_effects/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#get_checked_out-4">get_checked_out/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-6">handle_aux/6</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init_aux-1">init_aux/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_effects-1">leader_effects/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#metrics_handler-1">metrics_handler/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#perf_test-2">perf_test/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#query_customer_count-1">query_customer_count/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query_messages_checked_out-1">query_messages_checked_out/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query_messages_ready-1">query_messages_ready/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query_processes-1">query_processes/1</a></td><td></td></tr>
@@ -104,6 +107,7 @@
 <tr><td valign="top"><a href="#read_log-0">read_log/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#size_test-2">size_test/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-2">tick/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#usage-1">usage/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -128,9 +132,19 @@
 <p><tt>get_checked_out(Cid::<a href="#type-customer_id">customer_id()</a>, From::<a href="#type-msg_id">msg_id()</a>, To::<a href="#type-msg_id">msg_id()</a>, State::<a href="#type-state">state()</a>) -&gt; [<a href="#type-delivery_msg">delivery_msg()</a>]</tt><br></p>
 </div>
 
+<h3 class="function"><a name="handle_aux-6">handle_aux/6</a></h3>
+<div class="spec">
+<p><tt>handle_aux(X1, X2, Cmd, X4, Log, X6) -&gt; any()</tt></p>
+</div>
+
 <h3 class="function"><a name="init-1">init/1</a></h3>
 <div class="spec">
 <p><tt>init(Conf::<a href="#type-config">config()</a>) -&gt; {<a href="#type-state">state()</a>, <a href="ra_machine.html#type-effects">ra_machine:effects()</a>}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="init_aux-1">init_aux/1</a></h3>
+<div class="spec">
+<p><tt>init_aux(Name) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="leader_effects-1">leader_effects/1</a></h3>
@@ -145,12 +159,17 @@
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(State::<a href="#type-state">state()</a>) -&gt; map()</tt><br></p>
+<p><tt>overview(State::<a href="#type-state">state()</a>) -&gt; #{}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="perf_test-2">perf_test/2</a></h3>
 <div class="spec">
 <p><tt>perf_test(NumMsg, NumCust) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="query_customer_count-1">query_customer_count/1</a></h3>
+<div class="spec">
+<p><tt>query_customer_count(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="query_messages_checked_out-1">query_messages_checked_out/1</a></h3>
@@ -186,6 +205,11 @@
 <h3 class="function"><a name="tick-2">tick/2</a></h3>
 <div class="spec">
 <p><tt>tick(Ts::non_neg_integer(), State::<a href="#type-state">state()</a>) -&gt; <a href="ra_machine.html#type-effects">ra_machine:effects()</a></tt><br></p>
+</div>
+
+<h3 class="function"><a name="usage-1">usage/1</a></h3>
+<div class="spec">
+<p><tt>usage(Name::atom()) -&gt; float()</tt><br></p>
 </div>
 <hr>
 

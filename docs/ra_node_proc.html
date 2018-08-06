@@ -88,15 +88,15 @@
 <tr><td valign="top"><a href="#log_fold-4">log_fold/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#ping-2">ping/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#pre_vote-3">pre_vote/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#query-4">query/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#recover-3">recover/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#send_rpc-2">send_rpc/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#state_query-2">state_query/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#state_query-3">state_query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminate-3">terminate/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminating_follower-3">terminating_follower/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminating_leader-3">terminating_leader/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#trigger_election-2">trigger_election/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -113,7 +113,7 @@
 
 <h3 class="function"><a name="candidate-3">candidate/3</a></h3>
 <div class="spec">
-<p><tt>candidate(EventType, OldState, State) -&gt; any()</tt></p>
+<p><tt>candidate(EventType, Msg, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="cast_command-2">cast_command/2</a></h3>
@@ -138,7 +138,7 @@
 
 <h3 class="function"><a name="follower-3">follower/3</a></h3>
 <div class="spec">
-<p><tt>follower(EventType, OldState, State) -&gt; any()</tt></p>
+<p><tt>follower(EventType, Msg, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="format_status-2">format_status/2</a></h3>
@@ -158,7 +158,7 @@
 
 <h3 class="function"><a name="leader-3">leader/3</a></h3>
 <div class="spec">
-<p><tt>leader(EventType, OldState, State) -&gt; any()</tt></p>
+<p><tt>leader(EventType, Msg, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="log_fold-4">log_fold/4</a></h3>
@@ -173,12 +173,12 @@
 
 <h3 class="function"><a name="pre_vote-3">pre_vote/3</a></h3>
 <div class="spec">
-<p><tt>pre_vote(EventType, OldState, State) -&gt; any()</tt></p>
+<p><tt>pre_vote(EventType, Msg, State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="query-3">query/3</a></h3>
+<h3 class="function"><a name="query-4">query/4</a></h3>
 <div class="spec">
-<p><tt>query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::<a href="#type-query_fun">query_fun()</a>, X3::dirty | consistent) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a>}</tt><br></p>
+<p><tt>query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::<a href="#type-query_fun">query_fun()</a>, X3::dirty | consistent, Timeout::timeout()) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="recover-3">recover/3</a></h3>
@@ -196,9 +196,9 @@
 <p><tt>start_link(Config::<a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>) -&gt; <a href="#type-gen_statem_start_ret">gen_statem_start_ret()</a></tt><br></p>
 </div>
 
-<h3 class="function"><a name="state_query-2">state_query/2</a></h3>
+<h3 class="function"><a name="state_query-3">state_query/3</a></h3>
 <div class="spec">
-<p><tt>state_query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Spec::all | members | machine) -&gt; <a href="#type-ra_leader_call_ret">ra_leader_call_ret</a>(term())</tt><br></p>
+<p><tt>state_query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Spec::all | members | machine, Timeout::timeout()) -&gt; <a href="#type-ra_leader_call_ret">ra_leader_call_ret</a>(term())</tt><br></p>
 </div>
 
 <h3 class="function"><a name="terminate-3">terminate/3</a></h3>
@@ -213,12 +213,12 @@
 
 <h3 class="function"><a name="terminating_leader-3">terminating_leader/3</a></h3>
 <div class="spec">
-<p><tt>terminating_leader(EvtType, OldState, State) -&gt; any()</tt></p>
+<p><tt>terminating_leader(EvtType, Msg, State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="trigger_election-1">trigger_election/1</a></h3>
+<h3 class="function"><a name="trigger_election-2">trigger_election/2</a></h3>
 <div class="spec">
-<p><tt>trigger_election(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; ok</tt><br></p>
+<p><tt>trigger_election(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; ok</tt><br></p>
 </div>
 <hr>
 

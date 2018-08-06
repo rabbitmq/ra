@@ -70,7 +70,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
-<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, process, pid()} | {demonitor, node, node()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} | garbage_collection</tt></p>
+<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, process, pid()} | {demonitor, node, node()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} | {aux, term()} | garbage_collection</tt></p>
 
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
@@ -103,7 +103,9 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#eol_effects-2">eol_effects/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
+<tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_effects-2">leader_effects/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
@@ -123,10 +125,21 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p><tt>eol_effects(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
 </div>
 
+<h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
+<div class="spec">
+<p><tt>handle_aux(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_node.html#type-ra_state">ra_node:ra_state()</a>, Type::{call, From::<a href="#type-from">from()</a>} | cast, Command::term(), AuxState, LogState, MacState::<a href="#type-state">state()</a>) -&gt; {reply, Reply::term(), AuxState, LogState} | {no_reply, AuxState, LogState} | undefined</tt>
+<ul class="definitions"><li><tt>AuxState = term()</tt></li><li><tt>LogState = <a href="ra_log.html#type-ra_log">ra_log:ra_log()</a></tt></li></ul></p>
+</div>
+
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
 <p><tt>init(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; {<a href="#type-state">state()</a>, <a href="#type-effects">effects()</a>}</tt><br></p>
 </div><p>initialise a new machine</p>
+
+<h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>
+<div class="spec">
+<p><tt>init_aux(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; term()</tt><br></p>
+</div>
 
 <h3 class="function"><a name="leader_effects-2">leader_effects/2</a></h3>
 <div class="spec">
@@ -140,7 +153,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
-<p><tt>overview(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; map()</tt><br></p>
+<p><tt>overview(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; #{}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>

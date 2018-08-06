@@ -4,5 +4,5 @@
           ra_fifo_index,ra_file_handle,ra_lib,ra_log,ra_log_ets,ra_log_meta,
           ra_log_segment,ra_log_segment_writer,ra_log_snapshot_writer,
           ra_log_sup,ra_log_wal,ra_log_wal_sup,ra_lru,ra_machine,
-          ra_machine_simple,ra_metrics_ets,ra_node,ra_node_proc,ra_nodes_sup,
-          ra_sup,ra_system_sup]}.
+          ra_machine_ets,ra_machine_simple,ra_metrics_ets,ra_node,
+          ra_node_proc,ra_nodes_sup,ra_sup,ra_system_sup]}.

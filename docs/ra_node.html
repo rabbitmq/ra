@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), map()}</tt></p>
+<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), #{}}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
@@ -40,7 +40,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_node_state">ra_node_state()</a></h3>
-<p><tt>ra_node_state() = #{id =&gt; <a href="#type-ra_node_id">ra_node_id()</a>, uid =&gt; <a href="#type-ra_uid">ra_uid()</a>, leader_id =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_node_id">ra_node_id()</a>), cluster =&gt; <a href="#type-ra_cluster">ra_cluster()</a>, cluster_change_permitted =&gt; boolean(), cluster_index_term =&gt; <a href="#type-ra_idxterm">ra_idxterm()</a>, pending_cluster_changes =&gt; [term()], previous_cluster =&gt; {<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-ra_cluster">ra_cluster()</a>}, current_term =&gt; <a href="#type-ra_term">ra_term()</a>, log =&gt; term(), voted_for =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_node_id">ra_node_id()</a>), votes =&gt; non_neg_integer(), commit_index =&gt; <a href="#type-ra_index">ra_index()</a>, last_applied =&gt; <a href="#type-ra_index">ra_index()</a>, persisted_last_applied =&gt; <a href="#type-ra_index">ra_index()</a>, stop_after =&gt; <a href="#type-ra_index">ra_index()</a>, machine =&gt; <a href="ra_machine.html#type-machine">ra_machine:machine()</a>, machine_state =&gt; term(), condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>, condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>]}</tt></p>
+<p><tt>ra_node_state() = #{id =&gt; <a href="#type-ra_node_id">ra_node_id()</a>, uid =&gt; <a href="#type-ra_uid">ra_uid()</a>, leader_id =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_node_id">ra_node_id()</a>), cluster =&gt; <a href="#type-ra_cluster">ra_cluster()</a>, cluster_change_permitted =&gt; boolean(), cluster_index_term =&gt; <a href="#type-ra_idxterm">ra_idxterm()</a>, pending_cluster_changes =&gt; [term()], previous_cluster =&gt; {<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-ra_cluster">ra_cluster()</a>}, current_term =&gt; <a href="#type-ra_term">ra_term()</a>, log =&gt; term(), voted_for =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_node_id">ra_node_id()</a>), votes =&gt; non_neg_integer(), commit_index =&gt; <a href="#type-ra_index">ra_index()</a>, last_applied =&gt; <a href="#type-ra_index">ra_index()</a>, persisted_last_applied =&gt; <a href="#type-ra_index">ra_index()</a>, stop_after =&gt; <a href="#type-ra_index">ra_index()</a>, machine =&gt; <a href="ra_machine.html#type-machine">ra_machine:machine()</a>, machine_state =&gt; term(), aux_state =&gt; term(), condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>, condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>], pre_vote_token =&gt; reference()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_reply_body">ra_reply_body()</a></h3>
@@ -57,6 +57,7 @@
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-4">handle_aux/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_await_condition-2">handle_await_condition/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_candidate-2">handle_candidate/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_follower-2">handle_follower/2</a></td><td></td></tr>
@@ -88,6 +89,11 @@
 <p><tt>current_term(State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>)</tt><br></p>
 </div>
 
+<h3 class="function"><a name="handle_aux-4">handle_aux/4</a></h3>
+<div class="spec">
+<p><tt>handle_aux(RaftState, Type, Cmd, State0) -&gt; any()</tt></p>
+</div>
+
 <h3 class="function"><a name="handle_await_condition-2">handle_await_condition/2</a></h3>
 <div class="spec">
 <p><tt>handle_await_condition(Request_vote_rpc::<a href="#type-ra_msg">ra_msg()</a>, State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_node_state">ra_node_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
@@ -105,7 +111,7 @@
 
 <h3 class="function"><a name="handle_leader-2">handle_leader/2</a></h3>
 <div class="spec">
-<p><tt>handle_leader(Append_entries_rpc::<a href="#type-ra_msg">ra_msg()</a>, State0::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_node_state">ra_node_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
+<p><tt>handle_leader(Install_snapshot_rpc::<a href="#type-ra_msg">ra_msg()</a>, State0::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_node_state">ra_node_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="handle_pre_vote-2">handle_pre_vote/2</a></h3>
@@ -165,7 +171,7 @@
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; map()</tt><br></p>
+<p><tt>overview(State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; #{}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="persist_last_applied-1">persist_last_applied/1</a></h3>

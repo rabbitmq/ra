@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
-<p><tt>state() = #state{file_num = non_neg_integer(), wal = #wal{fd = <a href="#type-maybe">maybe</a>(<a href="file.html#type-io_device">file:io_device()</a>), filename = <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>), writer_name_cache = <a href="#type-writer_name_cache">writer_name_cache()</a>, file_size = non_neg_integer()} | undefined, batch = <a href="#type-maybe">maybe</a>(#batch{writes = non_neg_integer(), waiting = #{<a href="#type-writer_id">writer_id()</a> =&gt; {From::<a href="#type-ra_index">ra_index()</a>, To::<a href="#type-ra_index">ra_index()</a>}}, start_time = <a href="#type-maybe">maybe</a>(integer()), pending = iolist()}), file_modes = [term()], dir = string(), max_batch_size = non_neg_integer(), max_size_bytes = non_neg_integer(), segment_writer = atom(), writers = #{<a href="#type-writer_id">writer_id()</a> =&gt; {in_seq | out_of_seq, <a href="#type-ra_index">ra_index()</a>}}, metrics_cursor = non_neg_integer(), compute_checksums = boolean(), write_strategy = <a href="#type-wal_write_strategy">wal_write_strategy()</a>}</tt></p>
+<p><tt>state() = #state{file_num = non_neg_integer(), wal = #wal{fd = <a href="#type-maybe">maybe</a>(<a href="file.html#type-io_device">file:io_device()</a>), filename = <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>), writer_name_cache = <a href="#type-writer_name_cache">writer_name_cache()</a>, file_size = non_neg_integer()} | undefined, batch = <a href="#type-maybe">maybe</a>(#batch{writes = non_neg_integer(), waiting = #{}, start_time = <a href="#type-maybe">maybe</a>(integer()), pending = iolist()}), file_modes = [term()], dir = string(), max_batch_size = non_neg_integer(), max_size_bytes = non_neg_integer(), segment_writer = atom(), writers = #{}, metrics_cursor = non_neg_integer(), compute_checksums = boolean(), write_strategy = <a href="#type-wal_write_strategy">wal_write_strategy()</a>}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-wal_conf">wal_conf()</a></h3>
@@ -40,6 +40,7 @@
 <tr><td valign="top"><a href="#init-3">init/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_link-2">start_link/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#system_continue-3">system_continue/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#system_get_state-1">system_get_state/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#system_terminate-4">system_terminate/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#truncate_write-5">truncate_write/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#wal2list-1">wal2list/1</a></td><td></td></tr>
@@ -67,6 +68,11 @@
 <h3 class="function"><a name="system_continue-3">system_continue/3</a></h3>
 <div class="spec">
 <p><tt>system_continue(Parent, Debug, State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="system_get_state-1">system_get_state/1</a></h3>
+<div class="spec">
+<p><tt>system_get_state(State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="system_terminate-4">system_terminate/4</a></h3>

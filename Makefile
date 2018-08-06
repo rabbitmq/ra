@@ -26,7 +26,7 @@ dep_rabbitmq_ct_helpers = git https://github.com/rabbitmq/rabbitmq-ct-helpers
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit meck proper syntax_tools erts kernel stdlib common_test inets aten looking_glass
+PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten looking_glass mnesia ssh ssl xref
 
 EDOC_OUTPUT = docs
 
