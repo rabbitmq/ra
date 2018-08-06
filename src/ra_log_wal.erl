@@ -20,6 +20,7 @@
 -define(MAX_MAX_BATCH_SIZE, 16 * 128 * 2).
 -define(METRICS_WINDOW_SIZE, 100).
 -define(CURRENT_VERSION, 1).
+-define(MAGIC, "RAWA").
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -447,7 +448,7 @@ open_file(File, #state{write_strategy = delay_writes_sync,
         Modes = [sync | Modes0],
         case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
-                ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>),
+                ok = write_header(Fd),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
                 ok = ra_file_handle:sync(Fd),
@@ -460,8 +461,12 @@ open_file(File, #state{write_strategy = delay_writes_sync,
         end;
 open_file(File, #state{file_modes = Modes} = State) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
-    ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>),
+    ok = write_header(Fd),
     State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
+
+write_header(Fd) ->
+    ok = ra_file_handle:write(Fd, <<?MAGIC>>),
+    ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>).
 
 close_file(undefined) ->
     ok;
@@ -572,11 +577,11 @@ wal2list(File) ->
 
 open_existing(File) ->
     case file:read_file(File) of
-        {ok, <<?CURRENT_VERSION:8/unsigned, Data/binary>>} ->
+        {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned, Data/binary>>} ->
             %% the only version currently supported
             Data;
-        {ok, <<UnknownVersion:8/unsigned, _/binary>>} ->
-            exit({unknown_wal_version, UnknownVersion})
+        {ok, <<Magic:64/binary, UnknownVersion:8/unsigned, _/binary>>} ->
+            exit({unknown_wal_file_format, Magic, UnknownVersion})
     end.
 
 
