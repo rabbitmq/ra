@@ -536,7 +536,7 @@ snapshot_recovery(Config) ->
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
-    Snapshot = {9, 2, #{n1 => #{}}, <<"9">>},
+    Snapshot = {9, 2, [n1], <<"9">>},
     Log2 = ra_log:install_snapshot(Snapshot, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log:close(Log3),
@@ -556,7 +556,7 @@ snapshot_installation(Config) ->
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
     {0, 0} = ra_log:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
-    Snapshot = {15, 2, #{n1 => #{}}, <<"9">>},
+    Snapshot = {15, 2, [n1], <<"9">>},
     Log2 = ra_log:install_snapshot(Snapshot, Log1),
 
     % after a snapshot we need a "truncating write" that ignores missing

@@ -46,7 +46,7 @@
 -define(LOG_APPEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
--type ra_log_snapshot() :: {ra_index(), ra_term(), ra_cluster(), term()}.
+-type snapshot() :: ra_log_snapshot:state().
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
                         File :: string()}.
 -type ra_log_event() :: {written, {From :: ra_index(),
@@ -67,7 +67,7 @@
          last_written_index_term = {0, 0} :: ra_idxterm(),
          segment_refs = [] :: [segment_ref()],
          open_segments = #{} :: #{string() => ra_log_segment:state()},
-         directory :: list(),
+         directory :: file:filename(),
          kv :: ra_log_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
@@ -92,7 +92,7 @@
 -export_type([ra_log_init_args/0,
               ra_log/0,
               ra_meta_key/0,
-              ra_log_snapshot/0,
+              snapshot/0,
               segment_ref/0,
               ra_log_event/0
              ]).
@@ -131,8 +131,9 @@ init(#{uid := UId} = Conf) ->
     SnapshotState  =
         case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
             [File | _] ->
-                {ok, Bin} = file:read_file(File),
-                {SI, ST, _, _} = binary_to_term(Bin),
+                %% TODO provide function that only reads the index and term
+                %% of the snapshot file.
+                {ok, {SI, ST, _, _}} = ra_log_snapshot:read(File),
                 {SI, ST, File};
             [] ->
                 undefined
@@ -491,7 +492,7 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
             end
     end.
 
--spec install_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
+-spec install_snapshot(Snapshot :: ra_log:snapshot(),
                        State :: ra_log()) ->
     ra_log().
 install_snapshot({Idx, Term, _, _} = Snapshot,
@@ -503,13 +504,13 @@ install_snapshot({Idx, Term, _, _} = Snapshot,
                              last_written_index_term = {Idx, Term}}).
 
 -spec read_snapshot(State :: ra_log()) ->
-    maybe(ra_log:ra_log_snapshot()).
+    maybe(ra_log:snapshot()).
 read_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
 read_snapshot(#state{snapshot_state = {_, _, File}}) ->
-    case file:read_file(File) of
-        {ok, Bin} ->
-            binary_to_term(Bin);
+    case ra_log_snapshot:read(File) of
+        {ok, Snapshot} ->
+            Snapshot;
         {error, enoent} ->
             undefined
     end.
@@ -534,6 +535,7 @@ update_release_cursor(Idx, Cluster, MachineState,
                       #state{segment_refs = SegRefs,
                              snapshot_state = SnapState,
                              snapshot_interval = SnapInter} = State0) ->
+    ClusterNodes = maps:keys(Cluster),
     SnapLimit = case SnapState of
                     undefined -> SnapInter;
                     {I, _, _} -> I + SnapInter
@@ -546,7 +548,6 @@ update_release_cursor(Idx, Cluster, MachineState,
         true ->
             % segments can be cleared up
             % take a snapshot at the release_cursor
-            {Term, State} = fetch_term(Idx, State0),
             % TODO: here we use the current cluster configuration in
             % the snapshot,
             % _not_ the configuration at the snapshot point.
@@ -556,8 +557,14 @@ update_release_cursor(Idx, Cluster, MachineState,
             % well be :dragons: here.
             % The MachineState is a dehydrated version of the state at
             % the release_cursor point.
-            ok = sync_meta(State),
-            write_snapshot({Idx, Term, Cluster, MachineState}, State);
+            case fetch_term(Idx, State0) of
+                {undefined, _} ->
+                    exit({term_not_found_for_index, Idx});
+                {Term, State} ->
+                    ok = sync_meta(State),
+                    write_snapshot({Idx, Term, ClusterNodes, MachineState},
+                                   State)
+            end;
         false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
             %% up
@@ -566,7 +573,8 @@ update_release_cursor(Idx, Cluster, MachineState,
                     State;
                 {Term, State} ->
                     ok = sync_meta(State),
-                    write_snapshot({Idx, Term, Cluster, MachineState}, State)
+                    write_snapshot({Idx, Term, ClusterNodes, MachineState},
+                                   State)
             end;
         false ->
             State0

@@ -40,6 +40,8 @@
 
 -type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
 
+-type ra_cluster_nodes() :: [ra_node_id()].
+
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
@@ -95,7 +97,7 @@
          leader_id :: ra_node_id(),
          last_index :: ra_index(), % the snapshot replaces all previous entries incl this
          last_term :: ra_term(), % the term at the point of snapshot
-         last_config :: ra_cluster(),
+         last_config :: ra_cluster_nodes(),
          % because we only snapshot when the state is effectively empty
          % we should never need to create chunks
          data :: term()

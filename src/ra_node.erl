@@ -156,7 +156,8 @@ init(#{id := Id,
             undefined ->
                 {0, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
-            {Idx, Term, Clu, MacSt} ->
+            {Idx, Term, ClusterNodes, MacSt} ->
+                Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
                 {Idx, Clu, MacSt, {Idx, Term}}
         end,
@@ -758,7 +759,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       leader_id = LeaderId,
                                       last_term = LastTerm,
                                       last_index = LastIndex,
-                                      last_config = Cluster,
+                                      last_config = ClusterNodes,
                                       data = Data},
                 State0 = #{id := Id, log := Log0,
                            current_term := CurTerm})
@@ -766,12 +767,12 @@ handle_follower(#install_snapshot_rpc{term = Term,
     ?INFO("~w: installing snapshot at index ~b in term ~b~n",
           [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
-    Log = ra_log:install_snapshot({LastIndex, LastTerm, Cluster, Data}, Log0),
+    Log = ra_log:install_snapshot({LastIndex, LastTerm, ClusterNodes, Data}, Log0),
     State1 = State0#{log => Log,
                      current_term => Term,
                      commit_index => LastIndex,
                      last_applied => LastIndex,
-                     cluster => Cluster,
+                     cluster => make_cluster(Id, ClusterNodes),
                      machine_state => Data,
                      leader_id => LeaderId},
     State = persist_last_applied(State1),

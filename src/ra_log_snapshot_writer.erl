@@ -4,6 +4,7 @@
 
 -include("ra.hrl").
 
+
 %% API functions
 -export([start_link/0,
          write_snapshot/3,
@@ -23,9 +24,12 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
+-spec write_snapshot(pid(), file:filename_all(), ra_log:snapshot()) -> ok.
 write_snapshot(From, Dir, Snapshot) ->
     gen_server:cast(?MODULE, {write_snapshot, From, Dir, Snapshot}).
 
+-spec write_snapshot_call(file:filename(), ra_log:snapshot()) ->
+    {ok, File :: file:filename(), Old :: [file:filename()]}.
 write_snapshot_call(Dir, Snapshot) ->
     gen_server:call(?MODULE, {write_snapshot, Dir, Snapshot}).
 
@@ -81,4 +85,4 @@ write_snapshot(Dir, Snapshot) ->
 write(File, Snapshot) ->
     % TODO: snapshots should be checksummed
     ?INFO("snapshot_writer: Writing file ~p", [File]),
-    file:write_file(File, term_to_binary(Snapshot)).
+    ra_log_snapshot:write(File, Snapshot).

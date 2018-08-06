@@ -37,7 +37,7 @@
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
                 entries = #{0 => {0, undefined}} :: #{ra_term() => {ra_index(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
-                snapshot :: maybe(ra_log:ra_log_snapshot())}).
+                snapshot :: maybe(ra_log:snapshot())}).
 
 -type ra_log_memory_state() :: #state{}.
 
@@ -185,7 +185,7 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
--spec install_snapshot(Snapshot :: ra_log:ra_log_snapshot(),
+-spec install_snapshot(Snapshot :: ra_log:snapshot(),
                        State :: ra_log_memory_state()) ->
     ra_log_memory_state().
 install_snapshot(Snapshot, #state{entries = Log0} = State) ->
@@ -195,7 +195,7 @@ install_snapshot(Snapshot, #state{entries = Log0} = State) ->
     State#state{entries = Log, snapshot = Snapshot}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
-    ra_log:ra_log_snapshot().
+    ra_log:snapshot().
 read_snapshot(#state{snapshot = Snapshot}) ->
     Snapshot.
 

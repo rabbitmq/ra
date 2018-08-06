@@ -257,7 +257,7 @@ snapshot(Config) ->
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(1, "entry2", Log1),
     {LastIdx, LastTerm} = ra_log:last_index_term(Log2),
-    Cluster = #{node1 => #{}},
+    Cluster = [node1],
     Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
     Log4 = ra_log:install_snapshot(Snapshot, Log2),
 

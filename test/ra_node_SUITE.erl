@@ -151,14 +151,15 @@ init(_Config) ->
     #{current_term := 5,
       voted_for := some_node} = ra_node_init(InitConf),
     % snapshot
-    Snapshot = {3, 5, Cluster, {simple, ?MACFUN, "hi1+2+3"}},
+    Snapshot = {3, 5, maps:keys(Cluster), {simple, ?MACFUN, "hi1+2+3"}},
     LogS = ra_log:install_snapshot(Snapshot, Log),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
       machine_state := {simple, _, "hi1+2+3"},
-      cluster := Cluster,
+      cluster := ClusterOut,
       voted_for := some_node} = ra_node_init(InitConf),
+    ?assertEqual(maps:keys(Cluster), maps:keys(ClusterOut)),
     ok.
 
 init_restores_cluster_changes(_Config) ->
@@ -614,7 +615,7 @@ follower_catchup_condition(_Config) ->
 
     ISRpc = #install_snapshot_rpc{term = 99, leader_id = n1,
                                   last_index = 99, last_term = 99,
-                                  last_config = #{}, data = []},
+                                  last_config = [], data = []},
     {follower, State, [_NextEvent]} =
         ra_node:handle_await_condition(ISRpc, State),
 
@@ -1244,7 +1245,7 @@ pre_vote_election_reverts(_Config) ->
     % install snapshot rpc
     ISR = #install_snapshot_rpc{term = 5, leader_id = n2,
                                 last_index = 3, last_term = 5,
-                                last_config = #{}, data = []},
+                                last_config = [], data = []},
     {follower, #{current_term := 5, votes := 0}, [{next_event, ISR}]}
         = ra_node:handle_pre_vote(ISR, State),
     ok.
@@ -1271,7 +1272,7 @@ leader_receives_install_snapshot_rpc(_Config) ->
                last_applied := Idx} = (base_state(5))#{votes => 1},
     ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = n5,
                                   last_index = Idx, last_term = Term,
-                                  last_config = #{}, data = []},
+                                  last_config = [], data = []},
     {follower, #{}, [{next_event, ISRpc}]}
         = ra_node:handle_leader(ISRpc, State),
     % leader ignores lower term
@@ -1288,7 +1289,7 @@ follower_installs_snapshot(_Config) ->
     Idx = 3,
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  last_config = Config, data = []},
+                                  last_config = maps:keys(Config), data = []},
     {follower, #{current_term := Term,
                  commit_index := Idx,
                  last_applied := Idx,
@@ -1307,7 +1308,7 @@ snapshotted_follower_received_append_entries(_Config) ->
     Idx = 3,
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  last_config = Config, data = []},
+                                  last_config = maps:keys(Config), data = []},
     {follower, FState1, _} = ra_node:handle_follower(ISRpc, FState0),
 
     Cmd = usr({enc, banana}),
@@ -1373,13 +1374,7 @@ leader_receives_install_snapshot_result(_Config) ->
                       [{1, 1, noop}, {2, 1, noop},
                        {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
                        {4, 1, {'$usr',pid, {enq,pear}, after_log_append}}]),
-    Log = ra_log:install_snapshot({2,1,
-                                 #{n1 => new_peer_with(#{match_index => 0}),
-                                   n2 => new_peer_with(#{match_index => 2,
-                                                         next_index => 3}),
-                                   n3 => new_peer_with(#{match_index => 2,
-                                                         next_index => 3})},
-                                 []}, Log0),
+    Log = ra_log:install_snapshot({2,1, [n1, n2, n3], []}, Log0),
     Leader = #{cluster =>
                #{n1 => new_peer_with(#{match_index => 0}),
                  n2 => new_peer_with(#{match_index => 4, next_index => 5,

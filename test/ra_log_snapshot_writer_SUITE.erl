@@ -47,8 +47,7 @@ write_snapshot(Config) ->
     receive
         {ra_log_event, {snapshot_written, {10, 5}, File, []}} ->
             % TODO: validate snapshot
-            {ok, Data} = file:read_file(File),
-            Snapshot = binary_to_term(Data),
+            {ok, Snapshot} = ra_log_snapshot:read(File),
             ok
     after 2000 ->
               throw(ra_log_event_timeout)
@@ -60,8 +59,7 @@ write_snapshot(Config) ->
         {ra_log_event, {snapshot_written, {20, 6}, File2, [Old]}} ->
             % TODO: validate snapshot
             true = filelib:is_file(Old),
-            {ok, Data2} = file:read_file(File2),
-            Snapshot2 = binary_to_term(Data2),
+            {ok, Snapshot2} = ra_log_snapshot:read(File2),
             ok
     after 2000 ->
               throw(ra_log_event_timeout)
