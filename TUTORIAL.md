@@ -50,8 +50,8 @@
 
 4. Perform a query
 
-    As we know the previous command achieved consensus a committed query to the leader is fine.
+    As we know the previous command achieved consensus a local query to the leader is fine.
 
     ```
-    {ok, {IdxTerm, 5}, Leader} = ra:committed_query({node1, node()}, fun (S) -> S end),
+    {ok, {IdxTerm, 5}, Leader} = ra:local_query({node1, node()}, fun (S) -> S end),
     ```

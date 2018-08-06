@@ -530,7 +530,7 @@ get_missing_deliveries(Leader, From, To, CustomerTag) ->
     Query = fun (State) ->
                     ra_fifo:get_checked_out(CustomerId, From, To, State)
             end,
-    {ok, {_, Missing}, _} = ra:committed_query(Leader, Query),
+    {ok, {_, Missing}, _} = ra:local_query(Leader, Query),
     Missing.
 
 pick_node(#state{leader = undefined, nodes = [N | _]}) ->

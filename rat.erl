@@ -135,7 +135,7 @@ perc(Numbers) ->
         Perc <- [0.50, 0.75, 0.90, 0.95, 0.99, 0.999]].
 
 query(Node) ->
-    ra:dirty_query(Node, fun (S) -> S end).
+    ra:local_query(Node, fun (S) -> S end).
 
 p(F) ->
     lg:trace([ra_node, ra_node_proc, ra_proxy, ra_log_file], lg_file_tracer,

@@ -99,7 +99,7 @@ print_machine_state(#{nodes := Nodes}) ->
     end,
     io:format("Starting ra cluster on nodes ~w~n", [Nodes]),
     [begin
-         {ok, {IdxTerm, MacState}, _} = ra:committed_query(NodeId, fun (S) -> S end),
+         {ok, {IdxTerm, MacState}, _} = ra:local_query(NodeId, fun (S) -> S end),
          io:format("Machine state of node ~w at ~w:~n~p~n",
                    [NodeId, IdxTerm, MacState])
      end

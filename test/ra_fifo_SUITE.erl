@@ -450,15 +450,15 @@ test_queries(Config) ->
           end),
     F0 = ra_fifo_client:init(ClusterId, [NodeId], 4),
     {ok, _} = ra_fifo_client:checkout(<<"tag">>, 1, F0),
-    {ok, {_, Ready}, _} = ra:committed_query(NodeId,
+    {ok, {_, Ready}, _} = ra:local_query(NodeId,
                                              fun ra_fifo:query_messages_ready/1),
     ?assertEqual(1, maps:size(Ready)),
     ct:pal("Ready ~w~n", [Ready]),
-    {ok, {_, Checked}, _} = ra:committed_query(NodeId,
+    {ok, {_, Checked}, _} = ra:local_query(NodeId,
                                                fun ra_fifo:query_messages_checked_out/1),
     ?assertEqual(1, maps:size(Checked)),
     ct:pal("Checked ~w~n", [Checked]),
-    {ok, {_, Processes}, _} = ra:committed_query(NodeId,
+    {ok, {_, Processes}, _} = ra:local_query(NodeId,
                                                  fun ra_fifo:query_processes/1),
     ct:pal("Processes ~w~n", [Processes]),
     ?assertEqual(2, length(Processes)),
@@ -763,21 +763,21 @@ recover_after_kill(Config) ->
     %% this should by the default release cursor interval of 128
     %% create a new snapshot
     {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
-    {ok, {_X, MS}, _} = ra:committed_query(NodeId, fun (S) -> S end),
+    {ok, {_X, MS}, _} = ra:local_query(NodeId, fun (S) -> S end),
     %% kill node again to trigger post snapshot recovery
     exit(whereis(Name), kill),
     timer:sleep(250),
     ra:members(NodeId),
     timer:sleep(100),
     % give leader time to commit noop
-    {ok, {_X2, MS2}, _} = ra:committed_query(NodeId, fun (S) -> S end),
+    {ok, {_X2, MS2}, _} = ra:local_query(NodeId, fun (S) -> S end),
     ok = ra:stop_node(NodeId),
     % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
     %        [X, X2, MS, MS2, AllDeq]),
     ?assertEqual(MS, MS2),
     ok = ra:restart_node(NodeId),
     ra:members(NodeId),
-    {ok, {_, MS3}, _} = ra:committed_query(NodeId, fun (S) -> S end),
+    {ok, {_, MS3}, _} = ra:local_query(NodeId, fun (S) -> S end),
     ?assertEqual(MS2, MS3),
     ok.
 
