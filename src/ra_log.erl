@@ -133,7 +133,7 @@ init(#{uid := UId} = Conf) ->
             [File | _] ->
                 %% TODO provide function that only reads the index and term
                 %% of the snapshot file.
-                {ok, {SI, ST, _, _}} = ra_log_snapshot:read(File),
+                {ok, {SI, ST}} = ra_log_snapshot:read_indexterm(File),
                 {SI, ST, File};
             [] ->
                 undefined

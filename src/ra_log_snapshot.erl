@@ -2,7 +2,8 @@
 
 -export([
          write/2,
-         read/1
+         read/1,
+         read_indexterm/1
          ]).
 
 -include("ra.hrl").
@@ -61,6 +62,32 @@ read(File) ->
             {error, {invalid_version, Version}};
         {ok, _} ->
             {error, invalid_format};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @doc reads the index and term from the snapshot file without reading the
+%% entire binary body. NB: this does not do checksum validation.
+-spec read_indexterm(file:filename()) ->
+    {ok, ra_idxterm()} | {error, invalid_format |
+                          {invalid_version, integer()} |
+                          checksum_error |
+                          file_err()}.
+read_indexterm(File) ->
+    case file:open(File, [read, binary, raw]) of
+        {ok, Fd} ->
+            case file:read(Fd, 9 + 16) of
+                {ok, <<?MAGIC, ?VERSION:8/unsigned, _:32/integer,
+                       Idx:64/unsigned,
+                       Term:64/unsigned>>} ->
+                    {ok, {Idx, Term}};
+                {ok, <<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>} ->
+                    {error, {invalid_version, Version}};
+                {ok, _} ->
+                    {error, invalid_format};
+                Err ->
+                    Err
+            end;
         {error, _} = Err ->
             Err
     end.

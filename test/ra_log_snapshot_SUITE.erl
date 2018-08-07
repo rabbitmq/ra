@@ -24,7 +24,8 @@ all_tests() ->
      read_missing,
      read_other_file,
      read_invalid_version,
-     read_invalid_checksum
+     read_invalid_checksum,
+     read_index_term
     ].
 
 groups() ->
@@ -88,5 +89,14 @@ read_invalid_checksum(Config) ->
                            term_to_binary(<<"hi">>)]),
     {error, checksum_error} = ra_log_snapshot:read(File),
     ok.
+
+read_index_term(Config) ->
+    File = ?config(file, Config),
+    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
+                my_state},
+    ok = ra_log_snapshot:write(File, Snapshot),
+    {ok, {33, 94}} = ra_log_snapshot:read_indexterm(File),
+    ok.
+
 
 %% Utility
