@@ -1145,6 +1145,7 @@ call_for_election(pre_vote, #{id := Id,
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
 
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
+                                         version = ?RA_PROTO_VERSION,
                                          token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
@@ -1172,10 +1173,11 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             {FsmState, State, [{reply, Reply}]}
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
+                                         version = Version,
                                          token = Token,
                                          candidate_id = _Cand},
                 #{current_term := CurTerm} = State)
-  when Term < CurTerm ->
+  when Term < CurTerm orelse Version =/= ?RA_PROTO_VERSION ->
     ?INFO("~w declining pre-vote to ~w for term ~b, current term ~b~n",
           [id(State), _Cand, Term, CurTerm]),
     Reply = #pre_vote_result{term = CurTerm,
@@ -1187,14 +1189,6 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index => 0}.
-
-% is_new_peer(#{next_index := 1,
-%               match_index := 0,
-%               commit_index := 0}) ->
-%     true;
-% is_new_peer(_Peer) ->
-%     false.
-
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).

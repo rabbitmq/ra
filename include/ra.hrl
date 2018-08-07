@@ -45,6 +45,20 @@
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
+-define(RA_PROTO_VERSION, 1).
+%% the protocol version should be incremented whenever extensions need to be
+%% done to the core protocol records (below). It is only ever exchanged by the
+%% pre_vote message so that nodes can reject pre votes for nodes running a
+%% higher protocol version. This should be sufficient to disallow a node with
+%% newer protocol version to become leader before it has a majority and thus
+%% potentially exchange incompatible message types with nodes running older
+%% code.
+%%
+%% If fields need to be added to any of the below records it is suggested that
+%% a new record is created (by appending _vPROTO_VERSION). The node still need
+%% to be able to handle and reply to the older message types to ensure
+%% availability.
+
 %% Figure 2 in the paper
 -record(append_entries_rpc,
         {term :: ra_term(),
@@ -81,7 +95,8 @@
 
 %% pre-vote extension
 -record(pre_vote_rpc,
-        {term :: ra_term(),
+        {version = ?RA_PROTO_VERSION :: non_neg_integer(),
+         term :: ra_term(),
          token :: reference(),
          candidate_id :: ra_node_id(),
          last_log_index :: ra_index(),
@@ -93,13 +108,13 @@
          vote_granted :: boolean()}).
 
 -record(install_snapshot_rpc,
-        {term :: ra_term(), % the leaders term
+        {term :: ra_term(), % the leader's term
          leader_id :: ra_node_id(),
-         last_index :: ra_index(), % the snapshot replaces all previous entries incl this
-         last_term :: ra_term(), % the term at the point of snapshot
+         % the snapshot replaces all previous entries incl this
+         last_index :: ra_index(),
+         % the term at the point of snapshot
+         last_term :: ra_term(),
          last_config :: ra_cluster_nodes(),
-         % because we only snapshot when the state is effectively empty
-         % we should never need to create chunks
          data :: term()
         }).
 
