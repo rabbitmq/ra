@@ -184,7 +184,7 @@ init_restores_cluster_changes(_Config) ->
     % n2 joins
     {leader, #{cluster := Cluster,
                log := Log0}, _} =
-        ra_node:handle_leader({command, {'$ra_join', self(),
+        ra_node:handle_leader({command, {'$ra_join', meta(),
                                          n2, await_consensus}}, State),
     ?assert(maps:size(Cluster) =:= 2),
     % intercept ra_log:init call to simulate persisted log data
@@ -472,7 +472,7 @@ follower_aer_5(_Config) ->
     ?assertMatch(#append_entries_reply{next_index = 4,
                                        last_term = 1,
                                        last_index = 3}, M),
-    ct:pal("Effects ~p~n State: ~p", [Effects, State1]),
+    % ct:pal("Effects ~p~n State: ~p", [Effects, State1]),
     ok.
 
 
@@ -497,7 +497,6 @@ follower_aer_term_mismatch(_Config) ->
                  ok.
 
 follower_handles_append_entries_rpc(_Config) ->
-    Self = self(),
     State = (base_state(3))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = n1,
@@ -536,7 +535,7 @@ follower_handles_append_entries_rpc(_Config) ->
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 1, prev_log_term = 1,
                              leader_commit = 2,
-                             entries = [{2, 4, {'$usr', Self, <<"hi">>,
+                             entries = [{2, 4, {'$usr', meta(), <<"hi">>,
                                                 after_log_append}}]},
 
     {follower,  #{log := Log},
@@ -620,7 +619,7 @@ follower_catchup_condition(_Config) ->
         ra_node:handle_await_condition(ISRpc, State),
 
     {await_condition, State, []} =
-        ra_node:handle_await_condition({ra_log_event, {written, bla}}, State),
+        ra_node:handle_await_condition({ra_log_event, {written, {99, 99, 99}}}, State),
 
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
@@ -685,21 +684,19 @@ append_entries_reply_success(_Config) ->
     Msg = {n2, #append_entries_reply{term = 5, success = true,
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
-    ExpectedEffects =
-        {send_rpcs,
-         [{n3, #append_entries_rpc{term = 5, leader_id = n1,
-                                   prev_log_index = 1,
-                                   prev_log_term = 1,
-                                   leader_commit = 3,
-                                   entries = [{2, 3, usr(<<"hi2">>)},
-                                              {3, 5, usr(<<"hi3">>)}]}}
-         ]},
     % update match index
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 3}},
                commit_index := 3,
                last_applied := 3,
                machine_state := {simple, _, <<"hi3">>}},
-     [ExpectedEffects, _Metrics]} = ra_node:handle_leader(Msg, State),
+     [{send_rpcs,
+         [{n3, #append_entries_rpc{term = 5, leader_id = n1,
+                                   prev_log_index = 1,
+                                   prev_log_term = 1,
+                                   leader_commit = 3,
+                                   entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                              {3, 5, {'$usr', _, <<"hi3">>, _}}]}}
+         ]}, _Metrics]} = ra_node:handle_leader(Msg, State),
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
@@ -726,18 +723,19 @@ append_entries_reply_no_success(_Config) ->
     % n2 has only seen index 1
     Msg = {n2, #append_entries_reply{term = 5, success = false, next_index = 2,
                                      last_index = 1, last_term = 1}},
-    AE = #append_entries_rpc{term = 5, leader_id = n1,
-                             prev_log_index = 1,
-                             prev_log_term = 1,
-                             leader_commit = 1,
-                             entries = [{2, 3, usr(<<"hi2">>)},
-                                        {3, 5, usr(<<"hi3">>)}]},
-    ExpectedEffects = [{send_rpcs, [{n3, AE}, {n2, AE}]}],
     % new peers state is updated
     {leader, #{cluster := #{n2 := #{next_index := 4, match_index := 1}},
                commit_index := 1,
                last_applied := 1,
-               machine_state := {simple, _, <<"hi1">>}}, ExpectedEffects} =
+               machine_state := {simple, _, <<"hi1">>}},
+     [{send_rpcs,
+       [{n3, #append_entries_rpc{term = 5, leader_id = n1,
+                                 prev_log_index = 1,
+                                 prev_log_term = 1,
+                                 leader_commit = 1,
+                                 entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                            {3, 5, {'$usr', _, <<"hi3">>, _}}]}},
+        {n2, _}]}]} =
         ra_node:handle_leader(Msg, State),
     ok.
 
@@ -914,7 +912,7 @@ consistent_query(_Config) ->
                 n3 => #{next_index => 4, match_index => 3}},
     State = (base_state(3))#{cluster => Cluster},
     {leader, State0, _} =
-        ra_node:handle_leader({command, {'$ra_query', self(),
+        ra_node:handle_leader({command, {'$ra_query', meta(),
                                          fun id/1, await_consensus}}, State),
     % ct:pal("next ~p", [Next]),
     {leader, State1, _} = ra_node:handle_leader({ra_log_event, {written, {4, 4, 5}}}, State0),
@@ -922,7 +920,7 @@ consistent_query(_Config) ->
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_node:handle_leader(AEReply, State1),
-    ct:pal("Effects ~p", [Effects]),
+    % ct:pal("Effects ~p", [Effects]),
     ?assert(lists:any(fun({reply, _, {machine_reply, {{4, 5}, <<"hi3">>}}}) ->
                               true;
                          (_) -> false
@@ -951,7 +949,7 @@ leader_node_join(_Config) ->
     % and further cluster changes should be disallowed
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _, n4 := _},
                cluster_change_permitted := false} = _State1, Effects} =
-        ra_node:handle_leader({command, {'$ra_join', self(),
+        ra_node:handle_leader({command, {'$ra_join', meta(),
                                          n4, await_consensus}}, State0),
     % {leader, State, Effects} = ra_node:handle_leader({written, 4}, State1),
     [{send_rpcs,
@@ -988,7 +986,7 @@ leader_node_leave(_Config) ->
     % raft nodes should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
      [{send_rpcs, [N3, N2]} | _]} =
-        ra_node:handle_leader({command, {'$ra_leave', self(), n4, await_consensus}},
+        ra_node:handle_leader({command, {'$ra_leave', meta(), n4, await_consensus}},
                               State),
     % the leaving node is no longer included
     {n3, #append_entries_rpc{term = 5, leader_id = n1,
@@ -1015,7 +1013,7 @@ leader_is_removed(_Config) ->
     State = (base_state(3))#{cluster => OldCluster},
 
     {leader, State1, _} =
-        ra_node:handle_leader({command, {'$ra_leave', self(), n1, await_consensus}},
+        ra_node:handle_leader({command, {'$ra_leave', meta(), n1, await_consensus}},
                               State),
     {leader, State1b, _} =
         ra_node:handle_leader(written_evt({4, 4, 5}), State1),
@@ -1038,7 +1036,7 @@ follower_cluster_change(_Config) ->
                    n2 => #{next_index => 4, match_index => 3},
                    n3 => #{next_index => 4, match_index => 3},
                    n4 => #{next_index => 1}},
-    JoinEntry = {4, 5, {'$ra_cluster_change', self(), NewCluster, await_consensus}},
+    JoinEntry = {4, 5, {'$ra_cluster_change', meta(), NewCluster, await_consensus}},
     AE = #append_entries_rpc{term = 5, leader_id = n1,
                              prev_log_index = 3,
                              prev_log_term = 5,
@@ -1064,7 +1062,7 @@ leader_applies_new_cluster(_Config) ->
                    n3 => #{next_index => 4, match_index => 3}},
 
     State = (base_state(3))#{id => n1, cluster => OldCluster},
-    Command = {command, {'$ra_join', self(), n4, await_consensus}},
+    Command = {command, {'$ra_join', meta(), n4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
     {leader, #{cluster_index_term := {4, 5},
@@ -1074,7 +1072,7 @@ leader_applies_new_cluster(_Config) ->
     {leader, State1b, _} =
         ra_node:handle_leader(written_evt({4, 4, 5}), State1),
 
-    Command2 = {command, {'$ra_join', self(), n5, await_consensus}},
+    Command2 = {command, {'$ra_join', meta(), n5, await_consensus}},
     % additional cluster change commands are not applied whilst
     % cluster change is being committed
     {leader, #{cluster_index_term := {4, 5},
@@ -1116,7 +1114,7 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                    n3 => #{next_index => 4, match_index => 3}},
 
     State = (base_state(3))#{id => n1, cluster => OldCluster},
-    Command = {command, {'$ra_join', self(), n4, await_consensus}},
+    Command = {command, {'$ra_join', meta(), n4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
     {leader, #{cluster_index_term := {4, 5},
@@ -1155,8 +1153,8 @@ is_new(_Config) ->
 
 command(_Config) ->
     State = base_state(3),
-    Self = self(),
-    Cmd = {'$usr', Self, <<"hi4">>, after_log_append},
+    Meta = meta(),
+    Cmd = {'$usr', Meta, <<"hi4">>, after_log_append},
     AE = #append_entries_rpc{entries = [{4, 5, Cmd}],
                              leader_id = n1,
                              term = 5,
@@ -1164,7 +1162,8 @@ command(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3
                             },
-    {leader, _, [{reply, Self, {4, 5}},
+    From = maps:get(from, Meta),
+    {leader, _, [{reply, From, {4, 5}},
                  {send_rpcs, [{n3, AE}, {n2, AE}]} |
                  _]} =
         ra_node:handle_leader({command, Cmd}, State),
@@ -1335,8 +1334,8 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                               ra_log:append_sync(E, L)
                       end, ra_log:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, noop},
-                       {2, 2, {'$usr', pid, {enq, apple}, after_log_append}},
-                       {3, 5, {2, {'$usr', pid, {enq, pear}, after_log_append}}}]),
+                       {2, 2, {'$usr', meta(), {enq, apple}, after_log_append}},
+                       {3, 5, {2, {'$usr', meta(), {enq, pear}, after_log_append}}}]),
     Leader0 = #{cluster =>
                 #{n1 => new_peer_with(#{match_index => 0}), % current leader in term 2
                   n2 => new_peer_with(#{match_index => 0,
@@ -1366,6 +1365,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
        = ra_node:handle_leader({n2, AER}, Leader0),
     ok.
 
+
 leader_receives_install_snapshot_result(_Config) ->
     % should update peer next_index
     Term = 1,
@@ -1373,8 +1373,8 @@ leader_receives_install_snapshot_result(_Config) ->
                               ra_log:append_sync(E, L)
                       end, ra_log:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, noop}, {2, 1, noop},
-                       {3, 1, {'$usr',pid, {enq,apple}, after_log_append}},
-                       {4, 1, {'$usr',pid, {enq,pear}, after_log_append}}]),
+                       {3, 1, {'$usr', meta(), {enq,apple}, after_log_append}},
+                       {4, 1, {'$usr', meta(), {enq,pear}, after_log_append}}]),
     Log = ra_log:install_snapshot({2,1, [n1, n2, n3], []}, Log0),
     Leader = #{cluster =>
                #{n1 => new_peer_with(#{match_index => 0}),
@@ -1422,7 +1422,7 @@ list(L) when is_list(L) -> L;
 list(L) -> [L].
 
 entry(Idx, Term, Data) ->
-    {Idx, Term, {'$usr', self(), Data, after_log_append}}.
+    {Idx, Term, {'$usr', meta(), Data, after_log_append}}.
 
 empty_state(NumNodes, Id) ->
     Nodes = lists:foldl(fun(N, Acc) ->
@@ -1469,7 +1469,10 @@ usr_cmd(Data) ->
     {command, usr(Data)}.
 
 usr(Data) ->
-    {'$usr', self(), Data, after_log_append}.
+    {'$usr', meta(), Data, after_log_append}.
+
+meta() ->
+    #{from => {self(), make_ref()}}.
 
 dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),

@@ -63,6 +63,22 @@
 -type ra_state() :: leader | follower | candidate
                     | pre_vote | await_condition | delete_and_terminate | stop.
 
+-type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
+                        '$ra_cluster_change' | '$ra_cluster'.
+
+-type command_meta() :: #{from := maybe(from())}.
+
+-type command_correlation() :: non_neg_integer().
+
+-type command_reply_mode() :: after_log_append |
+                              await_consensus |
+                              {notify_on_consensus, pid(),
+                               command_correlation()} |
+                              noreply.
+
+-type command() :: {command_type(), command_meta(),
+                    UserCommand :: term(), command_reply_mode()} | noop.
+
 -type ra_msg() :: #append_entries_rpc{} |
                   {ra_node_id(), #append_entries_reply{}} |
                   {ra_node_id(), #install_snapshot_result{}} |
@@ -73,7 +89,9 @@
                   #install_snapshot_rpc{} |
                   election_timeout |
                   await_condition_timeout |
-                  {command, term()}.
+                  {command, command()} |
+                  {commands, [command()]} |
+                  ra_log:event().
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -118,7 +136,12 @@
               ra_state/0,
               ra_node_config/0,
               ra_msg/0,
-              machine_conf/0
+              machine_conf/0,
+              command/0,
+              command_type/0,
+              command_meta/0,
+              command_correlation/0,
+              command_reply_mode/0
              ]).
 
 -define(AER_CHUNK_SIZE, 25).
@@ -347,9 +370,9 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
                               Effects1;
-                          {_, undefined, _, _} ->
+                          {_, #{from := undefined}, _, _} ->
                               Effects1;
-                          {_, From, _, _} ->
+                          {_, #{from := From}, _, _} ->
                               [{reply, From, {Idx, Term}} | Effects1];
                           _ ->
                               Effects1
@@ -357,16 +380,16 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             {leader, State, Effects}
     end;
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
-    {State0, Effects0} = lists:foldl(
-                           fun(C, {S0, E}) ->
-                                   {ok, I, T, S} = append_log_leader(C, S0),
-                                   case C of
-                                       {_, From, _, after_log_append} ->
-                                           {S, [{reply, From , {I, T}} | E]};
-                                       _ ->
-                                           {S, E}
-                                   end
-                           end, {State00, []}, Cmds),
+    {State0, Effects0} =
+        lists:foldl( fun(C, {S0, E}) ->
+                             {ok, I, T, S} = append_log_leader(C, S0),
+                             case C of
+                                 {_, #{from := From}, _, after_log_append} ->
+                                     {S, [{reply, From , {I, T}} | E]};
+                                 _ ->
+                                     {S, E}
+                             end
+                     end, {State00, []}, Cmds),
 
     {State, Rpcs} = make_pipelined_rpcs(length(Cmds), State0),
     %% TOOD: ra_metrics
@@ -1337,9 +1360,9 @@ make_notify_effects(Nots, Effects) ->
               end, Effects, Nots).
 
 apply_with(Machine,
-           {Idx, Term, {'$usr', From, Cmd, ReplyType}},
+           {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
-    Meta = #{index => Idx, term => Term},
+    Meta = Meta0#{index => Idx, term => Term},
     case ra_machine:apply(Machine, Meta, Cmd, Effects0, MacSt) of
         {NextMacSt, Effects1} ->
             % apply returned no reply so use IdxTerm as reply value
@@ -1353,14 +1376,15 @@ apply_with(Machine,
             {Idx, State, NextMacSt, Effects, Notifys}
     end;
 apply_with({machine, MacMod, _}, % Machine
-           {Idx, Term, {'$ra_query', From, QueryFun, ReplyType}},
+           {Idx, Term, {'$ra_query', #{from := From}, QueryFun, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
     Result = ra_machine:query(MacMod, QueryFun, MacSt),
     {Effects, Notifys} = add_reply(From, {{Idx, Term}, Result},
                                    ReplyType, Effects0, Notifys0),
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(_Machine,
-           {Idx, Term, {'$ra_cluster_change', From, _New, ReplyType}},
+           {Idx, Term, {'$ra_cluster_change', #{from := From}, _New,
+                        ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     ?INFO("~w: applying ra cluster change to ~w~n",
           [id(State0), maps:keys(_New)]),
@@ -1377,7 +1401,7 @@ apply_with(_, % Machine
     State = State0#{cluster_change_permitted => true},
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(Machine,
-           {Idx, _, {'$ra_cluster', From, delete, ReplyType}},
+           {Idx, _, {'$ra_cluster', #{from := From}, delete, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
     {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),

@@ -150,7 +150,7 @@ last_written(#state{last_written = LastWritten}) ->
     % remain api compatible with  ra_log, for now at least.
     LastWritten.
 
--spec handle_event(ra_log:ra_log_event(), ra_log_memory_state()) ->
+-spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     ra_log_memory_state().
 handle_event({written, {_From, Idx, Term}}, State0) ->
     case fetch_term(Idx, State0) of

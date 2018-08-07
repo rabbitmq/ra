@@ -51,21 +51,11 @@
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
--type correlation() :: non_neg_integer().
-
--type command_reply_mode() :: after_log_append |
-                              await_consensus |
-                              {notify_on_consensus, pid(), correlation()}.
 
 -type query_fun() :: fun((term()) -> term()).
 
--type ra_command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave'
-                           | '$ra_cluster_change' | '$ra_cluster'.
-
--type ra_command() :: {ra_command_type(), term(), command_reply_mode()}.
-
--type ra_command_with_from() ::
-    {ra_command_type(), from(), term(), command_reply_mode()}.
+-type ra_command() :: {ra_node:command_type(), term(),
+                       ra_node:command_reply_mode()}.
 
 -type ra_command_priority() :: normal | high.
 
@@ -83,12 +73,12 @@
 
 %% ra_event types
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_node_id()),
-                                   correlation()}.
+                                   ra_node:command_correlation()}.
 
 -type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
     % sent using ra:send_and_notify
-    {applied, [correlation()]} |
+    {applied, [ra_node:command_correlation()]} |
     {rejected, ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
     {machine, term()}.
@@ -110,8 +100,8 @@
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
-                delayed_commands = queue:new() ::
-                                        queue:queue(ra_command_with_from())}).
+                delayed_commands =
+                    queue:new() :: queue:queue(ra_node:command())}).
 
 %%%===================================================================
 %%% API
@@ -256,7 +246,8 @@ leader(EventType, {command, high, {CmdType, Data, ReplyMode}},
                {call, F} -> F
            end,
     {leader, NodeState, Effects} =
-        ra_node:handle_leader({command, {CmdType, From, Data, ReplyMode}},
+        ra_node:handle_leader({command, {CmdType, #{from => From},
+                                         Data, ReplyMode}},
                               NodeState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
                                       State0#state{node_state = NodeState}),
@@ -268,7 +259,7 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                cast -> undefined;
                {call, F} -> F
            end,
-    Cmd = {CmdType, From, Data, ReplyMode},
+    Cmd = {CmdType, #{from => From}, Data, ReplyMode},
     %% if there are no prior delayed commands
     %% (and thus no action queued to do so)
     %% queue a state timeout to flush them
@@ -321,13 +312,13 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
         {MRef, Monitors} ->
             % there is a monitor for the ref
             {leader, NodeState, Effects} =
-                ra_node:handle_leader({command, {'$usr', undefined,
+                ra_node:handle_leader({command, {'$usr', #{from => undefined},
                                                  {down, Pid, Info}, noreply}},
                                       NodeState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
-                               State0#state{node_state = NodeState,
-                                            monitors = Monitors}),
+                                State0#state{node_state = NodeState,
+                                             monitors = Monitors}),
             {keep_state, State, Actions};
         error ->
             {keep_state, State0, []}
@@ -341,7 +332,7 @@ leader(info, {NodeEvt, Node},
             % there is a monitor for the node
             {leader, NodeState, Effects} =
                 ra_node:handle_leader({command,
-                                       {'$usr', undefined,
+                                       {'$usr', #{from => undefined},
                                         {NodeEvt, Node}, noreply}},
                                       NodeState0),
             {State, Actions} =

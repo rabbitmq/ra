@@ -49,15 +49,17 @@
 -type snapshot() :: ra_log_snapshot:state().
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
                         File :: string()}.
--type ra_log_event() :: {written, {From :: ra_index(),
-                                   To :: ra_index(),
-                                   ToTerm :: ra_term()}} |
-                        {segments, ets:tid(), [segment_ref()]} |
-                        {resend_write, ra_index()} |
-                        {snapshot_written,
-                         ra_idxterm(),
-                         File :: file:filename(),
-                         Old :: [file:filename()]}.
+-type event_body() :: {written, {From :: ra_index(),
+                                 To :: ra_index(),
+                                 ToTerm :: ra_term()}} |
+                      {segments, ets:tid(), [segment_ref()]} |
+                      {resend_write, ra_index()} |
+                      {snapshot_written,
+                       ra_idxterm(),
+                       File :: file:filename(),
+                       Old :: [file:filename()]}.
+
+-type event() :: {ra_log_event, event_body()}.
 
 -record(state,
         {uid :: ra_uid(),
@@ -94,7 +96,8 @@
               ra_meta_key/0,
               snapshot/0,
               segment_ref/0,
-              ra_log_event/0
+              event/0,
+              event_body/0
              ]).
 
 -spec init(ra_log_init_args()) -> ra_log().
@@ -320,7 +323,7 @@ set_last_index(Idx, #state{last_written_index_term = {LWIdx0, _}} = State0) ->
                               last_written_index_term = {LWIdx, LWTerm}}}
     end.
 
--spec handle_event(ra_log:ra_log_event(), ra_log()) ->
+-spec handle_event(event_body(), ra_log()) ->
     ra_log().
 handle_event({written, {FromIdx, ToIdx, Term}},
              #state{last_written_index_term = {LastWrittenIdx0,

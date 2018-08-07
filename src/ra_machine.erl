@@ -131,8 +131,8 @@
 
 -type command() :: user_command() | builtin_command().
 
--type command_meta_data() :: #{index := ra_index(),
-                               term := ra_term()}.
+-type command_meta_data() :: ra_node:command_meta() | #{index := ra_index(),
+                                                        term := ra_term()}.
 %% extensible command meta data map
 
 
