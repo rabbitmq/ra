@@ -551,7 +551,6 @@ node_is_deleted(Config) ->
     F0 = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, F1} = ra_fifo_client:enqueue(msg1, F0),
     _ = process_ra_event(F1, 250),
-    % {ok, _, NodeId} = ra:send_and_await_consensus(NodeId, {enqueue, msg1}),
     % force roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     ok = ra:delete_node(NodeId),
@@ -566,8 +565,6 @@ node_is_deleted(Config) ->
     ok = ra:trigger_election(NodeId),
     F = ra_fifo_client:init(ClusterId, [NodeId]),
     {ok, _} = ra_fifo_client:checkout(<<"tag">>, 10, F),
-    % {ok, _, _} = ra:send_and_await_consensus(NodeId,
-    %                                          {checkout, {auto, 10}, CId}),
     receive
         {ra_event, _, Evt} ->
             exit({unexpected_machine_event, Evt})

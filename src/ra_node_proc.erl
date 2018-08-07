@@ -166,6 +166,8 @@ leader_call(ServerRef, Msg, Timeout) ->
                               Timeout) of
         {redirect, Leader} ->
             leader_call(Leader, Msg, Timeout);
+        {machine_reply, Reply} ->
+            {ok, Reply, ServerRef};
         {error, _} = E ->
             E;
         timeout ->

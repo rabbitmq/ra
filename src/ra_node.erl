@@ -1403,7 +1403,7 @@ add_next_cluster_change(Effects, State) ->
 
 
 add_reply(From, Reply, await_consensus, Effects, Notifys) ->
-    {[{reply, From, Reply} | Effects], Notifys};
+    {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
 add_reply(undefined, _, {notify_on_consensus, Corr, Pid}, % _ IdxTerm
           Effects, Notifys0) ->
     % notify are casts and thus have to include their own pid()
