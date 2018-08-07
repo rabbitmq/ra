@@ -21,7 +21,10 @@ all() ->
 all_tests() ->
     [
      roundtrip,
-     read_missing
+     read_missing,
+     read_other_file,
+     read_invalid_version,
+     read_invalid_checksum
     ].
 
 groups() ->
@@ -54,7 +57,8 @@ end_per_testcase(_TestCase, _Config) ->
 
 roundtrip(Config) ->
     File = ?config(file, Config),
-    Snapshot = {33, 94, [{banana, node@jungle}], my_state},
+    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
+                my_state},
     ok = ra_log_snapshot:write(File, Snapshot),
     {ok, Snapshot} = ra_log_snapshot:read(File),
     ok.
@@ -66,9 +70,23 @@ read_missing(Config) ->
 
 read_other_file(Config) ->
     File = ?config(file, Config),
-    file:write_file(File, <<"NOTMAGIC">>),
+    file:write_file(File, <<"NSAR", 1:8/unsigned>>),
     {error, invalid_format} = ra_log_snapshot:read(File),
     ok.
 
+read_invalid_version(Config) ->
+    File = ?config(file, Config),
+    Data = term_to_binary(snapshot),
+    Crc = erlang:crc32(Data),
+    file:write_file(File, [<<"RASN", 99:8/unsigned, Crc:32/integer>>, Data]),
+    {error, {invalid_version, 99}} = ra_log_snapshot:read(File),
+    ok.
+
+read_invalid_checksum(Config) ->
+    File = ?config(file, Config),
+    file:write_file(File, [<<"RASN">>, <<1:8/unsigned, 0:32/unsigned>>,
+                           term_to_binary(<<"hi">>)]),
+    {error, checksum_error} = ra_log_snapshot:read(File),
+    ok.
 
 %% Utility
