@@ -1158,26 +1158,19 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             ?INFO("~w: granting pre-vote for ~w with last indexterm ~w"
                   "for term ~b previous term was ~b~n",
                   [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
-            Reply = #pre_vote_result{term = Term,
-                                     token = Token,
-                                     vote_granted = true},
-            {FsmState, State#{voted_for => Cand}, [{reply, Reply}]};
+            {FsmState, State#{voted_for => Cand},
+             [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
             ?INFO("~w: declining pre-vote for ~w for protocol version ~b~n",
                   [id(State0), Cand, Version]),
-            Reply = #pre_vote_result{term = Term,
-                                     token = Token,
-                                     vote_granted = false},
-            {FsmState, State, [{reply, Reply}]};
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
         false ->
             ?INFO("~w: declining pre-vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
                   "Last log entry idxterm seen was: ~w~n",
                   [id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
-            Reply = #pre_vote_result{term = Term,
-                                     token = Token,
-                                     vote_granted = false},
-            {FsmState, State, [{reply, Reply}]}
+            {FsmState, State,
+             [{reply, pre_vote_result(Term, Token, false)}]}
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
@@ -1186,10 +1179,13 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
   when Term < CurTerm ->
     ?INFO("~w declining pre-vote to ~w for term ~b, current term ~b~n",
           [id(State), _Cand, Term, CurTerm]),
-    Reply = #pre_vote_result{term = CurTerm,
-                             token = Token,
-                             vote_granted = false},
-    {FsmState, State, [{reply, Reply}]}.
+    {FsmState, State,
+     [{reply, pre_vote_result(CurTerm, Token, false)}]}.
+
+pre_vote_result(Term, Token, Success) ->
+    #pre_vote_result{term = Term,
+                     token = Token,
+                     vote_granted = Success}.
 
 new_peer() ->
     #{next_index => 1,
