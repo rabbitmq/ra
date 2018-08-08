@@ -1145,16 +1145,16 @@ call_for_election(pre_vote, #{id := Id,
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
 
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
-                                         version = ?RA_PROTO_VERSION,
+                                         version = Version,
                                          token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
                  #{current_term := CurTerm}= State0)
-  when Term >= CurTerm ->
+  when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
-        true ->
+        true when Version =< ?RA_PROTO_VERSION ->
             ?INFO("~w: granting pre-vote for ~w with last indexterm ~w"
                   "for term ~b previous term was ~b~n",
                   [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
@@ -1162,6 +1162,13 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                      token = Token,
                                      vote_granted = true},
             {FsmState, State#{voted_for => Cand}, [{reply, Reply}]};
+        true ->
+            ?INFO("~w: declining pre-vote for ~w for protocol version ~b~n",
+                  [id(State0), Cand, Version]),
+            Reply = #pre_vote_result{term = Term,
+                                     token = Token,
+                                     vote_granted = false},
+            {FsmState, State, [{reply, Reply}]};
         false ->
             ?INFO("~w: declining pre-vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
@@ -1173,11 +1180,10 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             {FsmState, State, [{reply, Reply}]}
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
-                                         version = Version,
                                          token = Token,
                                          candidate_id = _Cand},
                 #{current_term := CurTerm} = State)
-  when Term < CurTerm orelse Version =/= ?RA_PROTO_VERSION ->
+  when Term < CurTerm ->
     ?INFO("~w declining pre-vote to ~w for term ~b, current term ~b~n",
           [id(State), _Cand, Term, CurTerm]),
     Reply = #pre_vote_result{term = CurTerm,

@@ -802,6 +802,13 @@ follower_pre_vote(_Config) ->
         ra_node:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION+1},
                                 State),
 
+    % but still allow from a lower protocol version
+        %
+    {follower, #{current_term := Term},
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}}]} =
+        ra_node:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION - 1},
+                                State),
     % fail due to lower term
     {follower, #{current_term := 5},
      [{reply, #pre_vote_result{term = 5, token = Token,
