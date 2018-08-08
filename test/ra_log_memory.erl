@@ -25,7 +25,7 @@
          write_config/2,
          read_config/1,
          delete_everything/1,
-         release_resources/1,
+         release_resources/2,
          to_list/1
         ]).
 
@@ -243,7 +243,7 @@ read_config(_Log) ->
 
 delete_everything(_Log) -> ok.
 
-release_resources(State) ->
+release_resources(_, State) ->
     State.
 
 to_list(#state{entries = Log}) ->

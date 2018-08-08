@@ -230,9 +230,9 @@ recover(_, _, State) ->
     % `next_event` from init
     {keep_state, State, {postpone, true}}.
 
-leader(enter, _, State = #state{name = Name}) ->
+leader(enter, _, State = #state{name = Name, node_state = NS0}) ->
     ets:insert(ra_state, {Name, leader}),
-    {keep_state, State};
+    {keep_state, State#state{node_state = ra_node:become(leader, NS0)}};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
     leader(EventType, Msg, State);
@@ -481,9 +481,10 @@ pre_vote(EventType, Msg, State0) ->
              [election_timeout_action(long, State) | Actions]}
     end.
 
-follower(enter, _, State = #state{name = Name}) ->
+follower(enter, _, State = #state{name = Name,
+                                  node_state = NS0}) ->
     ets:insert(ra_state, {Name, follower}),
-    {keep_state, State};
+    {keep_state, State#state{node_state = ra_node:become(follower, NS0)}};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(_, {command, _Priority, {_CmdType, Data, noreply}},

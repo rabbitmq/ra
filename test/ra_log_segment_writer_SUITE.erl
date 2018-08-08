@@ -107,21 +107,37 @@ delete_segments(Config) ->
             % test a lower index _does not_ delete the file
             ok = ra_log_segment_writer:delete_segments(TblWriterPid, UId, 2,
                                                        [SegmentFile]),
-            timer:sleep(500),
+            timer:sleep(250),
             ?assert(filelib:is_file(SegmentFile)),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
             ok = ra_log_segment_writer:delete_segments(TblWriterPid, UId, 3,
                                                        [SegmentFile]),
-            timer:sleep(1000),
+            validate_segment_deleted(100, SegmentFile),
+            % timer:sleep(1000),
             % validate file is gone
-            ?assert(false =:= filelib:is_file(SegmentFile)),
+            % ?assert(false =:= filelib:is_file(SegmentFile)),
             ok
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
     ok = gen_server:stop(TblWriterPid),
     ok.
+
+validate_segment_deleted(0, _) ->
+    exit(file_was_not_deleted);
+validate_segment_deleted(N, SegFile) ->
+    timer:sleep(20),
+    case filelib:is_file(SegFile) of
+        true ->
+            validate_segment_deleted(N-1, SegFile),
+            ok;
+        false ->
+            ok
+    end.
+
+
+
 
 my_segments(Config) ->
     Dir = ?config(wal_dir, Config),

@@ -41,7 +41,8 @@ all_tests() ->
      transient_writer_is_handled,
      read_opt,
      written_event_after_snapshot,
-     updated_segment_can_be_read
+     updated_segment_can_be_read,
+     open_segments_limit
     ].
 
 groups() ->
@@ -233,15 +234,17 @@ read_opt(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
     % write a segment and roll 1 - 299 - term 1
-    Num = 4096 * 5,
-    Log1 = write_and_roll(1, Num, 1, Log0, 5000),
+    Num = 4096 * 2,
+    Log1 = write_and_roll(1, Num, 1, Log0, 50),
+    Log2 = wait_for_segments(Log1, 5000),
     %% read small batch of the latest entries
-    {_, Log} = ra_log:take(1, Num, Log1),
+    {_, Log} = ra_log:take(Num - 5, 5, Log2),
+    %% measure the time it takes to read the first index
     {Time, _} = timer:tc(fun () ->
                                  _ = erlang:statistics(exact_reductions),
-                                 ra_log:take(1, Num, Log)
+                                 ra_log:take(1, 1, Log)
                          end),
-    Reds = erlang:statistics(exact_reductions),
+    {_, Reds} = erlang:statistics(exact_reductions),
     ct:pal("read took ~w Reduction ~w~n", [Time / 1000, Reds]),
     ok.
 
@@ -654,7 +657,8 @@ transient_writer_is_handled(Config) ->
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
     _Pid = spawn(fun () ->
                          ra_directory:register_name(<<"sub_proc">>, self(), sub_proc),
-                         Log0 = ra_log:init(#{data_dir => Dir, uid => <<"sub_proc">>}),
+                         Log0 = ra_log:init(#{data_dir => Dir,
+                                              uid => <<"sub_proc">>}),
                          Log1 = append_n(1, 10, 2, Log0),
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
@@ -663,6 +667,24 @@ transient_writer_is_handled(Config) ->
     application:stop(ra),
     application:start(ra),
     timer:sleep(2000),
+    ok.
+
+open_segments_limit(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    Max = 3,
+    Log0 = ra_log:init(#{data_dir => Dir, uid => UId,
+                         max_open_segments => Max}),
+    % write a few entries
+    Log1 = append_and_roll(1, 2000, 1, Log0),
+    %% this should result in a few segments
+    %% validate as this read all of them
+    Log1b = wait_for_segments(Log1, 5000),
+    Log2 = validate_read(1, 2000, 1, Log1b),
+    Segs = find_segments(Config),
+    #{open_segments := Open}  = ra_log:overview(Log2),
+    ?assert(length(Segs) > Max),
+    ?assert(Open =< Max),
     ok.
 
 validate_read(To, To, _Term, Log0) ->
@@ -721,6 +743,16 @@ deliver_all_log_events(Log0, Timeout) ->
             ct:pal("log evt: ~p", [Evt]),
             Log = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events(Log, Timeout)
+    after Timeout ->
+              Log0
+    end.
+
+wait_for_segments(Log0, Timeout) ->
+    receive
+        {ra_log_event, {segments, _, _} = Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            Log = ra_log:handle_event(Evt, Log0),
+            deliver_all_log_events(Log, 100)
     after Timeout ->
               Log0
     end.

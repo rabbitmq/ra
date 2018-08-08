@@ -13,6 +13,7 @@
          handle_follower/2,
          handle_await_condition/2,
          handle_aux/4,
+         become/2,
          tick/1,
          overview/1,
          is_new/1,
@@ -229,6 +230,7 @@ init(#{id := Id,
 recover(#{id := Id,
           commit_index := CommitIndex,
           last_applied := _LastApplied,
+          log := Log0,
           machine := Machine} = State0) ->
     ?INFO("~w: recovering state machine from ~b to ~b~n",
           [Id, _LastApplied, CommitIndex]),
@@ -244,7 +246,7 @@ recover(#{id := Id,
                              State0),
     % close and re-open log to ensure segments aren't unnecessarily kept
     % open
-    Log = ra_log:release_resources(maps:get(log, State)),
+    Log = ra_log:release_resources(1, Log0),
     State#{log => Log}.
 
 % the peer id in the append_entries_reply message is an artifact of
@@ -832,6 +834,19 @@ handle_await_condition(Msg, #{condition := Cond} = State) ->
 tick(#{machine := Machine, machine_state := MacState}) ->
     Now = os:system_time(millisecond),
     ra_machine:tick(Machine, Now, MacState).
+
+
+-spec become(ra_state(), ra_node_state()) -> ra_node_state().
+become(leader, #{cluster := Cluster, log := Log0} = State) ->
+    Log = ra_log:release_resources(maps:size(Cluster), Log0),
+    State#{log => Log};
+become(follower, #{log := Log0} = State) ->
+    %% followers should only ever need a single segment open at any one
+    %% time
+    State#{log => ra_log:release_resources(1, Log0)};
+become(_RaftState, State) ->
+    State.
+
 
 -spec overview(ra_node_state()) -> map().
 overview(#{log := Log, machine := Machine,

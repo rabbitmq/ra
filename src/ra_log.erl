@@ -31,7 +31,7 @@
          write_config/2,
          read_config/1,
          delete_everything/1,
-         release_resources/1
+         release_resources/2
         ]).
 
 -include("ra.hrl").
@@ -68,7 +68,7 @@
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          segment_refs = [] :: [segment_ref()],
-         open_segments = #{} :: #{string() => ra_log_segment:state()},
+         open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
          directory :: file:filename(),
          kv :: ra_log_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(),
@@ -89,7 +89,8 @@
                               uid := ra_uid(),
                               wal => atom(),
                               snapshot_interval => non_neg_integer(),
-                              resend_window => integer()}.
+                              resend_window => integer(),
+                              max_open_segments => non_neg_integer()}.
 
 -export_type([ra_log_init_args/0,
               ra_log/0,
@@ -110,6 +111,7 @@ init(#{uid := UId} = Conf) ->
                   _ ->
                       ra_env:data_dir()
               end,
+    MaxOpen = maps:get(max_open_segments, Conf, 5),
     Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
     Meta = filename:join(Dir, "meta.dat"),
     ok = filelib:ensure_dir(Meta),
@@ -154,6 +156,7 @@ init(#{uid := UId} = Conf) ->
                       snapshot_interval = SnapInterval,
                       kv = Kv,
                       wal = Wal,
+                      open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
                       resend_window_seconds = ResendWindow},
 
     LastIdx = State000#state.last_index,
@@ -218,7 +221,7 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 close(#state{kv = Kv, open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
-    [_ = ra_log_segment:close(S) || S <- maps:values(OpenSegs)],
+    _ = ra_flru:evict_all(OpenSegs),
     % close also fsyncs
     _ = ra_log_meta:close(Kv),
     ok.
@@ -393,14 +396,14 @@ handle_event({segments, Tid, NewSegs},
     %% check if any of the segrefs refer to open segment and re-load their
     %% new indexs if so
     Open = lists:foldl(fun ({_, _, F}, Acc0) ->
-                               case maps:take(F, Acc0) of
-                                   {S0, Acc} ->
-                                       %% TODO: this could result in unecessary
+                               case ra_flru:evict(F, Acc0) of
+                                   {_, Acc} ->
+                                       %% TODO: evicting here could result in
+                                       %% unecessary
                                        %% file handle churn but may not be worth
                                        %% optimising
                                        %% Alternative would be something like:
                                        %% ra_log_segment:reload_index/1
-                                       ok = ra_log_segment:close(S0),
                                        Acc;
                                    error ->
                                        Acc0
@@ -431,13 +434,20 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
                 % close all relevant active segments
                 ObsoleteKeys = [element(3, O) || O <- Obsolete],
                 % close any open segments
-                [ok = ra_log_segment:close(S)
-                 || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
+                OpenSegs1 = lists:foldl(fun (K, OS0) ->
+                                                case ra_flru:evict(K, OS0) of
+                                                    {_, OS} ->
+                                                        OS;
+                                                    error ->
+                                                        OS0
+                                                end
+                                        end, OpenSegs0, ObsoleteKeys),
+                % [ok = ra_log_segment:close(S)
+                %  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
                 ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
                 ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                            ObsoleteFiles),
-                {Active, maps:without(ObsoleteKeys, OpenSegs0),
-                 length(ObsoleteKeys)}
+                {Active, OpenSegs1, length(ObsoleteKeys)}
         end,
     ?INFO("~s: Snapshot written at index ~b in term ~b. ~b"
           " obsolete segments~n",
@@ -657,7 +667,7 @@ overview(#state{last_index = LastIndex,
       last_index => LastIndex,
       last_written_index_term => LWIT,
       num_segments => length(Segs),
-      open_segments => maps:size(OpenSegs),
+      open_segments => ra_flru:size(OpenSegs),
       snapshot_index_in_progress => SIIP,
       snapshot_index => case SnapshotState of
                             undefined -> undefined;
@@ -692,11 +702,14 @@ delete_everything(#state{directory = Dir} = Log) ->
     end,
     ok.
 
-release_resources(#state{open_segments = OpenSegs} = State) ->
-    % deliberately ignoring return value
+release_resources(MaxOpenSegments,
+                  #state{open_segments = OpenSegs} = State) ->
     % close all open segments
-    [_ = ra_log_segment:close(S) || S <- maps:values(OpenSegs)],
-    State#state{open_segments = #{}}.
+    % deliberately ignoring return value
+    _ = ra_flru:evict_all(OpenSegs),
+    %% open a new segment with the new max open segment value
+    State#state{open_segments = ra_flru:new(MaxOpenSegments,
+                                            fun flru_handler/1)}.
 
 %%% Local functions
 
@@ -815,19 +828,23 @@ segment_take(#state{segment_refs = SegRefs,
          ({From, _, _}, {_, {_, End}, _} = Acc)
            when From > End ->
               Acc;
-         ({From, To, Fn}, {Open, {Start0, End}, E0})
+         ({From, To, Fn}, {Open0, {Start0, End}, E0})
            when To >= End ->
-              Seg = case Open of
-                        #{Fn := S} -> S;
-                        _ ->
-                            AbsFn = filename:join(Dir, Fn),
-                            case ra_log_segment:open(AbsFn, #{mode => read}) of
-                                {ok, S} -> S;
-                                {error, Err} ->
-                                    exit({ra_log_failed_to_open_segment, Err,
-                                          AbsFn})
-                            end
-                    end,
+              {Seg, Open} =
+                  case ra_flru:fetch(Fn, Open0) of
+                      {ok, S, Open1} ->
+                          {S, Open1};
+                      error ->
+                          AbsFn = filename:join(Dir, Fn),
+                          case ra_log_segment:open(AbsFn,
+                                                   #{mode => read}) of
+                              {ok, S} ->
+                                  {S, ra_flru:insert(Fn, S, Open0)};
+                              {error, Err} ->
+                                  exit({ra_log_failed_to_open_segment, Err,
+                                        AbsFn})
+                          end
+                  end,
 
               % actual start point cannot be prior to first segment
               % index
@@ -841,7 +858,7 @@ segment_take(#state{segment_refs = SegRefs,
                         _ ->
                             {Start0, Start-1}
                     end,
-              {Open#{Fn => Seg}, Rem, Entries}
+              {Open, Rem, Entries}
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #state{segment_refs = SegRefs,
@@ -850,17 +867,17 @@ segment_term_query(Idx, #state{segment_refs = SegRefs,
     {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Dir),
     {Result, State#state{open_segments = Open}}.
 
-segment_term_query0(Idx, [{From, To, Filename} | _], Open, Dir)
+segment_term_query0(Idx, [{From, To, Filename} | _], Open0, Dir)
   when Idx >= From andalso Idx =< To ->
-    case Open of
-        #{Filename := Seg} ->
+    case ra_flru:fetch(Filename, Open0) of
+        {ok, Seg, Open} ->
             Term = ra_log_segment:term_query(Seg, Idx),
             {Term, Open};
-        _ ->
+        error ->
             AbsFn = filename:join(Dir, Filename),
             {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read}),
             Term = ra_log_segment:term_query(Seg, Idx),
-            {Term, Open#{Filename => Seg}}
+            {Term, ra_flru:insert(Filename, Seg, Open0)}
     end;
 segment_term_query0(Idx, [_ | Tail], Open, Dir) ->
     segment_term_query0(Idx, Tail, Open, Dir);
@@ -983,6 +1000,11 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
 write_snapshot(Snapshot, #state{directory = Dir} = State) ->
     ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
     State#state{snapshot_index_in_progress = element(1, Snapshot)}.
+
+flru_handler({_, Seg}) ->
+    _ = ra_log_segment:close(Seg),
+    ok.
+
 
 %%%% TESTS
 

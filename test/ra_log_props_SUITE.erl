@@ -83,7 +83,7 @@ wait_sequence_gen(N) ->
     ?LET(List, vector(N, wait_gen()), List).
 
 wait_gen() ->
-    frequency([{8, 0}, {5, choose(1, 40)}, {1, choose(60, 350)}]).
+    frequency([{8, 0}, {5, choose(0, 20)}, {1, choose(25, 150)}]).
 
 consume_gen(N) ->
     ?LET(List, vector(N, boolean()), List).
@@ -530,7 +530,7 @@ next_index_term_prop(Dir, TestCase) ->
 read_write_meta(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun read_write_meta_prop/2, [Dir, TestCase], 100).
+    run_proper(fun read_write_meta_prop/2, [Dir, TestCase], 25).
 
 -type meta_data() :: {current_term, non_neg_integer()} |
                      {last_applied, non_neg_integer()} |
@@ -555,7 +555,7 @@ read_write_meta_prop(Dir, TestCase) ->
 sync_meta(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun sync_meta_prop/2, [Dir, TestCase], 100).
+    run_proper(fun sync_meta_prop/2, [Dir, TestCase], 25).
 
 sync_meta_prop(Dir, TestCase) ->
     ?FORALL(
@@ -800,7 +800,7 @@ wait_for_wal(M, N) ->
 last_written(Config) ->
     Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_prop/2, [Dir, TestCase], 25).
+    run_proper(fun last_written_prop/2, [Dir, TestCase], 10).
 
 last_written_prop(Dir, TestCase) ->
     ?FORALL(

@@ -54,10 +54,10 @@ end_per_testcase(_, Config) ->
                   foo4@localhost |
                   foo5@localhost.
 
--type actions() :: {part, [nodes5()], 1000..20000} |
-                   {wait, 1000..20000}.
+-type actions() :: {part, [nodes5()], 500..10000} |
+                   {wait, 500..10000}.
 
--type wait_time() :: 1000..20000.
+-type wait_time() :: 500..10000.
 
 prop_enq_drain(Config) ->
     ClusterId = ?config(cluster_id, Config),
