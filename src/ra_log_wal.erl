@@ -349,8 +349,7 @@ write_data(Id, Idx, Term, Data0, Trunc,
     end.
 
 handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},
-           #state{writers = Writers} = State0,
-          Dbg) ->
+           #state{writers = Writers} = State0, Dbg) ->
     case maps:find(Id, Writers) of
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
             write_data(Id, Idx, Term, Entry, false, State0, Dbg);

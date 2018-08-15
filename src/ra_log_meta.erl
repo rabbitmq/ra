@@ -9,6 +9,24 @@
 
 -include("ra.hrl").
 
+
+%% Options:
+%% 1. Leave as is
+%%    up: nothing to do, easy gc as stored in ra node directory
+%%    down: pay the cost of 1 fd per ra node. May need hoop jumping if changed later
+%% 2. Use dets,
+%%    up: quick and easy,
+%%    down: cannot easily interact with fsync, no async write
+%% 3. Use disk_log:
+%%    up: log based, async write,
+%%    down: fsync interaction
+%% 4. Weave into ra_wal:
+%%    up: fsync interaction, async write,
+%%    down: makes wal more complext
+%% 5. Make custom with wal like fsync / create gen_batch_server abstraction
+%%    up: fit for purpose, fast,
+%%    down: more work.
+
 % small fixed-size key value store for persisting no log raft data points
 % replacement for dets
 
