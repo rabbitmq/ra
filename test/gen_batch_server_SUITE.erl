@@ -190,7 +190,6 @@ sys_get_status_calls_format_status(Config) ->
                                              #{}, []),
 
     {_, _, _, [_, _, _, _, [_, _ ,S]]} = sys:get_status(Mod),
-    % ct:pal("Misc ~p~n", [S]),
     ?assertEqual({format_status, #{}}, S),
 
     ?assertEqual(true, meck:called(Mod, format_status, '_')),

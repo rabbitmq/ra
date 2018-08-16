@@ -25,20 +25,46 @@
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#read-1">read/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#write-2">write/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read_indexterm-1">read_indexterm/1</a></td><td>reads the index and term from the snapshot file without reading the
+  entire binary body.</td></tr>
+<tr><td valign="top"><a href="#write-2">write/2</a></td><td>
+  Snapshot file format:
+  "RASN"
+  Version (byte)
+  Checksum (unsigned 32)
+  Index (unsigned 64)
+  Term (unsigned 64)
+  Num cluster nodes (byte)
+  [DataLen (byte), Data (binary)]
+  Snapshot Data (binary).</td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
 <h3 class="function"><a name="read-1">read/1</a></h3>
 <div class="spec">
-<p><tt>read(File::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, invalid_format | <a href="#type-file_err">file_err()</a>}</tt><br></p>
+<p><tt>read(File::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, invalid_format | {invalid_version, integer()} | checksum_error | <a href="#type-file_err">file_err()</a>}</tt><br></p>
 </div>
+
+<h3 class="function"><a name="read_indexterm-1">read_indexterm/1</a></h3>
+<div class="spec">
+<p><tt>read_indexterm(File::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-ra_idxterm">ra_idxterm()</a>} | {error, invalid_format | {invalid_version, integer()} | checksum_error | <a href="#type-file_err">file_err()</a>}</tt><br></p>
+</div><p>reads the index and term from the snapshot file without reading the
+  entire binary body. NB: this does not do checksum validation.</p>
 
 <h3 class="function"><a name="write-2">write/2</a></h3>
 <div class="spec">
-<p><tt>write(File::<a href="file.html#type-filename">file:filename()</a>, Snapshot::<a href="#type-state">state()</a>) -&gt; ok | {error, <a href="#type-file_err">file_err()</a>}</tt><br></p>
-</div>
+<p><tt>write(File::<a href="file.html#type-filename">file:filename()</a>, X2::<a href="#type-state">state()</a>) -&gt; ok | {error, <a href="#type-file_err">file_err()</a>}</tt><br></p>
+</div><p>
+  Snapshot file format:
+  "RASN"
+  Version (byte)
+  Checksum (unsigned 32)
+  Index (unsigned 64)
+  Term (unsigned 64)
+  Num cluster nodes (byte)
+  [DataLen (byte), Data (binary)]
+  Snapshot Data (binary)</p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>

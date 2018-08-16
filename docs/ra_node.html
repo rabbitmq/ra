@@ -15,6 +15,26 @@
 
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-command">command()</a></h3>
+<p><tt>command() = {<a href="#type-command_type">command_type()</a>, <a href="#type-command_meta">command_meta()</a>, UserCommand::term(), <a href="#type-command_reply_mode">command_reply_mode()</a>} | noop</tt></p>
+
+
+<h3 class="typedecl"><a name="type-command_correlation">command_correlation()</a></h3>
+<p><tt>command_correlation() = non_neg_integer()</tt></p>
+
+
+<h3 class="typedecl"><a name="type-command_meta">command_meta()</a></h3>
+<p><tt>command_meta() = #{from := <a href="#type-maybe">maybe</a>(<a href="#type-from">from()</a>)}</tt></p>
+
+
+<h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
+<p><tt>command_reply_mode() = after_log_append | await_consensus | {notify_on_consensus, pid(), <a href="#type-command_correlation">command_correlation()</a>} | noreply</tt></p>
+
+
+<h3 class="typedecl"><a name="type-command_type">command_type()</a></h3>
+<p><tt>command_type() = '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' | '$ra_cluster_change' | '$ra_cluster'</tt></p>
+
+
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
 <p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), map()}</tt></p>
 
@@ -32,7 +52,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_msg">ra_msg()</a></h3>
-<p><tt>ra_msg() = #append_entries_rpc{} | {<a href="#type-ra_node_id">ra_node_id()</a>, #append_entries_reply{}} | {<a href="#type-ra_node_id">ra_node_id()</a>, #install_snapshot_result{}} | #request_vote_rpc{} | #request_vote_result{} | #pre_vote_rpc{} | #pre_vote_result{} | #install_snapshot_rpc{} | election_timeout | await_condition_timeout | {command, term()}</tt></p>
+<p><tt>ra_msg() = #append_entries_rpc{} | {<a href="#type-ra_node_id">ra_node_id()</a>, #append_entries_reply{}} | {<a href="#type-ra_node_id">ra_node_id()</a>, #install_snapshot_result{}} | #request_vote_rpc{} | #request_vote_result{} | #pre_vote_rpc{} | #pre_vote_result{} | #install_snapshot_rpc{} | election_timeout | await_condition_timeout | {command, <a href="#type-command">command()</a>} | {commands, [<a href="#type-command">command()</a>]} | <a href="ra_log.html#type-event">ra_log:event()</a></tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_node_config">ra_node_config()</a></h3>
@@ -56,7 +76,8 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#become-2">become/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-4">handle_aux/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_await_condition-2">handle_await_condition/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_candidate-2">handle_candidate/2</a></td><td></td></tr>
@@ -83,6 +104,11 @@
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="become-2">become/2</a></h3>
+<div class="spec">
+<p><tt>become(RaftState::<a href="#type-ra_state">ra_state()</a>, State::<a href="#type-ra_node_state">ra_node_state()</a>) -&gt; <a href="#type-ra_node_state">ra_node_state()</a></tt><br></p>
+</div>
 
 <h3 class="function"><a name="current_term-1">current_term/1</a></h3>
 <div class="spec">

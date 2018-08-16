@@ -61,23 +61,18 @@ The maximum size of the WAL (Write Ahead Log). Default: 128Mb.
 Indicate whether the wal should compute and validate checksums. Default: true
 
 * `wal_write_strategy`:
-    - `delay_writes`:
+    - `default`:
 
     The default. Actual `write(2)` system calls are delayed until a buffer is
     due to be
     flushed. Then it writes all the data in a single call then fsyncs. Fastest but
     incurs some additional memory use.
 
-    - `delay_writes_sync`:
+    - `do_sync`:
 
-    Like `delay_writes` but will try to open the file with `O_SYNC` and thus wont
+    Like `default` but will try to open the file with `O_SYNC` and thus wont
     need the additional `fsync(2)` system call. If it fails to open the file with this
-    flag this mode falls back to `delay_writes`
-
-    - `no_delay`:
-
-    Each entry is written using `write(2)` as soon as possible. Somewhat slower than
-    `delay_writes` but doesn't need to cache binary data for as long.
+    flag this mode falls back to `default`
 
 
 
@@ -87,7 +82,7 @@ Example:
 [{data_dir, "/tmp/ra-data"},
  {wal_max_size_bytes, 134217728},
  {wal_compute_checksums, true},
- {wal_write_strategy, delay_writes},
+ {wal_write_strategy, default},
 ]
 ```
 

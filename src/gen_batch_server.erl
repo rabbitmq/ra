@@ -38,7 +38,8 @@
 
 % -type state() :: #state{}.
 
--export_type([from/0, op/0]).
+-export_type([from/0, op/0,
+              action/0, server_ref/0]).
 
 %%% Behaviour
 
@@ -115,8 +116,11 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
 
 -spec cast(pid() | atom(), term()) -> ok.
 cast(Ref, Msg) ->
-    Ref ! {'$gen_cast', self(), Msg},
-    ok.
+    try Ref ! {'$gen_cast', self(), Msg} of
+        _ -> ok
+    catch
+        _:_ -> ok
+    end.
 
 -spec call(pid() | atom(), term()) -> term().
 call(Name, Request) ->
@@ -135,6 +139,8 @@ call(Name, Request, Timeout) ->
 %% Internal
 
 loop_wait(State0, Parent) ->
+    %% batches can accumulate a lot of garbage, collect it here
+    garbage_collect(),
     receive
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent,
@@ -185,8 +191,8 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
             enter_loop_batched(Msg, Parent, State0)
     after 0 ->
               State = complete_batch(State0),
-              NewBatchSize = max(State0#state.min_batch_size,
-                                 State0#state.batch_size / 2),
+              NewBatchSize = max(State#state.min_batch_size,
+                                 State#state.batch_size / 2),
               loop_wait(State#state{batch_size = NewBatchSize}, Parent)
     end.
 
@@ -211,7 +217,7 @@ complete_batch(#state{batch = Batch,
                                         Pid ! Msg,
                                         handle_debug_out(Pid, Msg, Dbg)
                                 end, Debug0, Actions),
-            {State, Debug};
+            State#state{debug = Debug};
         {stop, Reason} ->
             terminate(Reason, State0),
             exit(Reason);

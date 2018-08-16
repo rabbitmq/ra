@@ -6,9 +6,8 @@
 
 all() ->
     [
-     {group, no_delay},
-     {group, delay_writes},
-     {group, delay_writes_sync}
+     {group, default},
+     {group, o_sync}
     ].
 
 
@@ -25,14 +24,13 @@ all_tests() ->
      recover,
      recover_after_roll_over,
      recover_truncated_write,
-     system_get_state
+     sys_get_status
     ].
 
 groups() ->
     [
-     {no_delay, [], all_tests()},
-     {delay_writes, [], all_tests()},
-     {delay_writes_sync, [], all_tests()}
+     {default, [], all_tests()},
+     {o_sync, [], all_tests()}
     ].
 
 init_per_group(Group, Config) ->
@@ -124,6 +122,7 @@ write_many(Config) ->
     ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
+    Writes = lists:seq(1, NumWrites),
     {_, GarbBefore} = erlang:process_info(WalPid, garbage_collection),
     {_, MemBefore} = erlang:process_info(WalPid, memory),
     {_, BinBefore} = erlang:process_info(WalPid, binary),
@@ -132,9 +131,8 @@ write_many(Config) ->
     {Taken, _} =
         timer:tc(
           fun () ->
-                  [begin
-                       ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, {data, Data})
-                   end || Idx <- lists:seq(1, NumWrites)],
+                  [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1,
+                                         {data, Data}) || Idx <- Writes],
                   receive
                       {ra_log_event, {written, {_, NumWrites, 1}}} ->
                           ok
@@ -142,10 +140,11 @@ write_many(Config) ->
                             throw(written_timeout)
                   end
           end),
+    timer:sleep(5), % give the gc some time
     {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
     {_, BinAfter} = erlang:process_info(WalPid, binary),
-    {_, MemAfter} = erlang:process_info(WalPid, memory),
     {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
+    {_, MemAfter} = erlang:process_info(WalPid, memory),
 
     ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
     ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),
@@ -323,11 +322,12 @@ recover_truncated_write(Config) ->
     proc_lib:stop(Pid),
     ok.
 
-system_get_state(Config) ->
+sys_get_status(Config) ->
     Conf = ?config(wal_conf, Config),
     {_UId, _} = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf, []),
-    #{write_strategy := _} = sys:get_state(ra_log_wal),
+    {_, _, _, [_, _, _, _, [_, _ ,S]]} = sys:get_status(ra_log_wal),
+    #{write_strategy := _} = S,
     proc_lib:stop(Pid),
     ok.
 
@@ -408,10 +408,13 @@ empty_mailbox() ->
               ok
     end.
 
-await_written({UId, _}, {_From, To, _Term} = Written) ->
+await_written({UId, _} = Id, {From, To, Term} = Written) ->
     receive
         {ra_log_event, {written, Written}} ->
-            mem_tbl_read(UId, To)
+            mem_tbl_read(UId, To);
+        {ra_log_event, {written, {From, T, _}}} ->
+            ct:pal("received partial written event ~w~n", [Written]),
+            await_written(Id, {T+1, To, Term})
     after 5000 ->
               throw({written_timeout, To})
     end.
