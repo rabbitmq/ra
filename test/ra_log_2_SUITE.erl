@@ -169,7 +169,8 @@ take_after_overwrite_and_init(Config) ->
 validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{data_dir => Dir, uid => UId}),
+    Log0 = ra_log:init(#{data_dir => Dir, uid => UId,
+                         max_open_segments => 1000}),
     % write a few entries
     Log1 = append_and_roll(1, 100, 1, Log0),
     Log2 = append_and_roll(100, 200, 1, Log1),
@@ -201,7 +202,7 @@ validate_sequential_reads(Config) ->
     ct:pal("validate_sequential_reads WARM took ~pms Reductions: ~p~n",
            [WarmTaken/1000, WarmReds]),
     % we'd like to know if we regress beyond this
-    ?assert(WarmReds < 75000),
+    ?assert(WarmReds < ColdReds),
     ra_log:close(FinLog2),
     ok.
 
