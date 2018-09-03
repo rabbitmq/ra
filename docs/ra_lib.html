@@ -16,15 +16,19 @@
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#ceiling-1">ceiling/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#default-2">default/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#derive_safe_string-2">derive_safe_string/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#dump-1">dump/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#dump-2">dump/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#id-1">id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#iter_maybe-2">iter_maybe/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#lazy_default-2">lazy_default/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#make_uid-0">make_uid/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#make_uid-1">make_uid/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#ra_node_id_node-1">ra_node_id_node/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#ra_node_id_to_local_name-1">ra_node_id_to_local_name/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#recursive_delete-1">recursive_delete/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#to_atom-1">to_atom/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_binary-1">to_binary/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#to_list-1">to_list/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#to_string-1">to_string/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_element-3">update_element/3</a></td><td></td></tr>
@@ -43,6 +47,11 @@
 <h3 class="function"><a name="default-2">default/2</a></h3>
 <div class="spec">
 <p><tt>default(Value, Def) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="derive_safe_string-2">derive_safe_string/2</a></h3>
+<div class="spec">
+<p><tt>derive_safe_string(S, Num) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="dump-1">dump/1</a></h3>
@@ -70,6 +79,16 @@
 <p><tt>lazy_default(Value::undefined | term(), DefGen::fun(() -&gt; term())) -&gt; term()</tt><br></p>
 </div>
 
+<h3 class="function"><a name="make_uid-0">make_uid/0</a></h3>
+<div class="spec">
+<p><tt>make_uid() -&gt; binary()</tt><br></p>
+</div>
+
+<h3 class="function"><a name="make_uid-1">make_uid/1</a></h3>
+<div class="spec">
+<p><tt>make_uid(Prefix0::atom() | binary() | string()) -&gt; binary()</tt><br></p>
+</div>
+
 <h3 class="function"><a name="ra_node_id_node-1">ra_node_id_node/1</a></h3>
 <div class="spec">
 <p><tt>ra_node_id_node(Name) -&gt; any()</tt></p>
@@ -88,6 +107,11 @@
 <h3 class="function"><a name="to_atom-1">to_atom/1</a></h3>
 <div class="spec">
 <p><tt>to_atom(A::atom() | list() | binary()) -&gt; atom()</tt><br></p>
+</div>
+
+<h3 class="function"><a name="to_binary-1">to_binary/1</a></h3>
+<div class="spec">
+<p><tt>to_binary(B::atom() | binary() | binary() | integer()) -&gt; binary()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="to_list-1">to_list/1</a></h3>
