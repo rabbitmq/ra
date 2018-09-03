@@ -175,7 +175,7 @@ throw_error(Format, Args) ->
 make_uid() ->
     make_uid(<<>>).
 
--spec make_uid(string()) -> binary().
+-spec make_uid(atom() | binary() | string()) -> binary().
 make_uid(Prefix0) ->
     Len = 12,
     ChrsSize = size(?ALLOWED_CHARS),
