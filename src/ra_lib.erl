@@ -23,7 +23,8 @@
          recursive_delete/1,
          make_uid/0,
          make_uid/1,
-         derive_safe_string/2
+         derive_safe_string/2,
+         validate_base64uri/1
         ]).
 
 ceiling(X) when X < 0 ->
@@ -164,12 +165,17 @@ do_delete(Dir, directory) ->
 throw_error(Format, Args) ->
     throw({error, lists:flatten(io_lib:format(Format, Args))}).
 
--define(ALLOWED_CHARS,
+%% "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+-define(GENERATED_UID_CHARS,
         {65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,
          84,85,86,87,88,89,90,48,49,50,51,52,53,54,55,56,57}).
 
--define(SAFE_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").
+-define(BASE64_URI_CHARS,
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789_-=").
 -define(UID_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890").
+-define(UID_LENGTH, 12).
 
 -spec make_uid() -> binary().
 make_uid() ->
@@ -177,18 +183,33 @@ make_uid() ->
 
 -spec make_uid(atom() | binary() | string()) -> binary().
 make_uid(Prefix0) ->
-    Len = 12,
-    ChrsSize = size(?ALLOWED_CHARS),
-    F = fun(_, R) -> [element(rand:uniform(ChrsSize), ?ALLOWED_CHARS) | R] end,
+    ChrsSize = size(?GENERATED_UID_CHARS),
+    F = fun(_, R) ->
+                [element(rand:uniform(ChrsSize), ?GENERATED_UID_CHARS) | R]
+        end,
     Prefix = to_binary(Prefix0),
-    B = list_to_binary(lists:foldl(F, "", lists:seq(1, Len))),
+    B = list_to_binary(lists:foldl(F, "", lists:seq(1, ?UID_LENGTH))),
     <<Prefix/binary, B/binary>>.
+
+-spec validate_base64uri(string()) -> boolean().
+validate_base64uri(Str) ->
+    catch
+    begin
+        [begin
+             case lists:member(C, ?BASE64_URI_CHARS) of
+                 true -> ok;
+                 false -> throw(false)
+             end
+         end || C <- string:to_graphemes(Str)],
+        string:is_empty(Str) == false
+    end.
+
 
 derive_safe_string(S, Num) ->
     F = fun Take([], Acc) ->
                 string:reverse(Acc);
             Take([G | Rem], Acc) ->
-                case lists:member(G, ?SAFE_CHARS) of
+                case lists:member(G, ?BASE64_URI_CHARS) of
                     true ->
                         Take(string:next_grapheme(Rem), [G | Acc]);
                     false ->
@@ -224,6 +245,13 @@ derive_safe_string_test() ->
     [] = derive_safe_string(<<"">>, 4),
     "bnan" = derive_safe_string(S, 4),
     "bnan" = derive_safe_string(S2, 4),
+    ok.
+
+validate_base64uri_test() ->
+    false = validate_base64uri(""), %% false
+    true = validate_base64uri(?BASE64_URI_CHARS),
+    false = validate_base64uri("asdføasdf"),
+    false = validate_base64uri("asdf/asdf"),
     ok.
 
 -endif.

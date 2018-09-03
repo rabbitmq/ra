@@ -92,12 +92,18 @@ start_local_cluster(Num, Name, Machine) ->
 %% @returns `{ok | error, Error}'
 -spec start_node(ra_node:ra_node_config()) -> ok | {error, term()}.
 start_node(Conf) ->
-    % don't match on return value in case it is already running
-    case catch ra_nodes_sup:start_node(Conf) of
-        {ok, _} -> ok;
-        {ok, _, _} -> ok;
-        {error, _} = Err -> Err;
-        {'EXIT', Err} -> {error, Err}
+    %% validate UID is safe
+    case ra_lib:validate_base64uri(maps:get(uid, Conf)) of
+        true ->
+            % don't match on return value in case it is already running
+            case catch ra_nodes_sup:start_node(Conf) of
+                {ok, _} -> ok;
+                {ok, _, _} -> ok;
+                {error, _} = Err -> Err;
+                {'EXIT', Err} -> {error, Err}
+            end;
+        false ->
+            {error, invalid_uid}
     end.
 
 %% @doc Restarts a previously succesfully started ra node

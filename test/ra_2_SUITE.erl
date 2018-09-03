@@ -23,7 +23,8 @@ all_tests() ->
      node_restart_after_application_restart,
      restarted_node_does_not_reissue_side_effects,
      recover,
-     recover_after_kill
+     recover_after_kill,
+     start_node_uid_validation
     ].
 
 groups() ->
@@ -247,6 +248,19 @@ recover_after_kill(Config) ->
     ra:members(NodeId),
     {ok, {_, MS3}, _} = ra:local_query(NodeId, fun (S) -> S end),
     ?assertEqual(MS2, MS3),
+    ok.
+
+start_node_uid_validation(Config) ->
+    NodeId = ?config(node_id, Config),
+    UId = <<"ADSFASDFø"/utf8>>,
+    Conf = #{cluster_id => ?config(cluster_id, Config),
+             id => NodeId,
+             uid => UId,
+             initial_nodes => [NodeId],
+             log_init_args => #{uid => UId},
+             machine => {module, ?MODULE, #{}}},
+    {error, invalid_uid} = ra:start_node(Conf),
+    {error, invalid_uid} = ra:start_node(Conf#{uid => <<"">>}),
     ok.
 
 enq_deq_n(N, NodeId) ->

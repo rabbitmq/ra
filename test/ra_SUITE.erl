@@ -238,6 +238,8 @@ start_nodes(Config) ->
                                                      ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
+
+
 node_recovery(Config) ->
     N1 = nn(Config, 1),
     N2 = nn(Config, 2),

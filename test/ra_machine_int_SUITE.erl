@@ -128,7 +128,9 @@ follower_takes_over_monitor(Config) ->
     meck:expect(Mod, apply,
                 fun (_, {monitor_me, Pid}, _, State) ->
                         {[Pid | State], [{monitor, process, Pid}], ok};
-                    (_, dummy, _, State) ->
+                    (_, Cmd, _, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
                         {State, []}
                 end),
     meck:expect(Mod, leader_effects,
@@ -137,6 +139,8 @@ follower_takes_over_monitor(Config) ->
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
     {ok, ok, _} = ra:send_and_await_consensus(NodeId1, {monitor_me, self()}),
+    %% sleep here as it seems monitors, or this stat aren't updated synchronously
+    timer:sleep(100),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name1)),
 
