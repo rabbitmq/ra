@@ -11,6 +11,7 @@
          iter_maybe/2,
          % cohercion
          to_list/1,
+         to_binary/1,
          to_string/1,
          to_atom/1,
          ra_node_id_to_local_name/1,
@@ -19,7 +20,10 @@
          zpad_filename/3,
          zpad_filename_incr/1,
          zpad_extract_num/1,
-         recursive_delete/1
+         recursive_delete/1,
+         make_uid/0,
+         make_uid/1,
+         derive_safe_string/2
         ]).
 
 ceiling(X) when X < 0 ->
@@ -68,6 +72,16 @@ to_list(I) when is_integer(I) ->
     integer_to_list(I);
 to_list(L) when is_list(L) ->
     L.
+
+-spec to_binary(atom() | binary() | binary() | integer()) -> binary().
+to_binary(B) when is_binary(B) ->
+    B;
+to_binary(A) when is_atom(A) ->
+    atom_to_binary(A, utf8);
+to_binary(I) when is_integer(I) ->
+    integer_to_binary(I);
+to_binary(L) when is_list(L) ->
+    list_to_binary(L).
 
 -spec to_string(binary() | string()) -> string().
 to_string(B) when is_binary(B) ->
@@ -150,14 +164,66 @@ do_delete(Dir, directory) ->
 throw_error(Format, Args) ->
     throw({error, lists:flatten(io_lib:format(Format, Args))}).
 
+-define(ALLOWED_CHARS,
+        {65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,
+         84,85,86,87,88,89,90,48,49,50,51,52,53,54,55,56,57}).
+
+-define(SAFE_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").
+-define(UID_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890").
+
+-spec make_uid() -> binary().
+make_uid() ->
+    make_uid(<<>>).
+
+-spec make_uid(string()) -> binary().
+make_uid(Prefix0) ->
+    Len = 12,
+    ChrsSize = size(?ALLOWED_CHARS),
+    F = fun(_, R) -> [element(rand:uniform(ChrsSize), ?ALLOWED_CHARS) | R] end,
+    Prefix = to_binary(Prefix0),
+    B = list_to_binary(lists:foldl(F, "", lists:seq(1, Len))),
+    <<Prefix/binary, B/binary>>.
+
+derive_safe_string(S, Num) ->
+    F = fun Take([], Acc) ->
+                string:reverse(Acc);
+            Take([G | Rem], Acc) ->
+                case lists:member(G, ?SAFE_CHARS) of
+                    true ->
+                        Take(string:next_grapheme(Rem), [G | Acc]);
+                    false ->
+                        Take(string:next_grapheme(Rem), Acc)
+                end
+         end,
+     string:slice(F(string:next_grapheme(S), []), 0, Num).
+
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+make_uid_test() ->
+    U1 = make_uid(),
+    U2 = make_uid(),
+    ?debugFmt("U1 ~s U2 ~s", [U1, U2]),
+    ?assertNotEqual(U1, U2),
+    <<"ABCD", _/binary>> = make_uid("ABCD"),
+    <<"ABCD", _/binary>> = make_uid(<<"ABCD">>),
+    ok.
 
 zpad_filename_incr_test() ->
     Fn = "/lib/blah/prefix_00000001.segment",
     Ex = "/lib/blah/prefix_00000002.segment",
     Ex = zpad_filename_incr(Fn),
     undefined = zpad_filename_incr("0000001"),
+    ok.
+
+derive_safe_string_test() ->
+    S = <<"bønana"/utf8>>,
+    S2 = "bønana",
+    [] = derive_safe_string(<<"">>, 4),
+    "bnan" = derive_safe_string(S, 4),
+    "bnan" = derive_safe_string(S2, 4),
     ok.
 
 -endif.

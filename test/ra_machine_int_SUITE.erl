@@ -144,6 +144,7 @@ follower_takes_over_monitor(Config) ->
     % give the election process a bit of time before issuing a command
     timer:sleep(200),
     {ok, _, _} = ra:send_and_await_consensus(NodeId2, dummy),
+    timer:sleep(200),
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
                                                              monitored_by),

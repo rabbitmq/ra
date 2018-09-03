@@ -223,17 +223,13 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                  ra_node:machine_conf(), [ra_node_id()]) ->
     ok | {error, term()}.
 start_node(ClusterId, NodeId, Machine, NodeIds) ->
-    TS = erlang:system_time(millisecond),
-    I = erlang:unique_integer(),
-    UId = ra_lib:to_list(ClusterId)
-          ++ ra_lib:to_list(I)
-          ++ ra_lib:to_list(TS),
-    U = list_to_binary(UId),
+    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterId), 4),
+    UId = ra_lib:make_uid(string:uppercase(Prefix)),
     Conf = #{cluster_id => ClusterId,
              id => NodeId,
-             uid => U,
+             uid => UId,
              initial_nodes => NodeIds,
-             log_init_args => #{uid => U},
+             log_init_args => #{uid => UId},
              machine => Machine},
     start_node(Conf).
 

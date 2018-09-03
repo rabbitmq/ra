@@ -111,11 +111,14 @@ cluster_is_deleted_with_node_down(Config) ->
     Peers = [NodeId1, NodeId2, NodeId3],
     ok = start_cluster(ClusterId, Peers),
     timer:sleep(100),
+    [ begin
+          UId = ra_directory:registered_name_from_node_name(Name),
+          ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
+      end || {Name, _} <- Peers],
+
     % check data dirs exist for all nodes
-    Wildcard = lists:flatten(filename:join([PrivDir,
-                                            atom_to_list(ClusterId) ++ "**"])),
+    % Wildcard = lists:flatten(filename:join([PrivDir, "**"])),
     % assert there are three matching data dirs
-    [_, _, _] = filelib:wildcard(Wildcard),
 
     ok = ra:stop_node(NodeId3),
     {ok, _} = ra:delete_cluster(Peers),
@@ -128,7 +131,10 @@ cluster_is_deleted_with_node_down(Config) ->
     ok = validate_process_down(element(1, NodeId3), 10),
 
     % validate there are no data dirs anymore
-    [] = filelib:wildcard(Wildcard),
+    [ begin
+          UId = ra_directory:registered_name_from_node_name(Name),
+          ?assert(false =:= filelib:is_dir(filename:join([PrivDir, UId])))
+      end || {Name, _} <- Peers],
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
@@ -140,11 +146,10 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     Peers = [NodeId1, NodeId2, NodeId3],
     ok = start_cluster(ClusterId, Peers),
     % check data dirs exist for all nodes
-    Wildcard = lists:flatten(filename:join([PrivDir,
-                                            atom_to_list(ClusterId) ++ "**"])),
-    % assert there are three matching data dirs
-    [_,_,_] = filelib:wildcard(Wildcard),
-
+    [ begin
+          UId = ra_directory:registered_name_from_node_name(Name),
+          ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
+      end || {Name, _} <- Peers],
     ra:stop_node(NodeId2),
     ra:stop_node(NodeId3),
     {error, {no_more_nodes_to_try, Errs}} = ra:delete_cluster(Peers, 250),
