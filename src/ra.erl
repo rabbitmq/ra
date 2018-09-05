@@ -100,7 +100,8 @@ start_node(Conf) ->
                 {ok, _} -> ok;
                 {ok, _, _} -> ok;
                 {error, _} = Err -> Err;
-                {'EXIT', Err} -> {error, Err}
+                {'EXIT', Err} -> {error, Err};
+                {badrpc, Reason} -> {error, Reason}
             end;
         false ->
             {error, invalid_uid}

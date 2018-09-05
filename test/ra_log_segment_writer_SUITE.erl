@@ -332,7 +332,7 @@ fake_mem_table(UId, Dir, Entries) ->
     {MemTables, filename:join(Dir, "blah.wal")}.
 
 make_mem_table(UId, Entries) ->
-    N = ra_directory:what_node(UId),
+    N = ra_directory:name_of(UId),
     Tid = ets:new(N, []),
     [ets:insert(Tid, E) || E <- Entries],
     Tid.

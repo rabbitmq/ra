@@ -5,10 +5,9 @@
          deinit/0,
          register_name/3,
          unregister_name/1,
-         whereis_name/1,
-         what_node/1,
-         registered_name_from_node_name/1,
-         whereis_node_name/1,
+         where_is/1,
+         name_of/1,
+         uid_of/1,
          send/2,
          overview/0
          ]).
@@ -60,39 +59,38 @@ unregister_name(UId) ->
             UId
     end.
 
--spec whereis_name(ra_uid()) -> pid() | undefined.
-whereis_name(UId) ->
+-spec where_is(ra_uid() | atom()) -> pid() | undefined.
+where_is(NodeName) when is_atom(NodeName) ->
+    case dets:lookup(?REVERSE_TBL, NodeName) of
+        [] -> undefined;
+        [{_, UId}] ->
+            where_is(UId)
+    end;
+where_is(UId) when is_binary(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_Name, Pid, _RaNodeName}] -> Pid;
+        [{_, Pid, _}] -> Pid;
         [] -> undefined
     end.
 
--spec what_node(ra_uid()) -> atom().
-what_node(UId) ->
+-spec name_of(ra_uid()) -> atom().
+name_of(UId) ->
     case ets:lookup(?MODULE, UId) of
         [{_UId, _Pid, Node}] -> Node;
         [] -> undefined
     end.
 
-registered_name_from_node_name(NodeName) when is_atom(NodeName) ->
+uid_of(NodeName) when is_atom(NodeName) ->
     case dets:lookup(?REVERSE_TBL, NodeName) of
         [] -> undefined;
         [{_, UId}] ->
             UId
     end.
 
-whereis_node_name(NodeName) when is_atom(NodeName) ->
-    case dets:lookup(?REVERSE_TBL, NodeName) of
-        [] -> undefined;
-        [{_, UId}] ->
-            whereis_name(UId)
-    end.
-
--spec send(ra_uid(), term()) -> pid().
-send(Name, Msg) ->
-    case whereis_name(Name) of
+-spec send(ra_uid() | atom(), term()) -> pid().
+send(UIdOrName, Msg) ->
+    case where_is(UIdOrName) of
         undefined ->
-            exit({badarg, {Name, Msg}});
+            exit({badarg, {UIdOrName, Msg}});
         Pid ->
             _ = erlang:send(Pid, Msg),
             Pid

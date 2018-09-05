@@ -17,6 +17,7 @@ all() ->
 
 all_tests() ->
     [
+     start_stopped_node,
      node_is_deleted,
      cluster_is_deleted_with_node_down,
      cluster_cannot_be_deleted_in_minority,
@@ -67,6 +68,24 @@ dequeue(Node) ->
     {ok, Res, _} = ra:send_and_await_consensus(Node, deq),
     Res.
 
+start_stopped_node(Config) ->
+    %% ra:start_node should fail if the node already exists
+    ClusterId = ?config(cluster_id, Config),
+    PrivDir = ?config(priv_dir, Config),
+    NodeId = ?config(node_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterId, UId, NodeId, PrivDir, []),
+    ok = ra:start_node(Conf),
+    ok = ra:trigger_election(NodeId),
+    ok = enqueue(NodeId, msg1),
+    %%
+    {error, {already_started, _}} = ra:start_node(Conf),
+    ok = ra:stop_node(NodeId),
+    {error, not_new} = ra:start_node(Conf),
+    ok = ra:restart_node(NodeId),
+    ok.
+
+
 node_is_deleted(Config) ->
     ClusterId = ?config(cluster_id, Config),
     PrivDir = ?config(priv_dir, Config),
@@ -113,7 +132,7 @@ cluster_is_deleted_with_node_down(Config) ->
     ok = start_cluster(ClusterId, Peers),
     timer:sleep(100),
     [ begin
-          UId = ra_directory:registered_name_from_node_name(Name),
+          UId = ra_directory:uid_of(Name),
           ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
       end || {Name, _} <- Peers],
 
@@ -133,7 +152,7 @@ cluster_is_deleted_with_node_down(Config) ->
 
     % validate there are no data dirs anymore
     [ begin
-          UId = ra_directory:registered_name_from_node_name(Name),
+          UId = ra_directory:uid_of(Name),
           ?assert(false =:= filelib:is_dir(filename:join([PrivDir, UId])))
       end || {Name, _} <- Peers],
     ok.
@@ -148,7 +167,7 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     ok = start_cluster(ClusterId, Peers),
     % check data dirs exist for all nodes
     [ begin
-          UId = ra_directory:registered_name_from_node_name(Name),
+          UId = ra_directory:uid_of(Name),
           ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
       end || {Name, _} <- Peers],
     ra:stop_node(NodeId2),

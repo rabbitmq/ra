@@ -476,7 +476,7 @@ open_mem_table({UId, _Pid}) ->
 open_mem_table(UId) ->
     % lookup the locally registered name of the process to use as ets
     % name
-    NodeName = ra_directory:what_node(UId),
+    NodeName = ra_directory:name_of(UId),
     Tid = ets:new(NodeName, [set, {read_concurrency, true}, public]),
     % immediately give away ownership to ets process
     true = ra_log_ets:give_away(Tid),

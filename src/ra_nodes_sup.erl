@@ -11,6 +11,7 @@
          remove_all/0,
          start_link/0,
          % for rpcs only
+         prepare_start_rpc/1,
          prepare_restart_rpc/1,
          delete_node_rpc/1]).
 
@@ -20,23 +21,42 @@
 -include("ra.hrl").
 
 -spec start_node(ra_node:ra_node_config()) ->
-    supervisor:startchild_ret().
-start_node(#{id := NodeId} = Config) ->
+    supervisor:startchild_ret() | {error, not_new}.
+start_node(#{id := NodeId,
+             uid := UId} = Config) ->
+    %% check that the node isn't already registered
     Node = ra_lib:ra_node_id_node(NodeId),
-    supervisor:start_child({?MODULE, Node}, [Config]).
+    case rpc:call(Node, ?MODULE, prepare_start_rpc, [UId]) of
+        ok ->
+            supervisor:start_child({?MODULE, Node}, [Config]);
+        Err ->
+            Err
+    end.
 
 -spec restart_node(ra_node_id()) -> supervisor:startchild_ret().
 restart_node({RaName, Node}) ->
     case rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]) of
-        {ok, Conf} ->
-            start_node(Conf);
+        {ok, Config} ->
+            supervisor:start_child({?MODULE, Node}, [Config]);
         Err ->
             {error, Err}
     end.
 
+prepare_start_rpc(UId) ->
+    case ra_directory:name_of(UId) of
+        undefined ->
+            ok;
+        Name ->
+            case whereis(Name) of
+                undefined ->
+                    {error, not_new};
+                Pid ->
+                    {error, {already_started, Pid}}
+              end
+    end.
 
 prepare_restart_rpc(RaName) ->
-    case ra_directory:registered_name_from_node_name(RaName) of
+    case ra_directory:uid_of(RaName) of
         undefined ->
             name_not_registered;
         UId ->
@@ -48,11 +68,11 @@ prepare_restart_rpc(RaName) ->
 -spec stop_node(RaNodeId :: ra_node_id()) -> ok | {error, term()}.
 stop_node({RaName, Node}) ->
     Pid = rpc:call(Node, ra_directory,
-                   whereis_node_name, [RaName]),
+                   where_is, [RaName]),
     supervisor:terminate_child({?MODULE, Node}, Pid);
 stop_node(RaName) ->
     % local node
-    case ra_directory:whereis_node_name(RaName) of
+    case ra_directory:where_is(RaName) of
         undefined -> ok;
         Pid ->
             supervisor:terminate_child(?MODULE, Pid)
@@ -71,7 +91,7 @@ delete_node(NodeId) ->
 
 delete_node_rpc(RaName) ->
     %% TODO: better handle and report errors
-    UId = ra_directory:registered_name_from_node_name(RaName),
+    UId = ra_directory:uid_of(RaName),
     Dir = ra_env:data_dir(UId),
     ok = ra_log_segment_writer:release_segments(
            ra_log_segment_writer, UId),

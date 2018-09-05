@@ -54,42 +54,42 @@ end_per_testcase(_TestCase, _Config) ->
 basics(Config) ->
     Dir = ?config(priv_dir, Config),
     ok = ra_directory:init(Dir),
-    Name = <<"test1">>,
+    UId = <<"test1">>,
     Self = self(),
-    yes = ra_directory:register_name(Name, Self, test1),
+    yes = ra_directory:register_name(UId, Self, test1),
     % registrations should always succeed - no negative test
     % no = register_name(Name, spawn(fun() -> ok end), test1),
-    Self = ra_directory:whereis_name(Name),
-    Name = ra_directory:registered_name_from_node_name(test1),
+    Self = ra_directory:where_is(UId),
+    UId = ra_directory:uid_of(test1),
     % ensure it can be read from another process
     _ = spawn_link(
           fun () ->
-                  Name = ra_directory:registered_name_from_node_name(test1),
+                  UId = ra_directory:uid_of(test1),
                   Self ! done
           end),
     receive done -> ok after 500 -> exit(timeout) end,
-    test1 = ra_directory:what_node(Name),
-    _ = ra_directory:send(Name, hi_Name),
+    test1 = ra_directory:name_of(UId),
+    _ = ra_directory:send(UId, hi_Name),
     receive
         hi_Name -> ok
     after 100 ->
               exit(await_msg_timeout)
     end,
-    Name = ra_directory:unregister_name(Name),
-    undefined = ra_directory:whereis_name(Name),
-    undefined = ra_directory:what_node(Name),
-    undefined = ra_directory:registered_name_from_node_name(test1),
+    UId = ra_directory:unregister_name(UId),
+    undefined = ra_directory:where_is(UId),
+    undefined = ra_directory:name_of(UId),
+    undefined = ra_directory:uid_of(test1),
     ok.
 
 persistence(Config) ->
     Dir = ?config(priv_dir, Config),
     ok = ra_directory:init(Dir),
-    Name = <<"test1">>,
+    UId = <<"test1">>,
     Self = self(),
-    yes = ra_directory:register_name(Name, Self, test1),
-    Name = ra_directory:registered_name_from_node_name(test1),
+    yes = ra_directory:register_name(UId, Self, test1),
+    UId = ra_directory:uid_of(test1),
     ok = ra_directory:deinit(),
     ok = ra_directory:init(Dir),
-    Name = ra_directory:registered_name_from_node_name(test1),
+    UId = ra_directory:uid_of(test1),
     ok.
 %% Utility
