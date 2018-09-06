@@ -19,6 +19,7 @@
 <tr><td valign="top"><a href="#delete_node_rpc-1">delete_node_rpc/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#prepare_restart_rpc-1">prepare_restart_rpc/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#prepare_start_rpc-1">prepare_start_rpc/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#remove_all-0">remove_all/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#restart_node-1">restart_node/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td></td></tr>
@@ -48,6 +49,11 @@
 <p><tt>prepare_restart_rpc(RaName) -&gt; any()</tt></p>
 </div>
 
+<h3 class="function"><a name="prepare_start_rpc-1">prepare_start_rpc/1</a></h3>
+<div class="spec">
+<p><tt>prepare_start_rpc(UId) -&gt; any()</tt></p>
+</div>
+
 <h3 class="function"><a name="remove_all-0">remove_all/0</a></h3>
 <div class="spec">
 <p><tt>remove_all() -&gt; any()</tt></p>
@@ -65,7 +71,7 @@
 
 <h3 class="function"><a name="start_node-1">start_node/1</a></h3>
 <div class="spec">
-<p><tt>start_node(Config::<a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>) -&gt; <a href="supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a></tt><br></p>
+<p><tt>start_node(Config::<a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>) -&gt; <a href="supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a> | {error, not_new}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="stop_node-1">stop_node/1</a></h3>
