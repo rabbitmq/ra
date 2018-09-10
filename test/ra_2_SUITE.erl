@@ -264,8 +264,9 @@ recover_after_kill(Config) ->
     %        [X, X2, MS, MS2, AllDeq]),
     ?assertEqual(MS, MS2),
     ok = ra:restart_node(NodeId),
-    ra:members(NodeId),
+    {ok, _, _} = ra:members(NodeId, 30000),
     {ok, {_, MS3}, _} = ra:local_query(NodeId, fun (S) -> S end),
+    ct:pal("~p ~p", [MS2, MS3]),
     ?assertEqual(MS2, MS3),
     ok.
 

@@ -32,8 +32,9 @@
 -type writer_id() :: {binary(), pid()}.
 
 -record(batch, {writes = 0 :: non_neg_integer(),
-                waiting = #{} :: #{writer_id() =>
-                                   {From :: ra_index(), To :: ra_index()}},
+                waiting = #{} :: #{pid() =>
+                                   {From :: ra_index(), To :: ra_index(),
+                                    Term :: ra_term()}},
                 start_time :: maybe(integer()),
                 pending = [] :: iolist()
                }).
@@ -69,7 +70,7 @@
                 % beyond the available WAL files
                 % all writers seen withing the lifetime of a WAL file
                 % and the last index seen
-                writers = #{} :: #{writer_id() =>
+                writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
                 compute_checksums = false :: boolean(),
@@ -270,32 +271,31 @@ cleanup(#state{wal = #wal{fd = Fd}}) ->
     _ = ra_file_handle:sync(Fd),
     ok.
 
-serialize_header(Id, Trunc, {Next, Cache} = WriterCache) ->
+serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
     T = case Trunc of true -> 1; false -> 0 end,
     case Cache of
-        #{Id := BinId} ->
-            {<<T:1/integer, BinId/bitstring>>, 2, WriterCache};
+        #{UId := BinId} ->
+            {<<T:1/unsigned, BinId/bitstring>>, 2, WriterCache};
         _ ->
             % TODO: check overflows of Next
-            % cache the last 15 bits of the header word
-            BinId = <<1:1/integer, Next:14/integer>>,
-            IdData = term_to_binary(Id),
-            IdDataLen = byte_size(IdData),
-            Prefix = <<T:1/integer, 0:1/integer, Next:14/integer,
-                       IdDataLen:16/integer>>,
-            MarkerId = [Prefix, IdData],
+            % cache the last 23 bits of the header word
+            BinId = <<1:1/unsigned, Next:22/unsigned>>,
+            IdDataLen = byte_size(UId),
+            Prefix = <<T:1/unsigned, 0:1/unsigned, Next:22/unsigned,
+                       IdDataLen:16/unsigned>>,
+            MarkerId = [Prefix, UId],
             {MarkerId, 4 + IdDataLen,
-             {Next+1, Cache#{Id => BinId}}}
+             {Next + 1, Cache#{UId => BinId}}}
     end.
 
-write_data(Id, Idx, Term, Data0, Trunc,
+write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
            #state{max_size_bytes = MaxWalSize,
                   compute_checksums = ComputeChecksum,
                   wal = #wal{file_size = FileSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
-    {HeaderData, HeaderLen, Cache} = serialize_header(Id, Trunc, Cache0),
+    {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
     % fixed overhead =
     % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
     DataSize = HeaderLen + 24 + EntryDataLen,
@@ -324,9 +324,9 @@ write_data(Id, Idx, Term, Data0, Trunc,
                         DataSize, Record, Trunc)
     end.
 
-handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},
+handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
            #state{writers = Writers} = State0) ->
-    case maps:find(Id, Writers) of
+    case maps:find(UId, Writers) of
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
             write_data(Id, Idx, Term, Entry, false, State0);
         error ->
@@ -340,9 +340,9 @@ handle_msg({append, {_, Pid} = Id, Idx, Term, Entry},
             % notify writer
             ?WARN("WAL: requesting resend from `~p`, "
                   "last idx ~b idx received ~b",
-                  [Id, PrevIdx, Idx]),
+                  [UId, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
-            State0#state{writers = Writers#{Id => {out_of_seq, PrevIdx}}}
+            State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
 handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
     write_data(Id, Idx, Term, Entry, true, State0);
@@ -352,14 +352,14 @@ handle_msg(rollover, State) ->
 append_data(#state{wal = #wal{file_size = FileSize} = Wal,
                    batch = Batch,
                    writers = Writers} = State,
-            Id, Idx, Term, Entry, DataSize, Data, Truncate) ->
-    true = update_mem_table(ra_log_open_mem_tables, Id, Idx, Term, Entry,
+            {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
+    true = update_mem_table(ra_log_open_mem_tables, UId, Idx, Term, Entry,
                             Truncate),
     State#state{wal = Wal#wal{file_size = FileSize + DataSize},
-                batch = incr_batch(Batch, Id, {Idx, Term}, Data),
-                writers = Writers#{Id => {in_seq, Idx}} }.
+                batch = incr_batch(Batch, Pid, {Idx, Term}, Data),
+                writers = Writers#{UId => {in_seq, Idx}} }.
 
-update_mem_table(OpnMemTbl, {UId, _}, Idx, Term, Entry, Truncate) ->
+update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table and safe
     % some disk space when it later is flushed to disk
     case ets:lookup(OpnMemTbl, UId) of
@@ -516,7 +516,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          batch = undefined},
 
     % make notification actions
-    Actions = maps:fold(fun ({_, Pid}, WrittenInfo, Acc) ->
+    Actions = maps:fold(fun (Pid, WrittenInfo, Acc) ->
                                 [{notify, Pid, {ra_log_event,
                                                 {written, WrittenInfo}}}
                                  | Acc]
@@ -525,10 +525,14 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
 
 incr_batch(#batch{writes = Writes,
                   waiting = Waiting0,
-                  pending = Pend} = Batch, Id, {Idx, Term}, Data) ->
-    Waiting = maps:update_with(Id, fun ({From, _, _}) ->
-                                           {min(Idx, From), Idx, Term}
-                                   end, {Idx, Idx, Term}, Waiting0),
+                  pending = Pend} = Batch, Pid, {Idx, Term}, Data) ->
+    Waiting = case Waiting0 of
+                  #{Pid := {From, _, _}} ->
+                      Waiting0#{Pid => {min(Idx, From), Idx, Term}};
+                  _ ->
+                      Waiting0#{Pid => {Idx, Idx, Term}}
+              end,
+
     Batch#batch{writes = Writes + 1,
                 waiting = Waiting,
                 pending = [Data | Pend]}.
@@ -547,19 +551,19 @@ open_existing(File) ->
     end.
 
 
-dump_records(<<_:1/integer, 0:1/integer, _:14/integer,
-               IdDataLen:16/integer, _:IdDataLen/binary,
+dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
+               IdDataLen:16/unsigned, _:IdDataLen/binary,
                _:32/integer,
-               EntryDataLen:32/integer,
-               Idx:64/integer, _:64/integer,
+               EntryDataLen:32/unsigned,
+               Idx:64/unsigned, _:64/unsigned,
                EntryData:EntryDataLen/binary,
                Rest/binary>>, Entries) ->
     % TODO: recover writers info, i.e. last index seen
     dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
-dump_records(<<_:1/integer, 1:1/integer, _:14/integer,
+dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
                _:32/integer,
-               EntryDataLen:32/integer,
-               Idx:64/integer, _:64/integer,
+               EntryDataLen:32/unsigned,
+               Idx:64/unsigned, _:64/unsigned,
                EntryData:EntryDataLen/binary,
                Rest/binary>>, Entries) ->
     dump_records(Rest, [{Idx, binary_to_term(EntryData)} | Entries]);
@@ -575,39 +579,38 @@ try_recover_records(Data, Cache) ->
               ok
     end.
 
-recover_records(<<Trunc:1/integer, 0:1/integer, IdRef:14/integer,
-                  IdDataLen:16/integer, IdData:IdDataLen/binary,
+recover_records(<<Trunc:1/integer, 0:1/unsigned, IdRef:22/unsigned,
+                  IdDataLen:16/unsigned, UId:IdDataLen/binary,
                   Checksum:32/integer,
-                  EntryDataLen:32/integer,
-                  Idx:64/integer, Term:64/integer,
+                  EntryDataLen:32/unsigned,
+                  Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
-    Id = binary_to_term(IdData),
     % first writer appearance in WAL
-    true = validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc),
+    true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest,
-                    Cache#{IdRef => {Id, <<1:1/integer, IdRef:14/integer>>}});
-recover_records(<<Trunc:1/integer, 1:1/integer, IdRef:14/integer,
+                    Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}});
+recover_records(<<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/integer,
-                  Idx:64/integer, Term:64/integer,
+                  Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
-    #{IdRef := {Id, _}} = Cache,
-    true = validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc),
+    #{IdRef := {UId, _}} = Cache,
+    true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
 
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest, Cache);
 recover_records(<<>>, _Cache) ->
     ok.
 
-validate_and_update(Id, Checksum, Idx, Term, EntryData, Trunc) ->
+validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc) ->
     validate_checksum(Checksum, Idx, Term, EntryData),
-    true = update_mem_table(ra_log_recover_mem_tables, Id, Idx, Term,
+    true = update_mem_table(ra_log_recover_mem_tables, UId, Idx, Term,
                             binary_to_term(EntryData), Trunc =:= 1).
 
-validate_checksum(0, _Idx, _Term, _Data) ->
+validate_checksum(0, _, _, _) ->
     % checksum not used
     ok;
 validate_checksum(Checksum, Idx, Term, Data) ->
@@ -628,6 +631,3 @@ merge_conf_defaults(Conf) ->
 
 to_binary(Term) ->
     term_to_binary(Term).
-
-%% Here are the sys call back functions
-
