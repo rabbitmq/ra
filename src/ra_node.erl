@@ -1065,13 +1065,6 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
     ra_node_state().
 update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
-
-    % 1. CHK A
-    % 2. ENQ (allocated to A[1])
-    % SNAPSHOT: A[1] (no messages)
-    %
-    % 3. ENQ (allocated to A[1, 3])
-    % 4. SET 2 (release cursor is 2) A[3]
     % simply pass on release cursor index to log
     Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
     State#{log => Log}.
@@ -1087,8 +1080,8 @@ persist_last_applied(#{persisted_last_applied := L,
     % do nothing
     State;
 persist_last_applied(#{last_applied := L, log := Log0} = State) ->
-    State#{log => ra_log:write_meta(last_applied, L, Log0, false),
-           persisted_last_applied => L}.
+    ok = ra_log:write_meta(last_applied, L, Log0, false),
+    State#{persisted_last_applied => L}.
 
 
 -spec terminate(ra_node_state(), Reason :: {shutdown, delete} | term()) -> ok.
@@ -1252,11 +1245,10 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_meta(Term, VotedFor, #{log := Log0} = State) ->
-    Log1 = ra_log:write_meta(current_term, Term, Log0, false),
-    Log = ra_log:write_meta(voted_for, VotedFor, Log1, true),
-    State#{log => Log,
-           current_term => Term,
+update_meta(Term, VotedFor, #{log := Log} = State) ->
+    ok = ra_log:write_meta(current_term, Term, Log, false),
+    ok = ra_log:write_meta(voted_for, VotedFor, Log, true),
+    State#{current_term => Term,
            voted_for => VotedFor}.
 
 update_term(Term, State = #{current_term := CurTerm})

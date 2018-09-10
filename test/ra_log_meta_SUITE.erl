@@ -15,9 +15,8 @@ all() ->
 
 all_tests() ->
     [
-     init,
      roundtrip,
-     empty
+     delete
     ].
 
 groups() ->
@@ -26,58 +25,52 @@ groups() ->
     ].
 
 init_per_group(_, Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    _ = application:load(ra),
+    ok = application:set_env(ra, data_dir, PrivDir),
+    application:ensure_all_started(ra),
     Config.
 
 end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
-    Dir = ?config(priv_dir, Config),
-    File = filename:join(Dir, atom_to_list(TestCase)),
-    _ = ets:new(ra_open_file_metrics,
-                [named_table, public, {write_concurrency, true}]),
-    _ = ets:new(ra_io_metrics,
-                [named_table, public, {write_concurrency, true}]),
-    ra_file_handle:start_link(),
-    [{file, File} |  Config].
+    [{key, TestCase} | Config].
 
 end_per_testcase(_, Config) ->
     exit(whereis(ra_file_handle), normal),
     Config.
 
-init(Config) ->
-    Kv = ra_log_meta:init(?config(file, Config)),
-    0 = ra_log_meta:fetch(last_applied, Kv),
-    0 = ra_log_meta:fetch(current_term, Kv),
-    undefined = ra_log_meta:fetch(voted_for, Kv),
-    ok.
-
 roundtrip(Config) ->
-    Kv = ra_log_meta:init(?config(file, Config)),
-    ok = ra_log_meta:store(last_applied, 199, Kv),
-    199 = ra_log_meta:fetch(last_applied, Kv),
-    ok = ra_log_meta:store(current_term, 5, Kv),
-    5 = ra_log_meta:fetch(current_term, Kv),
-    ok = ra_log_meta:store(voted_for, 'cøstard', Kv),
-    'cøstard' = ra_log_meta:fetch(voted_for, Kv),
-    ok = ra_log_meta:store(voted_for, undefined, Kv),
-    undefined = ra_log_meta:fetch(voted_for, Kv),
-    undefined = ra_log_meta:fetch(voted_for, Kv),
-    ok = ra_log_meta:store(voted_for, {custard, cream}, Kv),
-    {custard, cream} = ra_log_meta:fetch(voted_for, Kv),
-    ok = ra_log_meta:close(Kv),
-    % reooen
-    Kv2 = ra_log_meta:init(?config(file, Config)),
-    199 = ra_log_meta:fetch(last_applied, Kv2),
-    5 = ra_log_meta:fetch(current_term, Kv2),
-    {custard, cream} = ra_log_meta:fetch(voted_for, Kv2),
-    ok = ra_log_meta:close(Kv2),
+    Id = ?config(key, Config),
+    ok = ra_log_meta:store_sync(Id, last_applied, 199),
+    199 = ra_log_meta:fetch(Id, last_applied),
+    ok = ra_log_meta:store_sync(Id, current_term, 5),
+    5 = ra_log_meta:fetch(Id, current_term),
+    ok = ra_log_meta:store(Id, voted_for, 'cream'),
+    ok = ra_log_meta:store_sync(Id, voted_for, 'cøstard'),
+    'cøstard' = ra_log_meta:fetch(Id, voted_for),
+    ok = ra_log_meta:store_sync(Id, voted_for, undefined),
+    undefined = ra_log_meta:fetch(Id, voted_for),
+    ok = ra_log_meta:store_sync(Id, voted_for, {custard, cream}),
+    {custard, cream} = ra_log_meta:fetch(Id, voted_for),
+    %% lose and re-open
+    proc_lib:stop(whereis(ra_log_meta), killed, infinity),
+    timer:sleep(200),
+    % give it some time to restart
+    199 = ra_log_meta:fetch(Id, last_applied),
+    5 = ra_log_meta:fetch(Id, current_term),
+    {custard, cream} = ra_log_meta:fetch(Id, voted_for),
     ok.
 
-empty(Config) ->
-    Kv = ra_log_meta:init(?config(file, Config)),
-    ok = ra_log_meta:store(voted_for, '', Kv),
-    '' = ra_log_meta:fetch(voted_for, Kv),
+delete(Config) ->
+    Id = ?config(key, Config),
+    ok = ra_log_meta:store_sync(Id, last_applied, 199),
+    Oth = <<"some_other_id">>,
+    ok = ra_log_meta:store_sync(Oth, last_applied, 1),
+    ok = ra_log_meta:delete(Oth), %% async
+    ok = ra_log_meta:delete_sync(Id), %% async
+    %% store some other id just to make sure the delete is processed
+    undefined = ra_log_meta:fetch(Oth, last_applied),
+    undefined = ra_log_meta:fetch(Id, last_applied),
     ok.
-
-

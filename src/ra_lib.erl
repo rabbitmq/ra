@@ -23,6 +23,7 @@
          recursive_delete/1,
          make_uid/0,
          make_uid/1,
+         ensure_dir/1,
          derive_safe_string/2,
          validate_base64uri/1
         ]).
@@ -190,6 +191,16 @@ make_uid(Prefix0) ->
     Prefix = to_binary(Prefix0),
     B = list_to_binary(lists:foldl(F, "", lists:seq(1, ?UID_LENGTH))),
     <<Prefix/binary, B/binary>>.
+
+-spec ensure_dir(file:name_all()) ->
+    ok | {error, file:posix() | badarg}.
+ensure_dir(Dir) ->
+    case file:make_dir(Dir) of
+        ok -> ok;
+        {error, eexist} -> ok;
+        Err ->
+            Err
+    end.
 
 -spec validate_base64uri(string()) -> boolean().
 validate_base64uri(Str) ->

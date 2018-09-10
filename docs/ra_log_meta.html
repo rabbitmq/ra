@@ -12,6 +12,7 @@
 <h1>Module ra_log_meta</h1>
 <ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
 
+<p><b>Behaviours:</b> <a href="gen_batch_server.html"><tt>gen_batch_server</tt></a>.</p>
 
 <h2><a name="types">Data Types</a></h2>
 
@@ -28,38 +29,68 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#delete-1">delete/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#delete_sync-1">delete_sync/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format_status-1">format_status/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_batch-2">handle_batch/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#store-3">store/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#store_sync-3">store_sync/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="close-1">close/1</a></h3>
+<h3 class="function"><a name="delete-1">delete/1</a></h3>
 <div class="spec">
-<p><tt>close(State::<a href="#type-state">state()</a>) -&gt; ok</tt><br></p>
+<p><tt>delete(UId::<a href="#type-ra_uid">ra_uid()</a>) -&gt; ok</tt><br></p>
+</div>
+
+<h3 class="function"><a name="delete_sync-1">delete_sync/1</a></h3>
+<div class="spec">
+<p><tt>delete_sync(UId::<a href="#type-ra_uid">ra_uid()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="fetch-2">fetch/2</a></h3>
 <div class="spec">
-<p><tt>fetch(X1::<a href="#type-key">key()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-value">value()</a> | undefined</tt><br></p>
+<p><tt>fetch(Id::<a href="#type-ra_uid">ra_uid()</a>, X2::<a href="#type-key">key()</a>) -&gt; <a href="#type-value">value()</a> | undefined</tt><br></p>
+</div>
+
+<h3 class="function"><a name="format_status-1">format_status/1</a></h3>
+<div class="spec">
+<p><tt>format_status(State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="handle_batch-2">handle_batch/2</a></h3>
+<div class="spec">
+<p><tt>handle_batch(Commands, State) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="init-1">init/1</a></h3>
 <div class="spec">
-<p><tt>init(Fn::<a href="file.html#type-filename">file:filename()</a>) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><tt>init(Dir::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-state">state()</a>}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><tt>start_link(Config::map()) -&gt; {ok, pid()} | {error, {already_started, pid()}}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="store-3">store/3</a></h3>
 <div class="spec">
-<p><tt>store(X1::<a href="#type-key">key()</a>, LastApplied::<a href="#type-value">value()</a>, State::<a href="#type-state">state()</a>) -&gt; ok</tt><br></p>
+<p><tt>store(UId::<a href="#type-ra_uid">ra_uid()</a>, Key::<a href="#type-key">key()</a>, Value::<a href="#type-value">value()</a>) -&gt; ok</tt><br></p>
 </div>
 
-<h3 class="function"><a name="sync-1">sync/1</a></h3>
+<h3 class="function"><a name="store_sync-3">store_sync/3</a></h3>
 <div class="spec">
-<p><tt>sync(State::<a href="#type-state">state()</a>) -&gt; ok</tt><br></p>
+<p><tt>store_sync(UId::<a href="#type-ra_uid">ra_uid()</a>, Key::<a href="#type-key">key()</a>, Value::<a href="#type-value">value()</a>) -&gt; ok</tt><br></p>
+</div>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><tt>terminate(X1, State) -&gt; any()</tt></p>
 </div>
 <hr>
 

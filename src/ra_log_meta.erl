@@ -1,156 +1,138 @@
 -module(ra_log_meta).
+-behaviour(gen_batch_server).
 
--export([init/1,
+-export([start_link/1,
+         init/1,
+         handle_batch/2,
+         terminate/2,
+         format_status/1,
          store/3,
-         fetch/2,
-         sync/1,
-         close/1
+         store_sync/3,
+         delete/1,
+         delete_sync/1,
+         fetch/2
         ]).
 
 -include("ra.hrl").
 
-
-%% Options:
-%% 1. Leave as is
-%%    up: nothing to do, easy gc as stored in ra node directory
-%%    down: pay the cost of 1 fd per ra node. May need hoop jumping if changed later
-%% 2. Use dets,
-%%    up: quick and easy,
-%%    down: cannot easily interact with fsync, no async write
-%% 3. Use disk_log:
-%%    up: log based, async write,
-%%    down: fsync interaction
-%% 4. Weave into ra_wal:
-%%    up: fsync interaction, async write,
-%%    down: makes wal more complext
-%% 5. Make custom with wal like fsync / create gen_batch_server abstraction
-%%    up: fit for purpose, fast,
-%%    down: more work.
-
-% small fixed-size key value store for persisting no log raft data points
-% replacement for dets
+%% centralised meta data storage server for ra nodes.
 
 -type key() :: current_term | voted_for | last_applied.
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.
 
--define(MAGIC, "RAME").
--define(VERSION, 1).
--define(HEADER_SIZE, 8).
--define(CURRENT_TERM_OFFS, ?HEADER_SIZE).
--define(CURRENT_TERM_SIZE, 8).
--define(LAST_APPLIED_OFFS, ?CURRENT_TERM_OFFS + ?CURRENT_TERM_SIZE).
--define(LAST_APPLIED_SIZE, 8).
--define(VOTED_FOR_NAME_OFFS, ?LAST_APPLIED_OFFS + ?LAST_APPLIED_SIZE).
-% atoms max 255 characters but allow for unicode + length prefix
--define(ATOM_SIZE, 513).
--define(VOTED_FOR_NODE_OFFS, ?VOTED_FOR_NAME_OFFS + ?ATOM_SIZE ).
+-define(TBL_NAME, ?MODULE).
 
--record(state, {fd :: file:fd()}).
+-record(state, {ref :: reference()}).
 
 -opaque state() :: #state{}.
 
 -export_type([state/0]).
 
--spec init(file:filename()) -> state().
-init(Fn) ->
-    ok = filelib:ensure_dir(Fn),
-    {ok, Fd} = open_file(Fn),
-    % expand file
-    {ok, _} = ra_file_handle:position(Fd, ?VOTED_FOR_NODE_OFFS + ?ATOM_SIZE),
-    ok = file:truncate(Fd),
-    #state{fd = Fd}.
+-spec start_link(Config :: map()) ->
+    {ok, pid()} | {error, {already_started, pid()}}.
+start_link(Config) ->
+    gen_batch_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
 
+-spec init(file:filename()) -> {ok, state()}.
+init(Dir) ->
+    MetaFile = filename:join(Dir, "meta.dets"),
+    ok = filelib:ensure_dir(MetaFile),
+    {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile}]),
+    _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
+    ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
+    {ok, #state{ref = Ref}}.
 
+handle_batch(Commands, #state{ref = Ref} = State) ->
+    DoInsert =
+        fun (Id, Key, Value, Inserts0) ->
+                case Inserts0 of
+                    #{Id := Data} ->
+                        Inserts0#{Id => update_key(Key, Value, Data)};
+                    _ ->
+                        case dets:lookup(Ref, Id) of
+                            [{Id, T, V, A}] ->
+                                Data = {Id, T, V, A},
+                                Inserts0#{Id => update_key(Key, Value, Data)};
+                            [] ->
+                                Data = {Id, undefined, undefined,
+                                        undefined},
+                                Inserts0#{Id => update_key(Key, Value, Data)}
+                        end
+                end
+        end,
+    {Inserts, Replies} =
+        lists:foldl(
+          fun ({Type, From, {store, Id, Key, Value}},
+               {Inserts0, Replies}) ->
+                  {DoInsert(Id, Key, Value, Inserts0),
+                   add_reply(Type, Replies, From, ok)};
+              ({Type, From, {delete, Id}},
+               {Inserts0, Replies}) ->
+                  _ = dets:delete(Ref, Id),
+                  _ = ets:delete(?MODULE, Id),
+                  {maps:remove(Id, Inserts0),
+                   add_reply(Type, Replies, From, ok)}
+          end, {#{}, []}, Commands),
+    Objects = maps:values(Inserts),
+    ok = dets:insert(?MODULE, Objects),
+    true = ets:insert(?MODULE, Objects),
+    ok = dets:sync(?MODULE),
+    {ok, Replies, State}.
 
--spec store(key(), value(), state()) -> ok.
-store(last_applied, LastApplied, #state{fd = Fd}) ->
-    ok = write_integer(Fd, LastApplied, ?LAST_APPLIED_OFFS);
-store(current_term, CurTerm, #state{fd = Fd}) ->
-    ok = write_integer(Fd, CurTerm, ?CURRENT_TERM_OFFS);
-store(voted_for, {Name, Node}, #state{fd = Fd}) ->
-    ok = write_atom(Fd, Name, ?VOTED_FOR_NAME_OFFS),
-    ok = write_atom(Fd, Node, ?VOTED_FOR_NODE_OFFS),
-    ok;
-store(voted_for, undefined, #state{fd = Fd}) ->
-    % clear value
-    Data = <<0:16/integer>>,
-    Ops = [{?VOTED_FOR_NAME_OFFS, Data},
-           {?VOTED_FOR_NODE_OFFS, Data}],
-    ok = ra_file_handle:pwrite(Fd, Ops);
-store(voted_for, Name, #state{fd = Fd}) when is_atom(Name) ->
-    write_atom(Fd, Name, ?VOTED_FOR_NAME_OFFS).
+terminate(_, #state{ref = Ref}) ->
+    _ = dets:close(Ref),
+    ok.
 
--spec fetch(key(), state()) -> value() | undefined.
-fetch(voted_for, #state{fd = Fd}) ->
-    case read_atom(Fd, ?VOTED_FOR_NAME_OFFS) of
-        undefined ->
-            undefined;
-        Name ->
-            case read_atom(Fd, ?VOTED_FOR_NODE_OFFS) of
-                undefined ->
-                    Name;
-                Node ->
-                    {Name, Node}
-            end
-    end;
-fetch(current_term, #state{fd = Fd}) ->
-    read_integer(Fd, ?CURRENT_TERM_OFFS);
-fetch(last_applied, #state{fd = Fd}) ->
-    read_integer(Fd, ?LAST_APPLIED_OFFS).
+format_status(State) ->
+    State.
 
+%% send a message to the meta data store using cast
+-spec store(ra_uid(), key(), value()) -> ok.
+store(UId, Key, Value) ->
+    gen_batch_server:cast(?MODULE, {store, UId, Key, Value}).
 
--spec sync(state()) -> ok.
-sync(#state{fd = Fd}) ->
-    ok = ra_file_handle:sync(Fd).
+%% waits until batch has been processed and synced.
+%% when it returns the store request has been safely flushed to disk
+-spec store_sync(ra_uid(), key(), value()) -> ok.
+store_sync(UId, Key, Value) ->
+    gen_batch_server:call(?MODULE, {store, UId, Key, Value}).
 
+-spec delete(ra_uid()) -> ok.
+delete(UId) ->
+    gen_batch_server:cast(?MODULE, {delete, UId}).
 
--spec close(state()) -> ok.
-close(#state{fd = Fd}) ->
-    ok = ra_file_handle:sync(Fd),
-    _ = ra_file_handle:close(Fd).
+-spec delete_sync(ra_uid()) -> ok.
+delete_sync(UId) ->
+    gen_batch_server:call(?MODULE, {delete, UId}).
+
+%% READER API
+
+-spec fetch(ra_uid(), key()) -> value() | undefined.
+fetch(Id, current_term) ->
+    maybe_fetch(Id, 2);
+fetch(Id, voted_for) ->
+    maybe_fetch(Id, 3);
+fetch(Id, last_applied) ->
+    maybe_fetch(Id, 4).
 
 %%% internal
 
-
-write_integer(Fd, Int, Offs) ->
-    Data = <<Int:64/integer>>,
-    ok = ra_file_handle:pwrite(Fd, Offs, Data).
-
-read_integer(Fd, Offs) ->
-    {ok, <<Int:64/integer>>} = ra_file_handle:pread(Fd, Offs, 8),
-    Int.
-
-write_atom(Fd, A, Offs) ->
-    Ops = case atom_to_binary(A, utf8) of
-              <<>> ->
-                  [{Offs, <<1:1/integer, 0:15/integer>>}];
-              AData ->
-                  ASize = byte_size(AData),
-                  [{Offs, <<0:1/integer, ASize:15/integer>>},
-                   {Offs + 2, AData}]
-          end,
-    ok = ra_file_handle:pwrite(Fd, Ops).
-
-read_atom(Fd, Offs) ->
-    case ra_file_handle:pread(Fd, Offs, ?ATOM_SIZE) of
-        {ok, <<0:1/integer, 0:15/integer, _/binary>>} -> % zero length
-            undefined;
-        {ok, <<1:1/integer, 0:15/integer, _/binary>>} -> % empty atom
-            '';
-        {ok, <<0:1/integer, Len:15/integer, Data:Len/binary, _/binary>>} ->
-            % strip trailing null bytes
-            binary_to_atom(Data, utf8)
+maybe_fetch(Id, Pos) ->
+    try ets:lookup_element(?TBL_NAME, Id, Pos) of
+        E -> E
+    catch
+        _:badarg ->
+            undefined
     end.
 
-open_file(Fn) ->
-    {ok, Fd} = ra_file_handle:open(Fn, [binary, raw, read, write]),
-    case ra_file_handle:read(Fd, 8) of
-        {ok, <<?MAGIC, ?VERSION:8/unsigned, _Reserved/binary>>} ->
-            %% all is well
-            {ok, Fd};
-        {ok, _} ->
-            exit(unknown_meta_data_format);
-        eof ->
-            ok = ra_file_handle:write(Fd, <<?MAGIC, ?VERSION:8/unsigned>>),
-            {ok, Fd}
-    end.
+add_reply(cast, Replies, _, _) ->
+    Replies;
+add_reply(call, Replies, From, Reply) ->
+    [{reply, From, Reply} | Replies].
+
+update_key(current_term, Value, Data) ->
+    setelement(2, Data, Value);
+update_key(voted_for, Value, Data) ->
+    setelement(3, Data, Value);
+update_key(last_applied, Value, Data) ->
+    setelement(4, Data, Value).

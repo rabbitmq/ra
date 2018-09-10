@@ -142,6 +142,9 @@ delete_one_node_cluster(Config) ->
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    [{_, Node}] = NodeIds,
+    UId = rpc:call(Node, ra_directory, uid_of, [ClusterId]),
+    false = undefined =:= UId,
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     Wc = filename:join([PrivDir, s1, "*"]),
@@ -160,6 +163,8 @@ delete_one_node_cluster(Config) ->
     end,
     %% validate there is no data
     Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    undefined = rpc:call(Node, ra_directory, uid_of, [ClusterId]),
+    undefined = rpc:call(Node, ra_log_meta, fetch, [UId, current_term]),
     ct:pal("Files  ~p~n", [Files]),
     [] = Files,
     [ok = slave:stop(S) || {_, S} <- NodeIds],

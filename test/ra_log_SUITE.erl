@@ -30,11 +30,11 @@ all_tests() ->
 groups() ->
     [
      {tests, [], [
-                        init_close_init,
-                        write_recover_then_overwrite,
-                        write_overwrite_then_recover,
-                        snapshot
-                        | all_tests()]}
+                  init_close_init,
+                  write_recover_then_overwrite,
+                  write_overwrite_then_recover,
+                  snapshot
+                  | all_tests()]}
     ].
 
 init_per_group(tests, Config) ->
@@ -240,12 +240,12 @@ last(Config) ->
     ok.
 
 meta(Config) ->
-    Log0 = ?config(ra_log, Config),
-    Log1 = ra_log:write_meta(current_term, 87, Log0),
-    87 = ra_log:read_meta(current_term, Log1),
-    Log2 = ra_log:write_meta(last_applied, 42, Log1),
-    42 = ra_log:read_meta(last_applied, Log2),
-    Log = ra_log:write_meta(voted_for, cream, Log2),
+    Log = ?config(ra_log, Config),
+    ok = ra_log:write_meta(current_term, 87, Log),
+    87 = ra_log:read_meta(current_term, Log),
+    ok = ra_log:write_meta(last_applied, 42, Log),
+    42 = ra_log:read_meta(last_applied, Log),
+    ok = ra_log:write_meta(voted_for, cream, Log),
     cream = ra_log:read_meta(voted_for, Log),
     ok.
 
@@ -284,8 +284,8 @@ init_close_init(Config) ->
     Log0 = ?config(ra_log, Config),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(2, "entry2", Log1),
-    Log = ra_log:write_meta(current_term, 2, Log2),
-    ok = ra_log:close(Log),
+    ok = ra_log:write_meta(current_term, 2, Log2),
+    ok = ra_log:close(Log2),
     LogA = InitFun(init_close_init),
     {2, 2} = ra_log:last_index_term(LogA),
     {{2, 2, "entry2"}, LogA1} = ra_log:fetch(2, LogA),

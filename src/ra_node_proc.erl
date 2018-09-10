@@ -667,9 +667,10 @@ terminate(Reason, StateName,
     _ = ra_node:terminate(NodeState, Reason),
     case Reason of
         {shutdown, delete} ->
-            _ = ra_log_segment_writer:release_segments(
-                  ra_log_segment_writer, UId),
-            _ = ra_directory:unregister_name(UId);
+            catch ra_log_segment_writer:release_segments(
+                    ra_log_segment_writer, UId),
+            catch ra_directory:unregister_name(UId),
+            catch ra_log_meta:delete_sync(UId);
         _ -> ok
     end,
     _ = aten:unregister(Key),

@@ -20,16 +20,19 @@
          read_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
+         %% meta
          read_meta/2,
          read_meta/3,
          write_meta/3,
          write_meta/4,
-         sync_meta/1,
+
          can_write/1,
          exists/2,
          overview/1,
+         %% config
          write_config/2,
          read_config/1,
+
          delete_everything/1,
          release_resources/2
         ]).
@@ -70,7 +73,6 @@
          segment_refs = [] :: [segment_ref()],
          open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
          directory :: file:filename(),
-         kv :: ra_log_meta:state(),
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
@@ -113,9 +115,8 @@ init(#{uid := UId} = Conf) ->
               end,
     MaxOpen = maps:get(max_open_segments, Conf, 5),
     Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
-    Meta = filename:join(Dir, "meta.dat"),
-    ok = filelib:ensure_dir(Meta),
-    Kv = ra_log_meta:init(Meta),
+
+    ok =  ra_lib:ensure_dir(Dir),
 
     % initialise metrics for this node
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
@@ -154,7 +155,6 @@ init(#{uid := UId} = Conf) ->
                       segment_refs = SegRefs,
                       snapshot_state = SnapshotState,
                       snapshot_interval = SnapInterval,
-                      kv = Kv,
                       wal = Wal,
                       open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
                       resend_window_seconds = ResendWindow},
@@ -181,49 +181,11 @@ init(#{uid := UId} = Conf) ->
           [last_index_term(State)]),
     State.
 
-recover_range(UId) ->
-    % 0. check open mem_tables (this assumes wal has finished recovering
-    % which means it is essential that ra_nodes are part of the same
-    % supervision tree
-    % 1. check closed mem_tables to extend
-    OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of
-                     [] ->
-                         [];
-                     [{UId, First, Last, _}] ->
-                         [{First, Last}]
-                 end,
-    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
-    % 2. check segments
-    SegFiles = ra_log_segment_writer:my_segments(UId),
-    SegRefs =
-    [begin
-         %% ?INFO("ra_log: recovering ~p~n", [S]),
-         {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
-         SegRef = ra_log_segment:segref(Seg),
-         %% ?INFO("ra_log: recovered ~p ~p~n", [S, {F, L}]),
-         ok = ra_log_segment:close(Seg),
-         SegRef
-     end || S <- lists:reverse(SegFiles)],
-    SegRanges = [{F, L} || {F, L, _} <- SegRefs],
-    Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
-    {pick_range(Ranges, undefined), SegRefs}.
-
-% picks the current range from a sorted (newest to oldest) list of ranges
-pick_range([], Res) ->
-    Res;
-pick_range([H | Tail], undefined) ->
-    pick_range(Tail, H);
-pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
-    pick_range(Tail, {min(Fst, CurFst), CurLst}).
-
-
 -spec close(ra_log()) -> ok.
-close(#state{kv = Kv, open_segments = OpenSegs}) ->
+close(#state{open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
     _ = ra_flru:evict_all(OpenSegs),
-    % close also fsyncs
-    _ = ra_log_meta:close(Kv),
     ok.
 
 -spec append(Entry :: log_entry(), State :: ra_log()) ->
@@ -236,8 +198,7 @@ append({Idx, _, _}, #state{last_index = LastIdx}) ->
                                       [Idx, LastIdx+1])),
     exit({integrity_error, Msg}).
 
--spec write(Entries :: [log_entry()],
-            State :: ra_log()) ->
+-spec write(Entries :: [log_entry()], State :: ra_log()) ->
     {ok, ra_log()} |
     {error, {integrity_error, term()} | wal_down}.
 write([{FstIdx, _, _} = First | Rest] = Entries,
@@ -291,8 +252,9 @@ take(Start, Num, #state{uid = UId, first_index = FirstIdx,
                         {Entries2, MetricOps2, {S, E} = Rem2} ->
                             case catch segment_take(State, Rem2, Entries2) of
                                 {Open, undefined, Entries} ->
-                                    MetricOp = {?METRICS_SEGMENT_POS, E - S + 1},
-                                    ok = update_metrics(UId, [MetricOp | MetricOps2]),
+                                    MOp = {?METRICS_SEGMENT_POS, E - S + 1},
+                                    ok = update_metrics(UId,
+                                                        [MOp | MetricOps2]),
                                     {Entries, State#state{open_segments = Open}}
                             end
                     end
@@ -556,7 +518,7 @@ update_release_cursor(Idx, Cluster, MachineState,
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
     % Check here if any segments can be release.
-    case lists:any(fun({_From, To, _}) when To =< Idx -> true;
+    case lists:any(fun({_, To, _}) when To =< Idx -> true;
                       (_) -> false end, SegRefs) of
         true ->
             % segments can be cleared up
@@ -574,7 +536,6 @@ update_release_cursor(Idx, Cluster, MachineState,
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
-                    ok = sync_meta(State),
                     write_snapshot({Idx, Term, ClusterNodes, MachineState},
                                    State)
             end;
@@ -585,7 +546,6 @@ update_release_cursor(Idx, Cluster, MachineState,
                 {undefined, State} ->
                     State;
                 {Term, State} ->
-                    ok = sync_meta(State),
                     write_snapshot({Idx, Term, ClusterNodes, MachineState},
                                    State)
             end;
@@ -596,8 +556,8 @@ update_release_cursor(Idx, Cluster, MachineState,
 
 -spec read_meta(Key :: ra_meta_key(),
                 State :: ra_log()) -> maybe(term()).
-read_meta(Key, #state{kv = Kv}) ->
-    ra_log_meta:fetch(Key, Kv).
+read_meta(Key, #state{uid = Id}) ->
+    ra_log_meta:fetch(Id, Key).
 
 -spec read_meta(Key :: ra_meta_key(), State :: ra_log(),
                 Default :: term()) -> term().
@@ -605,19 +565,16 @@ read_meta(Key, Log, Default) ->
     ra_lib:default(read_meta(Key, Log), Default).
 
 -spec write_meta(Key :: ra_meta_key(), Value :: term(), State :: ra_log()) ->
-    ra_log().
+    ok.
 write_meta(Key, Value, Log) ->
     write_meta(Key, Value, Log, true).
 
 -spec write_meta(Key :: ra_meta_key(), Value :: term(),
-                 State :: ra_log(), Sync :: boolean()) -> ra_log().
-write_meta(Key, Value, #state{kv = Kv} = Log, true) ->
-    ok = ra_log_meta:store(Key, Value, Kv),
-    ok = sync_meta(Log),
-    Log;
-write_meta(Key, Value, #state{kv = Kv} = Log, false) ->
-    ok = ra_log_meta:store(Key, Value, Kv),
-    Log.
+                 State :: ra_log(), Sync :: boolean()) -> ok.
+write_meta(Key, Value, #state{uid = Id}, true) ->
+    ok = ra_log_meta:store_sync(Id, Key, Value);
+write_meta(Key, Value, #state{uid = Id}, false) ->
+    ok = ra_log_meta:store(Id, Key, Value).
 
 append_sync({Idx, Term, _} = Entry, Log0) ->
     Log = ra_log:append(Entry, Log0),
@@ -641,10 +598,6 @@ write_sync(Entries, Log0) ->
         {error, _} = Err ->
             Err
     end.
--spec sync_meta(State :: ra_log()) -> ok.
-sync_meta(#state{kv = Kv}) ->
-    ok = ra_log_meta:sync(Kv),
-    ok.
 
 can_write(#state{wal = Wal}) ->
     undefined =/= whereis(Wal).
@@ -1004,6 +957,42 @@ write_snapshot(Snapshot, #state{directory = Dir} = State) ->
 flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
     ok.
+
+recover_range(UId) ->
+    % 0. check open mem_tables (this assumes wal has finished recovering
+    % which means it is essential that ra_nodes are part of the same
+    % supervision tree
+    % 1. check closed mem_tables to extend
+    OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of
+                     [] ->
+                         [];
+                     [{UId, First, Last, _}] ->
+                         [{First, Last}]
+                 end,
+    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
+    % 2. check segments
+    SegFiles = ra_log_segment_writer:my_segments(UId),
+    SegRefs =
+    [begin
+         %% ?INFO("ra_log: recovering ~p~n", [S]),
+         {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
+         SegRef = ra_log_segment:segref(Seg),
+         %% ?INFO("ra_log: recovered ~p ~p~n", [S, {F, L}]),
+         ok = ra_log_segment:close(Seg),
+         SegRef
+     end || S <- lists:reverse(SegFiles)],
+    SegRanges = [{F, L} || {F, L, _} <- SegRefs],
+    Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
+    {pick_range(Ranges, undefined), SegRefs}.
+
+% picks the current range from a sorted (newest to oldest) list of ranges
+pick_range([], Res) ->
+    Res;
+pick_range([H | Tail], undefined) ->
+    pick_range(Tail, H);
+pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
+    pick_range(Tail, {min(Fst, CurFst), CurLst}).
+
 
 
 %%%% TESTS

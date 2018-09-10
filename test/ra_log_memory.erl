@@ -19,7 +19,7 @@
          update_release_cursor/4,
          read_meta/2,
          write_meta/3,
-         sync_meta/1,
+         write_meta_f/3,
          can_write/1,
          overview/1,
          write_config/2,
@@ -39,7 +39,9 @@
                 meta = #{} :: ra_log_memory_meta(),
                 snapshot :: maybe(ra_log:snapshot())}).
 
--type ra_log_memory_state() :: #state{}.
+-opaque ra_log_memory_state() :: #state{}.
+
+-export_type([ra_log_memory_state/0]).
 
 -spec init(_) -> ra_log_memory_state().
 init(_Args) ->
@@ -217,14 +219,13 @@ snapshot_index_term(#state{snapshot = undefined}) ->
 update_release_cursor(_Idx, _Cluster, _MacState, State) ->
     State.
 
--spec write_meta(Key :: ra_log:ra_meta_key(), Value :: term(),
-                 State :: ra_log_memory_state()) ->
-    ra_log_memory_state() | {error, term()}.
-write_meta(Key, Value, #state{meta = Meta} = State) ->
-    State#state{meta = Meta#{Key => Value}}.
-
-sync_meta(_Log) ->
+write_meta(_Key, _Value, _State) ->
     ok.
+
+-spec write_meta_f(term(), term(), ra_log_memory_state()) ->
+    ra_log_memory_state().
+write_meta_f(Key, Value, #state{meta = Meta} = State) ->
+    State#state{meta = Meta#{Key => Value}}.
 
 can_write(_Log) ->
     true.

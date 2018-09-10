@@ -30,7 +30,6 @@ all_tests() ->
      fetch_out_of_range_term,
      next_index_term,
      read_write_meta,
-     sync_meta,
      last_written,
      last_written_with_wal,
      last_written_with_segment_writer,
@@ -552,25 +551,12 @@ read_write_meta_prop(Dir, TestCase) ->
                                end, Result))
        end).
 
-sync_meta(Config) ->
-    Dir = ?config(wal_dir, Config),
-    TestCase = ?config(test_case, Config),
-    run_proper(fun sync_meta_prop/2, [Dir, TestCase], 25).
-
-sync_meta_prop(Dir, TestCase) ->
-    ?FORALL(
-       Meta0, list(meta_data()),
-       begin
-           Log = write_meta(Meta0,
-                            ra_log:init(#{data_dir => Dir, uid => TestCase})),
-           ok == ra_log:sync_meta(Log)
-       end).
 
 write_meta([], Log) ->
     Log;
 write_meta([{Key, Value} | Rest], Log0) ->
-    Log = ra_log:write_meta(Key, Value, Log0),
-    write_meta(Rest, Log).
+    ok = ra_log:write_meta(Key, Value, Log0),
+    write_meta(Rest, Log0).
 
 last_written_with_wal(Config) ->
     Dir = ?config(wal_dir, Config),

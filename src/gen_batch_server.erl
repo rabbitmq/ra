@@ -208,8 +208,11 @@ complete_batch(#state{batch = Batch,
                       state = Inner0,
                       debug = Debug0} = State0) ->
     case catch Mod:handle_batch(lists:reverse(Batch), Inner0) of
+        {ok, Inner} ->
+            State0#state{batch = [],
+                         state = Inner,
+                         batch_count = 0};
         {ok, Actions, Inner} ->
-            State = State0#state{batch = [], state = Inner, batch_count = 0},
             Debug = lists:foldl(fun ({reply, {Pid, Tag}, Msg}, Dbg) ->
                                         Pid ! {Tag, Msg},
                                         handle_debug_out(Pid, Msg, Dbg);
@@ -217,7 +220,10 @@ complete_batch(#state{batch = Batch,
                                         Pid ! Msg,
                                         handle_debug_out(Pid, Msg, Dbg)
                                 end, Debug0, Actions),
-            State#state{debug = Debug};
+            State0#state{batch = [],
+                         state = Inner,
+                         batch_count = 0,
+                         debug = Debug};
         {stop, Reason} ->
             terminate(Reason, State0),
             exit(Reason);

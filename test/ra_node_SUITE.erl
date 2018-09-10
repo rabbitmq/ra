@@ -95,7 +95,6 @@ setup_log() ->
                         ra_log_memory:write_meta(K, V, L)
                 end),
     meck:expect(ra_log, read_meta, fun ra_log_memory:read_meta/2),
-    meck:expect(ra_log, sync_meta, fun ra_log_memory:sync_meta/1),
     meck:expect(ra_log, read_meta, fun (K, L, D) ->
                                            ra_lib:default(
                                              ra_log_memory:read_meta(K, L), D)
@@ -145,14 +144,14 @@ init(_Config) ->
     #{current_term := 0,
       voted_for := undefined} = ra_node_init(InitConf),
     % previous data
-    Log1 = ra_log:write_meta(voted_for, some_node, Log0),
-    Log = ra_log:write_meta(current_term, CurrentTerm, Log1),
+    Log1 = ra_log_memory:write_meta_f(voted_for, some_node, Log0),
+    Log = ra_log_memory:write_meta_f(current_term, CurrentTerm, Log1),
     meck:expect(ra_log, init, fun (_) -> Log end),
     #{current_term := 5,
       voted_for := some_node} = ra_node_init(InitConf),
     % snapshot
     Snapshot = {3, 5, maps:keys(Cluster), {simple, ?MACFUN, "hi1+2+3"}},
-    LogS = ra_log:install_snapshot(Snapshot, Log),
+    LogS = ra_log_memory:install_snapshot(Snapshot, Log),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -197,15 +196,8 @@ init_restores_cluster_changes(_Config) ->
 election_timeout(_Config) ->
     State = base_state(3),
     Msg = election_timeout,
-
+    %
     % follower
-    % PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
-    %                            token = Token,
-    %                            last_log_index = 3, last_log_term = 5},
-    % PreVoteForSelfEvent = {next_event, cast,
-    %                        #pre_vote_result{term = 5,
-    %                                         token = Token,
-    %                                         vote_granted = true}},
     {pre_vote, #{current_term := 5, votes := 0,
                  pre_vote_token := Token},
      [{next_event, cast, #pre_vote_result{term = 5, token = Token,
@@ -230,7 +222,6 @@ election_timeout(_Config) ->
                            candidate_id = n1}},
         {n3, _}]}]} =
         ra_node:handle_pre_vote(Msg, State),
-
 
     %% assert tokens are not the same
     ?assertNotEqual(Token, Token1),
@@ -467,7 +458,7 @@ follower_aer_5(_Config) ->
     AER2 = #append_entries_rpc{term = 2, leader_id = n5, prev_log_index = 3,
                                prev_log_term = 1, leader_commit = 3,
                                entries = []},
-    {follower, State1, Effects} = ra_node:handle_follower(AER2, State0),
+    {follower, _State1, Effects} = ra_node:handle_follower(AER2, State0),
     {cast, n5, {_, M}} = hd(Effects),
     ?assertMatch(#append_entries_reply{next_index = 4,
                                        last_term = 1,
@@ -885,14 +876,13 @@ higher_term_detected(_Config) ->
     AEReply = {n2, #append_entries_reply{term = IncomingTerm, success = false,
                                          next_index = 4,
                                          last_index = 3, last_term = 5}},
-    ExpectLog0 = ra_log:write_meta(current_term, IncomingTerm, Log),
-    ExpectLog = ra_log:write_meta(voted_for, undefined, ExpectLog0),
-    {follower, #{current_term := IncomingTerm,
-                 log := ExpectLog}, []} = ra_node:handle_leader(AEReply, State),
-    {follower, #{current_term := IncomingTerm,
-                 log := ExpectLog}, []} = ra_node:handle_follower(AEReply, State),
-    {follower, #{current_term := IncomingTerm,
-                 log := ExpectLog}, []}
+    Log1 = ra_log_memory:write_meta_f(current_term, IncomingTerm, Log),
+    _ = ra_log_memory:write_meta_f(voted_for, undefined, Log1),
+    {follower, #{current_term := IncomingTerm}, []} =
+        ra_node:handle_leader(AEReply, State),
+    {follower, #{current_term := IncomingTerm}, []} =
+        ra_node:handle_follower(AEReply, State),
+    {follower, #{current_term := IncomingTerm}, []}
         = ra_node:handle_candidate(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
@@ -1152,14 +1142,15 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
     ok.
 
 is_new(_Config) ->
-    State = base_state(3),
-    false = ra_node:is_new(State),
     Args = #{cluster_id => some_id,
              id => {ra, node()},
              uid => <<"ra">>,
              initial_nodes => [],
              log_init_args => #{data_dir => "", uid => <<>>},
              machine => {simple, fun erlang:'+'/2, 0}},
+    {NewState, _} = ra_node:init(Args),
+    {leader, State, _} = ra_node:handle_leader(usr_cmd(1), NewState),
+    false = ra_node:is_new(State),
     {NewState, _} = ra_node:init(Args),
     true = ra_node:is_new(NewState),
     ok.
@@ -1450,12 +1441,14 @@ empty_state(NumNodes, Id) ->
                    machine => {simple, fun (E, _) -> E end, <<>>}}). % just keep last applied value
 
 base_state(NumNodes) ->
-    Log = lists:foldl(fun(E, L) ->
-                              ra_log:append_sync(E, L)
-                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
+    Log0 = lists:foldl(fun(E, L) ->
+                              ra_log_memory:append(E, L)
+                      end, ra_log_memory:init(#{data_dir => "", uid => <<>>}),
                       [{1, 1, usr(<<"hi1">>)},
                        {2, 3, usr(<<"hi2">>)},
                        {3, 5, usr(<<"hi3">>)}]),
+    Log = ra_log_memory:handle_event({written, {1, 3, 5}}, Log0),
+
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Name = list_to_atom("n" ++ integer_to_list(N)),
                                 Acc#{Name =>
