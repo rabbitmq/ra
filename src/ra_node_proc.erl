@@ -183,10 +183,12 @@ init(Config0) when is_map(Config0) ->
     _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
-    _ = lists:foreach(fun ({_, Node}) ->
-                              net_kernel:connect_node(Node);
-                          (_) -> node()
-                      end, Peers),
+    _ = spawn(fun () ->
+                      _ = lists:foreach(fun ({_, Node}) ->
+                                                net_kernel:connect_node(Node);
+                                            (_) -> node()
+                                        end, Peers)
+              end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     State0 = #state{node_state = NodeState, name = Key,

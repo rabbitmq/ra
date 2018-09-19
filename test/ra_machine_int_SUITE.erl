@@ -138,11 +138,12 @@ follower_takes_over_monitor(Config) ->
                         [{monitor, process, P} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
-    {ok, ok, _} = ra:send_and_await_consensus(NodeId1, {monitor_me, self()}),
+    {ok, ok, {LeaderName, _}} =
+        ra:send_and_await_consensus(NodeId1, {monitor_me, self()}),
     %% sleep here as it seems monitors, or this stat aren't updated synchronously
     timer:sleep(100),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
-    ?assert(MonitoredBy =:= whereis(Name1)),
+    ?assert(MonitoredBy =:= whereis(LeaderName)),
 
     ok = ra:stop_node(NodeId1),
     % give the election process a bit of time before issuing a command
@@ -194,7 +195,8 @@ deleted_cluster_emits_eol_effects(Config) ->
 %% Utility
 
 start_cluster(ClusterId, Machine, NodeIds) ->
-    {ok, NodeIds, _} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, Started, _} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    ?assertEqual(length(NodeIds), length(Started)),
     ok.
 
 validate_process_down(Name, 0) ->

@@ -25,7 +25,8 @@
          make_uid/1,
          ensure_dir/1,
          derive_safe_string/2,
-         validate_base64uri/1
+         validate_base64uri/1,
+         partition_parallel/2
         ]).
 
 ceiling(X) when X < 0 ->
@@ -229,6 +230,28 @@ derive_safe_string(S, Num) ->
          end,
      string:slice(F(string:next_grapheme(S), []), 0, Num).
 
+partition_parallel(F, Es) ->
+   Parent = self(),
+   Running = [
+              {spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
+       || E <- Es],
+   collect(Running, {[], []}, 60000).
+
+collect([], Acc, _Timeout) -> Acc;
+collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
+  receive
+    {Pid, true} ->
+      erlang:demonitor(MRef, [flush]),
+      collect(Next, {[E | Left], Right}, Timeout);
+      % [{left, E} | collect(Next, Timeout)];
+    {Pid, false} ->
+      erlang:demonitor(MRef, [flush]),
+      collect(Next, {Left, [E | Right]}, Timeout);
+    {'DOWN', MRef, process, Pid, _Reason} ->
+      collect(Next, {Left, [E | Right]}, Timeout)
+  after Timeout ->
+    exit(partition_parallel_timeout)
+  end.
 
 
 -ifdef(TEST).

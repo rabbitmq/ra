@@ -196,25 +196,28 @@ start_or_restart_cluster(ClusterId, Machine,
     {ok, [ra_node_id()], [ra_node_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterId, Machine, NodeIds) ->
-    % create locally unique id
-    % as long as all nodes are on different erlang nodes we can use the same
-    % uid for all
-    % TODO: validate all nodes are on different erlang nodes
     {Started, NotStarted} =
-        lists:partition(fun (N) ->
-                                ok =:= start_node(ClusterId, N,
-                                                  Machine, NodeIds)
-                        end, NodeIds),
+        ra_lib:partition_parallel(fun (N) ->
+                                          ok ==  start_node(ClusterId, N,
+                                                            Machine, NodeIds)
+                                  end, NodeIds),
     case Started of
         [] ->
             ?WARN("ra: failed to form new cluster ~w.~n "
                   "No nodes were succesfully started.~n", [ClusterId]),
             {error, cluster_not_formed};
         _ ->
-            Node = hd(Started),
-            ok = trigger_election(Node),
-            case members(Node) of
-                {ok, _, _} ->
+            %% try triggering elections until one succeeds
+            _ = lists:any(fun (N) -> ok == trigger_election(N) end,
+                          sort_by_local(Started, [])),
+            %% TODO: handle case where no election was successfully triggered
+            case members(hd(Started), length(NodeIds) * ?DEFAULT_TIMEOUT) of
+                {ok, _, Leader} ->
+                    ?INFO("ra: started cluster ~s with ~b nodes~n"
+                          "~b nodes failed to start: ~w~n"
+                          "Leader: ~w", [ClusterId, length(NodeIds),
+                                         length(NotStarted), NotStarted,
+                                         Leader]),
                     % we have a functioning cluster
                     {ok, Started, NotStarted};
                 Err ->
@@ -225,6 +228,7 @@ start_cluster(ClusterId, Machine, NodeIds) ->
                     {error, cluster_not_formed}
             end
     end.
+
 
 -spec start_node(ra_cluster_id(), ra_node_id(),
                  ra_node:machine_conf(), [ra_node_id()]) ->
@@ -518,3 +522,11 @@ members(ServerRef, Timeout) ->
 
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
+
+sort_by_local([], Acc) ->
+    Acc;
+sort_by_local([{_, N} = X | Rem], Acc) when N =:= node() ->
+    [X | Acc] ++ Rem;
+sort_by_local([X | Rem], Acc) ->
+    sort_by_local(Rem, [X | Acc]).
+

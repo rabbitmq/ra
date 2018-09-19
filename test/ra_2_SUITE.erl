@@ -315,9 +315,10 @@ validate_process_down(Name, Num) ->
     end.
 
 start_cluster(ClusterId, NodeIds, Config) ->
-    {ok, NodeIds, _} = ra:start_cluster(ClusterId,
+    {ok, Started, _} = ra:start_cluster(ClusterId,
                                         {module, ?MODULE, Config},
                                         NodeIds),
+    ?assertEqual(lists:sort(NodeIds), lists:sort(Started)),
     ok.
 
 start_cluster(ClusterId, NodeIds) ->
