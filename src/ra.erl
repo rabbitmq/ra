@@ -14,30 +14,30 @@
          send_and_notify/4,
          cast/2,
          cast/3,
-         local_query/2,
-         local_query/3,
          members/1,
          members/2,
+         local_query/2,
+         local_query/3,
          consistent_query/2,
          consistent_query/3,
+         % cluster operations
+         start_cluster/3,
+         start_or_restart_cluster/3,
+         delete_cluster/1,
+         delete_cluster/2,
          % cluster management
          start_node/1,
          start_node/4,
          restart_node/1,
          stop_node/1,
          delete_node/1,
-         % cluster operations
-         start_cluster/3,
-         start_or_restart_cluster/3,
-         delete_cluster/1,
-         delete_cluster/2,
-
+         trigger_election/1,
+         trigger_election/2,
+         %% membership
          add_node/2,
          add_node/3,
          remove_node/2,
          remove_node/3,
-         trigger_election/1,
-         trigger_election/2,
          leave_and_terminate/1,
          leave_and_terminate/2,
          leave_and_terminate/3,
@@ -352,8 +352,7 @@ overview() ->
                    lists:max([X || {X, _} <- ets:tab2list(ra_log_wal_metrics)]),
                status => sys:get_state(ra_log_wal),
                open_mem_tables => ets:info(ra_log_open_mem_tables, size),
-               closed_mem_tables => ets:info(ra_log_closed_mem_tables, size)
-               },
+               closed_mem_tables => ets:info(ra_log_closed_mem_tables, size)},
       segment_writer => ra_log_segment_writer:overview()
       }.
 

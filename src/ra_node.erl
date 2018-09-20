@@ -1344,7 +1344,6 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
             {AppliedTo, State, MacState, Effects, Notifys} =
                 lists:foldl(ApplyFun, {LastApplied, State1, MacState0,
                                        Effects0, Notifys0}, Entries),
-            % Effects = make_notify_effects(Notifys, Effects1),
             % {AppliedTo,_, _} = lists:last(Entries),
             % ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
             apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
