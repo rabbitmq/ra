@@ -28,7 +28,7 @@ all_tests() ->
      members,
      consistent_query,
      node_catches_up,
-     add_node,
+     add_member,
      queue_example,
      ramp_up_and_ramp_down,
      start_and_join_then_leave_and_terminate,
@@ -117,7 +117,7 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
     % remove leader node
     % the leader should here replicate the new cluster config
     % then step down + shut itself down
-    ok = remove_node(N1),
+    ok = remove_member(N1),
     timer:sleep(500),
     {error, noproc} = ra:send_and_await_consensus(N1, 5, 2000),
     _ = issue_op(N2, 5),
@@ -166,7 +166,7 @@ ramp_up_and_ramp_down(Config) ->
     % we need a quorum from the node that is to be removed for the cluster
     % change. if we stop the node before removing it from the cluster
     % configuration the cluster becomes non-functional
-    ok = remove_node(N2),
+    ok = remove_member(N2),
     % a longish sleep here simulates a node that has been removed but not
     % shut down and thus may start issuing request_vote_rpcs
     timer:sleep(1000),
@@ -328,13 +328,13 @@ consistent_query(Config) ->
     {ok, {{_, Term}, 14}, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
 
-add_node(Config) ->
+add_member(Config) ->
     Name = ?config(test_name, Config),
     [A, _B] = Cluster = start_local_cluster(2, Name, add_machine()),
     {ok, {_, Term}, Leader} = ra:send_and_await_consensus(A, 9),
     C = ra_node:name(Name, "3"),
     ok = ra:start_node(Name, C, add_machine(), Cluster),
-    {ok, {_, Term}, _Leader} = ra:add_node(Leader, {C, node()}),
+    {ok, {_, Term}, _Leader} = ra:add_member(Leader, {C, node()}),
     {ok, {{_, Term}, 9}, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
@@ -358,7 +358,7 @@ node_catches_up(Config) ->
                                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
 
     ok = ra:start_node(Name, {N3, node()}, Mac, InitialNodes),
-    {ok, {_, Term}, _Leader} = ra:add_node(Leader, {N3, node()}),
+    {ok, {_, Term}, _Leader} = ra:add_member(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point the node should be caught up
     {ok, {_, Res}, _} = ra:local_query(N1, fun ra_lib:id/1),
@@ -583,13 +583,13 @@ stop_node(Name) ->
     ok = ra:stop_node({Name, node()}),
     ok.
 
-add_node(Ref, New) ->
-    {ok, _IdxTerm, _Leader} = ra:add_node({Ref, node()}, {New, node()}),
+add_member(Ref, New) ->
+    {ok, _IdxTerm, _Leader} = ra:add_member({Ref, node()}, {New, node()}),
     ok.
 
 start_and_join(Ref, New) ->
     ServerRef = {Ref, node()},
-    {ok, _, _} = ra:add_node(ServerRef, {New, node()}),
+    {ok, _, _} = ra:add_member(ServerRef, {New, node()}),
     ok = ra:start_node(New, {New, node()}, add_machine(), [ServerRef]),
     ok.
 
@@ -601,8 +601,8 @@ start_local_cluster(Num, Name, Machine) ->
     ?assert(length(Failed) == 0),
     Nodes.
 
-remove_node(Name) ->
-    {ok, _IdxTerm, _Leader} = ra:remove_node({Name, node()}, {Name, node()}),
+remove_member(Name) ->
+    {ok, _IdxTerm, _Leader} = ra:remove_member({Name, node()}, {Name, node()}),
     ok.
 
 issue_op(Name, Op) ->

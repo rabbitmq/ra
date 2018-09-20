@@ -34,10 +34,10 @@
          trigger_election/1,
          trigger_election/2,
          %% membership
-         add_node/2,
-         add_node/3,
-         remove_node/2,
-         remove_node/3,
+         add_member/2,
+         add_member/3,
+         remove_member/2,
+         remove_member/3,
          leave_and_terminate/1,
          leave_and_terminate/2,
          leave_and_terminate/3,
@@ -253,13 +253,13 @@ delete_cluster0([], _, Errs) ->
 %%
 %% @param ServerRef the ra node to send the command to
 %% @param NodeId the ra node id of the new node
--spec add_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
-add_node(ServerRef, NodeId) ->
-    add_node(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+-spec add_member(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
+add_member(ServerRef, NodeId) ->
+    add_member(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
 
-%% @see add_node/2
--spec add_node(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
-add_node(ServerRef, NodeId, Timeout) ->
+%% @see add_member/2
+-spec add_member(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
+add_member(ServerRef, NodeId, Timeout) ->
     ra_node_proc:command(ServerRef, {'$ra_join', NodeId, after_log_append},
                          Timeout).
 
@@ -269,13 +269,13 @@ add_node(ServerRef, NodeId, Timeout) ->
 %%
 %% @param ServerRef the ra node to send the command to
 %% @param NodeId the ra node id of the node to remove
--spec remove_node(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
-remove_node(ServerRef, NodeId) ->
-    remove_node(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
+-spec remove_member(ra_node_id(), ra_node_id()) -> ra_cmd_ret().
+remove_member(ServerRef, NodeId) ->
+    remove_member(ServerRef, NodeId, ?DEFAULT_TIMEOUT).
 
-%% @see remove_node/2
--spec remove_node(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
-remove_node(ServerRef, NodeId, Timeout) ->
+%% @see remove_member/2
+-spec remove_member(ra_node_id(), ra_node_id(), timeout()) -> ra_cmd_ret().
+remove_member(ServerRef, NodeId, Timeout) ->
     ra_node_proc:command(ServerRef, {'$ra_leave', NodeId, after_log_append},
                          Timeout).
 

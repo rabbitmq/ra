@@ -76,7 +76,7 @@ to_list(I) when is_integer(I) ->
 to_list(L) when is_list(L) ->
     L.
 
--spec to_binary(atom() | binary() | binary() | integer()) -> binary().
+-spec to_binary(atom() | binary() | list() | integer()) -> binary().
 to_binary(B) when is_binary(B) ->
     B;
 to_binary(A) when is_atom(A) ->

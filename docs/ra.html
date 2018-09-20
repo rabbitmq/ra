@@ -21,9 +21,9 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_node-2">add_node/2</a></td><td>Add a ra node id to a ra cluster's membership configuration
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_member-2">add_member/2</a></td><td>Add a ra node id to a ra cluster's membership configuration
   This commits a join command to the leader log.</td></tr>
-<tr><td valign="top"><a href="#add_node-3">add_node/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#add_member-3">add_member/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#cast-2">cast/2</a></td><td>Cast a message to a node
   This is the least reliable way to interact with a ra node.</td></tr>
 <tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Cast a message to a node with a priority
@@ -52,9 +52,9 @@
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>return a map of overview data of the ra system on the current erlang
   node.</td></tr>
-<tr><td valign="top"><a href="#remove_node-2">remove_node/2</a></td><td>Removes a node from the cluster's membership configuration
+<tr><td valign="top"><a href="#remove_member-2">remove_member/2</a></td><td>Removes a node from the cluster's membership configuration
   This function returns after appending the command to the log.</td></tr>
-<tr><td valign="top"><a href="#remove_node-3">remove_node/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#remove_member-3">remove_member/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#restart_node-1">restart_node/1</a></td><td>Restarts a previously succesfully started ra node.</td></tr>
 <tr><td valign="top"><a href="#send-2">send/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#send-3">send/3</a></td><td>send a command to the ra node.</td></tr>
@@ -64,7 +64,6 @@
 <tr><td valign="top"><a href="#send_and_notify-4">send_and_notify/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_local_cluster-3">start_local_cluster/3</a></td><td>Starts a ra cluster on the current erlang node.</td></tr>
 <tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td>Starts a ra node.</td></tr>
 <tr><td valign="top"><a href="#start_node-4">start_node/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a></td><td>Starts or restarts a ra cluster.</td></tr>
@@ -77,9 +76,9 @@
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="add_node-2">add_node/2</a></h3>
+<h3 class="function"><a name="add_member-2">add_member/2</a></h3>
 <div class="spec">
-<p><tt>add_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+<p><tt>add_member(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
 <p><tt>ServerRef</tt>: the ra node to send the command to<br>
 <tt>NodeId</tt>: the ra node id of the new node<br>
 </p>
@@ -89,11 +88,11 @@
   This function returns after appending the command to the log.
  </p>
 
-<h3 class="function"><a name="add_node-3">add_node/3</a></h3>
+<h3 class="function"><a name="add_member-3">add_member/3</a></h3>
 <div class="spec">
-<p><tt>add_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+<p><tt>add_member(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
 </div>
-<p><b>See also:</b> <a href="#add_node-2">add_node/2</a>.</p>
+<p><b>See also:</b> <a href="#add_member-2">add_member/2</a>.</p>
 
 <h3 class="function"><a name="cast-2">cast/2</a></h3>
 <div class="spec">
@@ -209,9 +208,9 @@
 </div><p>return a map of overview data of the ra system on the current erlang
   node.</p>
 
-<h3 class="function"><a name="remove_node-2">remove_node/2</a></h3>
+<h3 class="function"><a name="remove_member-2">remove_member/2</a></h3>
 <div class="spec">
-<p><tt>remove_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+<p><tt>remove_member(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
 <p><tt>ServerRef</tt>: the ra node to send the command to<br>
 <tt>NodeId</tt>: the ra node id of the node to remove<br>
 </p>
@@ -219,11 +218,11 @@
   This function returns after appending the command to the log.
  </p>
 
-<h3 class="function"><a name="remove_node-3">remove_node/3</a></h3>
+<h3 class="function"><a name="remove_member-3">remove_member/3</a></h3>
 <div class="spec">
-<p><tt>remove_node(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+<p><tt>remove_member(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, NodeId::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
 </div>
-<p><b>See also:</b> <a href="#remove_node-2">remove_node/2</a>.</p>
+<p><b>See also:</b> <a href="#remove_member-2">remove_member/2</a>.</p>
 
 <h3 class="function"><a name="restart_node-1">restart_node/1</a></h3>
 <div class="spec">
@@ -328,19 +327,6 @@
   forcefully deleted.</p>
 </div><p><p>Starts a new distributed ra cluster.</p>
  
- </p>
-
-<h3 class="function"><a name="start_local_cluster-3">start_local_cluster/3</a></h3>
-<div class="spec">
-<p><tt>start_local_cluster(Num::non_neg_integer(), Name::atom() | string(), Machine::<a href="ra_node.html#type-machine_conf">ra_node:machine_conf()</a>) -&gt; [<a href="#type-ra_node_id">ra_node_id()</a>]</tt><br></p>
-<p><tt>Num</tt>: the number of nodes in the cluster<br>
-<tt>Name</tt>: The name of the cluster<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-</p>
-<p>returns: <code>[ra_node_id()]</code> after a leader has been elected</p>
-</div><p>Starts a ra cluster on the current erlang node.
-  Useful for testing and exploration. Use <a href="#start_cluster-3"><code>start_cluster/3</code></a> for
-  real use.
  </p>
 
 <h3 class="function"><a name="start_node-1">start_node/1</a></h3>
