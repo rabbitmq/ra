@@ -6,7 +6,6 @@
 
 -export([
          start/0,
-         start_local_cluster/3,
          send/2,
          send/3,
          send_and_await_consensus/2,
@@ -56,36 +55,6 @@
 start() ->
     {ok, _} = application:ensure_all_started(ra),
     ok.
-
-%% @doc Starts a ra cluster on the current erlang node.
-%% Useful for testing and exploration. Use {@link start_cluster/3} for
-%% real use.
-%%
-%% @param Num the number of nodes in the cluster
-%% @param Name The name of the cluster
-%% @param Machine The {@link ra_machine:machine/0} configuration.
-%% @returns `[ra_node_id()]' after a leader has been elected
--spec start_local_cluster(non_neg_integer(), atom() | string(),
-                          ra_node:machine_conf()) ->
-    [ra_node_id()].
-start_local_cluster(Num, Name, Machine) ->
-    [Node1 | _] = Nodes = [{ra_node:name(Name, integer_to_list(N)), node()}
-                           || N <- lists:seq(1, Num)],
-    Conf0 = #{log_init_args => #{},
-              initial_nodes => Nodes,
-              cluster_id => Name,
-              machine => Machine},
-    Res = [begin
-               UId = atom_to_binary(element(1, Id), utf8),
-               {ok, _Pid} = ra_node_proc:start_link(
-                              Conf0#{id => Id,
-                                     log_init_args => #{uid => UId},
-                                     uid => UId}),
-               Id
-           end || Id <- Nodes],
-    ok = ra:trigger_election(Node1),
-    _ = ra:members(Node1),
-    Res.
 
 %% @doc Starts a ra node
 %% @param Conf a ra_node_config() configuration map.

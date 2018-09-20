@@ -26,8 +26,12 @@ init_per_suite(Config) ->
     Config.
 
 init_per_testcase(non_assoc, Config) ->
-    Cluster = ra:start_local_cluster(3, "test",
-                                     {simple, fun non_assoc_apply/2, 0}),
+    {ok, Cluster, _} = ra:start_cluster(non_assoc,
+                                        {simple, fun non_assoc_apply/2, 0},
+                                        [{n1, node()},
+                                         {n2, node()},
+                                         {n3, node()}]
+                                        ),
     [{ra_cluster, Cluster} | Config].
 
 end_per_testcase(_, Config) ->
