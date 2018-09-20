@@ -118,7 +118,7 @@ init(#{uid := UId} = Conf) ->
 
     ok =  ra_lib:ensure_dir(Dir),
 
-    % initialise metrics for this node
+    % initialise metrics for this server
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
@@ -510,7 +510,7 @@ update_release_cursor(Idx, Cluster, MachineState,
                       #state{segment_refs = SegRefs,
                              snapshot_state = SnapState,
                              snapshot_interval = SnapInter} = State0) ->
-    ClusterNodes = maps:keys(Cluster),
+    ClusterServerIds = maps:keys(Cluster),
     SnapLimit = case SnapState of
                     undefined -> SnapInter;
                     {I, _, _} -> I + SnapInter
@@ -536,7 +536,7 @@ update_release_cursor(Idx, Cluster, MachineState,
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterNodes, MachineState},
+                    write_snapshot({Idx, Term, ClusterServerIds, MachineState},
                                    State)
             end;
         false when Idx > SnapLimit ->
@@ -546,7 +546,7 @@ update_release_cursor(Idx, Cluster, MachineState,
                 {undefined, State} ->
                     State;
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterNodes, MachineState},
+                    write_snapshot({Idx, Term, ClusterServerIds, MachineState},
                                    State)
             end;
         false ->
@@ -960,7 +960,7 @@ flru_handler({_, Seg}) ->
 
 recover_range(UId) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
-    % which means it is essential that ra_nodes are part of the same
+    % which means it is essential that ra_servers are part of the same
     % supervision tree
     % 1. check closed mem_tables to extend
     OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of

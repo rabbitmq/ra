@@ -15,7 +15,7 @@
 
 -include("ra.hrl").
 
-%% centralised meta data storage server for ra nodes.
+%% centralised meta data storage server for ra servers.
 
 -type key() :: current_term | voted_for | last_applied.
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.

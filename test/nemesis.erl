@@ -20,14 +20,14 @@
 
 -type scenario() :: [{wait, non_neg_integer()} |
                      {part, [node()], non_neg_integer()} |
-                     {app_restart, [ra_node_id()]} |
+                     {app_restart, [ra_server_id()]} |
                      heal].
 
--type config() :: #{nodes := [ra_node_id()],
+-type config() :: #{nodes := [node()],
                     scenario := scenario()}.
 
 -record(state, {config :: config(),
-                nodes :: [ra_node_id()],
+                nodes :: [node()],
                 steps :: scenario(),
                 waiting :: term()}).
 
@@ -103,14 +103,15 @@ handle_step(#state{steps = [{part, Partition0, Time} | Rem],
 handle_step(#state{steps = [heal | Rem]} = State) ->
     heal(State#state.nodes),
     handle_step(State#state{steps = Rem});
-handle_step(#state{steps = [{app_restart, Nodes} | Rem]} = State) ->
+handle_step(#state{steps = [{app_restart, Servers} | Rem]} = State) ->
+    ct:pal("doing app restart of ~w", [Servers]),
     [begin
          rpc:call(N, application, stop, [ra]),
          rpc:call(N, application, start, [ra]),
-         rpc:call(N, ra, restart_node, [Id])
-     end || {_, N} = Id <- Nodes],
+         rpc:call(N, ra, restart_server, [Id])
+     end || {_, N} = Id <- Servers],
     handle_step(State#state{steps = Rem});
-handle_step(#state{steps = []} = _State) ->
+handle_step(#state{steps = []}) ->
     done.
 
 

@@ -19,7 +19,7 @@
 
 -define(REVERSE_TBL, ra_directory_reverse).
 
-% registry for a ra node's locally unique name
+% registry for a ra servers's locally unique name
 
 -spec init(file:filename()) -> ok.
 init(Dir) ->
@@ -43,25 +43,25 @@ deinit() ->
     ok.
 
 -spec register_name(ra_uid(), pid(), atom()) -> yes | no.
-register_name(UId, Pid, RaNodeName) ->
-    true = ets:insert(?MODULE, {UId, Pid, RaNodeName}),
-    ok = dets:insert(?REVERSE_TBL, {RaNodeName, UId}),
+register_name(UId, Pid, RaServerName) ->
+    true = ets:insert(?MODULE, {UId, Pid, RaServerName}),
+    ok = dets:insert(?REVERSE_TBL, {RaServerName, UId}),
     yes.
 
 -spec unregister_name(ra_uid()) -> ra_uid().
 unregister_name(UId) ->
     case ets:take(?MODULE, UId) of
-        [{_, _, NodeName}] ->
+        [{_, _, ServerName}] ->
             ets:take(?MODULE, UId),
-            ok = dets:delete(?REVERSE_TBL, NodeName),
+            ok = dets:delete(?REVERSE_TBL, ServerName),
             UId;
         [] ->
             UId
     end.
 
 -spec where_is(ra_uid() | atom()) -> pid() | undefined.
-where_is(NodeName) when is_atom(NodeName) ->
-    case dets:lookup(?REVERSE_TBL, NodeName) of
+where_is(ServerName) when is_atom(ServerName) ->
+    case dets:lookup(?REVERSE_TBL, ServerName) of
         [] -> undefined;
         [{_, UId}] ->
             where_is(UId)
@@ -79,8 +79,8 @@ name_of(UId) ->
         [] -> undefined
     end.
 
-uid_of(NodeName) when is_atom(NodeName) ->
-    case dets:lookup(?REVERSE_TBL, NodeName) of
+uid_of(ServerName) when is_atom(ServerName) ->
+    case dets:lookup(?REVERSE_TBL, ServerName) of
         [] -> undefined;
         [{_, UId}] ->
             UId

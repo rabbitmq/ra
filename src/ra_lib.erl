@@ -14,8 +14,8 @@
          to_binary/1,
          to_string/1,
          to_atom/1,
-         ra_node_id_to_local_name/1,
-         ra_node_id_node/1,
+         ra_server_id_to_local_name/1,
+         ra_server_id_node/1,
          update_element/3,
          zpad_filename/3,
          zpad_filename_incr/1,
@@ -100,11 +100,11 @@ to_atom(B) when is_binary(B) ->
 to_atom(L) when is_list(L) ->
     list_to_atom(L).
 
-ra_node_id_to_local_name({Name, _}) -> Name;
-ra_node_id_to_local_name(Name) when is_atom(Name) -> Name.
+ra_server_id_to_local_name({Name, _}) -> Name;
+ra_server_id_to_local_name(Name) when is_atom(Name) -> Name.
 
-ra_node_id_node({_Name, Node}) -> Node;
-ra_node_id_node(Name) when is_atom(Name) -> node().
+ra_server_id_node({_Name, Node}) -> Node;
+ra_server_id_node(Name) when is_atom(Name) -> node().
 
 update_element(Index, T, Update) when is_tuple(T) ->
     setelement(Index, T, Update(element(Index, T))).

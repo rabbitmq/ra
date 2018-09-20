@@ -1,31 +1,31 @@
--module(ra_nodes_sup).
+-module(ra_server_sup).
 
 -behaviour(supervisor).
 
 
 %% API functions
--export([start_node/1,
-         restart_node/1,
-         stop_node/1,
-         delete_node/1,
+-export([start_server/1,
+         restart_server/1,
+         stop_server/1,
+         delete_server/1,
          remove_all/0,
          start_link/0,
          % for rpcs only
          prepare_start_rpc/1,
          prepare_restart_rpc/1,
-         delete_node_rpc/1]).
+         delete_server_rpc/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
 -include("ra.hrl").
 
--spec start_node(ra_node:ra_node_config()) ->
+-spec start_server(ra_server:ra_server_config()) ->
     supervisor:startchild_ret() | {error, not_new}.
-start_node(#{id := NodeId,
+start_server(#{id := NodeId,
              uid := UId} = Config) ->
     %% check that the node isn't already registered
-    Node = ra_lib:ra_node_id_node(NodeId),
+    Node = ra_lib:ra_server_id_node(NodeId),
     case rpc:call(Node, ?MODULE, prepare_start_rpc, [UId]) of
         ok ->
             supervisor:start_child({?MODULE, Node}, [Config]);
@@ -33,8 +33,8 @@ start_node(#{id := NodeId,
             Err
     end.
 
--spec restart_node(ra_node_id()) -> supervisor:startchild_ret().
-restart_node({RaName, Node}) ->
+-spec restart_server(ra_server_id()) -> supervisor:startchild_ret().
+restart_server({RaName, Node}) ->
     case rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]) of
         {ok, Config} ->
             supervisor:start_child({?MODULE, Node}, [Config]);
@@ -65,12 +65,12 @@ prepare_restart_rpc(RaName) ->
             ra_log:read_config(Dir)
     end.
 
--spec stop_node(RaNodeId :: ra_node_id()) -> ok | {error, term()}.
-stop_node({RaName, Node}) ->
+-spec stop_server(RaNodeId :: ra_server_id()) -> ok | {error, term()}.
+stop_server({RaName, Node}) ->
     Pid = rpc:call(Node, ra_directory,
                    where_is, [RaName]),
     supervisor:terminate_child({?MODULE, Node}, Pid);
-stop_node(RaName) ->
+stop_server(RaName) ->
     % local node
     case ra_directory:where_is(RaName) of
         undefined -> ok;
@@ -78,18 +78,18 @@ stop_node(RaName) ->
             supervisor:terminate_child(?MODULE, Pid)
     end.
 
--spec delete_node(NodeId :: ra_node_id()) -> ok | {error, term()}.
-delete_node(NodeId) ->
-    Node = ra_lib:ra_node_id_node(NodeId),
-    Name = ra_lib:ra_node_id_to_local_name(NodeId),
-    case stop_node(NodeId) of
+-spec delete_server(NodeId :: ra_server_id()) -> ok | {error, term()}.
+delete_server(NodeId) ->
+    Node = ra_lib:ra_server_id_node(NodeId),
+    Name = ra_lib:ra_server_id_to_local_name(NodeId),
+    case stop_server(NodeId) of
         ok ->
             ?INFO("Deleting node ~p and it's data.~n", [NodeId]),
-            rpc:call(Node, ?MODULE, delete_node_rpc, [Name]);
+            rpc:call(Node, ?MODULE, delete_server_rpc, [Name]);
         {error, _} = Err -> Err
     end.
 
-delete_node_rpc(RaName) ->
+delete_server_rpc(RaName) ->
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
     Dir = ra_env:data_dir(UId),
@@ -101,7 +101,7 @@ delete_node_rpc(RaName) ->
         ok -> ok
     catch
         _:_ = Err ->
-            ?WARN("delete_node/2 failed to delete directory ~s~n"
+            ?WARN("delete_server/2 failed to delete directory ~s~n"
                   "Error: ~p~n", [Dir, Err])
     end,
     ra_directory:unregister_name(UId),
@@ -128,5 +128,5 @@ init([]) ->
                   % needs to be transient as may shut itself down by returning
                   % {stop, normal, State}
                   restart => transient,
-                  start => {ra_node_proc, start_link, []}},
+                  start => {ra_server_proc, start_link, []}},
     {ok, {SupFlags, [ChildSpec]}}.

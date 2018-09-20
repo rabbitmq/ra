@@ -18,7 +18,7 @@
 -include("ra.hrl").
 
 -type config() :: #{cluster_id := ra_cluster_id(),
-                    nodes := [ra_node_id()],
+                    servers := [ra_server_id()],
                     num_messages := non_neg_integer(),
                     spec := {Interval :: non_neg_integer(), Tag :: atom()}
                     }.
@@ -53,9 +53,9 @@ wait(Pid, Timeout) ->
 init([#{spec := {Interval, Tag},
         num_messages := Max,
         cluster_id := ClusterId,
-        nodes := Nodes}]) ->
+        servers := Servers}]) ->
     erlang:send_after(Interval, self(), enqueue),
-    F = ra_fifo_client:init(ClusterId, Nodes),
+    F = ra_fifo_client:init(ClusterId, Servers),
     {ok, #state{state = F,
                 max = Max,
                 interval = Interval,

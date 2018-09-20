@@ -2,14 +2,14 @@
 <html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module ra_node_proc</title>
+<title>Module ra_server_proc</title>
 <link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
 </head>
 <body bgcolor="white">
 <div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <hr>
 
-<h1>Module ra_node_proc</h1>
+<h1>Module ra_server_proc</h1>
 <ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
 
 <p><b>Behaviours:</b> <a href="gen_statem.html"><tt>gen_statem</tt></a>.</p>
@@ -29,7 +29,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_command">ra_command()</a></h3>
-<p><tt>ra_command() = {<a href="ra_node.html#type-command_type">ra_node:command_type()</a>, term(), <a href="ra_node.html#type-command_reply_mode">ra_node:command_reply_mode()</a>}</tt></p>
+<p><tt>ra_command() = {<a href="ra_server.html#type-command_type">ra_server:command_type()</a>, term(), <a href="ra_server.html#type-command_reply_mode">ra_server:command_reply_mode()</a>}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_command_priority">ra_command_priority()</a></h3>
@@ -41,15 +41,15 @@
 
 
 <h3 class="typedecl"><a name="type-ra_event_body">ra_event_body()</a></h3>
-<p><tt>ra_event_body() = {applied, [<a href="ra_node.html#type-command_correlation">ra_node:command_correlation()</a>]} | {rejected, <a href="#type-ra_event_reject_detail">ra_event_reject_detail()</a>} | {machine, term()}</tt></p>
+<p><tt>ra_event_body() = {applied, [<a href="ra_server.html#type-command_correlation">ra_server:command_correlation()</a>]} | {rejected, <a href="#type-ra_event_reject_detail">ra_event_reject_detail()</a>} | {machine, term()}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_event_reject_detail">ra_event_reject_detail()</a></h3>
-<p><tt>ra_event_reject_detail() = {not_leader, Leader::<a href="#type-maybe">maybe</a>(<a href="#type-ra_node_id">ra_node_id()</a>), <a href="ra_node.html#type-command_correlation">ra_node:command_correlation()</a>}</tt></p>
+<p><tt>ra_event_reject_detail() = {not_leader, Leader::<a href="#type-maybe">maybe</a>(<a href="#type-ra_server_id">ra_server_id()</a>), <a href="ra_server.html#type-command_correlation">ra_server:command_correlation()</a>}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-ra_leader_call_ret">ra_leader_call_ret()</a></h3>
-<p><tt>ra_leader_call_ret(Result) = {ok, Result, Leader::<a href="#type-ra_node_id">ra_node_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_node_id">ra_node_id()</a>}</tt></p>
+<p><tt>ra_leader_call_ret(Result) = {ok, Result, Leader::<a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</tt></p>
 
 
 <h3 class="typedecl"><a name="type-safe_call_ret">safe_call_ret()</a></h3>
@@ -106,12 +106,12 @@
 
 <h3 class="function"><a name="cast_command-2">cast_command/2</a></h3>
 <div class="spec">
-<p><tt>cast_command(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
+<p><tt>cast_command(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="cast_command-3">cast_command/3</a></h3>
 <div class="spec">
-<p><tt>cast_command(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Priority::<a href="#type-ra_command_priority">ra_command_priority()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
+<p><tt>cast_command(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Priority::<a href="#type-ra_command_priority">ra_command_priority()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>) -&gt; ok</tt><br></p>
 </div>
 
 <h3 class="function"><a name="code_change-4">code_change/4</a></h3>
@@ -121,7 +121,7 @@
 
 <h3 class="function"><a name="command-3">command/3</a></h3>
 <div class="spec">
-<p><tt>command(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
+<p><tt>command(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Cmd::<a href="#type-ra_command">ra_command()</a>, Timeout::timeout()) -&gt; <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="follower-3">follower/3</a></h3>
@@ -151,12 +151,12 @@
 
 <h3 class="function"><a name="log_fold-4">log_fold/4</a></h3>
 <div class="spec">
-<p><tt>log_fold(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Fun::function(), InitialState::term(), Timeout::integer()) -&gt; term()</tt><br></p>
+<p><tt>log_fold(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Fun::function(), InitialState::term(), Timeout::integer()) -&gt; term()</tt><br></p>
 </div>
 
 <h3 class="function"><a name="ping-2">ping/2</a></h3>
 <div class="spec">
-<p><tt>ping(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; <a href="#type-safe_call_ret">safe_call_ret</a>({pong, <a href="#type-states">states()</a>})</tt><br></p>
+<p><tt>ping(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Timeout::timeout()) -&gt; <a href="#type-safe_call_ret">safe_call_ret</a>({pong, <a href="#type-states">states()</a>})</tt><br></p>
 </div>
 
 <h3 class="function"><a name="pre_vote-3">pre_vote/3</a></h3>
@@ -166,7 +166,7 @@
 
 <h3 class="function"><a name="query-4">query/4</a></h3>
 <div class="spec">
-<p><tt>query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, QueryFun::<a href="#type-query_fun">query_fun()</a>, X3::local | consistent, Timeout::timeout()) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_node_id">ra_node_id()</a>}</tt><br></p>
+<p><tt>query(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, QueryFun::<a href="#type-query_fun">query_fun()</a>, X3::local | consistent, Timeout::timeout()) -&gt; {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, <a href="#type-ra_server_id">ra_server_id()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="recover-3">recover/3</a></h3>
@@ -181,12 +181,12 @@
 
 <h3 class="function"><a name="start_link-1">start_link/1</a></h3>
 <div class="spec">
-<p><tt>start_link(Config::<a href="ra_node.html#type-ra_node_config">ra_node:ra_node_config()</a>) -&gt; <a href="#type-gen_statem_start_ret">gen_statem_start_ret()</a></tt><br></p>
+<p><tt>start_link(Config::<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>) -&gt; <a href="#type-gen_statem_start_ret">gen_statem_start_ret()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="state_query-3">state_query/3</a></h3>
 <div class="spec">
-<p><tt>state_query(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Spec::all | members | machine, Timeout::timeout()) -&gt; <a href="#type-ra_leader_call_ret">ra_leader_call_ret</a>(term())</tt><br></p>
+<p><tt>state_query(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Spec::all | members | machine, Timeout::timeout()) -&gt; <a href="#type-ra_leader_call_ret">ra_leader_call_ret</a>(term())</tt><br></p>
 </div>
 
 <h3 class="function"><a name="terminate-3">terminate/3</a></h3>
@@ -206,7 +206,7 @@
 
 <h3 class="function"><a name="trigger_election-2">trigger_election/2</a></h3>
 <div class="spec">
-<p><tt>trigger_election(ServerRef::<a href="#type-ra_node_id">ra_node_id()</a>, Timeout::timeout()) -&gt; ok</tt><br></p>
+<p><tt>trigger_election(ServerRef::<a href="#type-ra_server_id">ra_server_id()</a>, Timeout::timeout()) -&gt; ok</tt><br></p>
 </div>
 <hr>
 

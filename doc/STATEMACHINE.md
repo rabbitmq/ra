@@ -87,13 +87,13 @@ An that is it! The state machine is finished.
 To actually run this we need to configure a ra cluster to use the `ra_kv`
 state machine and start it. The simplest way is to use the `ra:start_cluster/3`
 function. It takes a ClusterId that can be an arbitrary term, we here use a
-binary, a machine configuration and a list of nodes that define the initial
+binary, a machine configuration and a list of servers that define the initial
 set of members.
 
 ```erlang
 start() ->
     %% the initial cluster members
-    Nodes = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
+    Servers = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
     %% an arbitrary cluster id
     ClusterId = <<"ra_kv">>,
     %% the config passed to `init/1`
@@ -103,7 +103,7 @@ start() ->
     %% ensure ra is started
     application:ensure_all_started(ra),
     %% start a cluster instance running the `ra_kv` machine
-    ra:start_cluster(ClusterId, Machine, Nodes).
+    ra:start_cluster(ClusterId, Machine, Servers).
 ```
 
 If you then start an erlang shell with `make shell` or similar and call
@@ -116,9 +116,9 @@ If you then start an erlang shell with `make shell` or similar and call
     []}
 ```
 
-Indicating that all nodes in the `ra` cluster were successfully started. The
-last element of the tuple would contain the nodes that were not successfully
-started. If a quorum of nodes could not be started the function would return
+Indicating that all servers in the `ra` cluster were successfully started. The
+last element of the tuple would contain the servers that were not successfully
+started. If a quorum of servers could not be started the function would return
 and error.
 
 Now you can write your first value into the databas.
@@ -135,7 +135,7 @@ Now you can write your first value into the databas.
 ```
 
 `ra:send_and_await_consensus/2` blocks until the command has achieved consensus
-and has been applied to the state machine on the leader node. It is the simplest
+and has been applied to the state machine on the leader server. It is the simplest
 way to interact with `ra` but also the one with the highest latency.
 To read values consistently we have no choice than to use it.
 The return tuple has either the raft index and term the entry was added to the
@@ -151,7 +151,7 @@ than calling `ra:send_and_await_consensus/2` directly.
 ```erlang
 write(Key, Value) ->
     %% it would make sense to cache this to avoid redirection costs when this
-    %% node happens not to be the current leader
+    %% server happens not to be the current leader
     Node = ra_kv1,
     case ra:send_and_await_consensus(Node, {write, Key, Value}) of
         {ok, _, _} ->
@@ -175,19 +175,19 @@ read(Key) ->
 Effects are used to separate the state machine logic from the effects it wants
 to take inside it's environment. Each call to the `apply/3` function can return
 a list of effects for the leader to realise. This includes sending messages,
-setting up node and process monitors and calling arbitrary functions.
+setting up server and process monitors and calling arbitrary functions.
 Only the leader that first applies an entry will attempt the effect. Followers
 process the same set of commands but simply throw away any effects returned by
 the state machine.
 
 How does ra ensure we not re-issue effects on recovery?
 
-Each ra node persists it's `last_applied` index. When the node restarts it
+Each ra server persists it's `last_applied` index. When the server restarts it
 replays it's log until this point and throws away any resulting effects as they
 should already have been issued.
 
 NB: as the `last_applied` index is only persisted periodically there is a small
-chance that some effects may be issued multiple times when all the nodes in the
+chance that some effects may be issued multiple times when all the servers in the
 cluster crash suddenly and at the same time. It is worth taking this into account
 when implementing your state machine. There is also a chance that effects will
 never be issued or reach their recipients. Ra makes no allowance for this.

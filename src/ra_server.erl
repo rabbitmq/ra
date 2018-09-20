@@ -1,4 +1,4 @@
--module(ra_node).
+-module(ra_server).
 
 -include("ra.hrl").
 
@@ -34,12 +34,12 @@
          recover/1
         ]).
 
--type ra_await_condition_fun() :: fun((ra_msg(), ra_node_state()) -> boolean()).
+-type ra_await_condition_fun() :: fun((ra_msg(), ra_server_state()) -> boolean()).
 
--type ra_node_state() ::
-    #{id => ra_node_id(),
+-type ra_server_state() ::
+    #{id => ra_server_id(),
       uid => ra_uid(),
-      leader_id => maybe(ra_node_id()),
+      leader_id => maybe(ra_server_id()),
       cluster => ra_cluster(),
       cluster_change_permitted => boolean(),
       cluster_index_term => ra_idxterm(),
@@ -47,7 +47,7 @@
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term => ra_term(),
       log => term(),
-      voted_for => maybe(ra_node_id()), % persistent
+      voted_for => maybe(ra_server_id()), % persistent
       votes => non_neg_integer(),
       commit_index => ra_index(),
       last_applied => ra_index(),
@@ -81,8 +81,8 @@
                     UserCommand :: term(), command_reply_mode()} | noop.
 
 -type ra_msg() :: #append_entries_rpc{} |
-                  {ra_node_id(), #append_entries_reply{}} |
-                  {ra_node_id(), #install_snapshot_result{}} |
+                  {ra_server_id(), #append_entries_reply{}} |
+                  {ra_server_id(), #install_snapshot_result{}} |
                   #request_vote_rpc{} |
                   #request_vote_result{} |
                   #pre_vote_rpc{} |
@@ -102,10 +102,10 @@
     ra_machine:effect() |
     {reply, ra_reply_body()} |
     {reply, term(), ra_reply_body()} |
-    {cast, ra_node_id(), term()} |
-    {send_vote_requests, [{ra_node_id(),
+    {cast, ra_server_id(), term()} |
+    {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
-    {send_rpcs, [{ra_node_id(), #append_entries_rpc{}}]} |
+    {send_rpcs, [{ra_server_id(), #append_entries_rpc{}}]} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
     {notify, pid(), reference()} |
@@ -119,11 +119,11 @@
 -type machine_conf() :: {simple, simple_apply_fun(term()), State :: term()}
                         | {module, module(), map()}.
 
--type ra_node_config() :: #{id := ra_node_id(),
+-type ra_server_config() :: #{id := ra_server_id(),
                             uid := ra_uid(),
                             cluster_id := ra_cluster_id(),
                             log_init_args := ra_log:ra_log_init_args(),
-                            initial_nodes := [ra_node_id()],
+                            initial_members := [ra_server_id()],
                             machine := machine_conf(),
                             % TODO: review - only really used for
                             % setting election timeouts
@@ -133,9 +133,9 @@
                             tick_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer()}.
 
--export_type([ra_node_state/0,
+-export_type([ra_server_state/0,
               ra_state/0,
-              ra_node_config/0,
+              ra_server_config/0,
               ra_msg/0,
               machine_conf/0,
               command/0,
@@ -152,16 +152,16 @@
 
 -spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
 name(ClusterId, UniqueSuffix) ->
-    list_to_atom("ra_" ++ ClusterId ++ "_node_" ++ UniqueSuffix).
+    list_to_atom("ra_" ++ ClusterId ++ "_server_" ++ UniqueSuffix).
 
--spec init(ra_node_config()) -> {ra_node_state(), ra_effects()}.
+-spec init(ra_server_config()) -> {ra_server_state(), ra_effects()}.
 init(#{id := Id,
        uid := UId,
        cluster_id := _ClusterId,
-       initial_nodes := InitialNodes,
+       initial_members := InitialNodes,
        log_init_args := LogInitArgs,
        machine := MachineConf} = Config) ->
-    Name = ra_lib:ra_node_id_to_local_name(Id),
+    Name = ra_lib:ra_server_id_to_local_name(Id),
     Log0 = ra_log:init(LogInitArgs),
     ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
@@ -191,7 +191,7 @@ init(#{id := Id,
     State0 = #{id => Id,
                uid => UId,
                cluster => Cluster0,
-               % There may be scenarios when a single node
+               % There may be scenarios when a single server
                % starts up but hasn't
                % yet re-applied its noop command that we may receive other join
                % commands that can't be applied.
@@ -212,7 +212,7 @@ init(#{id := Id,
                aux_state => ra_machine:init_aux(Machine, Name),
                condition_timeout_effects => []},
     % Find last cluster change and idxterm and use as initial cluster
-    % This is required as otherwise a node could restart without any known
+    % This is required as otherwise a server could restart without any known
     % peers and become a leader
     {ok, {{ClusterIndexTerm, Cluster}, Log}} =
     fold_log_from(CommitIndex,
@@ -239,7 +239,7 @@ recover(#{id := Id,
                                      %% Clear out the effects to avoid building
                                      %% up a long list of effects than then
                                      %% we throw away
-                                     %% on node startup (queue recovery)
+                                     %% on server startup (queue recovery)
                                      setelement(4,
                                                 apply_with(Machine, E, S), [])
                              end,
@@ -253,8 +253,8 @@ recover(#{id := Id,
 % the "fake" rpc call in ra_proxy as when using reply the unique reference
 % is joined with the msg itself. In this instance it is treated as an info
 % message.
--spec handle_leader(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effects()}.
+-spec handle_leader(ra_msg(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              next_index = NextIdx,
                                              last_index = LastIdx}},
@@ -510,8 +510,8 @@ handle_leader(Msg, State) ->
     {leader, State, []}.
 
 
--spec handle_candidate(ra_msg() | election_timeout, ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effects()}.
+-spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{current_term := Term, votes := Votes,
                    cluster := Nodes, machine := Machine,
@@ -569,8 +569,8 @@ handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
 
--spec handle_pre_vote(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effects()}.
+-spec handle_pre_vote(ra_msg(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
 handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
@@ -615,8 +615,8 @@ handle_pre_vote(Msg, State) ->
     {pre_vote, State, []}.
 
 
--spec handle_follower(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effects()}.
+-spec handle_follower(ra_msg(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
 handle_follower(#append_entries_rpc{term = Term,
                                     leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
@@ -812,8 +812,8 @@ handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
 
--spec handle_await_condition(ra_msg(), ra_node_state()) ->
-    {ra_state(), ra_node_state(), ra_effects()}.
+-spec handle_await_condition(ra_msg(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, cast, Msg}]};
 handle_await_condition(election_timeout, State) ->
@@ -830,13 +830,13 @@ handle_await_condition(Msg, #{condition := Cond} = State) ->
             {await_condition, State, []}
     end.
 
--spec tick(ra_node_state()) -> ra_effects().
+-spec tick(ra_server_state()) -> ra_effects().
 tick(#{machine := Machine, machine_state := MacState}) ->
     Now = os:system_time(millisecond),
     ra_machine:tick(Machine, Now, MacState).
 
 
--spec become(ra_state(), ra_node_state()) -> ra_node_state().
+-spec become(ra_state(), ra_server_state()) -> ra_server_state().
 become(leader, #{cluster := Cluster, log := Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster), Log0),
     State#{log => Log};
@@ -848,7 +848,7 @@ become(_RaftState, State) ->
     State.
 
 
--spec overview(ra_node_state()) -> map().
+-spec overview(ra_server_state()) -> map().
 overview(#{log := Log, machine := Machine,
            machine_state := MacState} = State) ->
     O = maps:with([uid, current_term, commit_index, last_applied,
@@ -858,20 +858,20 @@ overview(#{log := Log, machine := Machine,
     O#{log => LogOverview,
        machine => MacOverview}.
 
--spec is_new(ra_node_state()) -> boolean().
+-spec is_new(ra_server_state()) -> boolean().
 is_new(#{log := Log}) ->
     ra_log:next_index(Log) =:= 1.
 
--spec is_fully_persisted(ra_node_state()) -> boolean().
+-spec is_fully_persisted(ra_server_state()) -> boolean().
 is_fully_persisted(#{log := Log}) ->
     LastWritten = ra_log:last_written(Log),
     LastIdxTerm = ra_log:last_index_term(Log),
     LastWritten =:= LastIdxTerm.
 
--spec is_fully_replicated(ra_node_state()) -> boolean().
+-spec is_fully_replicated(ra_server_state()) -> boolean().
 is_fully_replicated(#{commit_index := CI} = State) ->
     case maps:values(peers(State)) of
-        [] -> true; % there is only one node
+        [] -> true; % there is only one server
         Peers ->
             MinMI = lists:min([M || #{match_index := M} <- Peers]),
             MinMI >= CI
@@ -893,21 +893,21 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
 
 % property helpers
 
--spec id(ra_node_state()) -> ra_node_id().
+-spec id(ra_server_state()) -> ra_server_id().
 id(#{id := Id}) -> Id.
 
--spec uid(ra_node_state()) -> ra_uid().
+-spec uid(ra_server_state()) -> ra_uid().
 uid(#{uid := UId}) -> UId.
 
--spec machine(ra_node_state()) -> module().
+-spec machine(ra_server_state()) -> module().
 machine(#{machine := Machine}) ->
     ra_machine:module(Machine).
 
--spec leader_id(ra_node_state()) -> maybe(ra_node_id()).
+-spec leader_id(ra_server_state()) -> maybe(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
 
--spec current_term(ra_node_state()) -> maybe(ra_term()).
+-spec current_term(ra_server_state()) -> maybe(ra_term()).
 current_term(State) ->
     maps:get(current_term, State).
 % Internal
@@ -1061,8 +1061,8 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(), term(), ra_node_state()) ->
-    ra_node_state().
+-spec update_release_cursor(ra_index(), term(), ra_server_state()) ->
+    ra_server_state().
 update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
     % simply pass on release cursor index to log
@@ -1074,7 +1074,7 @@ update_release_cursor(Index, MacState,
 % follower that has seen an entry but not the commit_index
 % takes over and this
 % This is done on a schedule
--spec persist_last_applied(ra_node_state()) -> ra_node_state().
+-spec persist_last_applied(ra_server_state()) -> ra_server_state().
 persist_last_applied(#{persisted_last_applied := L,
                        last_applied := L} = State) ->
     % do nothing
@@ -1084,7 +1084,7 @@ persist_last_applied(#{last_applied := L, log := Log0} = State) ->
     State#{persisted_last_applied => L}.
 
 
--spec terminate(ra_node_state(), Reason :: {shutdown, delete} | term()) -> ok.
+-spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log} = _State, {shutdown, delete}) ->
     ?INFO("~w: terminating and deleting all data~n", [id(_State)]),
     catch ra_log:delete_everything(Log),
@@ -1094,9 +1094,9 @@ terminate(State, _Reason) ->
     catch ra_log:close(Log),
     ok.
 
--spec log_fold(ra_node_state(), fun((term(), State) -> State), State) ->
-    {ok, State, ra_node_state()} |
-    {error, term(), ra_node_state()}.
+-spec log_fold(ra_server_state(), fun((term(), State) -> State), State) ->
+    {ok, State, ra_server_state()} |
+    {error, term(), ra_server_state()}.
 log_fold(#{log := Log} = RaState, Fun, State) ->
     Idx = case ra_log:snapshot_index_term(Log) of
               {PrevIdx, _PrevTerm} ->
@@ -1305,10 +1305,10 @@ make_cluster(Self, Nodes) ->
                              Acc#{N => new_peer()}
                      end, #{}, Nodes) of
         #{Self := _} = Cluster ->
-            % current node is already in cluster - do nothing
+            % current server is already in cluster - do nothing
             Cluster;
         Cluster ->
-            % add current node to cluster
+            % add current server to cluster
             Cluster#{Self => new_peer()}
     end.
 
@@ -1409,7 +1409,7 @@ apply_with(Machine,
     {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
     Effects = make_notify_effects(Notifys, Effects1),
     EOLEffects = ra_machine:eol_effects(Machine, MacSt),
-    % non-local return to be caught by ra_node_proc
+    % non-local return to be caught by ra_server_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ Effects});
@@ -1612,17 +1612,17 @@ cast_reply(From, To, Msg) ->
 -include_lib("eunit/include/eunit.hrl").
 
 agreed_commit_test() ->
-    % one node
+    % one server
     4 = agreed_commit([4]),
-    % 2 nodes - only leader has seen new commit
+    % 2 servers - only leader has seen new commit
     3 = agreed_commit([4, 3]),
-    % 2 nodes - all nodes have seen new commit
+    % 2 servers - all servers have seen new commit
     4 = agreed_commit([4, 4, 4]),
-    % 3 nodes - leader + 1 node has seen new commit
+    % 3 servers - leader + 1 server has seen new commit
     4 = agreed_commit([4, 4, 3]),
-    % only other nodes have seen new commit
+    % only other servers have seen new commit
     4 = agreed_commit([3, 4, 4]),
-    % 3 nodes - only leader has seen new commit
+    % 3 servers - only leader has seen new commit
     3 = agreed_commit([4, 2, 3]),
     ok.
 

@@ -25,9 +25,9 @@ all_tests() ->
      start_stop_restart_delete_on_remote,
      start_cluster,
      start_or_restart_cluster,
-     delete_one_node_cluster,
-     delete_two_node_cluster,
-     delete_three_node_cluster,
+     delete_one_server_cluster,
+     delete_two_server_cluster,
+     delete_three_server_cluster,
      start_cluster_majority,
      start_cluster_minority
     ].
@@ -65,7 +65,7 @@ conf({Name, _Node} = NodeId, Nodes) ->
     #{cluster_id => c1,
       id => NodeId,
       uid => UId,
-      initial_nodes => Nodes,
+      initial_members => Nodes,
       log_init_args => #{uid => UId},
       machine => {module, ?MODULE, #{}}}.
 
@@ -75,20 +75,20 @@ start_stop_restart_delete_on_remote(Config) ->
     % ensure application is started
     NodeId = {c1, S1},
     Conf = conf(NodeId, [NodeId]),
-    ok = ra:start_node(Conf),
+    ok = ra:start_server(Conf),
     ok = ra:trigger_election(NodeId),
     % idempotency
-    {error, {already_started, _}} = ra:start_node(Conf),
-    ok = ra:stop_node(NodeId),
-    ok = ra:restart_node(NodeId),
+    {error, {already_started, _}} = ra:start_server(Conf),
+    ok = ra:stop_server(NodeId),
+    ok = ra:restart_server(NodeId),
     % idempotency
-    {error, {already_started, _}} = ra:restart_node(NodeId),
-    ok = ra:stop_node(NodeId),
+    {error, {already_started, _}} = ra:restart_server(NodeId),
+    ok = ra:stop_server(NodeId),
     % idempotency
-    ok = ra:stop_node(NodeId),
-    ok = ra:delete_node(NodeId),
+    ok = ra:stop_server(NodeId),
+    ok = ra:delete_server(NodeId),
     % idempotency
-    {error, _} = ra:delete_node(NodeId),
+    {error, _} = ra:delete_server(NodeId),
     timer:sleep(500),
     slave:stop(S1),
     ok.
@@ -102,7 +102,7 @@ start_cluster(Config) ->
     % assert all were said to be started
     [] = Started -- NodeIds,
     % assert all nodes are actually started
-    PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
+    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
@@ -119,7 +119,7 @@ start_or_restart_cluster(Config) ->
     % assert all were said to be started
     [] = Started -- NodeIds,
     % assert all nodes are actually started
-    PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
+    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
     % timer:sleep(1000),
@@ -130,13 +130,13 @@ start_or_restart_cluster(Config) ->
                                                      NodeIds),
     [] = Started2 -- NodeIds,
     timer:sleep(1000),
-    PingResults2 = [{pong, _} = ra_node_proc:ping(N, 500) || N <- NodeIds],
+    PingResults2 = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults2)),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
-delete_one_node_cluster(Config) ->
+delete_one_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
@@ -149,7 +149,7 @@ delete_one_node_cluster(Config) ->
     timer:sleep(250),
     Wc = filename:join([PrivDir, s1, "*"]),
     [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
-    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     % restart node
@@ -170,7 +170,7 @@ delete_one_node_cluster(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
-delete_two_node_cluster(Config) ->
+delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
@@ -178,8 +178,8 @@ delete_two_node_cluster(Config) ->
     {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
-    {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
-    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
+    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     receive
@@ -191,7 +191,7 @@ delete_two_node_cluster(Config) ->
     end,
     ok.
 
-delete_three_node_cluster(Config) ->
+delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterId = ?config(cluster_id, Config),
     NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
@@ -199,8 +199,8 @@ delete_three_node_cluster(Config) ->
     {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
-    {error, _} = ra_node_proc:ping(hd(tl(NodeIds)), 50),
-    {error, _} = ra_node_proc:ping(hd(NodeIds), 50),
+    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
+    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
@@ -219,7 +219,7 @@ start_cluster_majority(Config) ->
     ?assertEqual(2,  length(Started)),
     ?assertEqual(1,  length(NotStarted)),
     % assert all started are actually started
-    PingResults = [{pong, _} = ra_node_proc:ping(N, 500) || N <- Started],
+    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- Started],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
@@ -237,7 +237,7 @@ start_cluster_minority(Config) ->
     {error, cluster_not_formed} =
         ra:start_cluster(ClusterId, Machine, NodeIds),
     % assert none is started
-    [{error, _} = ra_node_proc:ping(N, 50) || N <- NodeIds],
+    [{error, _} = ra_server_proc:ping(N, 50) || N <- NodeIds],
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
     ok.
 

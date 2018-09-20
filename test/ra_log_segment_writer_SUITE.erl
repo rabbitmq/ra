@@ -19,6 +19,7 @@ all_tests() ->
      accept_mem_tables_append,
      accept_mem_tables_overwrite,
      accept_mem_tables_rollover,
+     accept_mem_tables_for_down_server,
      delete_segments,
      my_segments,
      skip_entries_lower_than_snapshot_index,
@@ -43,8 +44,8 @@ init_per_testcase(TestCase, Config) ->
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     file:make_dir(Dir),
-    NodeDir = filename:join(Dir, UId),
-    file:make_dir(NodeDir),
+    ServerDir = filename:join(Dir, UId),
+    file:make_dir(ServerDir),
     register(TestCase, self()),
     _ = ets:new(ra_open_file_metrics, [named_table, public,
                                        {write_concurrency, true}]),
@@ -53,7 +54,7 @@ init_per_testcase(TestCase, Config) ->
     ets:new(ra_log_snapshot_state, [named_table, public]),
     ra_file_handle:start_link(),
     [{uid, UId},
-     {node_dir, NodeDir},
+     {server_dir, ServerDir},
      {test_case, TestCase},
      {wal_dir, Dir} | Config].
 
@@ -74,7 +75,7 @@ accept_mem_tables(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
@@ -103,7 +104,7 @@ delete_segments(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             % test a lower index _does not_ delete the file
             ok = ra_log_segment_writer:delete_segments(TblWriterPid, UId, 2,
                                                        [SegmentFile]),
@@ -152,7 +153,7 @@ my_segments(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             [MyFile] = ra_log_segment_writer:my_segments(UId),
             ?assertEqual(SegmentFile, list_to_binary(MyFile)),
             ?assert(filelib:is_file(SegmentFile))
@@ -179,7 +180,7 @@ skip_entries_lower_than_snapshot_index(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, _Tid, [{4, 5, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert only entries with a higher index than the snapshot
             % have been written
@@ -231,7 +232,7 @@ accept_mem_tables_append(Config) ->
     AllEntries = Entries ++ Entries2,
     receive
         {ra_log_event, {segments, _Tid, [{1, 5, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             AllEntries = [{I, T, binary_to_term(B)}
@@ -257,7 +258,7 @@ accept_mem_tables_overwrite(Config) ->
 
     receive
         {ra_log_event, {segments, _Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             C2 = term_to_binary(c2),
             [{1, 43, _}, {2, 43, _}] = ra_log_segment:read(Seg, 1, 2),
@@ -290,7 +291,7 @@ accept_mem_tables_rollover(Config) ->
     ok = gen_server:stop(Pid),
     ok.
 
-accept_mem_tables_for_down_node(Config) ->
+accept_mem_tables_for_down_server(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     application:start(sasl),
@@ -301,14 +302,14 @@ accept_mem_tables_for_down_node(Config) ->
     Tid2 = make_mem_table(UId, Entries),
     MemTables = [{<<"not_self">>, 1, 3, Tid},
                  {UId, 1, 3, Tid2}],
-    % delete the ETS table to simulate down node
+    % delete the ETS table to simulate down server
     ets:delete(Tid),
     WalFile = filename:join(Dir, "00001.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
         {ra_log_event, {segments, Tid2, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(node_dir, Config), Fn),
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}

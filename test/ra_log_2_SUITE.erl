@@ -412,7 +412,7 @@ recover_bigly(Config) ->
 
 
 resend_write(Config) ->
-    % simulate lost messages requiring the ra node to resend in flight
+    % simulate lost messages requiring the ra server to resend in flight
     % writes
     meck:new(ra_log_wal, [passthrough]),
     meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) -> ok;
@@ -622,13 +622,13 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
 
     % create a segment
     Log1 = deliver_all_log_events(append_and_roll(1, 130, 2, Log0), 500),
-    % and another but don't notify ra_node
+    % and another but don't notify ra_server
     Log2 = append_and_roll_no_deliver(130, 150, 2, Log1),
     % deliver only written events
     Log3 = deliver_written_log_events(Log2, 500),
     % simulate the segments events getting lost due to crash
     empty_mailbox(500),
-    % although this has been flushed to disk the ra_node wasn't available
+    % although this has been flushed to disk the ra_server wasn't available
     % to clean it up.
     [_] = ets:tab2list(ra_log_closed_mem_tables),
     % then deliver all log events

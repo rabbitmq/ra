@@ -23,14 +23,14 @@
 %% uniquely identifies the ra cluster
 -type ra_cluster_id() :: term().
 
-%% Uniquely identifies a ra node on a local erlang node
+%% Uniquely identifies a ra server on a local erlang node
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
-%% Identifies a ra node in a ra cluster
-%% NB: ra nodes need to be registered as need to be reachable under the old
+%% Identifies a ra server in a ra cluster
+%% NB: ra servers need to be registered as need to be reachable under the old
 %% name after restarts. Pids won't do.
--type ra_node_id() :: atom() | {Name :: atom(), Node :: node()}.
+-type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
 
 -type ra_peer_state() :: #{next_index => non_neg_integer(),
                            match_index => non_neg_integer(),
@@ -38,9 +38,9 @@
                            % used for evaluating pipeline status
                            commit_index => non_neg_integer()}.
 
--type ra_cluster() :: #{ra_node_id() => ra_peer_state()}.
+-type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
--type ra_cluster_nodes() :: [ra_node_id()].
+-type ra_cluster_servers() :: [ra_server_id()].
 
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
@@ -48,21 +48,21 @@
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the
-%% pre_vote message so that nodes can reject pre votes for nodes running a
-%% higher protocol version. This should be sufficient to disallow a node with
+%% pre_vote message so that servers can reject pre votes for servers running a
+%% higher protocol version. This should be sufficient to disallow a server with
 %% newer protocol version to become leader before it has a majority and thus
-%% potentially exchange incompatible message types with nodes running older
+%% potentially exchange incompatible message types with servers running older
 %% code.
 %%
 %% If fields need to be added to any of the below records it is suggested that
-%% a new record is created (by appending _vPROTO_VERSION). The node still need
+%% a new record is created (by appending _vPROTO_VERSION). The server still need
 %% to be able to handle and reply to the older message types to ensure
 %% availability.
 
 %% Figure 2 in the paper
 -record(append_entries_rpc,
         {term :: ra_term(),
-         leader_id :: ra_node_id(),
+         leader_id :: ra_server_id(),
          leader_commit :: ra_index(),
          prev_log_index :: non_neg_integer(),
          prev_log_term :: ra_term(),
@@ -84,7 +84,7 @@
 %% Section 5.2
 -record(request_vote_rpc,
         {term :: ra_term(),
-         candidate_id :: ra_node_id(),
+         candidate_id :: ra_server_id(),
          last_log_index :: ra_index(),
          last_log_term :: ra_index()}).
 
@@ -98,7 +98,7 @@
         {version = ?RA_PROTO_VERSION :: non_neg_integer(),
          term :: ra_term(),
          token :: reference(),
-         candidate_id :: ra_node_id(),
+         candidate_id :: ra_server_id(),
          last_log_index :: ra_index(),
          last_log_term :: ra_index()}).
 
@@ -109,12 +109,12 @@
 
 -record(install_snapshot_rpc,
         {term :: ra_term(), % the leader's term
-         leader_id :: ra_node_id(),
+         leader_id :: ra_server_id(),
          % the snapshot replaces all previous entries incl this
          last_index :: ra_index(),
          % the term at the point of snapshot
          last_term :: ra_term(),
-         last_config :: ra_cluster_nodes(),
+         last_config :: ra_cluster_servers(),
          data :: term()
         }).
 

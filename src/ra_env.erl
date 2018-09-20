@@ -21,6 +21,6 @@ data_dir(Me0) ->
     filename:join(data_dir(), Me).
 
 wal_data_dir() ->
-    % TODO: review - this assumes noone will ever name a ra_node "_wal".
+    % TODO: review - this assumes noone will ever name a ra_server "_wal".
     Def = filename:join(data_dir(), "_wal"),
     application:get_env(ra, wal_data_dir, Def).

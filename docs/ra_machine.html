@@ -36,7 +36,7 @@ processing.</p>
  <p><br>
   <code>-callback leader_effects(state()) -&gt; effects().</code></p>
  
-  <p>Optional. Called when a node becomes leader, use this to return any effects  
+  <p>Optional. Called when a server becomes leader, use this to return any effects  
 need to be issued at this point.</p>
  
  <p><br>
@@ -66,7 +66,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 
 <h3 class="typedecl"><a name="type-command_meta_data">command_meta_data()</a></h3>
-<p><tt>command_meta_data() = <a href="ra_node.html#type-command_meta">ra_node:command_meta()</a> | #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</tt></p>
+<p><tt>command_meta_data() = <a href="ra_server.html#type-command_meta">ra_server:command_meta()</a> | #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</tt></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
@@ -127,7 +127,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
 <div class="spec">
-<p><tt>handle_aux(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_node.html#type-ra_state">ra_node:ra_state()</a>, Type::{call, From::<a href="#type-from">from()</a>} | cast, Command::term(), AuxState, LogState, MacState::<a href="#type-state">state()</a>) -&gt; {reply, Reply::term(), AuxState, LogState} | {no_reply, AuxState, LogState} | undefined</tt>
+<p><tt>handle_aux(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>, Type::{call, From::<a href="#type-from">from()</a>} | cast, Command::term(), AuxState, LogState, MacState::<a href="#type-state">state()</a>) -&gt; {reply, Reply::term(), AuxState, LogState} | {no_reply, AuxState, LogState} | undefined</tt>
 <ul class="definitions"><li><tt>AuxState = term()</tt></li><li><tt>LogState = <a href="ra_log.html#type-ra_log">ra_log:ra_log()</a></tt></li></ul></p>
 </div>
 

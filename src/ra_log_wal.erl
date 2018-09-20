@@ -26,7 +26,7 @@
 % current pid().
 % The pid is used for the immediate writer notification
 % The atom is used by the segment writer to send the segments
-% This has the effect that a restarted node has a different identity in terms
+% This has the effect that a restarted server has a different identity in terms
 % of it's write notification but the same identity in terms of it's ets
 % tables and segment notification
 -type writer_id() :: {binary(), pid()}.
@@ -476,8 +476,8 @@ open_mem_table({UId, _Pid}) ->
 open_mem_table(UId) ->
     % lookup the locally registered name of the process to use as ets
     % name
-    NodeName = ra_directory:name_of(UId),
-    Tid = ets:new(NodeName, [set, {read_concurrency, true}, public]),
+    ServerName = ra_directory:name_of(UId),
+    Tid = ets:new(ServerName, [set, {read_concurrency, true}, public]),
     % immediately give away ownership to ets process
     true = ra_log_ets:give_away(Tid),
     Tid.

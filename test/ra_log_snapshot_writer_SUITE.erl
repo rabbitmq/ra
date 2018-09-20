@@ -41,7 +41,7 @@ init_per_testcase(TestCase, Config) ->
 write_snapshot(Config) ->
     Dir = ?config(data_dir, Config),
     _ = ra_log_snapshot_writer:start_link(),
-    Snapshot = {10, 5, [node1], some_data},
+    Snapshot = {10, 5, [server1], some_data},
     Self = self(),
     ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot),
     receive
@@ -53,7 +53,7 @@ write_snapshot(Config) ->
               throw(ra_log_event_timeout)
     end,
     % Write a second snapshot
-    Snapshot2 = {20, 6, [node1, node2], some_data2},
+    Snapshot2 = {20, 6, [server1, server2], some_data2},
     ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot2),
     receive
         {ra_log_event, {snapshot_written, {20, 6}, File2, [Old]}} ->
@@ -70,7 +70,7 @@ write_snapshot(Config) ->
 write_snapshot_call(Config) ->
     Dir = ?config(data_dir, Config),
     _ = ra_log_snapshot_writer:start_link(),
-    Snapshot = {10, 5, [node1], some_data},
+    Snapshot = {10, 5, [server1], some_data},
     {ok, File, _} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
     ?assert(filelib:is_file(File)),
     ok.

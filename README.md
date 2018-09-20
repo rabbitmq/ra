@@ -25,7 +25,7 @@ The following Raft features are implemented:
 
  * Leader election
  * Log replication
- * Cluster membership changes: one node (member) at a time
+ * Cluster membership changes: one server (member) at a time
  * Log compaction (with limitations and RabbitMQ-specific extensions)
  * Snapshot installation
 
@@ -96,16 +96,16 @@ Identity is a somewhat convoluted topic in `ra` consisting of multiple parts use
 
     Each `ra` cluster is assigned an id that needs to be unique within the erlang cluster it is running on.
 
-2. Node Id
+2. Server Id
 
-    The node id is a tuple of a `ra` node's locally registered name and the erlang node it resides on. This is the primary id used for membership in ra and needs to be a persistent addressable (can be used to send messages) id. A `pid()` would not work as it isn't persisted across process restarts. Although typically each `ra` node within a `ra` cluster is started on a separate erlang node `ra` supports nodes within the same cluster sharing erlang nodes. Hence we cannot simply re-use the cluster id as the registered name.
+    The server id is a tuple of a `ra` server's locally registered name and the erlang server it resides on. This is the primary id used for membership in ra and needs to be a persistent addressable (can be used to send messages) id. A `pid()` would not work as it isn't persisted across process restarts. Although typically each `ra` server within a `ra` cluster is started on a separate erlang node `ra` supports servers within the same cluster sharing erlang nodes. Hence we cannot simply re-use the cluster id as the registered name.
 
 3. UID
 
-    Each `ra` node also needs an id that is unique to the local erlang node _and_ unique across incarnations of `ra` clusters with the same cluster id. This is used for interactions with the write ahead log, segment and snapshot writer processes who use the `ra_directory` to lookup the current `pid()` for a given id. It is also, critically, used to provide a identity for the node on disk. NB: Hence it is _required_ for this UId to be or readyly converted to a filename safe string as it is used to create the node's data
-directory on disk. When using `ra:start_node/4` the UId is automatically generated.
+    Each `ra` server also needs an id that is unique to the local erlang node _and_ unique across incarnations of `ra` clusters with the same cluster id. This is used for interactions with the write ahead log, segment and snapshot writer processes who use the `ra_directory` to lookup the current `pid()` for a given id. It is also, critically, used to provide a identity for the server on disk. NB: Hence it is _required_ for this UId to be or readyly converted to a filename safe string as it is used to create the server's data
+directory on disk. When using `ra:start_server/4` the UId is automatically generated.
 
-    This is to handle the case where a `ra` cluster with the same name is deleted and then re-created with the same cluster id and node ids shortly after. In this instance the write ahead log may contain entries from the previous incarnation which means we could be mixing entries written in the previous incarnation with ones written in the current incarnation which obviously is unacceptable. Hence providing a unique local identity is critical for correct operation. We suggest using a combination of the locally registered name combined with a time stamp or some random material.
+    This is to handle the case where a `ra` cluster with the same name is deleted and then re-created with the same cluster id and server ids shortly after. In this instance the write ahead log may contain entries from the previous incarnation which means we could be mixing entries written in the previous incarnation with ones written in the current incarnation which obviously is unacceptable. Hence providing a unique local identity is critical for correct operation. We suggest using a combination of the locally registered name combined with a time stamp or some random material.
 
 
 Example config:
@@ -113,7 +113,7 @@ Example config:
 
 ```
 Config = #{cluster_id => <<"ra-cluster-1">>,
-           node_id => {ra_cluster_1, ra1@snowman},
+           server_id => {ra_cluster_1, ra1@snowman},
            uid => <<"ra_cluster_1_1519808362841">>
            ...},
 
@@ -145,7 +145,7 @@ Ra tries to make use as much of native erlang failure detection facilities as it
 
 This only works well in crash-stop scenarios. For network partition scenarios it would rely on distributed erlang to detect the partition which could easily take up to a minute to happen which is too slow.
 
-The `ra` application provides a [node failure detector](https://github.com/rabbitmq/aten) that uses monitors erlang nodes. When it suspects an erlang node is down it notifies local `ra` nodes of this. If this erlang node is the node of the currently known `ra` leader the follower will start an election.
+The `ra` application provides a [node failure detector](https://github.com/rabbitmq/aten) that uses monitors erlang nodes. When it suspects an erlang node is down it notifies local `ra` servers of this. If this erlang node is the server of the currently known `ra` leader the follower will start an election.
 
 
 ## Copyright and License

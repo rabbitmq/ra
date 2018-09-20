@@ -202,7 +202,7 @@ truncate_write(Config) ->
     ok.
 
 out_of_seq_writes(Config) ->
-    % INVARIANT: the WAL expects writes for a particular ra node to be done
+    % INVARIANT: the WAL expects writes for a particular ra server to be done
     % using a contiguous range of integer keys (indexes). If a gap is detected
     % it will notify the write of the missing index and the writer can resend
     % writes from that point

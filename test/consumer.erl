@@ -17,7 +17,7 @@
 -include("ra.hrl").
 
 -type config() :: #{cluster_id := ra_cluster_id(),
-                    nodes := [ra_node_id()],
+                    servers := [ra_server_id()],
                     consumer_tag := binary(),
                     num_messages := integer(),
                     notify => pid(),
@@ -47,11 +47,11 @@ wait(Pid, Timeout) ->
 %%%===================================================================
 
 init([#{cluster_id := ClusterId,
-        nodes := Nodes,
+        servers := Servers,
         num_messages := Max,
         prefetch := Pref,
         consumer_tag := ConsumerTag} = C]) ->
-    F = ra_fifo_client:init(ClusterId, Nodes),
+    F = ra_fifo_client:init(ClusterId, Servers),
     {ok, F1} = ra_fifo_client:checkout(ConsumerTag, Pref, F),
     {ok, #state{state = F1, consumer_tag = ConsumerTag,
                 notify = maps:get(notify, C, undefined),

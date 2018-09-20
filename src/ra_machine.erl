@@ -21,7 +21,7 @@
 %%<br></br>
 %% <code>-callback leader_effects(state()) -> effects().</code>
 %%
-%% Optional. Called when a node becomes leader, use this to return any effects
+%% Optional. Called when a server becomes leader, use this to return any effects
 %% need to be issued at this point.
 %%
 %%<br></br>
@@ -115,7 +115,7 @@
 %% <dt><b>monitor</b></dt>
 %% <dd> monitor a process or erlang node </dd>
 %% <dt><b>demonitor</b></dt>
-%% <dd> demonitor a process or node </dd>
+%% <dd> demonitor a process or erlang node </dd>
 %% <dt><b>release_cursor</b></dt>
 %% <dd> indicate to Ra that none of the preceeding entries contribute to the
 %% current machine state </dd>
@@ -131,8 +131,8 @@
 
 -type command() :: user_command() | builtin_command().
 
--type command_meta_data() :: ra_node:command_meta() | #{index := ra_index(),
-                                                        term := ra_term()}.
+-type command_meta_data() :: ra_server:command_meta() | #{index := ra_index(),
+                                                         term := ra_term()}.
 %% extensible command meta data map
 
 
@@ -172,7 +172,7 @@
 
 -callback init_aux(Name :: atom()) -> term().
 
--callback handle_aux(ra_node:ra_state(),
+-callback handle_aux(ra_server:ra_state(),
                      {call, From :: from()} | cast,
                      Command :: term(),
                      AuxState,
@@ -215,7 +215,7 @@ overview({machine, Mod, _}, State) ->
 init_aux({machine, Mod, _}, Name) ->
     ?OPT_CALL(Mod:init_aux(Name), undefined).
 
--spec handle_aux(machine(), ra_node:ra_state(),
+-spec handle_aux(machine(), ra_server:ra_state(),
                  {call, From :: from()} | cast,
                  Command :: term(), AuxState,
                  LogState, MacState :: state()) ->

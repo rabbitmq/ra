@@ -20,9 +20,9 @@ init([]) ->
     RaLogFileSup = #{id => ra_log_sup,
                      type => supervisor,
                      start => {ra_log_sup, start_link, []}},
-    RaNodesSup = #{id => ra_nodes_sup,
+    RaNodesSup = #{id => ra_server_sup,
                    type => supervisor,
-                   start => {ra_nodes_sup, start_link, []}},
+                   start => {ra_server_sup, start_link, []}},
     {ok, {SupFlags, [Ets, RaLogFileSup, RaNodesSup]}}.
 
 

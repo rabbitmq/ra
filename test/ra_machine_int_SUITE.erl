@@ -48,18 +48,18 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TestCase, Config) ->
-    ra_nodes_sup:remove_all(),
-    NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
-    NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
+    ra_server_sup:remove_all(),
+    ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
+    ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {modname, TestCase},
      {cluster_id, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
-     {node_id, {TestCase, node()}},
-     {uid2, atom_to_binary(NodeName2, utf8)},
-     {node_id2, {NodeName2, node()}},
-     {uid3, atom_to_binary(NodeName3, utf8)},
-     {node_id3, {NodeName3, node()}}
+     {server_id, {TestCase, node()}},
+     {uid2, atom_to_binary(ServerName2, utf8)},
+     {server_id2, {ServerName2, node()}},
+     {uid3, atom_to_binary(ServerName3, utf8)},
+     {server_id3, {ServerName3, node()}}
      | Config].
 
 end_per_testcase(_TestCase, _Config) ->
@@ -80,17 +80,17 @@ machine_replies(Config) ->
                                     {State, [], {error, some_error_reply}}
                             end),
     ClusterId = ?config(cluster_id, Config),
-    NodeId = ?config(node_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [NodeId]),
-    {ok, the_reply, NodeId} = ra:send_and_await_consensus(NodeId, c1),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, the_reply, ServerId} = ra:send_and_await_consensus(ServerId, c1),
     %% ensure we can return any reply type
-    {ok, {error, some_error_reply}, NodeId} = ra:send_and_await_consensus(NodeId, c2),
+    {ok, {error, some_error_reply}, ServerId} = ra:send_and_await_consensus(ServerId, c2),
     ok.
 
 leader_monitors(Config) ->
     ClusterId = ?config(priv_dir, Config),
-    NodeId = ?config(node_id, Config),
-    Name = element(1, NodeId),
+    ServerId = ?config(server_id, Config),
+    Name = element(1, ServerId),
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> {[], []} end),
@@ -101,27 +101,27 @@ leader_monitors(Config) ->
                 fun (State) ->
                         [{monitor, process, P} || P <- State]
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [NodeId]),
-    {ok, ok, NodeId} = ra:send_and_await_consensus(NodeId, {monitor_me, self()}),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, ServerId} = ra:send_and_await_consensus(ServerId, {monitor_me, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
-    ra:stop_node(NodeId),
-    _ = ra:restart_node(NodeId),
-    ra:members(NodeId),
+    ra:stop_server(ServerId),
+    _ = ra:restart_server(ServerId),
+    ra:members(ServerId),
     % check monitors are re-applied after restart
     timer:sleep(200),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
                                                              monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
-    ra:stop_node(NodeId),
+    ra:stop_server(ServerId),
     ok.
 
 follower_takes_over_monitor(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    {Name1, _} = NodeId1 = ?config(node_id, Config),
-    {Name2, _} = NodeId2 = ?config(node_id2, Config),
-    {Name3, _} = NodeId3 = ?config(node_id3, Config),
-    Cluster = [NodeId1, NodeId2, NodeId3],
+    {_Name1, _} = ServerId1 = ?config(server_id, Config),
+    {Name2, _} = ServerId2 = ?config(server_id2, Config),
+    {Name3, _} = ServerId3 = ?config(server_id3, Config),
+    Cluster = [ServerId1, ServerId2, ServerId3],
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> {[], []} end),
@@ -139,30 +139,30 @@ follower_takes_over_monitor(Config) ->
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
     {ok, ok, {LeaderName, _}} =
-        ra:send_and_await_consensus(NodeId1, {monitor_me, self()}),
+        ra:send_and_await_consensus(ServerId1, {monitor_me, self()}),
     %% sleep here as it seems monitors, or this stat aren't updated synchronously
     timer:sleep(100),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(LeaderName)),
 
-    ok = ra:stop_node(NodeId1),
+    ok = ra:stop_server(ServerId1),
     % give the election process a bit of time before issuing a command
     timer:sleep(200),
-    {ok, _, _} = ra:send_and_await_consensus(NodeId2, dummy),
+    {ok, _, _} = ra:send_and_await_consensus(ServerId2, dummy),
     timer:sleep(200),
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
                                                              monitored_by),
     ?assert((MonitoredByAfter =:= whereis(Name2)) or
             (MonitoredByAfter =:= whereis(Name3))),
-    ra:stop_node(NodeId1),
-    ra:stop_node(NodeId2),
-    ra:stop_node(NodeId3),
+    ra:stop_server(ServerId1),
+    ra:stop_server(ServerId2),
+    ra:stop_server(ServerId3),
     ok.
 
 deleted_cluster_emits_eol_effects(Config) ->
     PrivDir = ?config(priv_dir, Config),
-    NodeId = ?config(node_id, Config),
+    ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
     ClusterId = ?config(cluster_id, Config),
     Mod = ?config(modname, Config),
@@ -176,14 +176,14 @@ deleted_cluster_emits_eol_effects(Config) ->
                 fun (State) ->
                         [{send_msg, P, eol} || P <- State]
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [NodeId]),
-    {ok, ok, _} = ra:send_and_await_consensus(NodeId, {monitor_me, self()}),
-    {ok, _} = ra:delete_cluster([NodeId]),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:send_and_await_consensus(ServerId, {monitor_me, self()}),
+    {ok, _} = ra:delete_cluster([ServerId]),
     % validate
-    ok = validate_process_down(element(1, NodeId), 50),
+    ok = validate_process_down(element(1, ServerId), 50),
     Dir = filename:join(PrivDir, UId),
     false = filelib:is_dir(Dir),
-    [] = supervisor:which_children(ra_nodes_sup),
+    [] = supervisor:which_children(ra_server_sup),
     % validate an end of life is emitted
     receive
         {ra_event, _, {machine, eol}} -> ok
@@ -194,9 +194,9 @@ deleted_cluster_emits_eol_effects(Config) ->
 
 %% Utility
 
-start_cluster(ClusterId, Machine, NodeIds) ->
-    {ok, Started, _} = ra:start_cluster(ClusterId, Machine, NodeIds),
-    ?assertEqual(length(NodeIds), length(Started)),
+start_cluster(ClusterId, Machine, ServerIds) ->
+    {ok, Started, _} = ra:start_cluster(ClusterId, Machine, ServerIds),
+    ?assertEqual(length(ServerIds), length(Started)),
     ok.
 
 validate_process_down(Name, 0) ->

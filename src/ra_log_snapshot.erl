@@ -12,7 +12,7 @@
 -define(VERSION, 1).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
--type state() :: {ra_index(), ra_term(), ra_cluster_nodes(), term()}.
+-type state() :: {ra_index(), ra_term(), ra_cluster_servers(), term()}.
 
 -export_type([state/0]).
 
@@ -23,24 +23,24 @@
 %% Checksum (unsigned 32)
 %% Index (unsigned 64)
 %% Term (unsigned 64)
-%% Num cluster nodes (byte)
+%% Num cluster servers (byte)
 %% [DataLen (byte), Data (binary)]
 %% Snapshot Data (binary)
 %% @end
 
 -spec write(file:filename(), state()) ->
     ok | {error, file_err()}.
-write(File, {Idx, Term, ClusterNodes, MacState}) ->
+write(File, {Idx, Term, ClusterServers, MacState}) ->
 
     Bin = term_to_binary(MacState),
     Data = [<<Idx:64/unsigned,
               Term:64/unsigned,
-              (length(ClusterNodes)):8/unsigned>>,
+              (length(ClusterServers)):8/unsigned>>,
             [begin
                  B = term_to_binary(N),
                  <<(byte_size(B)):8/unsigned,
                    B/binary>>
-             end || N <- ClusterNodes],
+             end || N <- ClusterServers],
            Bin],
     Checksum = erlang:crc32(Data),
     file:write_file(File, [<<?MAGIC,
@@ -103,14 +103,14 @@ validate(Crc, Data) ->
     end.
 
 parse_snapshot(<<Idx:64/unsigned, Term:64/unsigned,
-                 NumNodes:8/unsigned, Rest0/binary>>) ->
-    {Nodes, Rest} = parse_nodes(NumNodes, [], Rest0),
-    {Idx, Term, Nodes, binary_to_term(Rest)}.
+                 NumServers:8/unsigned, Rest0/binary>>) ->
+    {Servers, Rest} = parse_servers(NumServers, [], Rest0),
+    {Idx, Term, Servers, binary_to_term(Rest)}.
 
-parse_nodes(0, Nodes, Data) ->
-    {lists:reverse(Nodes), Data};
-parse_nodes(Num, Nodes, <<Len:8/unsigned, NodeData:Len/binary, Rem/binary>>) ->
-    parse_nodes(Num - 1, [binary_to_term(NodeData) | Nodes], Rem).
+parse_servers(0, Servers, Data) ->
+    {lists:reverse(Servers), Data};
+parse_servers(Num, Servers, <<Len:8/unsigned, ServerData:Len/binary, Rem/binary>>) ->
+    parse_servers(Num - 1, [binary_to_term(ServerData) | Servers], Rem).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

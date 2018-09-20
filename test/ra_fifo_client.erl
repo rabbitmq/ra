@@ -29,8 +29,8 @@
 -type seq() :: non_neg_integer().
 
 -record(state, {cluster_id :: ra_cluster_id(),
-                nodes = [] :: [ra_node_id()],
-                leader :: maybe(ra_node_id()),
+                servers = [] :: [ra_server_id()],
+                leader :: maybe(ra_server_id()),
                 next_seq = 0 :: seq(),
                 last_applied :: maybe(seq()),
                 next_enqueue_seq = 1 :: seq(),
@@ -59,32 +59,32 @@
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
 %% @param ClusterId the id of the cluster to interact with
-%% @param Nodes The known nodes of the queue. If the current leader is known
+%% @param Nodes The known servers of the queue. If the current leader is known
 %% ensure the leader node is at the head of the list.
--spec init(ra_cluster_id(), [ra_node_id()]) -> state().
+-spec init(ra_cluster_id(), [ra_server_id()]) -> state().
 init(ClusterId, Nodes) ->
     init(ClusterId, Nodes, ?SOFT_LIMIT).
 
 %% @doc Create the initial state for a new ra_fifo sessions. A state is needed
 %% to interact with a ra_fifo queue using @module.
 %% @param ClusterId the id of the cluster to interact with
-%% @param Nodes The known nodes of the queue. If the current leader is known
+%% @param Nodes The known servers of the queue. If the current leader is known
 %% ensure the leader node is at the head of the list.
 %% @param MaxPending size defining the max number of pending commands.
--spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer()) -> state().
+-spec init(ra_cluster_id(), [ra_server_id()], non_neg_integer()) -> state().
 init(ClusterId, Nodes, SoftLimit) ->
     Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
     #state{cluster_id = ClusterId,
-           nodes = Nodes,
+           servers = Nodes,
            soft_limit = SoftLimit,
            timeout = Timeout}.
 
--spec init(ra_cluster_id(), [ra_node_id()], non_neg_integer(), fun(() -> ok),
+-spec init(ra_cluster_id(), [ra_server_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
 init(ClusterId, Nodes, SoftLimit, BlockFun, UnblockFun) ->
     Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
     #state{cluster_id = ClusterId,
-           nodes = Nodes,
+           servers = Nodes,
            block_handler = BlockFun,
            unblock_handler = UnblockFun,
            soft_limit = SoftLimit,
@@ -297,7 +297,7 @@ discard(CustomerTag, [_|_] = MsgIds,
 -spec checkout(ra_fifo:customer_tag(), NumUnsettled :: non_neg_integer(),
                state()) -> {ok, state()} | {error | timeout, term()}.
 checkout(CustomerTag, NumUnsettled, State0) ->
-    Nodes = sorted_nodes(State0),
+    Nodes = sorted_servers(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
     try_send_and_await_consensus(Nodes, Cmd, State0).
@@ -314,7 +314,7 @@ checkout(CustomerTag, NumUnsettled, State0) ->
 -spec cancel_checkout(ra_fifo:customer_tag(), state()) ->
     {ok, state()} | {error | timeout, term()}.
 cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
-    Nodes = sorted_nodes(State0),
+    Nodes = sorted_servers(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, cancel, CustomerId},
     State = State0#state{customer_deliveries = maps:remove(CustomerTag, CDels)},
@@ -322,7 +322,7 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
 
 %% @doc Purges all the messages from a ra_fifo queue and returns the number
 %% of messages purged.
--spec purge(ra_node_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
+-spec purge(ra_server_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
 purge(Node) ->
     case ra:send_and_await_consensus(Node, purge) of
         {ok, {purge, Reply}, _} ->
@@ -358,7 +358,7 @@ cluster_id(#state{cluster_id = ClusterId}) ->
 %%  end
 %% '''
 %%
-%% @param From the {@link ra_node_id().} of the sending process.
+%% @param From the {@link ra_server_id().} of the sending process.
 %% @param Event the body of the `ra_event'.
 %% @param State the current {@module} state.
 %%
@@ -379,7 +379,7 @@ cluster_id(#state{cluster_id = ClusterId}) ->
 %% <li>`MsgId' is a customer scoped monotonically incrementing id that can be
 %% used to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished
 %% with them.</li>
--spec handle_ra_event(ra_node_id(), ra_node_proc:ra_event_body(), state()) ->
+-spec handle_ra_event(ra_server_id(), ra_server_proc:ra_event_body(), state()) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()} | eol.
 handle_ra_event(From, {applied, Seqs},
@@ -430,7 +430,7 @@ handle_ra_event(_Leader, {machine, eol}, _State0) ->
 
 %% @doc Attempts to enqueue a message using cast semantics. This provides no
 %% guarantees or retries if the message fails to achieve consensus or if the
-%% nodes sent to happens not to be available. If the message is sent to a
+%% servers sent to happens not to be available. If the message is sent to a
 %% follower it will attempt the deliver it to the leader, if known. Else it will
 %% drop the messages.
 %%
@@ -438,11 +438,11 @@ handle_ra_event(_Leader, {machine, eol}, _State0) ->
 %% cannot be maintained.
 %%
 %% @param CusterId  the cluster id.
-%% @param Nodes the known nodes in the cluster.
+%% @param Nodes the known servers in the cluster.
 %% @param Msg the message to enqueue.
 %%
 %% @returns `ok'
--spec untracked_enqueue(ra_cluster_id(), [ra_node_id()], term()) ->
+-spec untracked_enqueue(ra_cluster_id(), [ra_server_id()], term()) ->
     ok.
 untracked_enqueue(_ClusterId, [Node | _], Msg) ->
     Cmd = {enqueue, undefined, undefined, Msg},
@@ -533,15 +533,15 @@ get_missing_deliveries(Leader, From, To, CustomerTag) ->
     {ok, {_, Missing}, _} = ra:local_query(Leader, Query),
     Missing.
 
-pick_node(#state{leader = undefined, nodes = [N | _]}) ->
+pick_node(#state{leader = undefined, servers = [N | _]}) ->
     N;
 pick_node(#state{leader = Leader}) ->
     Leader.
 
-% nodes sorted by last known leader
-sorted_nodes(#state{leader = undefined, nodes = Nodes}) ->
+% servers sorted by last known leader
+sorted_servers(#state{leader = undefined, servers = Nodes}) ->
     Nodes;
-sorted_nodes(#state{leader = Leader, nodes = Nodes}) ->
+sorted_servers(#state{leader = Leader, servers = Nodes}) ->
     [Leader | lists:delete(Leader, Nodes)].
 
 next_seq(#state{next_seq = Seq} = State) ->

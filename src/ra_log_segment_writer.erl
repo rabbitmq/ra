@@ -33,8 +33,8 @@
 
 %%% ra_log_segment_writer
 %%% receives a set of closed mem_segments from the wal
-%%% appends to the current segment for the ra node
-%%% notifies the ra node of any new/updates segments
+%%% appends to the current segment for the ra server
+%%% notifies the ra server of any new/updates segments
 
 
 %%%===================================================================
@@ -58,7 +58,7 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
 delete_segments(Who, SnapIdx, SegmentFiles) ->
     delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
 
-%% delete segmetns for a ra node. Takes a list of absolute filenames and deletes
+%% delete segmetns for a ra server. Takes a list of absolute filenames and deletes
 %% all but the latest one immedately and sends the latest one to the segment
 %% writer process to delete in case it is still open.
 -spec delete_segments(atom() | pid(), ra_uid(),
@@ -137,7 +137,7 @@ handle_call(overview, _From, State) ->
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
     % delete wal file once done
-    % TODO: test scenario when node crashes after segments but before
+    % TODO: test scenario when server crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
     ?INFO("segment_writer: deleting wal file: ~p",
@@ -208,20 +208,20 @@ get_overview(#state{active_segments = Active,
       segment_conf => Conf
      }.
 
-do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
+do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
                   segment_conf = SegConf,
                   active_segments = ActiveSegments} = State) ->
-    Dir = filename:join(DataDir, binary_to_list(RaNodeUId)),
+    Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
     case filelib:is_dir(Dir) of
         true ->
             %% check that the directory exists -
-            %% if it does not exist the node has
+            %% if it does not exist the server has
             %% never been started or has been deleted
             %% and we should just continue
             Segment0 = case ActiveSegments of
-                           #{RaNodeUId := S} -> S;
+                           #{ServerUId := S} -> S;
                            _ -> open_file(Dir, SegConf)
                        end,
             case Segment0 of
@@ -229,7 +229,7 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
                     State;
                 _ ->
                     {Segment1, Closed0} =
-                        append_to_segment(RaNodeUId, Tid, StartIdx0, EndIdx,
+                        append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                           Segment0, SegConf),
                     % fsync
                     {ok, Segment} = ra_log_segment:sync(Segment1),
@@ -244,9 +244,9 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
                                       [SRef | ClosedSegRefs]
                               end,
 
-                    ok = send_segments(RaNodeUId, Tid, SegRefs),
+                    ok = send_segments(ServerUId, Tid, SegRefs),
                     State#state{active_segments =
-                                ActiveSegments#{RaNodeUId => Segment}}
+                                ActiveSegments#{ServerUId => Segment}}
             end;
         false ->
             ?INFO("segment_writer: skipping segment as directory ~s does "
@@ -254,24 +254,24 @@ do_segment({RaNodeUId, StartIdx0, EndIdx, Tid},
             State
     end.
 
-start_index(RaNodeUId, StartIdx0) ->
-    case ets:lookup(ra_log_snapshot_state, RaNodeUId) of
+start_index(ServerUId, StartIdx0) ->
+    case ets:lookup(ra_log_snapshot_state, ServerUId) of
         [{_, SnapIdx}] ->
             max(SnapIdx + 1, StartIdx0);
         [] ->
             StartIdx0
     end.
 
-send_segments(RaNodeUId, Tid, Segments) ->
+send_segments(ServerUId, Tid, Segments) ->
     Msg = {ra_log_event, {segments, Tid, Segments}},
-    try ra_directory:send(RaNodeUId, Msg) of
+    try ra_directory:send(ServerUId, Msg) of
         _ -> ok
     catch
         ErrType:Err ->
             ?INFO("ra_log_segment_writer: error sending "
                   "ra_log_event to: "
                   "~s. Error:~n~w:~W~n",
-                  [RaNodeUId, ErrType, Err, 7]),
+                  [ServerUId, ErrType, Err, 7]),
             ok
     end.
 
@@ -292,7 +292,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
         {error, full} ->
             % close and open a new segment
             Seg = open_successor_segment(Seg0, SegConf),
-            %% re-evaluate snapshot state for the node in case a snapshot
+            %% re-evaluate snapshot state for the server in case a snapshot
             %% has completed during segmeng flush
             StartIdx = start_index(UId, Idx),
             % recurse
@@ -325,7 +325,7 @@ open_file(Dir, SegConf) ->
                    F
            end,
     %% there is a small chance we'll get here without the target directory
-    %% existing this could happend during node deletion
+    %% existing this could happend during server deletion
     case filelib:ensure_dir(File) of
         ok ->
             case ra_log_segment:open(File, SegConf#{mode => append}) of
