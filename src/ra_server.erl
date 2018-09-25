@@ -69,7 +69,7 @@
 
 -type command_meta() :: #{from := maybe(from())}.
 
--type command_correlation() :: term().
+-type command_correlation() :: integer() | reference().
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
@@ -1365,18 +1365,11 @@ apply_with(Machine,
            {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
     Meta = Meta0#{index => Idx, term => Term},
-    case ra_machine:apply(Machine, Meta, Cmd, Effects0, MacSt) of
-        {NextMacSt, Effects1} ->
-            % apply returned no reply so use IdxTerm as reply value
-            {Effects, Notifys} = add_reply(From, noreply, ReplyType,
-                                           Effects1, Notifys0),
-            {Idx, State, NextMacSt, Effects, Notifys};
-        {NextMacSt, Effects1, Reply} ->
-            % apply returned a return value
-            {Effects, Notifys} = add_reply(From, Reply, ReplyType,
-                                           Effects1, Notifys0),
-            {Idx, State, NextMacSt, Effects, Notifys}
-    end;
+    {NextMacSt, Effects1, Reply} = ra_machine:apply(Machine, Meta, Cmd,
+                                                    Effects0, MacSt),
+    {Effects, Notifys} = add_reply(From, Reply, ReplyType,
+                                   Effects1, Notifys0),
+    {Idx, State, NextMacSt, Effects, Notifys};
 apply_with({machine, MacMod, _}, % Machine
            {Idx, _, {'$ra_query', #{from := From}, QueryFun, _}},
            {_, State, MacSt, Effects0, Notifys0}) ->
@@ -1384,12 +1377,12 @@ apply_with({machine, MacMod, _}, % Machine
     Effects = [{reply, From, {machine_reply, Result}} | Effects0],
     {Idx, State, MacSt, Effects, Notifys0};
 apply_with(_Machine,
-           {Idx, Term, {'$ra_cluster_change', #{from := From}, _New,
+           {Idx, _, {'$ra_cluster_change', #{from := From}, _New,
                         ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     ?INFO("~w: applying ra cluster change to ~w~n",
           [id(State0), maps:keys(_New)]),
-    {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
+    {Effects, Notifys} = add_reply(From, ok, ReplyType,
                                    Effects0, Notifys0),
     State = State0#{cluster_change_permitted => true},
     % add pending cluster change as next event
@@ -1426,21 +1419,14 @@ add_next_cluster_change(Effects,
 add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
-
-add_reply(From, noreply, await_consensus, Effects, Notifys) ->
-    {[{reply, From, {machine_reply, noreply}} | Effects], Notifys};
 add_reply(From, Reply, await_consensus, Effects, Notifys) ->
-    {[{reply, From, {machine_reply, {reply, Reply}}} | Effects], Notifys};
+    {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
 add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
           Effects, Notifys0) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
     % own bookkeeping
-    CorrData = case Reply of
-               noreply -> Corr;
-               _ -> {reply, Corr, Reply}
-           end,
-
+    CorrData = {Corr, Reply},
     Notifys = maps:update_with(Pid, fun (T) -> [CorrData | T] end,
                                [CorrData], Notifys0),
     {Effects, Notifys};

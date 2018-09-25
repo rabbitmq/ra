@@ -6,7 +6,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include("ra.hrl").
 
--define(SEND_AND_AWAIT_CONSENSUS_TIMEOUT, 6000).
+-define(PROCESS_COMMAND_TIMEOUT, 6000).
 
 all() ->
     [
@@ -84,8 +84,8 @@ single_server_processes_command(Config) ->
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     % index is 2 as leaders commit a noop entry on becoming leaders
-    {ok, {reply, 5}, _} = ra:process_command({N1, node()}, 5, 2000),
-    {ok, {reply, 10}, _} = ra:process_command({N1, node()}, 5, 2000),
+    {ok, 5, _} = ra:process_command({N1, node()}, 5, 2000),
+    {ok, 10, _} = ra:process_command({N1, node()}, 5, 2000),
     terminate_cluster([N1]).
 
 pipeline_commands(Config) ->
@@ -94,10 +94,12 @@ pipeline_commands(Config) ->
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
+    C1 = make_ref(),
+    C2 = make_ref(),
     % index is 2 as leaders commit a noop entry on becoming leaders
-    ok = ra:pipeline_command({N1, node()}, 5, c1, normal),
-    ok = ra:pipeline_command({N1, node()}, 5, c2, normal),
-    [{reply, c1, 5}, {reply, c2, 10}] = gather_applied([], 125),
+    ok = ra:pipeline_command({N1, node()}, 5, C1, normal),
+    ok = ra:pipeline_command({N1, node()}, 5, C2, normal),
+    [{C1, 5}, {C2, 10}] = gather_applied([], 125),
     terminate_cluster([N1]).
 
 stop_server_idemp(Config) ->
@@ -215,14 +217,14 @@ start_servers(Config) ->
     ok = ra:trigger_election(N1, ?DEFAULT_TIMEOUT),
     % a consensus command tells us there is a functioning cluster
     {ok, _, _Leader} = ra:process_command({N1, node()}, 5,
-                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                          ?PROCESS_COMMAND_TIMEOUT),
     % start the 3rd server and issue another command
     ok = ra:start_server(Name, {N3, node()}, add_machine(), [{N1, node()}, {N2, node()}]),
     timer:sleep(100),
     % issue command - this is likely to preceed teh rpc timeout so the node
     % then should stash the command until a leader is known
     {ok, _, Leader} = ra:process_command({N3, node()}, 5,
-                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
     % shut down non leader
     Target = case Leader of
                  {N1, _} -> {N2, node()};
@@ -231,7 +233,7 @@ start_servers(Config) ->
     gen_statem:stop(Target, normal, 2000),
     % issue command to confirm n3 joined the cluster successfully
     {ok, _, _} = ra:process_command({N3, node()}, 5,
-                                     ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                     ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
 
@@ -250,7 +252,7 @@ server_recovery(Config) ->
                        [{N1, node()}, {N3, node()}]),
     % a consensus command tells us there is a functioning 2 node cluster
     {ok, _, Leader} = ra:process_command({N2, node()}, 5,
-                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
     % stop leader to trigger restart
     proc_lib:stop(Leader, bad_thing, 5000),
     timer:sleep(1000),
@@ -260,15 +262,15 @@ server_recovery(Config) ->
         end,
     % issue command
     {ok, _, _Leader} = ra:process_command({N, node()}, 5,
-                                           ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                           ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2]).
 
 process_command(Config) ->
     [A, _B, _C] = Cluster =
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
-        {ok, {_, 14}, _Leader} = ra:process_command(A, 5,
-                                              ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+        {ok, 14, _Leader} = ra:process_command(A, 5,
+                                               ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster(Cluster).
 
 pipeline_command(Config) ->
@@ -276,10 +278,10 @@ pipeline_command(Config) ->
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
     {ok, _, Leader} = ra:members(A),
-    Correlation = my_corr,
+    Correlation = make_ref(),
     ok = ra:pipeline_command(Leader, 5, Correlation),
     receive
-        {ra_event, _, {applied, [{reply, Correlation, 14}]}} -> ok
+        {ra_event, _, {applied, [{Correlation, 14}]}} -> ok
     after 2000 ->
               exit(consensus_timeout)
     end,
@@ -289,10 +291,9 @@ pipeline_command_reject(Config) ->
     [A, _, _C] = Cluster =
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
-    Correlation = my_corr,
     {ok, _, Leader} = ra:members(A),
     Followers = Cluster -- [Leader],
-    Correlation = my_corr,
+    Correlation = make_ref(),
     Target = hd(Followers),
     ok = ra:pipeline_command(Target, 5, Correlation),
     receive
@@ -319,7 +320,7 @@ local_query(Config) ->
                                                {simple, fun erlang:'+'/2, 9}),
     {ok, {_, 9}, _} = ra:local_query(B, fun(S) -> S end),
     {ok, _, Leader} = ra:process_command(A, 5,
-                                                 ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                                 ?PROCESS_COMMAND_TIMEOUT),
     {ok, {_, 14}, _} = ra:local_query(Leader, fun(S) -> S end),
     terminate_cluster(Cluster).
 
@@ -327,7 +328,7 @@ members(Config) ->
     Cluster = start_local_cluster(3, ?config(test_name, Config),
                                   {simple, fun erlang:'+'/2, 9}),
     {ok, _, Leader} = ra:process_command(hd(Cluster), 5,
-                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
     {ok, Cluster, Leader} = ra:members(Leader),
     terminate_cluster(Cluster).
 
@@ -335,10 +336,10 @@ consistent_query(Config) ->
     [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9,
-                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
     {ok, 9, Leader} = ra:consistent_query(A, fun(S) -> S end),
-    {ok, {reply, 14}, _} = ra:process_command(Leader, 5,
-                                    ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+    {ok, 14, _} = ra:process_command(Leader, 5,
+                                    ?PROCESS_COMMAND_TIMEOUT),
     {ok, 14, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
 
@@ -369,7 +370,7 @@ server_catches_up(Config) ->
     {ok, _, Leader} = ra:process_command(N1, {enq, banana}),
     ok = ra:pipeline_command(Leader, {deq, DecSink}),
     {ok, _, Leader} = ra:process_command(Leader, {enq, apple},
-                                         ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
 
     ok = ra:start_server(Name, {N3, node()}, Mac, InitialNodes),
     {ok, _, _Leader} = ra:add_member(Leader, {N3, node()}),
@@ -454,14 +455,15 @@ follower_catchup(Config) ->
     _ = ra:members(N1),
     % a consensus command tells us there is a functioning cluster
     {ok, _, Leader} = ra:process_command(N1, 5,
-                                          ?SEND_AND_AWAIT_CONSENSUS_TIMEOUT),
+                                         ?PROCESS_COMMAND_TIMEOUT),
+    Corr = make_ref(),
     % issue command - this will be lost
-    ok = ra:pipeline_command(N1, 500, corr_500),
+    ok = ra:pipeline_command(N1, 500, Corr),
     % issue next command
     ok = ra:pipeline_command(N1, 501),
     [Follower] = [N1, N2] -- [Leader],
     receive
-        {ra_event, _, {applied, [{reply, corr_500, _}]}} ->
+        {ra_event, _, {applied, [{Corr, _}]}} ->
             exit(unexpected_consensus)
     after 1000 ->
             case get_gen_statem_status(Follower) of
@@ -476,7 +478,7 @@ follower_catchup(Config) ->
     % the aer with the original condition which should trigger a re-wind of of
     % the next_index and a subsequent resend of missing entries
     receive
-        {ra_event, _, {applied, [{reply, corr_500, _}]}} ->
+        {ra_event, _, {applied, [{Corr, _}]}} ->
             case get_gen_statem_status(Follower) of
                 follower ->
                     ok;
@@ -510,11 +512,12 @@ post_partition_liveness(Config) ->
 
     % simulate partition
     meck:expect(ra_server_proc, send_rpc, fun(_, _) -> ok end),
+    Corr = make_ref(),
     % send an entry that will not be replicated
-    ok = ra:pipeline_command(Leader, 500, corr_500),
+    ok = ra:pipeline_command(Leader, 500, Corr),
     % assert we don't achieve consensus
     receive
-        {ra_event, _, {applied, [{reply, corr_500, _}]}} ->
+        {ra_event, _, {applied, [{Corr, _}]}} ->
             exit(unexpected_consensus)
     after 1000 ->
               ok
@@ -523,7 +526,7 @@ post_partition_liveness(Config) ->
     meck:unload(),
     % assert consensus completes after some time
     receive
-        {ra_event, _, {applied, [{reply, corr_500, _}]}} ->
+        {ra_event, _, {applied, [{Corr, _}]}} ->
             ok
     after 6500 ->
             exit(consensus_timeout)

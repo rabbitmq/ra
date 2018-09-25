@@ -63,7 +63,7 @@
                                     {error, term()} |
                                     {timeout, ra_server_id()}.
 
--type ra_cmd_ret() :: ra_leader_call_ret(ra_idxterm() | term()).
+-type ra_cmd_ret() :: ra_leader_call_ret(term()).
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
@@ -78,7 +78,7 @@
 -type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
     % sent using ra:pipeline_command/3|4
-    {applied, [ra_server:command_correlation()]} |
+    {applied, [{ra_server:command_correlation(), Reply :: term()}]} |
     {rejected, ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
     {machine, term()}.

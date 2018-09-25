@@ -65,7 +65,7 @@ enqueue(Server, Msg) ->
     ok.
 
 dequeue(Server) ->
-    {ok, {reply, Res}, _} = ra:process_command(Server, deq),
+    {ok, Res, _} = ra:process_command(Server, deq),
     Res.
 
 start_stopped_server(Config) ->
@@ -329,7 +329,7 @@ init(_) ->
     {queue:new(), []}.
 
 'apply'(_Meta, {enq, Msg}, Effects, State) ->
-    {queue:in(Msg, State), Effects};
+    {queue:in(Msg, State), Effects, ok};
 'apply'(_Meta, deq, Effects, State0) ->
     case queue:out(State0) of
         {{value, Item}, State} ->
@@ -340,9 +340,9 @@ init(_) ->
 'apply'(_Meta, {deq, Pid}, Effects, State0) ->
     case queue:out(State0) of
         {{value, Item}, State} ->
-            {State, [{send_msg, Pid, Item} | Effects]};
+            {State, [{send_msg, Pid, Item} | Effects], ok};
         {empty, _} ->
-            {State0, Effects}
+            {State0, Effects, ok}
     end.
 
 eol_effects(State) ->

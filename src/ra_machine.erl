@@ -162,7 +162,7 @@
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
 -callback 'apply'(command_meta_data(), command(), effects(), State) ->
-    {State, effects()} | {State, effects(), reply()}.
+    {State, effects(), reply()}.
 
 -callback leader_effects(state()) -> effects().
 
@@ -191,7 +191,7 @@ init({machine, Mod, Args}, Name) ->
     Mod:init(Args#{name => Name}).
 
 -spec apply(machine(), command_meta_data(), command(), effects(), State) ->
-    {State, effects()} | {State, effects(), reply()}.
+    {State, effects(), reply()}.
 apply({machine, Mod, _}, Idx, Cmd, Effects, State) ->
     Mod:apply(Idx, Cmd, Effects, State).
 

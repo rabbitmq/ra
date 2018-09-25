@@ -162,9 +162,9 @@ dequeue(CustomerTag, Settlement, #state{timeout = Timeout} = State0) ->
     CustomerId = customer_id(CustomerTag),
     case ra:process_command(Node, {checkout, {dequeue, Settlement},
                                             CustomerId}, Timeout) of
-        {ok, {reply, {dequeue, Reply}}, Leader} ->
+        {ok, {dequeue, Reply}, Leader} ->
             {ok, Reply, State0#state{leader = Leader}};
-        {ok, {reply, Err}, _} ->
+        {ok, Err, _} ->
             Err;
         Err ->
             Err
@@ -463,7 +463,7 @@ try_process_command([Node | Rem], Cmd, State) ->
             try_process_command(Rem, Cmd, State)
     end.
 
-seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
+seq_applied({Seq, _}, {Corrs, #state{last_applied = Last} = State0})
   when Seq > Last orelse Last =:= undefined ->
     State = case Last of
                 undefined -> State0;

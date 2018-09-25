@@ -210,14 +210,14 @@ init(#{name := Name} = Conf) ->
 % ra_indexes holds all raft indexes for enqueues currently on queue
 -spec apply(ra_machine:command_meta_data(), command(),
             ra_machine:effects(), state()) ->
-    {state(), ra_machine:effects()} | {state(), ra_machine:effects(), term()}.
+    {state(), ra_machine:effects(), term()}.
 apply(#{index := RaftIdx}, {enqueue, From, Seq, RawMsg}, Effects0, State00) ->
     case maybe_enqueue(RaftIdx, From, Seq, RawMsg, Effects0, State00) of
         {ok, State0, Effects} ->
             State = append_to_master_index(RaftIdx, State0),
             checkout(State, Effects);
         {duplicate, State, Effects} ->
-            {State, Effects}
+            {State, Effects, ok}
     end;
 apply(#{index := RaftIdx}, {settle, MsgIds, CustomerId}, Effects0,
       #state{customers = Custs0} = State) ->
@@ -228,19 +228,19 @@ apply(#{index := RaftIdx}, {settle, MsgIds, CustomerId}, Effects0,
             complete_and_checkout(RaftIdx, MsgIds, CustomerId,
                                   Cust0, Effects0, State);
         _ ->
-            {State, Effects0}
+            {State, Effects0, ok}
     end;
 apply(#{index := RaftIdx}, {discard, MsgIds, CustomerId}, Effects0,
       #state{customers = Custs0} = State0) ->
     case Custs0 of
         #{CustomerId := Cust0} ->
-            {State, Effects} = complete_and_checkout(RaftIdx, MsgIds,
-                                                     CustomerId, Cust0,
-                                                     Effects0, State0),
+            {State, Effects, Rep} = complete_and_checkout(RaftIdx, MsgIds,
+                                                          CustomerId, Cust0,
+                                                          Effects0, State0),
             Discarded = maps:with(MsgIds, Cust0#customer.checked_out),
-            {State, dead_letter_effects(Discarded, State, Effects)};
+            {State, dead_letter_effects(Discarded, State, Effects), Rep};
         _ ->
-            {State0, Effects0}
+            {State0, Effects0, ok}
     end;
 apply(_, {return, MsgIds, CustomerId}, Effects0,
       #state{customers = Custs0} = State) ->
@@ -251,7 +251,7 @@ apply(_, {return, MsgIds, CustomerId}, Effects0,
             MsgNumMsgs = [M || M <- maps:values(Returned)],
             return(CustomerId, MsgNumMsgs, Cust0, Checked, Effects0, State);
         _ ->
-            {State, Effects0}
+            {State, Effects0, ok}
     end;
 apply(_, {checkout, {dequeue, _}, {_Tag, _Pid}}, Effects0,
       #state{messages = M,
@@ -265,8 +265,8 @@ apply(Meta, {checkout, {dequeue, settled}, CustomerId},
     % turn send msg effect into reply
     {success, _, MsgId, Msg, State2} = checkout_one(State1),
     % immediately settle
-    {State, Effects} = apply(Meta, {settle, [MsgId], CustomerId},
-                             Effects0, State2),
+    {State, Effects, _} = apply(Meta, {settle, [MsgId], CustomerId},
+                                Effects0, State2),
     {State, Effects, {dequeue, {MsgId, Msg}}};
 apply(_, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
       Effects0, State0) ->
@@ -283,14 +283,14 @@ apply(_, {checkout, {dequeue, unsettled}, {_Tag, Pid} = Customer},
     {State, Effects, {dequeue, Reply}};
 apply(_, {checkout, cancel, CustomerId}, Effects0, State0) ->
     {CancelEffects, State1} = cancel_customer(CustomerId, {Effects0, State0}),
-    {State, Effects} = checkout(State1, CancelEffects),
+    {State, Effects, _} = checkout(State1, CancelEffects),
     % TODO: here we should really demonitor the pid but _only_ if it has no
     % other customers or enqueuers.
-    {State, Effects};
+    {State, Effects, ok};
 apply(_, {checkout, Spec, {_Tag, Pid} = CustomerId}, Effects0, State0) ->
     State1 = update_customer(CustomerId, Spec, State0),
-    {State, Effects} = checkout(State1, Effects0),
-    {State, [{monitor, process, Pid} | Effects]};
+    {State, Effects, _} = checkout(State1, Effects0),
+    {State, [{monitor, process, Pid} | Effects], ok};
 apply(#{index := RaftIdx}, purge, Effects0,
       #state{customers = Custs0, ra_indexes = Indexes } = State0) ->
     Total = ra_fifo_index:size(Indexes),
@@ -304,12 +304,12 @@ apply(#{index := RaftIdx}, purge, Effects0,
                                                  #{}, EffectsAcc0, StateAcc0),
                   {StateAcc, EffectsAcc}
           end, {State0, Effects0}, Custs0),
-    {State, Effects} = update_smallest_raft_index(
-                         RaftIdx, Indexes,
-                         State1#state{ra_indexes = ra_fifo_index:empty(),
-                                      messages = #{},
-                                      returns = queue:new(),
-                                      low_msg_num = undefined}, Effects1),
+        {State, Effects, ok} = update_smallest_raft_index(
+                                 RaftIdx, Indexes,
+                                 State1#state{ra_indexes = ra_fifo_index:empty(),
+                                              messages = #{},
+                                              returns = queue:new(),
+                                              low_msg_num = undefined}, Effects1),
     {State, [garbage_collection | Effects], {purge, Total}};
 apply(_, {down, CustomerPid, noconnection},
       Effects0, #state{customers = Custs0,
@@ -331,7 +331,7 @@ apply(_, {down, CustomerPid, noconnection},
                   _ ->
                       [{monitor, node, Node} | Effects0]
               end,
-    {State0#state{customers = Custs, enqueuers = Enqs}, Effects};
+    {State0#state{customers = Custs, enqueuers = Enqs}, Effects, ok};
 apply(_, {down, Pid, _Info}, Effects0,
       #state{customers = Custs0,
              enqueuers = Enqs0} = State0) ->
@@ -369,9 +369,9 @@ apply(_, {nodeup, Node}, Effects0,
     Monitors = [{monitor, process, P} || P <- Custs ++ Enqs],
     % TODO: should we unsuspect these processes here?
     % TODO: avoid list concat
-    {State0, Monitors ++ Effects0};
+    {State0, Monitors ++ Effects0, ok};
 apply(_, {nodedown, _Node}, Effects, State) ->
-    {State, Effects}.
+    {State, Effects, ok}.
 
 -spec leader_effects(state()) -> ra_machine:effects().
 leader_effects(#state{customers = Custs,
@@ -658,7 +658,7 @@ complete_and_checkout(IncomingRaftIdx, MsgIds, CustomerId,
     MsgRaftIdxs = [RIdx || {_, {RIdx, _}} <- maps:values(Discarded)],
     {State1, Effects1}  = complete(CustomerId, MsgRaftIdxs,
                                    Cust0, Checked, Effects0, State0),
-    {State, Effects} = checkout(State1, Effects1),
+    {State, Effects, _} = checkout(State1, Effects1),
     % settle metrics are incremented separately
     update_smallest_raft_index(IncomingRaftIdx, Indexes0, State, Effects).
 
@@ -691,7 +691,7 @@ update_smallest_raft_index(IncomingRaftIdx, OldIndexes,
             % we can forward release_cursor all the way until
             % the last received command
             {State,
-             [{release_cursor, IncomingRaftIdx, State} | Effects]};
+             [{release_cursor, IncomingRaftIdx, State} | Effects], ok};
         _ ->
             NewSmallest = ra_fifo_index:smallest(Indexes),
             % Take the smallest raft index available in the index when starting
@@ -700,15 +700,15 @@ update_smallest_raft_index(IncomingRaftIdx, OldIndexes,
                 {{Smallest, _}, {Smallest, _}} ->
                     % smallest has not changed, do not issue release cursor
                     % effects
-                    {State, Effects};
+                    {State, Effects, ok};
                 {_, {Smallest, Shadow}} when Shadow =/= undefined ->
                     % ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest,
                     %                              Shadow]),
-                    {State, [{release_cursor, Smallest, Shadow} | Effects]};
+                    {State, [{release_cursor, Smallest, Shadow} | Effects], ok};
                  _ -> % smallest
                     % no shadow taken for this index,
                     % no release cursor increase
-                    {State, Effects}
+                    {State, Effects, ok}
             end
     end.
 
@@ -736,10 +736,10 @@ checkout0({success, CustomerId, MsgId, Msg, State}, Effects, Acc0) ->
     checkout0(checkout_one(State), Effects, Acc);
 checkout0({inactive, State}, Effects0, Acc) ->
     Effects = append_send_msg_effects(Effects0, Acc),
-    {State, [{aux, inactive} | Effects]};
+    {State, [{aux, inactive} | Effects], ok};
 checkout0(State, Effects0, Acc) ->
     Effects = append_send_msg_effects(Effects0, Acc),
-    {State, Effects}.
+    {State, Effects, ok}.
 
 append_send_msg_effects(Effects, AccMap) when map_size(AccMap) == 0 ->
     Effects;
@@ -991,9 +991,9 @@ metrics_handler(_) ->
 
 enq_enq_checkout_test() ->
     Cid = {<<"enq_enq_checkout_test">>, self()},
-    {State1, _} = enq(1, 1, first, test_init(test)),
-    {State2, _} = enq(2, 2, second, State1),
-    {_State3, Effects} =
+    {State1, _, _} = enq(1, 1, first, test_init(test)),
+    {State2, _, _} = enq(2, 2, second, State1),
+    {_State3, Effects, _} =
         apply(meta(3), {checkout, {once, 2}, Cid}, [], State2),
     ?ASSERT_EFF({monitor, _, _}, Effects),
     ?ASSERT_EFF({send_msg, _, {delivery, _, _}}, Effects),
@@ -1001,8 +1001,8 @@ enq_enq_checkout_test() ->
 
 enq_enq_deq_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
-    {State1, _} = enq(1, 1, first, test_init(test)),
-    {State2, _} = enq(2, 2, second, State1),
+    {State1, _, _} = enq(1, 1, first, test_init(test)),
+    {State2, _, _} = enq(2, 2, second, State1),
     % get returns a reply value
     {_State3, [{monitor, _, _}], {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, unsettled}, Cid}, [], State2),
@@ -1010,8 +1010,8 @@ enq_enq_deq_test() ->
 
 enq_enq_deq_deq_settle_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
-    {State1, _} = enq(1, 1, first, test_init(test)),
-    {State2, _} = enq(2, 2, second, State1),
+    {State1, _, _} = enq(1, 1, first, test_init(test)),
+    {State2, _, _} = enq(2, 2, second, State1),
     % get returns a reply value
     {State3, [{monitor, _, _}], {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, unsettled}, Cid}, [], State2),
@@ -1021,7 +1021,7 @@ enq_enq_deq_deq_settle_test() ->
 
 enq_enq_checkout_get_settled_test() ->
     Cid = {<<"enq_enq_checkout_get_test">>, self()},
-    {State1, _} = enq(1, 1, first, test_init(test)),
+    {State1, _, _} = enq(1, 1, first, test_init(test)),
     % get returns a reply value
     {_State2, _Effects, {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, settled}, Cid}, [], State1),
@@ -1037,32 +1037,32 @@ checkout_get_empty_test() ->
 untracked_enq_deq_test() ->
     Cid = {<<"untracked_enq_deq_test">>, self()},
     State0 = test_init(test),
-    {State1, _} = apply(meta(1), {enqueue, undefined, undefined, first}, [], State0),
+    {State1, _, _} = apply(meta(1), {enqueue, undefined, undefined, first}, [], State0),
     {_State2, _, {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, settled}, Cid}, [], State1),
     ok.
 release_cursor_test() ->
     Cid = {<<"release_cursor_test">>, self()},
-    {State1, _} = enq(1, 1, first,  test_init(test)),
-    {State2, _} = enq(2, 2, second, State1),
-    {State3, _} = check(Cid, 3, 10, State2),
+    {State1, _, _} = enq(1, 1, first,  test_init(test)),
+    {State2, _, _} = enq(2, 2, second, State1),
+    {State3, _, _} = check(Cid, 3, 10, State2),
     % no release cursor effect at this point
-    {State4, _} = settle(Cid, 4, 1, State3),
-    {_Final, Effects1} = settle(Cid, 5, 0, State4),
+    {State4, _, _} = settle(Cid, 4, 1, State3),
+    {_Final, Effects1, _} = settle(Cid, 5, 0, State4),
     % empty queue forwards release cursor all the way
     ?ASSERT_EFF({release_cursor, 5, _}, Effects1),
     ok.
 
 checkout_enq_settle_test() ->
     Cid = {<<"checkout_enq_settle_test">>, self()},
-    {State1, [{monitor, _, _}]} = check(Cid, 1, test_init(test)),
-    {State2, Effects0} = enq(2, 1,  first, State1),
+    {State1, [{monitor, _, _}], _} = check(Cid, 1, test_init(test)),
+    {State2, Effects0, _} = enq(2, 1,  first, State1),
     ?ASSERT_EFF({send_msg, _,
                  {delivery, <<"checkout_enq_settle_test">>,
                   [{0, {_, first}}]}},
                 Effects0),
-    {State3, [_Inactive]} = enq(3, 2, second, State2),
-    {_, _Effects} = settle(Cid, 4, 0, State3),
+    {State3, [_Inactive], _} = enq(3, 2, second, State2),
+    {_, _Effects, _} = settle(Cid, 4, 0, State3),
     % the release cursor is the smallest raft index that does not
     % contribute to the state of the application
     % ?ASSERT_EFF({release_cursor, 2, _}, Effects),
@@ -1070,70 +1070,71 @@ checkout_enq_settle_test() ->
 
 out_of_order_enqueue_test() ->
     Cid = {<<"out_of_order_enqueue_test">>, self()},
-    {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, test_init(test)),
-    {State2, Effects2} = enq(2, 1, first, State1),
+    {State1, [{monitor, _, _}], _} = check_n(Cid, 5, 5, test_init(test)),
+    {State2, Effects2, _} = enq(2, 1, first, State1),
     ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
     % assert monitor was set up
     ?ASSERT_EFF({monitor, _, _}, Effects2),
     % enqueue seq num 3 and 4 before 2
-    {State3, Effects3} = enq(3, 3, third, State2),
+    {State3, Effects3, _} = enq(3, 3, third, State2),
     ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects3),
-    {State4, Effects4} = enq(4, 4, fourth, State3),
+    {State4, Effects4, _} = enq(4, 4, fourth, State3),
     % assert no further deliveries where made
     ?assertNoEffect({send_msg, _, {delivery, _, _}}, Effects4),
-    {_State5, Effects5} = enq(5, 2, second, State4),
+    {_State5, Effects5, _} = enq(5, 2, second, State4),
     % assert two deliveries were now made
     ?debugFmt("Effects5 ~n~p~n", [Effects5]),
     ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, second}},
-                                               {_, {_, third}},
-                                               {_, {_, fourth}}]}}, Effects5),
+                                             {_, {_, third}},
+                                             {_, {_, fourth}}]}}, Effects5),
     ok.
 
 out_of_order_first_enqueue_test() ->
     Cid = {<<"out_of_order_enqueue_test">>, self()},
-    {State1, _} = check_n(Cid, 5, 5, test_init(test)),
-    {_State2, Effects2} = enq(2, 10, first, State1),
+    {State1, _, _} = check_n(Cid, 5, 5, test_init(test)),
+    {_State2, Effects2, _} = enq(2, 10, first, State1),
     ?ASSERT_EFF({monitor, process, _}, Effects2),
     ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
     ok.
 
 duplicate_enqueue_test() ->
     Cid = {<<"duplicate_enqueue_test">>, self()},
-    {State1, [{monitor, _, _}]} = check_n(Cid, 5, 5, test_init(test)),
-    {State2, Effects2} = enq(2, 1, first, State1),
+    {State1, [{monitor, _, _}], _} = check_n(Cid, 5, 5, test_init(test)),
+    {State2, Effects2, _} = enq(2, 1, first, State1),
     ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects2),
-    {_State3, Effects3} = enq(3, 1, first, State2),
+    {_State3, Effects3, _} = enq(3, 1, first, State2),
     ?assertNoEffect({send_msg, _, {delivery, _, [{_, {_, first}}]}}, Effects3),
     ok.
 
 return_non_existent_test() ->
     Cid = {<<"cid">>, self()},
-    {State0, [_, _Inactive]} = enq(1, 1, second, test_init(test)),
+    {State0, [_, _Inactive], _} = enq(1, 1, second, test_init(test)),
     % return non-existent
-    {_State2, []} = apply(meta(3), {return, [99], Cid}, [], State0),
+    {_State2, [], _} = apply(meta(3), {return, [99], Cid}, [], State0),
     ok.
 
 return_checked_out_test() ->
     Cid = {<<"cid">>, self()},
-    {State0, [_, _]} = enq(1, 1, first, test_init(test)),
+    {State0, [_, _], _} = enq(1, 1, first, test_init(test)),
     {State1, [_Monitor, {aux, active},
-              {send_msg, _, {delivery, _, [{MsgId, _}]}}]} =
+              {send_msg, _, {delivery, _, [{MsgId, _}]}}],
+    _} =
         check(Cid, 2, State0),
     % return
-    {_State2, [_, _]} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
+    {_State2, [_, _], _} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
     ok.
 
 return_auto_checked_out_test() ->
     Cid = {<<"cid">>, self()},
-    {State00, [_, _]} = enq(1, 1, first, test_init(test)),
-    {State0, [_]} = enq(2, 2, second, State00),
+    {State00, [_, _], _} = enq(1, 1, first, test_init(test)),
+    {State0, [_], _} = enq(2, 2, second, State00),
     % it first active then inactive as the consumer took on but cannot take
     % any more
     {State1, [_Monitor, {aux, inactive}, {aux, active},
-              {send_msg, _, {delivery, _, [{MsgId, _}]}} | _]} =
+              {send_msg, _, {delivery, _, [{MsgId, _}]}} | _], _} =
         check_auto(Cid, 2, State0),
     % return should include another delivery
-    {_State2, Effects} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
+    {_State2, Effects, _} = apply(meta(3), {return, [MsgId], Cid}, [], State1),
     ?ASSERT_EFF({send_msg, _,
                  {delivery, _, [{_, {#{delivery_count := 1}, first}}]}},
                 Effects),
@@ -1142,11 +1143,11 @@ return_auto_checked_out_test() ->
 
 cancelled_checkout_out_test() ->
     Cid = {<<"cid">>, self()},
-    {State00, [_, _]} = enq(1, 1, first, test_init(test)),
-    {State0, [_]} = enq(2, 2, second, State00),
-    {State1, _} = check_auto(Cid, 2, State0),
+    {State00, [_, _], _} = enq(1, 1, first, test_init(test)),
+    {State0, [_], _} = enq(2, 2, second, State00),
+    {State1, _, _} = check_auto(Cid, 2, State0),
     % cancelled checkout should return all pending messages to queue
-    {State2, _Effects} = apply(meta(3), {checkout, cancel, Cid}, [], State1),
+    {State2, _Effects, _} = apply(meta(3), {checkout, cancel, Cid}, [], State1),
 
     {State3, _, {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, settled}, Cid}, [], State2),
@@ -1156,10 +1157,10 @@ cancelled_checkout_out_test() ->
 
 down_with_noproc_customer_returns_unsettled_test() ->
     Cid = {<<"down_customer_returns_unsettled_test">>, self()},
-    {State0, [_, _]} = enq(1, 1, second, test_init(test)),
-    {State1, [{monitor, process, Pid} | _]} = check(Cid, 2, State0),
-    {State2, [_, _]} = apply(meta(3), {down, Pid, noproc}, [], State1),
-    {_State, Effects} = check(Cid, 4, State2),
+    {State0, [_, _], _} = enq(1, 1, second, test_init(test)),
+    {State1, [{monitor, process, Pid} | _], _} = check(Cid, 2, State0),
+    {State2, [_, _], _} = apply(meta(3), {down, Pid, noproc}, [], State1),
+    {_State, Effects, _} = check(Cid, 4, State2),
     ?ASSERT_EFF({monitor, process, _}, Effects),
     ok.
 
@@ -1168,19 +1169,19 @@ down_with_noconnection_marks_suspect_and_node_is_monitored_test() ->
     Cid = {<<"down_with_noconnect">>, Pid},
     Self = self(),
     Node = node(Pid),
-    {State0, Effects0} = enq(1, 1, second, test_init(test)),
+    {State0, Effects0, _} = enq(1, 1, second, test_init(test)),
     ?ASSERT_EFF({monitor, process, P}, P =:= Self, Effects0),
-    {State1, Effects1} = check(Cid, 2, State0),
+    {State1, Effects1, _} = check(Cid, 2, State0),
     ?ASSERT_EFF({monitor, process, P}, P =:= Pid, Effects1),
     % monitor both enqueuer and customer
     % because we received a noconnection we now need to monitor the node
-    {State2a, _Effects2a} = apply(meta(3), {down, Pid, noconnection}, [], State1),
-    {State2, Effects2} = apply(meta(3), {down, Self, noconnection}, [], State2a),
+    {State2a, _Effects2a, _} = apply(meta(3), {down, Pid, noconnection}, [], State1),
+    {State2, Effects2, _} = apply(meta(3), {down, Self, noconnection}, [], State2a),
     ?ASSERT_EFF({monitor, node, _}, Effects2),
     ?assertNoEffect({demonitor, process, _}, Effects2),
     % when the node comes up we need to retry the process monitors for the
     % disconnected processes
-    {_State3, Effects3} = apply(meta(3), {nodeup, Node}, [], State2),
+    {_State3, Effects3, _} = apply(meta(3), {nodeup, Node}, [], State2),
     % try to re-monitor the suspect processes
     ?ASSERT_EFF({monitor, process, P}, P =:= Pid, Effects3),
     ?ASSERT_EFF({monitor, process, P}, P =:= Self, Effects3),
@@ -1189,18 +1190,18 @@ down_with_noconnection_marks_suspect_and_node_is_monitored_test() ->
 down_with_noproc_enqueuer_is_cleaned_up_test() ->
     State00 = test_init(test),
     Pid = spawn(fun() -> ok end),
-    {State0, Effects0} = apply(meta(1), {enqueue, Pid, 1, first}, [], State00),
+    {State0, Effects0, _} = apply(meta(1), {enqueue, Pid, 1, first}, [], State00),
     ?ASSERT_EFF({monitor, process, _}, Effects0),
-    {State1, _Effects1} = apply(meta(3), {down, Pid, noproc}, [], State0),
+    {State1, _Effects1, _} = apply(meta(3), {down, Pid, noproc}, [], State0),
     % ensure there are no enqueuers
     ?assert(0 =:= maps:size(State1#state.enqueuers)),
     ok.
 
 completed_customer_yields_demonitor_effect_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
-    {State0, [_, _]} = enq(1, 1, second, test_init(test)),
-    {State1, [{monitor, process, _} |  _]} = check(Cid, 2, State0),
-    {_, Effects} = settle(Cid, 3, 0, State1),
+    {State0, [_, _], _} = enq(1, 1, second, test_init(test)),
+    {State1, [{monitor, process, _} |  _], _} = check(Cid, 2, State0),
+    {_, Effects, _} = settle(Cid, 3, 0, State1),
     ?ASSERT_EFF({demonitor, _, _}, Effects),
     % release cursor for empty queue
     ?ASSERT_EFF({release_cursor, 3, _}, Effects),
@@ -1208,12 +1209,12 @@ completed_customer_yields_demonitor_effect_test() ->
 
 discarded_message_without_dead_letter_handler_is_removed_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
-    {State0, [_, _]} = enq(1, 1, first, test_init(test)),
-    {State1, Effects1} = check_n(Cid, 2, 10, State0),
+    {State0, [_, _], _} = enq(1, 1, first, test_init(test)),
+    {State1, Effects1, _} = check_n(Cid, 2, 10, State0),
     ?ASSERT_EFF({send_msg, _,
                  {delivery, _, [{0, {#{}, first}}]}},
                 Effects1),
-    {_State2, Effects2} = apply(meta(1), {discard, [0], Cid}, [], State1),
+    {_State2, Effects2, _} = apply(meta(1), {discard, [0], Cid}, [], State1),
     ?assertNoEffect({send_msg, _,
                      {delivery, _, [{0, {#{}, first}}]}},
                     Effects2),
@@ -1224,12 +1225,12 @@ discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
     {State00, _} = init(#{name => test,
                           dead_letter_handler =>
                           {somemod, somefun, [somearg]}}),
-    {State0, [_, _]} = enq(1, 1, first, State00),
-    {State1, Effects1} = check_n(Cid, 2, 10, State0),
+    {State0, [_, _], _} = enq(1, 1, first, State00),
+    {State1, Effects1, _} = check_n(Cid, 2, 10, State0),
     ?ASSERT_EFF({send_msg, _,
                  {delivery, _, [{0, {#{}, first}}]}},
                 Effects1),
-    {_State2, Effects2} = apply(meta(1), {discard, [0], Cid}, [], State1),
+    {_State2, Effects2, _} = apply(meta(1), {discard, [0], Cid}, [], State1),
     % assert mod call effect with appended reason and message
     ?ASSERT_EFF({mod_call, somemod, somefun, [somearg, [{rejected, first}]]},
                 Effects2),
@@ -1238,11 +1239,11 @@ discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
 tick_test() ->
     Cid = {<<"c">>, self()},
     Cid2 = {<<"c2">>, self()},
-    {S0, _} = enq(1, 1, fst, test_init(test)),
-    {S1, _} = enq(2, 2, snd, S0),
-    {S2, {MsgId, _}} = deq(3, Cid, unsettled, S1),
-    {S3, {_, _}} = deq(4, Cid2, unsettled, S2),
-    {S4, _} = apply(meta(5), {return, [MsgId], Cid}, [], S3),
+    {S0, _, _} = enq(1, 1, fst, test_init(test)),
+    {S1, _, _} = enq(2, 2, snd, S0),
+    {S2, {MsgId, _}, _} = deq(3, Cid, unsettled, S1),
+    {S3, {_, _}, _} = deq(4, Cid2, unsettled, S2),
+    {S4, _, _} = apply(meta(5), {return, [MsgId], Cid}, [], S3),
 
     [{mod_call, _, _, [{test, 1, 1, 2, 1}]}, {aux, emit}] = tick(1, S4),
     ok.
@@ -1391,16 +1392,16 @@ delivery_query_returns_deliveries_test() ->
 pending_enqueue_is_enqueued_on_down_test() ->
     Cid = {<<"cid">>, self()},
     Pid = self(),
-    {State0, _} = enq(1, 2, first, test_init(test)),
-    {State1, _} = apply(meta(2), {down, Pid, noproc}, [], State0),
+    {State0, _, _} = enq(1, 2, first, test_init(test)),
+    {State1, _, _} = apply(meta(2), {down, Pid, noproc}, [], State0),
     {_State2, _, {dequeue, {0, {_, first}}}} =
         apply(meta(3), {checkout, {dequeue, settled}, Cid}, [], State1),
     ok.
 
 duplicate_delivery_test() ->
-    {State0, _} = enq(1, 1, first, test_init(test)),
+    {State0, _, _} = enq(1, 1, first, test_init(test)),
     {#state{ra_indexes = RaIdxs,
-            messages = Messages}, _} = enq(2, 1, first, State0),
+            messages = Messages}, _, _} = enq(2, 1, first, State0),
     ?assertEqual(1, ra_fifo_index:size(RaIdxs)),
     ?assertEqual(1, maps:size(Messages)),
     ok.
@@ -1422,9 +1423,9 @@ performance_test() ->
 
 purge_test() ->
     Cid = {<<"purge_test">>, self()},
-    {State1, _} = enq(1, 1, first, test_init(test)),
+    {State1, _, _} = enq(1, 1, first, test_init(test)),
     {State2, _, {purge, 1}} = apply(meta(2), purge, [], State1),
-    {State3, _} = enq(3, 2, second, State2),
+    {State3, _, _} = enq(3, 2, second, State2),
     % get returns a reply value
     {_State4, [{monitor, _, _}], {dequeue, {0, {_, second}}}} =
         apply(meta(4), {checkout, {dequeue, unsettled}, Cid}, [], State3),
@@ -1432,9 +1433,9 @@ purge_test() ->
 
 purge_with_checkout_test() ->
     Cid = {<<"purge_test">>, self()},
-    {State0, _} = check_auto(Cid, 1, test_init(?FUNCTION_NAME)),
-    {State1, _} = enq(2, 1, first, State0),
-    {State2, _} = enq(3, 2, second, State1),
+    {State0, _, _} = check_auto(Cid, 1, test_init(?FUNCTION_NAME)),
+    {State1, _, _} = enq(2, 1, first, State0),
+    {State2, _, _} = enq(3, 2, second, State1),
     {State3, _, {purge, 2}} = apply(meta(2), purge, [], State2),
     #customer{checked_out = Checked} = maps:get(Cid, State3#state.customers),
     ?assertEqual(0, maps:size(Checked)),
@@ -1449,7 +1450,7 @@ enq(Idx, MsgSeq, Msg, State) ->
 deq(Idx, Cid, Settlement, State0) ->
     {State, _, {dequeue, Msg}} =
         apply(meta(Idx), {checkout, {dequeue,  Settlement}, Cid}, [], State0),
-    {State, Msg}.
+    {State, Msg, ok}.
 
 check_n(Cid, Idx, N, State) ->
     apply(meta(Idx), {checkout, {auto, N}, Cid}, [], State).
@@ -1469,8 +1470,6 @@ settle(Cid, Idx, MsgId, State) ->
 run_log(InitState, Entries) ->
     lists:foldl(fun ({Idx, E}, {Acc0, Efx0}) ->
                         case apply(meta(Idx), E, Efx0, Acc0) of
-                            {Acc, Efx} ->
-                                {Acc, Efx};
                             {Acc, Efx, _} ->
                                 {Acc, Efx}
                         end

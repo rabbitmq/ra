@@ -12,17 +12,16 @@
 init(_) -> {[], []}.
 
 apply(#{index := Idx}, {enq, Msg}, Effects, State) ->
-    {State ++ [{Idx, Msg}], Effects};
+    {State ++ [{Idx, Msg}], Effects, ok};
 apply(_Meta, {deq, ToPid}, Effects, [{EncIdx, Msg} | State]) ->
     {State, [{send_msg, ToPid, Msg},
              {release_cursor, EncIdx, []}
-             | Effects]};
+             | Effects], ok};
 apply(_Meta, deq, Effects, [{EncIdx, _Msg} | State]) ->
-    {State, [{release_cursor, EncIdx, []}
-             | Effects]};
+    {State, [{release_cursor, EncIdx, []} | Effects], ok};
 % due to compaction there may not be a dequeue op to do
 apply(_Meta, _, Effects, [] = State) ->
-    {State, Effects}.
+    {State, Effects, ok}.
 
 
 leader_effects(_) -> [].

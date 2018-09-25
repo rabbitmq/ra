@@ -260,7 +260,7 @@ add_member(ServerRef, ServerId) ->
 -spec add_member(ra_server_id(), ra_server_id(), timeout()) -> ra_cmd_ret().
 add_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef, {'$ra_join', ServerId, after_log_append},
-                         Timeout).
+                           Timeout).
 
 
 %% @doc Removes a server from the cluster's membership configuration
@@ -368,14 +368,14 @@ overview() ->
 %% @param Timeout the time to wait before returning {timeout, ServerId}
 -spec process_command(ServerId :: ra_server_id(), Command :: term(),
                       Timeout :: non_neg_integer()) ->
-    {ok, {reply, term()} | noreply, Leader :: ra_server_id()} |
+    {ok, Reply :: term(), Leader :: ra_server_id()} |
     {error, term()} |
     {timeout, ra_server_id()}.
 process_command(ServerId, Cmd, Timeout) ->
     ra_server_proc:command(ServerId, usr(Cmd, await_consensus), Timeout).
 
 -spec process_command(ServerId :: ra_server_id(), Command :: term()) ->
-    {ok, {reply, term()} | noreply, Leader :: ra_server_id()} |
+    {ok, Reply :: term(), Leader :: ra_server_id()} |
     {error, term()} |
     {timeout, ra_server_id()}.
 process_command(ServerId, Command) ->
@@ -392,11 +392,10 @@ process_command(ServerId, Command) ->
 %% When the command is applied to the state machine the ra server will send
 %% the calling process a ra_event of the following structure:
 %%
-%% `{ra_event, {applied, [Correlation | {reply, Correlation, Reply}]}}'
+%% `{ra_event, {applied, [{Correlation, Reply}]}}'
 %%
 %% Not that ra will batch notification and thus return a list of correlation
-%% identifiers. If the state machine returned a response the Correlation will
-%% be wrapped in a `{reply, Correlation, Reply}' tuple.
+%% and result tuples.
 %%
 %% If the receving ra server isn't a leader a ra event of the following
 %% structure will be returned informing the caller that it cannot process the
@@ -407,7 +406,8 @@ process_command(ServerId, Command) ->
 %% the correct ra server.
 %%
 %% If insteads the atom `no_correlation' is used the calling process will not
-%% receive any notification of messages success or otherwise. This is the
+%% receive any notification of command processing success or otherwise.
+%% This is the
 %% least reliable way to interact with a ra system and should only be used
 %% if the command is of little importance.
 %%

@@ -82,9 +82,9 @@ machine_replies(Config) ->
     ClusterId = ?config(cluster_id, Config),
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, {reply, the_reply}, ServerId} = ra:process_command(ServerId, c1),
+    {ok, the_reply, ServerId} = ra:process_command(ServerId, c1),
     %% ensure we can return any reply type
-    {ok, {reply, {error, some_error_reply}}, ServerId} =
+    {ok, {error, some_error_reply}, ServerId} =
         ra:process_command(ServerId, c2),
     ok.
 
@@ -103,7 +103,7 @@ leader_monitors(Config) ->
                         [{monitor, process, P} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, {reply, ok}, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
+    {ok, ok, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
     ra:stop_server(ServerId),
@@ -132,14 +132,14 @@ follower_takes_over_monitor(Config) ->
                     (_, Cmd, _, State) ->
                         ct:pal("handling ~p", [Cmd]),
                         %% handle all
-                        {State, []}
+                        {State, [], ok}
                 end),
     meck:expect(Mod, leader_effects,
                 fun (State) ->
                         [{monitor, process, P} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
-    {ok, {reply, ok}, {LeaderName, _}} =
+    {ok, ok, {LeaderName, _}} =
         ra:process_command(ServerId1, {monitor_me, self()}),
     %% sleep here as it seems monitors, or this stat aren't updated synchronously
     timer:sleep(100),
@@ -178,7 +178,7 @@ deleted_cluster_emits_eol_effects(Config) ->
                         [{send_msg, P, eol} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, {reply, ok}, _} = ra:process_command(ServerId, {monitor_me, self()}),
+    {ok, ok, _} = ra:process_command(ServerId, {monitor_me, self()}),
     {ok, _} = ra:delete_cluster([ServerId]),
     % validate
     ok = validate_process_down(element(1, ServerId), 50),

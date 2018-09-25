@@ -230,11 +230,10 @@ withing some time window.
 When the command is applied to the state machine the ra server will send  
 the calling process a ra_event of the following structure:</p>
  
-  <p><code>{ra_event, {applied, [Correlation | {reply, Correlation, Reply}]}}</code></p>
+  <p><code>{ra_event, {applied, [{Correlation, Reply}]}}</code></p>
  
-  <p>Not that ra will batch notification and thus return a list of correlation
-  identifiers. If the state machine returned a response the Correlation will
-  be wrapped in a <code>{reply, Correlation, Reply}</code> tuple.</p>
+  <p>Not that ra will batch notification and thus return a list of correlation  
+and result tuples.</p>
  
   <p>If the receving ra server isn't a leader a ra event of the following  
 structure will be returned informing the caller that it cannot process the  
@@ -245,19 +244,20 @@ The caller can then redirect the command for the correlation identifier to
 the correct ra server.</p>
  
   If insteads the atom <code>no_correlation</code> is used the calling process will not
-  receive any notification of messages success or otherwise. This is the
+  receive any notification of command processing success or otherwise.
+  This is the
   least reliable way to interact with a ra system and should only be used
   if the command is of little importance.
  </p>
 
 <h3 class="function"><a name="process_command-2">process_command/2</a></h3>
 <div class="spec">
-<p><tt>process_command(ServerId::<a href="#type-ra_server_id">ra_server_id()</a>, Command::term()) -&gt; {ok, {reply, term()} | noreply, Leader::<a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</tt><br></p>
+<p><tt>process_command(ServerId::<a href="#type-ra_server_id">ra_server_id()</a>, Command::term()) -&gt; {ok, Reply::term(), Leader::<a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="process_command-3">process_command/3</a></h3>
 <div class="spec">
-<p><tt>process_command(ServerId::<a href="#type-ra_server_id">ra_server_id()</a>, Command::term(), Timeout::non_neg_integer()) -&gt; {ok, {reply, term()} | noreply, Leader::<a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</tt><br></p>
+<p><tt>process_command(ServerId::<a href="#type-ra_server_id">ra_server_id()</a>, Command::term(), Timeout::non_neg_integer()) -&gt; {ok, Reply::term(), Leader::<a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()} | {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</tt><br></p>
 <p><tt>ServerId</tt>: the server id to send the command to<br>
 <tt>Command</tt>: an arbitrary term that the state machine can handle<br>
 <tt>Timeout</tt>: the time to wait before returning {timeout, ServerId}<br>
