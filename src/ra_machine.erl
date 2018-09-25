@@ -126,8 +126,8 @@
 
 -type reply() :: term().
 %% an arbitrary term that can be returned to the caller, _if_ the caller
-%% used {@link ra:send_and_await_consensus/2} or
-%% {@link ra:send_and_await_consensus/3}
+%% used {@link ra:process_command/2} or
+%% {@link ra:process_command/3}
 
 -type command() :: user_command() | builtin_command().
 

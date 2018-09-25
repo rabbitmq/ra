@@ -43,7 +43,7 @@
                                    {maybe(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()},
-                priority = high :: high | normal,
+                priority = normal :: normal | low,
                 block_handler = fun() -> ok end :: fun(() -> ok),
                 unblock_handler = fun() -> ok end :: fun(() -> ok),
                 timeout :: non_neg_integer()
@@ -115,7 +115,7 @@ enqueue(Correlation, Msg, State0 = #state{slow = Slow,
     {Next, State1} = next_enqueue_seq(State0),
     % by default there is no correlation id
     Cmd = {enqueue, self(), Next, Msg},
-    case send_command(Node, Correlation, Cmd, normal, State1) of
+    case send_command(Node, Correlation, Cmd, low, State1) of
         {slow, _} = Ret when not Slow ->
             BlockFun(),
             Ret;
@@ -160,10 +160,12 @@ enqueue(Msg, State) ->
 dequeue(CustomerTag, Settlement, #state{timeout = Timeout} = State0) ->
     Node = pick_node(State0),
     CustomerId = customer_id(CustomerTag),
-    case ra:send_and_await_consensus(Node, {checkout, {dequeue, Settlement},
+    case ra:process_command(Node, {checkout, {dequeue, Settlement},
                                             CustomerId}, Timeout) of
-        {ok, {dequeue, Reply}, Leader} ->
+        {ok, {reply, {dequeue, Reply}}, Leader} ->
             {ok, Reply, State0#state{leader = Leader}};
+        {ok, {reply, Err}, _} ->
+            Err;
         Err ->
             Err
     end.
@@ -186,7 +188,7 @@ dequeue(CustomerTag, Settlement, #state{timeout = Timeout} = State0) ->
 settle(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     Cmd = {settle, MsgIds, customer_id(CustomerTag)},
-    case send_command(Node, undefined, Cmd, high, State0) of
+    case send_command(Node, undefined, Cmd, normal, State0) of
         {slow, S} ->
             % turn slow into ok for this function
             {ok, S};
@@ -224,7 +226,7 @@ return(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     % TODO: make ra_fifo return support lists of message ids
     Cmd = {return, MsgIds, customer_id(CustomerTag)},
-    case send_command(Node, undefined, Cmd, high, State0) of
+    case send_command(Node, undefined, Cmd, normal, State0) of
         {slow, S} ->
             % turn slow into ok for this function
             {ok, S};
@@ -262,7 +264,7 @@ return(CustomerTag, [_|_] = MsgIds,
 discard(CustomerTag, [_|_] = MsgIds, #state{slow = false} = State0) ->
     Node = pick_node(State0),
     Cmd = {discard, MsgIds, customer_id(CustomerTag)},
-    case send_command(Node, undefined, Cmd, high, State0) of
+    case send_command(Node, undefined, Cmd, normal, State0) of
         {slow, S} ->
             % turn slow into ok for this function
             {ok, S};
@@ -300,7 +302,7 @@ checkout(CustomerTag, NumUnsettled, State0) ->
     Nodes = sorted_servers(State0),
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, {auto, NumUnsettled}, CustomerId},
-    try_send_and_await_consensus(Nodes, Cmd, State0).
+    try_process_command(Nodes, Cmd, State0).
 
 %% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
 %%
@@ -318,14 +320,14 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
     CustomerId = {CustomerTag, self()},
     Cmd = {checkout, cancel, CustomerId},
     State = State0#state{customer_deliveries = maps:remove(CustomerTag, CDels)},
-    try_send_and_await_consensus(Nodes, Cmd, State).
+    try_process_command(Nodes, Cmd, State).
 
 %% @doc Purges all the messages from a ra_fifo queue and returns the number
 %% of messages purged.
 -spec purge(ra_server_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
 purge(Node) ->
-    case ra:send_and_await_consensus(Node, purge) of
-        {ok, {purge, Reply}, _} ->
+    case ra:process_command(Node, purge) of
+        {ok, {reply, {purge, Reply}}, _} ->
             {ok, Reply};
         Err ->
             Err
@@ -406,7 +408,7 @@ handle_ra_event(From, {applied, Seqs},
             %% send all the settlements and returns
             State = lists:foldl(fun (C, S0) ->
                                         case send_command(Node, undefined,
-                                                          C, high, S0) of
+                                                          C, normal, S0) of
                                             {T, S} when T =/= error ->
                                                 S
                                         end
@@ -446,19 +448,19 @@ handle_ra_event(_Leader, {machine, eol}, _State0) ->
     ok.
 untracked_enqueue(_ClusterId, [Node | _], Msg) ->
     Cmd = {enqueue, undefined, undefined, Msg},
-    ok = ra:cast(Node, Cmd),
+    ok = ra:pipeline_command(Node, Cmd),
     ok.
 
 %% Internal
 
-try_send_and_await_consensus([Node | Rem], Cmd, State) ->
-    case ra:send_and_await_consensus(Node, Cmd, 30000) of
+try_process_command([Node | Rem], Cmd, State) ->
+    case ra:process_command(Node, Cmd, 30000) of
         {ok, _, Leader} ->
             {ok, State#state{leader = Leader}};
         Err when length(Rem) =:= 0 ->
             Err;
         _ ->
-            try_send_and_await_consensus(Rem, Cmd, State)
+            try_process_command(Rem, Cmd, State)
     end.
 
 seq_applied(Seq, {Corrs, #state{last_applied = Last} = State0})
@@ -558,7 +560,7 @@ send_command(Node, Correlation, Command, Priority,
                     priority = Priority,
                     soft_limit = SftLmt} = State0) ->
     {Seq, State} = next_seq(State0),
-    ok = ra:send_and_notify(Node, Priority, Command, Seq),
+    ok = ra:pipeline_command(Node, Command, Seq, Priority),
     Tag = case maps:size(Pending) >= SftLmt of
               true -> slow;
               false -> ok
@@ -566,18 +568,18 @@ send_command(Node, Correlation, Command, Priority,
     {Tag, State#state{pending = Pending#{Seq => {Correlation, Command}},
                       priority = Priority,
                       slow = Tag == slow}};
-send_command(Node, Correlation, Command, high,
-             #state{priority = normal} = State) ->
-    send_command(Node, Correlation, Command, normal, State);
 send_command(Node, Correlation, Command, normal,
-             #state{priority = high} = State) ->
-    send_command(Node, Correlation, Command, normal,
-                 State#state{priority = normal}).
+             #state{priority = low} = State) ->
+    send_command(Node, Correlation, Command, low, State);
+send_command(Node, Correlation, Command, low,
+             #state{priority = normal} = State) ->
+    send_command(Node, Correlation, Command, low,
+                 State#state{priority = low}).
 
 resend_command(Node, Correlation, Command,
                #state{pending = Pending} = State0) ->
     {Seq, State} = next_seq(State0),
-    ok = ra:send_and_notify(Node, Command, Seq),
+    ok = ra:pipeline_command(Node, Command, Seq),
     State#state{pending = Pending#{Seq => {Correlation, Command}}}.
 
 add_command(_Cid, _Tag, [], Acc) ->

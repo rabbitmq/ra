@@ -11,6 +11,8 @@ init(#{simple_fun := Fun,
     {{simple, Fun, Initial}, []}.
 
 apply(_, Cmd, Effects, {simple, Fun, State}) ->
-    {{simple, Fun, Fun(Cmd, State)}, Effects}.
+    Next = Fun(Cmd, State),
+    %% return the next state as the reply as well
+    {{simple, Fun, Next}, Effects, Next}.
 
 

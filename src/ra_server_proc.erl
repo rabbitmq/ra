@@ -57,7 +57,7 @@
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
 
--type ra_command_priority() :: normal | high.
+-type ra_command_priority() :: normal | low.
 
 -type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_server_id()} |
                                     {error, term()} |
@@ -77,7 +77,7 @@
 
 -type ra_event_body() ::
     % used for notifying senders of the ultimate fate of their command
-    % sent using ra:send_and_notify
+    % sent using ra:pipeline_command/3|4
     {applied, [ra_server:command_correlation()]} |
     {rejected, ra_event_reject_detail()} |
     % used to send message side-effects emitted by the state machine
@@ -115,18 +115,18 @@ start_link(Config = #{id := Id}) ->
 -spec command(ra_server_id(), ra_command(), timeout()) ->
     ra_cmd_ret().
 command(ServerRef, Cmd, Timeout) ->
-    leader_call(ServerRef, {command, high, Cmd}, Timeout).
+    leader_call(ServerRef, {command, normal, Cmd}, Timeout).
 
 -spec cast_command(ra_server_id(), ra_command()) -> ok.
 cast_command(ServerRef, Cmd) ->
-    gen_statem:cast(ServerRef, {command, normal, Cmd}).
+    gen_statem:cast(ServerRef, {command, low, Cmd}).
 
 -spec cast_command(ra_server_id(), ra_command_priority(), ra_command()) -> ok.
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_server_id(), query_fun(), local | consistent, timeout()) ->
-    {ok, {ra_idxterm(), term()}, ra_server_id()}.
+    {ok, term(), ra_server_id()}.
 query(ServerRef, QueryFun, local, Timeout) ->
     gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
@@ -240,9 +240,9 @@ leader(EventType, {leader_call, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
-leader(EventType, {command, high, {CmdType, Data, ReplyMode}},
+leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
        #state{server_state = ServerState0} = State0) ->
-    %% high priority commands are written immediately
+    %% normal priority commands are written immediately
     From = case EventType of
                cast -> undefined;
                {call, F} -> F
@@ -254,9 +254,9 @@ leader(EventType, {command, high, {CmdType, Data, ReplyMode}},
     {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
                                       State0#state{server_state = ServerState}),
     {keep_state, State, Actions};
-leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
+leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
-    %% cache the normal command until the flush_commands message arrives
+    %% cache the low priority command until the flush_commands message arrives
     From = case EventType of
                cast -> undefined;
                {call, F} -> F
@@ -489,7 +489,7 @@ follower(enter, _, State = #state{name = Name,
     {keep_state, State#state{server_state = ra_server:become(follower, NS0)}};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
-follower(_, {command, _Priority, {_CmdType, Data, noreply}},
+follower(_, {command, Priority, {_CmdType, Data, noreply}},
          State) ->
     % forward to leader
     case leader_id(State) of
@@ -500,7 +500,7 @@ follower(_, {command, _Priority, {_CmdType, Data, noreply}},
         LeaderId ->
             ?INFO("~w follower leader cast - redirecting to ~w ~n",
                   [id(State), LeaderId]),
-            ok = ra:cast(LeaderId, Data),
+            ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
             {keep_state, State, []}
     end;
 follower(cast, {command, _Priority,

@@ -61,11 +61,11 @@ init_per_testcase(TestCase, Config) ->
      | Config].
 
 enqueue(Server, Msg) ->
-    {ok, _, _} = ra:send_and_await_consensus(Server, {enq, Msg}),
+    {ok, _, _} = ra:process_command(Server, {enq, Msg}),
     ok.
 
 dequeue(Server) ->
-    {ok, Res, _} = ra:send_and_await_consensus(Server, deq),
+    {ok, {reply, Res}, _} = ra:process_command(Server, deq),
     Res.
 
 start_stopped_server(Config) ->
@@ -199,7 +199,7 @@ restarted_server_does_not_reissue_side_effects(Config) ->
     ClusterId = ?config(cluster_id, Config),
     ok = start_cluster(ClusterId, [ServerId]),
     ok = enqueue(ServerId, msg1),
-    {ok, _, _} = ra:send_and_await_consensus(ServerId, {deq, self()}),
+    {ok, _, _} = ra:process_command(ServerId, {deq, self()}),
     receive
         {ra_event, _, {machine, msg1}} ->
             ok
@@ -251,22 +251,22 @@ recover_after_kill(Config) ->
     %% this should by the default release cursor interval of 128
     %% create a new snapshot
     {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
-    {ok, {_X, MS}, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS, _} = ra:consistent_query(ServerId, fun (S) -> S end),
     %% kill node again to trigger post snapshot recovery
     exit(whereis(Name), kill),
     timer:sleep(250),
     ra:members(ServerId),
-    timer:sleep(100),
+    timer:sleep(200),
     % give leader time to commit noop
-    {ok, {_X2, MS2}, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS2, _} = ra:consistent_query(ServerId, fun (S) -> S end),
     ok = ra:stop_server(ServerId),
     % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
     %        [X, X2, MS, MS2, AllDeq]),
     ?assertEqual(MS, MS2),
     ok = ra:restart_server(ServerId),
     {ok, _, _} = ra:members(ServerId, 30000),
-    {ok, {X, MS3}, _} = ra:consistent_query(ServerId, fun (S) -> S end),
-    ct:pal("~p ~p ~p", [MS2, MS3, X]),
+    {ok, MS3, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    ct:pal("~p ~p", [MS2, MS3]),
     ?assertEqual(MS2, MS3),
     ok.
 

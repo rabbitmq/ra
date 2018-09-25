@@ -41,10 +41,10 @@
 
     Now you should have a working ra cluster.
 
-3. Send a command
+3. Process a command
 
     ```
-    {ok, IdxTerm, Leader} = ra:send_and_await_consensus({server1, node()}, 5),
+    {ok, Reply, Leader} = ra:process_command({server1, node()}, 5),
 
     ```
 

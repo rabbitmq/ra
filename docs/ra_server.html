@@ -20,7 +20,7 @@
 
 
 <h3 class="typedecl"><a name="type-command_correlation">command_correlation()</a></h3>
-<p><tt>command_correlation() = non_neg_integer()</tt></p>
+<p><tt>command_correlation() = term()</tt></p>
 
 
 <h3 class="typedecl"><a name="type-command_meta">command_meta()</a></h3>
@@ -28,7 +28,7 @@
 
 
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
-<p><tt>command_reply_mode() = after_log_append | await_consensus | {notify_on_consensus, pid(), <a href="#type-command_correlation">command_correlation()</a>} | noreply</tt></p>
+<p><tt>command_reply_mode() = after_log_append | await_consensus | {notify_on_consensus, <a href="#type-command_correlation">command_correlation()</a>, pid()} | noreply</tt></p>
 
 
 <h3 class="typedecl"><a name="type-command_type">command_type()</a></h3>

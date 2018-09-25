@@ -925,7 +925,7 @@ consistent_query(_Config) ->
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_server:handle_leader(AEReply, State1),
     % ct:pal("Effects ~p", [Effects]),
-    ?assert(lists:any(fun({reply, _, {machine_reply, {{4, 5}, <<"hi3">>}}}) ->
+    ?assert(lists:any(fun({reply, _, {machine_reply, <<"hi3">>}}) ->
                               true;
                          (_) -> false
                       end, Effects)),

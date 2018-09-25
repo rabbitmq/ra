@@ -48,8 +48,8 @@ non_assoc_prop([A, B, C], {Ops, Initial}) ->
     ct:pal("non_assoc_prop Ops: ~p Initial: ~p~n", [Ops, Initial]),
     Expected = lists:foldl(fun non_assoc_apply/2, Initial, Ops),
     % set cluster to
-    {ok, _, Leader} = ra:send_and_await_consensus(A, {set, Initial}),
-    [ra:send_and_await_consensus(Leader, Op) || Op <- Ops],
+    {ok, _, Leader} = ra:process_command(A, {set, Initial}),
+    [ra:process_command(Leader, Op) || Op <- Ops],
     {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
     timer:sleep(100),
     {ok, {_, ARes}, _} = ra:local_query(A, fun id/1),

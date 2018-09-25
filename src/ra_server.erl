@@ -69,12 +69,12 @@
 
 -type command_meta() :: #{from := maybe(from())}.
 
--type command_correlation() :: non_neg_integer().
+-type command_correlation() :: term().
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
-                              {notify_on_consensus, pid(),
-                               command_correlation()} |
+                              {notify_on_consensus,
+                               command_correlation(), pid()} |
                               noreply.
 
 -type command() :: {command_type(), command_meta(),
@@ -1368,7 +1368,7 @@ apply_with(Machine,
     case ra_machine:apply(Machine, Meta, Cmd, Effects0, MacSt) of
         {NextMacSt, Effects1} ->
             % apply returned no reply so use IdxTerm as reply value
-            {Effects, Notifys} = add_reply(From, {Idx, Term}, ReplyType,
+            {Effects, Notifys} = add_reply(From, noreply, ReplyType,
                                            Effects1, Notifys0),
             {Idx, State, NextMacSt, Effects, Notifys};
         {NextMacSt, Effects1, Reply} ->
@@ -1378,12 +1378,11 @@ apply_with(Machine,
             {Idx, State, NextMacSt, Effects, Notifys}
     end;
 apply_with({machine, MacMod, _}, % Machine
-           {Idx, Term, {'$ra_query', #{from := From}, QueryFun, ReplyType}},
+           {Idx, _, {'$ra_query', #{from := From}, QueryFun, _}},
            {_, State, MacSt, Effects0, Notifys0}) ->
     Result = ra_machine:query(MacMod, QueryFun, MacSt),
-    {Effects, Notifys} = add_reply(From, {{Idx, Term}, Result},
-                                   ReplyType, Effects0, Notifys0),
-    {Idx, State, MacSt, Effects, Notifys};
+    Effects = [{reply, From, {machine_reply, Result}} | Effects0],
+    {Idx, State, MacSt, Effects, Notifys0};
 apply_with(_Machine,
            {Idx, Term, {'$ra_cluster_change', #{from := From}, _New,
                         ReplyType}},
@@ -1428,15 +1427,22 @@ add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
 
+add_reply(From, noreply, await_consensus, Effects, Notifys) ->
+    {[{reply, From, {machine_reply, noreply}} | Effects], Notifys};
 add_reply(From, Reply, await_consensus, Effects, Notifys) ->
-    {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
-add_reply(undefined, _, {notify_on_consensus, Corr, Pid}, % _ IdxTerm
+    {[{reply, From, {machine_reply, {reply, Reply}}} | Effects], Notifys};
+add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
           Effects, Notifys0) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
     % own bookkeeping
-    Notifys = maps:update_with(Pid, fun (T) -> [Corr | T] end,
-                               [Corr], Notifys0),
+    CorrData = case Reply of
+               noreply -> Corr;
+               _ -> {reply, Corr, Reply}
+           end,
+
+    Notifys = maps:update_with(Pid, fun (T) -> [CorrData | T] end,
+                               [CorrData], Notifys0),
     {Effects, Notifys};
 add_reply(_, _, _, % From, Reply, Mode
           Effects, Notifys) ->

@@ -22,7 +22,7 @@ raft log. It takes a meta data map containing the raft index and term (more on t
 a command, a list of effects and the
 current state and either returns the new state and a list of effects (more on
 effects later) or the new state, effects _and_ a reply that can be returned
-to the caller _if_ they issued a synchronous call (see: `ra:send_and_await_consensus`).
+to the caller _if_ they issued a synchronous call (see: `ra:process_command/2`).
 Effects should be prepended to the incoming effects list. Ra will reverse
 the list of effects for each batch of applied entries before processing.
 
@@ -124,17 +124,17 @@ and error.
 Now you can write your first value into the databas.
 
 ```erlang
-2> ra:send_and_await_consensus(ra_kv1, {write, k, v}).
-{ok,{2,1},ra_kv1}
-3> ra:send_and_await_consensus(ra_kv1, {read, k}).
+2> ra:process_command(ra_kv1, {write, k, v}).
+{ok,noreply,ra_kv1}
+3> ra:process_command(ra_kv1, {read, k}).
 {ok,v,ra_kv1}
-4> ra:send_and_await_consensus(ra_kv1, {write, k, v2}).
-{ok,{4,1},ra_kv1}
-5> ra:send_and_await_consensus(ra_kv1, {read, k}).
+4> ra:process_command(ra_kv1, {write, k, v2}).
+{ok,noreply,ra_kv1}
+5> ra:process_command(ra_kv1, {read, k}).
 {ok,v2,ra_kv1}
 ```
 
-`ra:send_and_await_consensus/2` blocks until the command has achieved consensus
+`ra:process_command/2` blocks until the command has achieved consensus
 and has been applied to the state machine on the leader server. It is the simplest
 way to interact with `ra` but also the one with the highest latency.
 To read values consistently we have no choice than to use it.
@@ -146,14 +146,14 @@ raft log _or_ the return value optionally returned by the state machine. The
 
 We have already added the `start/0` function to start a local ra cluster. It would
 make sense to abstract interactions with the kv store behind a nicer interface
-than calling `ra:send_and_await_consensus/2` directly.
+than calling `ra:process_command/2` directly.
 
 ```erlang
 write(Key, Value) ->
     %% it would make sense to cache this to avoid redirection costs when this
     %% server happens not to be the current leader
     Node = ra_kv1,
-    case ra:send_and_await_consensus(Node, {write, Key, Value}) of
+    case ra:process_command(Node, {write, Key, Value}) of
         {ok, _, _} ->
             ok;
         Err ->
@@ -162,7 +162,7 @@ write(Key, Value) ->
 
 read(Key) ->
     Node = ra_kv1,
-    case ra:send_and_await_consensus(Node, {read, Key}) of
+    case ra:process_command(Node, {read, Key}) of
         {ok, Value, _} ->
             {ok, Value};
         Err ->

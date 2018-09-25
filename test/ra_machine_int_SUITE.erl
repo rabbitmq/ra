@@ -82,9 +82,10 @@ machine_replies(Config) ->
     ClusterId = ?config(cluster_id, Config),
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, the_reply, ServerId} = ra:send_and_await_consensus(ServerId, c1),
+    {ok, {reply, the_reply}, ServerId} = ra:process_command(ServerId, c1),
     %% ensure we can return any reply type
-    {ok, {error, some_error_reply}, ServerId} = ra:send_and_await_consensus(ServerId, c2),
+    {ok, {reply, {error, some_error_reply}}, ServerId} =
+        ra:process_command(ServerId, c2),
     ok.
 
 leader_monitors(Config) ->
@@ -102,7 +103,7 @@ leader_monitors(Config) ->
                         [{monitor, process, P} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, ok, ServerId} = ra:send_and_await_consensus(ServerId, {monitor_me, self()}),
+    {ok, {reply, ok}, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
     ra:stop_server(ServerId),
@@ -138,8 +139,8 @@ follower_takes_over_monitor(Config) ->
                         [{monitor, process, P} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
-    {ok, ok, {LeaderName, _}} =
-        ra:send_and_await_consensus(ServerId1, {monitor_me, self()}),
+    {ok, {reply, ok}, {LeaderName, _}} =
+        ra:process_command(ServerId1, {monitor_me, self()}),
     %% sleep here as it seems monitors, or this stat aren't updated synchronously
     timer:sleep(100),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
@@ -148,7 +149,7 @@ follower_takes_over_monitor(Config) ->
     ok = ra:stop_server(ServerId1),
     % give the election process a bit of time before issuing a command
     timer:sleep(200),
-    {ok, _, _} = ra:send_and_await_consensus(ServerId2, dummy),
+    {ok, _, _} = ra:process_command(ServerId2, dummy),
     timer:sleep(200),
 
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
@@ -177,7 +178,7 @@ deleted_cluster_emits_eol_effects(Config) ->
                         [{send_msg, P, eol} || P <- State]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
-    {ok, ok, _} = ra:send_and_await_consensus(ServerId, {monitor_me, self()}),
+    {ok, {reply, ok}, _} = ra:process_command(ServerId, {monitor_me, self()}),
     {ok, _} = ra:delete_cluster([ServerId]),
     % validate
     ok = validate_process_down(element(1, ServerId), 50),

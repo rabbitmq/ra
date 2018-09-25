@@ -6,14 +6,13 @@
 
 -export([
          start/0,
-         send/2,
-         send/3,
-         send_and_await_consensus/2,
-         send_and_await_consensus/3,
-         send_and_notify/3,
-         send_and_notify/4,
-         cast/2,
-         cast/3,
+         %% new api
+         process_command/2,
+         process_command/3,
+         pipeline_command/2,
+         pipeline_command/3,
+         pipeline_command/4,
+         %% queries
          members/1,
          members/2,
          local_query/2,
@@ -277,7 +276,7 @@ remove_member(ServerRef, ServerId) ->
 -spec remove_member(ra_server_id(), ra_server_id(), timeout()) -> ra_cmd_ret().
 remove_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef, {'$ra_leave', ServerId, after_log_append},
-                         Timeout).
+                           Timeout).
 
 %% @doc Causes the server to entre the pre-vote and attempt become leader
 %% It is necessary to call this function when starting a new cluster as a
@@ -356,91 +355,104 @@ overview() ->
       segment_writer => ra_log_segment_writer:overview()
       }.
 
-%% @see send/3
--spec send(ra_server_id(), term()) -> ra_cmd_ret().
-send(Ref, Data) ->
-    send(Ref, Data, ?DEFAULT_TIMEOUT).
+%% @doc Submits a command to a ra server. Returs after the command has
+%% been applied to the Raft state machine. If the state machine returned a
+%% response it is included in the second element of the response tuple.
+%% If the no response was returned the second element is the atom `noreply'.
+%% If the server receiving the command isn't the current leader it will
+%% redirect the call to the leader if known or hold on to the command until
+%% a leader is known. The leader's server id is returned as the 3rd element
+%% of the success reply tuple.
+%% @param ServerId the server id to send the command to
+%% @param Command an arbitrary term that the state machine can handle
+%% @param Timeout the time to wait before returning {timeout, ServerId}
+-spec process_command(ServerId :: ra_server_id(), Command :: term(),
+                      Timeout :: non_neg_integer()) ->
+    {ok, {reply, term()} | noreply, Leader :: ra_server_id()} |
+    {error, term()} |
+    {timeout, ra_server_id()}.
+process_command(ServerId, Cmd, Timeout) ->
+    ra_server_proc:command(ServerId, usr(Cmd, await_consensus), Timeout).
 
-%% @doc send a command to the ra server.
-%% if the ra server addressed isn't the leader and the leader is known
-%% it will automatically redirect the call to the leader server.
-%% This function returns after the command has been appended to the leader's
-%% raft log.
-%%
-%% @param ServerRef the ra server id of the server to send the commadn to.
-%% @param Command the command, an arbitrary term that the current state
-%% machine can understand.
-%% @param Timeout a timeout value
-%% @returns {@link ra_cmd_ret()}
--spec send(ra_server_id(), term(), timeout()) -> ra_cmd_ret().
-send(ServerRef, Command, Timeout) ->
-    ra_server_proc:command(ServerRef, usr(Command, after_log_append), Timeout).
+-spec process_command(ServerId :: ra_server_id(), Command :: term()) ->
+    {ok, {reply, term()} | noreply, Leader :: ra_server_id()} |
+    {error, term()} |
+    {timeout, ra_server_id()}.
+process_command(ServerId, Command) ->
+    process_command(ServerId, Command, ?DEFAULT_TIMEOUT).
 
--spec send_and_await_consensus(ra_server_id(), term()) -> ra_cmd_ret().
-send_and_await_consensus(Ref, Data) ->
-    send_and_await_consensus(Ref, Data, ?DEFAULT_TIMEOUT).
 
-%% @doc send a command to the ra server.
-%% if the ra server addressed isn't the leader and the leader is known
-%% it will automatically redirect the call to the leader server.
-%% This function returns after the command has been replicated and applied to
-%% the ra state machine. This is a fully synchronous interaction with the
-%% ra consensus system.
-%% Use this for low throughput actions where simple semantics are needed.
-%% if the state machine supports it it may return a result value which will
-%% be included in the result tuple.
+%% @doc Submits a command to the ra server using a gen_statem:cast passing
+%% an optional process scoped term as correlation identifier.
+%% A correlation id can be included
+%% to implement reliable async interactions with the ra system. The calling
+%% process can retain a map of command that have not yet been applied to the
+%% state machine successfully and resend them if a notification is not receied
+%% withing some time window.
+%% When the command is applied to the state machine the ra server will send
+%% the calling process a ra_event of the following structure:
 %%
-%% @param ServerRef the ra server id of the server to send the commadn to.
-%% @param Command the command, an arbitrary term that the current state
-%% machine can understand.
-%% @param Timeout a timeout value
-%% @returns {@link ra_cmd_ret()}
--spec send_and_await_consensus(ra_server_id(), term(), timeout()) ->
-    ra_cmd_ret().
-send_and_await_consensus(Ref, Data, Timeout) ->
-    ra_server_proc:command(Ref, usr(Data, await_consensus), Timeout).
-
-%% @doc send a command to the ra server using cast.
-%% This will send a command to the ra server using a cast.
-%% if the server addressed isn't the leader the command will be discarded and
-%% and asyncronous notification message returned to the caller of the format:
-%% `{ra_event, ra_server_id(), {rejected, {not_leader, Correlation, LeaderId}}'.
+%% `{ra_event, {applied, [Correlation | {reply, Correlation, Reply}]}}'
 %%
-%% If the server addressed is the leader the command will be appended to the log
-%% and replicated. Once it achieves consensus and asynchronous notification
-%% message of the format:
-%% `{ra_event, ra_server_id(), {applied, [Correlation]}}'
+%% Not that ra will batch notification and thus return a list of correlation
+%% identifiers. If the state machine returned a response the Correlation will
+%% be wrapped in a `{reply, Correlation, Reply}' tuple.
 %%
-%% @param ServerRef the ra server id of the server to send the commadn to.
-%% @param Command the command, an arbitrary term that the current state
-%% machine can understand.
-%% @param Timeout a timeout value
-%% @returns {@link ra_cmd_ret()}
--spec send_and_notify(ra_server_id(), term(), term()) -> ok.
-send_and_notify(ServerRef, Command, Correlation) ->
+%% If the receving ra server isn't a leader a ra event of the following
+%% structure will be returned informing the caller that it cannot process the
+%% message including the current leader, if known:
+%%
+%% `{ra_event, {rejected, {not_leader, Leader | undefined, Correlation}}}'
+%% The caller can then redirect the command for the correlation identifier to
+%% the correct ra server.
+%%
+%% If insteads the atom `no_correlation' is used the calling process will not
+%% receive any notification of messages success or otherwise. This is the
+%% least reliable way to interact with a ra system and should only be used
+%% if the command is of little importance.
+%%
+%% @param ServerId the ra server id to send the command to
+%% @param Command an arbitrary term that the state machine can handle
+%% @param Correlation a correlation identifier to be included to receive an
+%% async notification after the command is applied to the state machine. If the
+%% Correlation is `no_correlation' no notifications will be sent.
+%% @param Priority command priority. `low' priority commands will be held back
+%% and appended to the Raft log in batches. NB: A `normal' priority command sent
+%% from the same process can overtake a low priority command that was
+%% sent before. There is no high priority.
+%% Only use pritory level `low' for commands where
+%% total ordering does not matter.
+-spec pipeline_command(ServerId :: ra_server_id(), Command :: term(),
+                       Correlation :: ra_server:command_correlation() |
+                                      no_correlation,
+                       Priority :: normal | low) ->
+    ok.
+pipeline_command(ServerId, Command, Correlation, Priority)
+  when Correlation /= no_correlation ->
     Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
-    ra_server_proc:cast_command(ServerRef, Cmd).
-
--spec send_and_notify(ra_server_id(), high | normal, term(), term()) -> ok.
-send_and_notify(ServerRef, Priority, Command, Correlation) ->
-    Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
-    ra_server_proc:cast_command(ServerRef, Priority, Cmd).
-
-%% @doc Cast a message to a server
-%% This is the least reliable way to interact with a ra server. If the server
-%% addressed isn't the leader no notification will be issued.
--spec cast(ra_server_id(), term()) -> ok.
-cast(ServerRef, Command) ->
+    ra_server_proc:cast_command(ServerId, Priority, Cmd);
+pipeline_command(ServerId, Command, no_correlation, Priority) ->
     Cmd = usr(Command, noreply),
-    ra_server_proc:cast_command(ServerRef, Cmd).
+    ra_server_proc:cast_command(ServerId, Priority, Cmd).
 
-%% @doc Cast a message to a server with a priority
-%% This is the least reliable way to interact with a ra server. If the server
-%% addressed isn't the leader no notification will be issued.
--spec cast(ra_server_id(), normal | high, term()) -> ok.
-cast(ServerRef, Priority, Command) ->
-    Cmd = usr(Command, noreply),
-    ra_server_proc:cast_command(ServerRef, Priority, Cmd).
+-spec pipeline_command(ServerId :: ra_server_id(), Command :: term(),
+                       Correlation :: ra_server:command_correlation() |
+                                      no_correlation) ->
+    ok.
+pipeline_command(ServerId, Command, Correlation) ->
+    pipeline_command(ServerId, Command, Correlation, low).
+
+
+%% @doc process_commands a command to the ra server using a gen_statem:cast.
+%% Effectively the same as
+%% `ra:pipeline_command(ServerId, Command, low, no_correlation)'
+%% This is the least reliable way to inteact with a ra system and should only
+%% be used for commands that are of little importance and where waiting for
+%% a response is prohibitively slow.
+-spec pipeline_command(ServerId :: ra_server_id(),
+                           Command :: term()) -> ok.
+pipeline_command(ServerId, Command) ->
+    pipeline_command(ServerId, Command, no_correlation, low).
 
 %% @doc query the machine state on any server
 %% This allows you to run the QueryFun over the server machine state and
@@ -465,14 +477,14 @@ local_query(ServerRef, QueryFun, Timeout) ->
 %% result is consistent.
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun::fun((term()) -> term())) ->
-    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+    {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun) ->
     consistent_query(Server, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun::fun((term()) -> term()),
                        Timeout :: timeout()) ->
-    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+    {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun, Timeout) ->
     ra_server_proc:query(Server, QueryFun, consistent, Timeout).
 
