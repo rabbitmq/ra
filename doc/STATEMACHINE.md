@@ -11,7 +11,7 @@ implemented:
 -callback init(Conf :: machine_init_args()) -> {state(), effects()}.
 
 -callback 'apply'(Meta :: command_meta_data(), command(), State) ->
-    {State, effects()} | {State, effects(), reply()}.
+    {State, effects(), reply()}.
 ```
 
 `init/1` returns the initial state when a new instance of the state machine
@@ -67,14 +67,15 @@ we support.
 
 ```erlang
 apply(_Meta, {write, Key, Value}, State) ->
-    {maps:put(Key, Value, State), []};
+    {maps:put(Key, Value, State), [], ok};
 apply(_Meta, {read, Key}, State) ->
     Reply = maps:get(Key, State, undefined),
     {State, [], Reply}.
 ```
 
 For the `{write, Key, Value}` command we simply put the key and value into the
-map and return the new state as well as an empty list of effects.
+map and return the new state as well as an empty list of effects and an `ok`
+return value.
 
 For `{read, Key}` we additional return the value of the key or `undefined` if
 it does not exist so that a waiting caller can obtain the value.
@@ -125,13 +126,13 @@ Now you can write your first value into the databas.
 
 ```erlang
 2> ra:process_command(ra_kv1, {write, k, v}).
-{ok,noreply,ra_kv1}
+{ok, ok, ra_kv1}
 3> ra:process_command(ra_kv1, {read, k}).
-{ok,v,ra_kv1}
+{ok, v, ra_kv1}
 4> ra:process_command(ra_kv1, {write, k, v2}).
-{ok,noreply,ra_kv1}
+{ok, ok, ra_kv1}
 5> ra:process_command(ra_kv1, {read, k}).
-{ok,v2,ra_kv1}
+{ok, v2, ra_kv1}
 ```
 
 `ra:process_command/2` blocks until the command has achieved consensus
