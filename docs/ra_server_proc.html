@@ -101,7 +101,7 @@
 
 <h3 class="function"><a name="candidate-3">candidate/3</a></h3>
 <div class="spec">
-<p><tt>candidate(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>candidate(EventType, Msg, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="cast_command-2">cast_command/2</a></h3>
@@ -126,7 +126,7 @@
 
 <h3 class="function"><a name="follower-3">follower/3</a></h3>
 <div class="spec">
-<p><tt>follower(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>follower(EventType, Msg, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="format_status-2">format_status/2</a></h3>
@@ -146,7 +146,7 @@
 
 <h3 class="function"><a name="leader-3">leader/3</a></h3>
 <div class="spec">
-<p><tt>leader(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>leader(EventType, Msg, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="log_fold-4">log_fold/4</a></h3>
@@ -161,7 +161,7 @@
 
 <h3 class="function"><a name="pre_vote-3">pre_vote/3</a></h3>
 <div class="spec">
-<p><tt>pre_vote(EventType, Msg, State) -&gt; any()</tt></p>
+<p><tt>pre_vote(EventType, Msg, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="query-4">query/4</a></h3>
@@ -196,12 +196,12 @@
 
 <h3 class="function"><a name="terminating_follower-3">terminating_follower/3</a></h3>
 <div class="spec">
-<p><tt>terminating_follower(EvtType, OldState, State) -&gt; any()</tt></p>
+<p><tt>terminating_follower(EvtType, OldState, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="terminating_leader-3">terminating_leader/3</a></h3>
 <div class="spec">
-<p><tt>terminating_leader(EvtType, Msg, State) -&gt; any()</tt></p>
+<p><tt>terminating_leader(EvtType, Msg, State0) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="trigger_election-2">trigger_election/2</a></h3>

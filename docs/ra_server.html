@@ -68,7 +68,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_state">ra_state()</a></h3>
-<p><tt>ra_state() = leader | follower | candidate | pre_vote | await_condition | delete_and_terminate | stop</tt></p>
+<p><tt>ra_state() = leader | follower | candidate | pre_vote | await_condition | delete_and_terminate | terminating_leader | terminating_follower | recover | stop</tt></p>
 
 
 <h3 class="typedecl"><a name="type-simple_apply_fun">simple_apply_fun()</a></h3>
@@ -76,14 +76,14 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#become-2">become/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-4">handle_aux/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_await_condition-2">handle_await_condition/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_candidate-2">handle_candidate/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_follower-2">handle_follower/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_leader-2">handle_leader/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_pre_vote-2">handle_pre_vote/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_state_enter-2">handle_state_enter/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#id-1">id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#is_fully_persisted-1">is_fully_persisted/1</a></td><td></td></tr>
@@ -104,11 +104,6 @@
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
-
-<h3 class="function"><a name="become-2">become/2</a></h3>
-<div class="spec">
-<p><tt>become(RaftState::<a href="#type-ra_state">ra_state()</a>, State::<a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-ra_server_state">ra_server_state()</a></tt><br></p>
-</div>
 
 <h3 class="function"><a name="current_term-1">current_term/1</a></h3>
 <div class="spec">
@@ -143,6 +138,11 @@
 <h3 class="function"><a name="handle_pre_vote-2">handle_pre_vote/2</a></h3>
 <div class="spec">
 <p><tt>handle_pre_vote(Append_entries_rpc::<a href="#type-ra_msg">ra_msg()</a>, State0::<a href="#type-ra_server_state">ra_server_state()</a>) -&gt; {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
+</div>
+
+<h3 class="function"><a name="handle_state_enter-2">handle_state_enter/2</a></h3>
+<div class="spec">
+<p><tt>handle_state_enter(RaftState::<a href="#type-ra_state">ra_state()</a> | eol, State::<a href="#type-ra_server_state">ra_server_state()</a>) -&gt; {<a href="#type-ra_server_state">ra_server_state()</a> | eol, <a href="#type-ra_effects">ra_effects()</a>}</tt><br></p>
 </div>
 
 <h3 class="function"><a name="id-1">id/1</a></h3>

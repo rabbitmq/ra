@@ -12,8 +12,7 @@
 -export([
          init/1,
          apply/4,
-         leader_effects/1,
-         eol_effects/1,
+         state_enter/2,
          tick/2,
          overview/1,
          get_checked_out/4,
@@ -373,10 +372,9 @@ apply(_, {nodeup, Node}, Effects0,
 apply(_, {nodedown, _Node}, Effects, State) ->
     {State, Effects, ok}.
 
--spec leader_effects(state()) -> ra_machine:effects().
-leader_effects(#state{customers = Custs,
-                      name = Name,
-                      become_leader_handler = BLH}) ->
+state_enter(leader, #state{customers = Custs,
+                           name = Name,
+                           become_leader_handler = BLH}) ->
     % return effects to monitor all current customers
     Effects = [{monitor, process, P} || {_, P} <- maps:keys(Custs)],
     case BLH of
@@ -384,12 +382,14 @@ leader_effects(#state{customers = Custs,
             Effects;
         {Mod, Fun, Args} ->
             [{mod_call, Mod, Fun, Args ++ [Name]} | Effects]
-    end.
-
--spec eol_effects(state()) -> ra_machine:effects().
-eol_effects(#state{enqueuers = Enqs, customers = Custs0}) ->
+    end;
+state_enter(eol, #state{enqueuers = Enqs, customers = Custs0}) ->
     Custs = maps:fold(fun({_, P}, V, S) -> S#{P => V} end, #{}, Custs0),
-    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))].
+    [{send_msg, P, eol} || P <- maps:keys(maps:merge(Enqs, Custs))];
+state_enter(_, _) ->
+    %% catch all as not handling all states
+    [].
+
 
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
 tick(_Ts, #state{name = Name,
@@ -1406,11 +1406,11 @@ duplicate_delivery_test() ->
     ?assertEqual(1, maps:size(Messages)),
     ok.
 
-leader_effects_test() ->
+state_enter_test() ->
 
     S0 = element(1, init(#{name => the_name,
                            become_leader_handler => {m, f, [a]}})),
-    [{mod_call, m, f, [a, the_name]}] = leader_effects(S0),
+    [{mod_call, m, f, [a, the_name]}] = state_enter(leader, S0),
     ok.
 
 performance_test() ->

@@ -5,7 +5,7 @@
 -export([
          init/1,
          apply/4,
-         leader_effects/1,
+         state_enter/2,
          tick/2,
          overview/1
         ]).
@@ -24,7 +24,7 @@ apply(_Meta, _, Effects, [] = State) ->
     {State, Effects, ok}.
 
 
-leader_effects(_) -> [].
+state_enter(_, _) -> [].
 
 tick(_, _) -> [].
 

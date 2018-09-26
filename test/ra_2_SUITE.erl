@@ -345,5 +345,7 @@ init(_) ->
             {State0, Effects, ok}
     end.
 
-eol_effects(State) ->
-    [{send_msg, P, eol} || {P, _} <- queue:to_list(State), is_pid(P)].
+state_enter(eol, State) ->
+    [{send_msg, P, eol} || {P, _} <- queue:to_list(State), is_pid(P)];
+state_enter(_, _) ->
+    [].

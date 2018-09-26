@@ -13,7 +13,7 @@
          handle_follower/2,
          handle_await_condition/2,
          handle_aux/4,
-         become/2,
+         handle_state_enter/2,
          tick/1,
          overview/1,
          is_new/1,
@@ -62,7 +62,9 @@
      }.
 
 -type ra_state() :: leader | follower | candidate
-                    | pre_vote | await_condition | delete_and_terminate | stop.
+                    | pre_vote | await_condition | delete_and_terminate
+                    | terminating_leader | terminating_follower | recover |
+                    stop.
 
 -type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.
@@ -514,16 +516,15 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{current_term := Term, votes := Votes,
-                   cluster := Nodes, machine := Machine,
-                   machine_state := MacState} = State0) ->
+                   cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State, Rpcs} = make_all_rpcs(initialise_peers(State0)),
-            Effects = ra_machine:leader_effects(Machine, MacState),
+            % Effects = ra_machine:leader_effects(Machine, MacState),
             {leader, maps:without([votes, leader_id], State),
              [{send_rpcs, Rpcs},
-              {next_event, cast, {command, noop}} | Effects]};
+              {next_event, cast, {command, noop}}]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
@@ -835,17 +836,12 @@ tick(#{machine := Machine, machine_state := MacState}) ->
     Now = os:system_time(millisecond),
     ra_machine:tick(Machine, Now, MacState).
 
-
--spec become(ra_state(), ra_server_state()) -> ra_server_state().
-become(leader, #{cluster := Cluster, log := Log0} = State) ->
-    Log = ra_log:release_resources(maps:size(Cluster), Log0),
-    State#{log => Log};
-become(follower, #{log := Log0} = State) ->
-    %% followers should only ever need a single segment open at any one
-    %% time
-    State#{log => ra_log:release_resources(1, Log0)};
-become(_RaftState, State) ->
-    State.
+-spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
+    {ra_server_state() | eol, ra_effects()}.
+handle_state_enter(RaftState, #{machine := Machine,
+                                machine_state := MacState} = State) ->
+    {become(RaftState, State),
+     ra_machine:state_enter(Machine, RaftState, MacState)}.
 
 
 -spec overview(ra_server_state()) -> map().
@@ -891,6 +887,8 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
             {RaftState, State0, []}
     end.
 
+
+
 % property helpers
 
 -spec id(ra_server_state()) -> ra_server_id().
@@ -910,7 +908,18 @@ leader_id(State) ->
 -spec current_term(ra_server_state()) -> maybe(ra_term()).
 current_term(State) ->
     maps:get(current_term, State).
+
 % Internal
+
+become(leader, #{cluster := Cluster, log := Log0} = State) ->
+    Log = ra_log:release_resources(maps:size(Cluster), Log0),
+    State#{log => Log};
+become(follower, #{log := Log0} = State) ->
+    %% followers should only ever need a single segment open at any one
+    %% time
+    State#{log => ra_log:release_resources(1, Log0)};
+become(_RaftState, State) ->
+    State.
 
 follower_catchup_cond(#append_entries_rpc{term = Term,
                                           prev_log_index = PLIdx,
@@ -1400,7 +1409,8 @@ apply_with(Machine,
     % cluster deletion
     {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
     Effects = make_notify_effects(Notifys, Effects1),
-    EOLEffects = ra_machine:eol_effects(Machine, MacSt),
+    %% virtual "eol" state
+    EOLEffects = ra_machine:state_enter(Machine, eol, MacSt),
     % non-local return to be caught by ra_server_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},

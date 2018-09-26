@@ -208,9 +208,9 @@ callback_mode() -> [state_functions, state_enter].
 %%%===================================================================
 %%% State functions
 %%%===================================================================
-recover(enter, _OldState, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, recover}),
-    {keep_state, State};
+recover(enter, _OldState, State) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+    {keep_state, State, Actions};
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
     true = erlang:garbage_collect(),
@@ -232,9 +232,9 @@ recover(_, _, State) ->
     % `next_event` from init
     {keep_state, State, {postpone, true}}.
 
-leader(enter, _, State = #state{name = Name, server_state = NS0}) ->
-    ets:insert(ra_state, {Name, leader}),
-    {keep_state, State#state{server_state = ra_server:become(leader, NS0)}};
+leader(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
     leader(EventType, Msg, State);
@@ -384,9 +384,9 @@ leader(EventType, Msg, State0) ->
             end
     end.
 
-candidate(enter, _, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, candidate}),
-    {keep_state, State};
+candidate(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -436,9 +436,9 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     end.
 
 
-pre_vote(enter, _, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, pre_vote}),
-    {keep_state, State};
+pre_vote(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -483,10 +483,9 @@ pre_vote(EventType, Msg, State0) ->
              [election_timeout_action(long, State) | Actions]}
     end.
 
-follower(enter, _, State = #state{name = Name,
-                                  server_state = NS0}) ->
-    ets:insert(ra_state, {Name, follower}),
-    {keep_state, State#state{server_state = ra_server:become(follower, NS0)}};
+follower(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(_, {command, Priority, {_CmdType, Data, noreply}},
@@ -574,9 +573,9 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, terminating_follower, State, Actions}
     end.
 
-terminating_leader(enter, _, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, terminating_leader}),
-    {keep_state, State};
+terminating_leader(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
@@ -593,9 +592,9 @@ terminating_leader(EvtType, Msg, State0) ->
             {keep_state, State, Actions}
     end.
 
-terminating_follower(enter, _OldState, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, terminating_follower}),
-    {keep_state, State};
+terminating_follower(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     {keep_state, State, Actions} = follower(EvtType, Msg, State0),
@@ -633,9 +632,9 @@ await_condition(info, {server_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
-await_condition(enter, _OldState, State = #state{name = Name}) ->
-    ets:insert(ra_state, {Name, await_condition}),
-    {keep_state, State};
+await_condition(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
@@ -693,6 +692,15 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+handle_enter(RaftState, #state{name = Name,
+                                      server_state = ServerState0} = State) ->
+    true = ets:insert(ra_state, {Name, RaftState}),
+    {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
+                                                          ServerState0),
+    % ?INFO("state change effects ~w", [Effects]),
+    handle_effects(RaftState, Effects, cast,
+                   State#state{server_state  = ServerState}).
 
 queue_take(N, Q) ->
     queue_take(N, Q, []).
@@ -767,7 +775,7 @@ handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
 handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
     %% TODO: thread through state
     {_, ServerState, []} = ra_server:handle_aux(RaftState, cast, Cmd,
-                                            State#state.server_state),
+                                                State#state.server_state),
 
     {State#state{server_state = ServerState}, Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->

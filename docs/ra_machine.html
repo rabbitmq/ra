@@ -27,24 +27,21 @@
  <p><br>
   <code>-callback apply(Meta :: command_meta_data(),
                         <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
-     {State, effects()} | {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
+     {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
   <p>Applies each entry to the state machine. Effects should be prepended to the  
 incoming list of effects. Ra will reverse the list of effects before  
 processing.</p>
  
  <p><br>
-  <code>-callback leader_effects(state()) -&gt; effects().</code></p>
+  <code>-callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
+  </code></p>
  
-  <p>Optional. Called when a server becomes leader, use this to return any effects  
-need to be issued at this point.</p>
- 
- <p><br>
-  <code>-callback eol_effects(state()) -&gt; effects().</code></p>
- 
-  <p>Optional. Called when a ra cluster is deleted.</p>
- 
- <p><br>
+  <p>Optional. Called when the ra server enters a new state. Called for all states
+  in the ra_server_proc gen_statem implementation not just for the standard
+  Raft states (follower, candidate, leader). If implemented it is sensible
+  to include a catch all clause as new states may be implemented in the future.
+ <br>
   <code>-callback tick(TimeMs :: milliseconds(), state()) -&gt; effects().</code></p>
  
   <p>Optional. Called periodically.  
@@ -102,14 +99,13 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
-<tr><td valign="top"><a href="#eol_effects-2">eol_effects/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
 <tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#leader_effects-2">leader_effects/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
 </table>
 
@@ -118,11 +114,6 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="function"><a name="apply-5">apply/5</a></h3>
 <div class="spec">
 <p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-command_meta_data">command_meta_data()</a>, Cmd::<a href="#type-command">command()</a>, Effects::<a href="#type-effects">effects()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="eol_effects-2">eol_effects/2</a></h3>
-<div class="spec">
-<p><tt>eol_effects(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
 </div>
 
 <h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
@@ -141,11 +132,6 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p><tt>init_aux(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; term()</tt><br></p>
 </div>
 
-<h3 class="function"><a name="leader_effects-2">leader_effects/2</a></h3>
-<div class="spec">
-<p><tt>leader_effects(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
-</div>
-
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
 <p><tt>module(X1::<a href="#type-machine">machine()</a>) -&gt; module()</tt><br></p>
@@ -161,6 +147,11 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p><tt>query(Mod::module(), Fun::fun((<a href="#type-state">state()</a>) -&gt; Result), State::<a href="#type-state">state()</a>) -&gt; Result</tt>
 <ul class="definitions"><li><tt>Result = term()</tt></li></ul></p>
 </div>
+
+<h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
+<div class="spec">
+<p><tt>state_enter(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+</div><p>called when the ra_server_proc enters a new state</p>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>
 <div class="spec">

@@ -12,23 +12,20 @@
 %%<br></br>
 %% <code>-callback apply(Meta :: command_meta_data(),
 %%                       {@link command()}, effects(), State) ->
-%%    {State, effects()} | {State, {@link effects()}, {@link reply()}}</code>
+%%    {State, {@link effects()}, {@link reply()}}</code>
 %%
 %% Applies each entry to the state machine. Effects should be prepended to the
 %% incoming list of effects. Ra will reverse the list of effects before
 %% processing.
 %%
 %%<br></br>
-%% <code>-callback leader_effects(state()) -> effects().</code>
+%% <code>-callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
+%% </code>
 %%
-%% Optional. Called when a server becomes leader, use this to return any effects
-%% need to be issued at this point.
-%%
-%%<br></br>
-%% <code>-callback eol_effects(state()) -> effects().</code>
-%%
-%% Optional. Called when a ra cluster is deleted.
-%%
+%% Optional. Called when the ra server enters a new state. Called for all states
+%% in the ra_server_proc gen_statem implementation not just for the standard
+%% Raft states (follower, candidate, leader). If implemented it is sensible
+%% to include a catch all clause as new states may be implemented in the future.
 %%<br></br>
 %% <code>-callback tick(TimeMs :: milliseconds(), state()) -> effects().</code>
 %%
@@ -49,9 +46,8 @@
 
 -export([init/2,
          apply/5,
-         leader_effects/2,
-         eol_effects/2,
          tick/3,
+         state_enter/3,
          overview/2,
          query/3,
          module/1,
@@ -143,12 +139,11 @@
               builtin_command/0,
               command_meta_data/0]).
 
--optional_callbacks([leader_effects/1,
-                     tick/2,
-                     overview/1,
-                     eol_effects/1,
+-optional_callbacks([tick/2,
+                     state_enter/2,
                      init_aux/1,
-                     handle_aux/6
+                     handle_aux/6,
+                     overview/1
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -164,9 +159,7 @@
 -callback 'apply'(command_meta_data(), command(), effects(), State) ->
     {State, effects(), reply()}.
 
--callback leader_effects(state()) -> effects().
-
--callback eol_effects(state()) -> effects().
+-callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
@@ -195,17 +188,15 @@ init({machine, Mod, Args}, Name) ->
 apply({machine, Mod, _}, Idx, Cmd, Effects, State) ->
     Mod:apply(Idx, Cmd, Effects, State).
 
--spec leader_effects(machine(), state()) -> effects().
-leader_effects({machine, Mod, _}, State) ->
-    ?OPT_CALL(Mod:leader_effects(State), []).
-
--spec eol_effects(machine(), state()) -> effects().
-eol_effects({machine, Mod, _}, State) ->
-    ?OPT_CALL(Mod:eol_effects(State), []).
-
 -spec tick(machine(), milliseconds(), state()) -> effects().
 tick({machine, Mod, _}, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
+
+%% @doc called when the ra_server_proc enters a new state
+-spec state_enter(machine(), ra_server:ra_state() | eol, state()) ->
+    effects().
+state_enter({machine, Mod, _}, RaftState, State) ->
+    ?OPT_CALL(Mod:state_enter(RaftState, State), []).
 
 -spec overview(machine(), state()) -> map().
 overview({machine, Mod, _}, State) ->

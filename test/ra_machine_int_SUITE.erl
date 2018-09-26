@@ -23,7 +23,8 @@ all_tests() ->
      machine_replies,
      leader_monitors,
      follower_takes_over_monitor,
-     deleted_cluster_emits_eol_effects
+     deleted_cluster_emits_eol_effect,
+     machine_state_enter_effects
     ].
 
 groups() ->
@@ -98,9 +99,11 @@ leader_monitors(Config) ->
     meck:expect(Mod, apply, fun (_, {monitor_me, Pid}, _, State) ->
                                     {[Pid | State], [{monitor, process, Pid}], ok}
                             end),
-    meck:expect(Mod, leader_effects,
-                fun (State) ->
-                        [{monitor, process, P} || P <- State]
+    meck:expect(Mod, state_enter,
+                fun (leader, State) ->
+                        [{monitor, process, P} || P <- State];
+                    (_, _) ->
+                        []
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
     {ok, ok, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
@@ -134,9 +137,11 @@ follower_takes_over_monitor(Config) ->
                         %% handle all
                         {State, [], ok}
                 end),
-    meck:expect(Mod, leader_effects,
-                fun (State) ->
-                        [{monitor, process, P} || P <- State]
+    meck:expect(Mod, state_enter,
+                fun (leader, State) ->
+                        [{monitor, process, P} || P <- State];
+                    (_, _) ->
+                        []
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
     {ok, ok, {LeaderName, _}} =
@@ -161,7 +166,7 @@ follower_takes_over_monitor(Config) ->
     ra:stop_server(ServerId3),
     ok.
 
-deleted_cluster_emits_eol_effects(Config) ->
+deleted_cluster_emits_eol_effect(Config) ->
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
@@ -173,9 +178,12 @@ deleted_cluster_emits_eol_effects(Config) ->
                 fun (_, {monitor_me, Pid}, _, State) ->
                         {[Pid | State], [{monitor, process, Pid}], ok}
                 end),
-    meck:expect(Mod, eol_effects,
-                fun (State) ->
-                        [{send_msg, P, eol} || P <- State]
+    meck:expect(Mod, state_enter,
+                fun (eol, State) ->
+                        ct:pal("EOL"),
+                        [{send_msg, P, eol} || P <- State];
+                    (_, _) ->
+                        []
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {monitor_me, self()}),
@@ -193,7 +201,37 @@ deleted_cluster_emits_eol_effects(Config) ->
     end,
     ok.
 
+machine_state_enter_effects(Config) ->
+    ServerId = ?config(server_id, Config),
+    ClusterId = ?config(cluster_id, Config),
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> {[], []} end),
+    meck:expect(Mod, apply,
+                fun (_, _, _, State) ->
+                        {State, [], ok}
+                end),
+    meck:expect(Mod, state_enter,
+                fun (RaftState, _State) ->
+                        [{send_msg, Self, {state_enter, RaftState}}]
+                end),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ra:delete_cluster([ServerId]),
+    validate_state_enters([follower, candidate, leader, eol]),
+    ok.
+
 %% Utility
+
+validate_state_enters(States) ->
+    lists:foreach(fun (S) ->
+                          receive {ra_event, _, {machine, {state_enter, S}}} -> ok
+                          after 250 ->
+                                    flush(),
+                                    ct:pal("S ~w", [S]),
+                                    exit({timeout, S})
+                          end
+                  end, States).
 
 start_cluster(ClusterId, Machine, ServerIds) ->
     {ok, Started, _} = ra:start_cluster(ClusterId, Machine, ServerIds),
@@ -209,4 +247,13 @@ validate_process_down(Name, Num) ->
         _ ->
             timer:sleep(100),
             validate_process_down(Name, Num-1)
+    end.
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
     end.

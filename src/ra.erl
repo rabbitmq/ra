@@ -24,7 +24,7 @@
          start_or_restart_cluster/3,
          delete_cluster/1,
          delete_cluster/2,
-         % cluster management
+         % server management
          start_server/1,
          start_server/4,
          restart_server/1,
