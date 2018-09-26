@@ -1,0 +1,17 @@
+{application, 'ra', [
+	{description, "Experimental Raft library"},
+	{vsn, "0.1.0"},
+	{modules, ['gen_batch_server','ra','ra_app','ra_directory','ra_env',
+               'ra_file_handle','ra_flru','ra_lib','ra_log','ra_log_ets',
+               'ra_log_meta','ra_log_segment','ra_log_segment_writer',
+               'ra_log_snapshot','ra_log_snapshot_writer','ra_log_sup',
+               'ra_log_wal','ra_log_wal_sup','ra_machine','ra_machine_ets',
+               'ra_machine_simple','ra_metrics_ets','ra_server','ra_server_proc',
+               'ra_server_sup','ra_sup','ra_system_sup']},
+	{registered, [ra_sup]},
+	{applications, [kernel,stdlib,sasl,crypto,aten]},
+	{mod, {ra_app, []}},
+	{env, [
+	{data_dir, "/tmp/ra_data"}
+]}
+]}.

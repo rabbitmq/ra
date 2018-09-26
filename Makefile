@@ -1,13 +1,15 @@
 PROJECT = ra
-PROJECT_DESCRIPTION = Experimental raft library
-PROJECT_VERSION = 0.1.0
-PROJECT_MOD = ra_app
+# PROJECT_DESCRIPTION = Experimental raft library
+# PROJECT_VERSION = 0.1.0
+# PROJECT_MOD = ra_app
 
-define PROJECT_ENV
-[
-	{data_dir, "/tmp/ra_data"}
-]
-endef
+##NB: ra uses an src/ra.app.src file
+
+# define PROJECT_ENV
+# [
+# 	{data_dir, "/tmp/ra_data"}
+# ]
+# endef
 
 ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
