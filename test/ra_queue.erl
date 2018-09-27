@@ -9,7 +9,7 @@
          tick/2,
          overview/1
         ]).
-init(_) -> {[], []}.
+init(_) -> [].
 
 apply(#{index := Idx}, {enq, Msg}, Effects, State) ->
     {State ++ [{Idx, Msg}], Effects, ok};

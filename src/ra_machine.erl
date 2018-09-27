@@ -4,8 +4,7 @@
 %%
 %% == Callbacks ==
 %%
-%% <code>-callback init(Conf :: {@link machine_init_args()}) ->
-%% {state(), effects()}'</code>
+%% <code>-callback init(Conf :: {@link machine_init_args()}) -> state()'</code>
 %%
 %% Initialize a new machine state.
 %%
@@ -154,7 +153,7 @@
             Def
     end).
 
--callback init(Conf :: machine_init_args()) -> {state(), effects()}.
+-callback init(Conf :: machine_init_args()) -> state().
 
 -callback 'apply'(command_meta_data(), command(), effects(), State) ->
     {State, effects(), reply()}.
@@ -179,7 +178,7 @@
 -callback overview(state()) -> map().
 
 %% @doc initialise a new machine
--spec init(machine(), atom()) -> {state(), effects()}.
+-spec init(machine(), atom()) -> state().
 init({machine, Mod, Args}, Name) ->
     Mod:init(Args#{name => Name}).
 

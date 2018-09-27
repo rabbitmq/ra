@@ -84,7 +84,7 @@ end_per_testcase(_TestCase, Config) ->
 id(X) -> X.
 
 ra_server_init(Conf) ->
-    ra_server:recover(element(1, ra_server:init(Conf))).
+    ra_server:recover(ra_server:init(Conf)).
 
 setup_log() ->
     ok = meck:new(ra_log, []),
@@ -1148,10 +1148,10 @@ is_new(_Config) ->
              initial_members => [],
              log_init_args => #{data_dir => "", uid => <<>>},
              machine => {simple, fun erlang:'+'/2, 0}},
-    {NewState, _} = ra_server:init(Args),
+    NewState = ra_server:init(Args),
     {leader, State, _} = ra_server:handle_leader(usr_cmd(1), NewState),
     false = ra_server:is_new(State),
-    {NewState, _} = ra_server:init(Args),
+    NewState = ra_server:init(Args),
     true = ra_server:is_new(NewState),
     ok.
 

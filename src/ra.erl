@@ -166,8 +166,8 @@ start_or_restart_cluster(ClusterId, Machine,
 start_cluster(ClusterId, Machine, ServerIds) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(fun (N) ->
-                                          ok ==  start_server(ClusterId, N,
-                                                            Machine, ServerIds)
+                                          ok == start_server(ClusterId, N,
+                                                             Machine, ServerIds)
                                   end, ServerIds),
     case Started of
         [] ->
@@ -199,7 +199,7 @@ start_cluster(ClusterId, Machine, ServerIds) ->
 
 
 -spec start_server(ra_cluster_id(), ra_server_id(),
-                 ra_server:machine_conf(), [ra_server_id()]) ->
+                   ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
 start_server(ClusterId, ServerId, Machine, ServerIds) ->
     Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterId), 4),

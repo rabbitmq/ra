@@ -140,7 +140,7 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % TODO: test scenario when server crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
-    ?INFO("segment_writer: deleting wal file: ~p",
+    ?INFO("segment_writer: deleting wal file: ~s~n",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
     %% TODO: this shoudl be a debug option config?

@@ -8,7 +8,7 @@
 
 init(#{simple_fun := Fun,
        initial_state := Initial}) ->
-    {{simple, Fun, Initial}, []}.
+    {simple, Fun, Initial}.
 
 apply(_, Cmd, Effects, {simple, Fun, State}) ->
     Next = Fun(Cmd, State),

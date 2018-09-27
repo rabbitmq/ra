@@ -156,7 +156,7 @@
 name(ClusterId, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterId ++ "_server_" ++ UniqueSuffix).
 
--spec init(ra_server_config()) -> {ra_server_state(), ra_effects()}.
+-spec init(ra_server_config()) -> ra_server_state().
 init(#{id := Id,
        uid := UId,
        cluster_id := _ClusterId,
@@ -176,7 +176,7 @@ init(#{id := Id,
                   {module, Mod, Args} ->
                       {machine, Mod, Args}
               end,
-    {InitialMachineState, InitEffects} = ra_machine:init(Machine, Name),
+    InitialMachineState = ra_machine:init(Machine, Name),
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:read_snapshot(Log0) of
             undefined ->
@@ -224,9 +224,9 @@ init(#{id := Id,
                           Acc
                   end, {{SnapshotIndexTerm, Cluster0}, Log0}),
     % TODO: do we need to set previous cluster here?
-    {State0#{log => Log,
-             cluster => Cluster,
-             cluster_index_term => ClusterIndexTerm}, InitEffects}.
+    State0#{log => Log,
+            cluster => Cluster,
+            cluster_index_term => ClusterIndexTerm}.
 
 
 recover(#{id := Id,

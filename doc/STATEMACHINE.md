@@ -8,7 +8,7 @@ To implement a state machine to run in `ra` you need to implement the
 implemented:
 
 ```erlang
--callback init(Conf :: machine_init_args()) -> {state(), effects()}.
+-callback init(Conf :: machine_init_args()) -> state().
 
 -callback 'apply'(Meta :: command_meta_data(), command(), State) ->
     {State, effects(), reply()}.

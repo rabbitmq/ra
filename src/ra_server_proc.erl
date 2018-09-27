@@ -174,9 +174,8 @@ leader_call(ServerRef, Msg, Timeout) ->
 init(Config0) when is_map(Config0) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    {#{id := Id, uid := UId,
-       cluster := Cluster} = ServerState,
-     InitEffects} = ra_server:init(Config),
+    #{id := Id, uid := UId,
+      cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(), Key),
@@ -191,16 +190,14 @@ init(Config0) when is_map(Config0) ->
               end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
-    State0 = #state{server_state = ServerState, name = Key,
-                    tick_timeout = TickTime,
-                    await_condition_timeout = AwaitCondTimeout},
-    %%?INFO("~w ra_server_proc:init/1:~n~p~n", [Id, ra_server:overview(ServerState)]),
-    {State, Actions0} = ?HANDLE_EFFECTS(InitEffects, cast, State0),
+    State = #state{server_state = ServerState, name = Key,
+                   tick_timeout = TickTime,
+                   await_condition_timeout = AwaitCondTimeout},
     %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
     %% does not support this. it was fixed in 20.3.2
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
-    {ok, recover, State, [{state_timeout, 0, go} | Actions0]}.
+    {ok, recover, State, [{state_timeout, 0, go}]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].

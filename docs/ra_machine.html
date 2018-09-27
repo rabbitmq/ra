@@ -19,8 +19,7 @@
  
   <h3><a name="Callbacks">Callbacks</a></h3>
  
-  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt;
-  {state(), effects()}'</code></p>
+  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt; state()'</code></p>
  
   <p>Initialize a new machine state.</p>
  
@@ -124,7 +123,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
-<p><tt>init(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; {<a href="#type-state">state()</a>, <a href="#type-effects">effects()</a>}</tt><br></p>
+<p><tt>init(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; <a href="#type-state">state()</a></tt><br></p>
 </div><p>initialise a new machine</p>
 
 <h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>

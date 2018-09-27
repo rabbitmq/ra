@@ -104,8 +104,8 @@ server_is_deleted(Config) ->
     % afterwards
     UId2 = ?config(uid2, Config),
     ok = ra:start_server(Conf#{uid => UId2,
-                             log_init_args => #{data_dir => PrivDir,
-                                                uid => UId2}}),
+                               log_init_args => #{data_dir => PrivDir,
+                                                  uid => UId2}}),
     ok = ra:trigger_election(ServerId),
     case dequeue(ServerId) of
         empty -> ok;
@@ -326,7 +326,7 @@ start_cluster(ClusterId, ServerIds) ->
 
 %% ra_machine test impl
 init(_) ->
-    {queue:new(), []}.
+    queue:new().
 
 'apply'(_Meta, {enq, Msg}, Effects, State) ->
     {queue:in(Msg, State), Effects, ok};

@@ -189,19 +189,19 @@
               state/0,
               config/0]).
 
--spec init(config()) -> {state(), ra_machine:effects()}.
+-spec init(config()) -> state().
 init(#{name := Name} = Conf) ->
     DLH = maps:get(dead_letter_handler, Conf, undefined),
     CCH = maps:get(cancel_customer_handler, Conf, undefined),
     BLH = maps:get(become_leader_handler, Conf, undefined),
     MH = maps:get(metrics_handler, Conf, undefined),
     SHI = maps:get(shadow_copy_interval, Conf, ?SHADOW_COPY_INTERVAL),
-    {#state{name = Name,
+    #state{name = Name,
             dead_letter_handler = DLH,
             cancel_customer_handler = CCH,
             become_leader_handler = BLH,
             metrics_handler = MH,
-            shadow_copy_interval = SHI}, []}.
+            shadow_copy_interval = SHI}.
 
 
 
@@ -923,11 +923,11 @@ perf_test(NumMsg, NumCust) ->
                                 {N, {settle, N - NumMsg - NumCust - 1, Pid}}
                         end,
               S0 = run_log(1, NumMsg, EnqGen,
-                           element(1, init(#{name => size_test}))),
+                           init(#{name => size_test})),
               S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
               _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
               ok
-      end).
+     end).
 
 % profile(File) ->
 %     GzFile = atom_to_list(File) ++ ".gz",
@@ -982,9 +982,9 @@ dehydrate_state(#state{messages = Messages0,
                       end, Effects))).
 
 test_init(Name) ->
-    element(1, init(#{name => Name,
-                      shadow_copy_interval => 0,
-                      metrics_handler => {?MODULE, metrics_handler, []}})).
+    init(#{name => Name,
+           shadow_copy_interval => 0,
+           metrics_handler => {?MODULE, metrics_handler, []}}).
 
 metrics_handler(_) ->
     ok.
@@ -1222,9 +1222,9 @@ discarded_message_without_dead_letter_handler_is_removed_test() ->
 
 discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
-    {State00, _} = init(#{name => test,
-                          dead_letter_handler =>
-                          {somemod, somefun, [somearg]}}),
+    State00 = init(#{name => test,
+                     dead_letter_handler =>
+                     {somemod, somefun, [somearg]}}),
     {State0, [_, _], _} = enq(1, 1, first, State00),
     {State1, Effects1, _} = check_n(Cid, 2, 10, State0),
     ?ASSERT_EFF({send_msg, _,
@@ -1408,8 +1408,8 @@ duplicate_delivery_test() ->
 
 state_enter_test() ->
 
-    S0 = element(1, init(#{name => the_name,
-                           become_leader_handler => {m, f, [a]}})),
+    S0 = init(#{name => the_name,
+                become_leader_handler => {m, f, [a]}}),
     [{mod_call, m, f, [a, the_name]}] = state_enter(leader, S0),
     ok.
 
@@ -1481,7 +1481,7 @@ run_log(InitState, Entries) ->
 aux_test() ->
     _ = ra_machine_ets:start_link(),
     Aux0 = init_aux(aux_test),
-    {MacState, _} = init(#{name => aux_test}),
+    MacState = init(#{name => aux_test}),
     Log = undefined,
     {no_reply, Aux, undefined} = handle_aux(leader, cast, active, Aux0,
                                             Log, MacState),

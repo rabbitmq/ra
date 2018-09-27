@@ -74,7 +74,7 @@ end_per_testcase(_TestCase, _Config) ->
 machine_replies(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> {the_state, []} end),
+    meck:expect(Mod, init, fun (_) -> the_state end),
     meck:expect(Mod, apply, fun (_, c1, _, State) ->
                                     {State, [], the_reply};
                                 (_, c2, _, State) ->
@@ -95,7 +95,7 @@ leader_monitors(Config) ->
     Name = element(1, ServerId),
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> {[], []} end),
+    meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply, fun (_, {monitor_me, Pid}, _, State) ->
                                     {[Pid | State], [{monitor, process, Pid}], ok}
                             end),
@@ -128,7 +128,7 @@ follower_takes_over_monitor(Config) ->
     Cluster = [ServerId1, ServerId2, ServerId3],
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> {[], []} end),
+    meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
                 fun (_, {monitor_me, Pid}, _, State) ->
                         {[Pid | State], [{monitor, process, Pid}], ok};
@@ -173,7 +173,7 @@ deleted_cluster_emits_eol_effect(Config) ->
     ClusterId = ?config(cluster_id, Config),
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> {[], []} end),
+    meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
                 fun (_, {monitor_me, Pid}, _, State) ->
                         {[Pid | State], [{monitor, process, Pid}], ok}
@@ -207,7 +207,7 @@ machine_state_enter_effects(Config) ->
     Mod = ?config(modname, Config),
     Self = self(),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> {[], []} end),
+    meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
                 fun (_, _, _, State) ->
                         {State, [], ok}
