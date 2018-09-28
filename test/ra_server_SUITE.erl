@@ -666,7 +666,7 @@ candidate_handles_append_entries_rpc(_Config) ->
 append_entries_reply_success(_Config) ->
     Cluster = #{n1 => new_peer_with(#{next_index => 5, match_index => 4}),
                 n2 => new_peer_with(#{next_index => 1, match_index => 0,
-                                      commit_index => 3}),
+                                      commit_index_sent => 3}),
                 n3 => new_peer_with(#{next_index => 2, match_index => 1})},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
@@ -706,7 +706,7 @@ append_entries_reply_no_success(_Config) ->
     Cluster = #{n1 => #{},
                 n2 => new_peer_with(#{next_index => 3, match_index => 0}),
                 n3 => new_peer_with(#{next_index => 2, match_index => 1,
-                                      commit_index => 1})},
+                                      commit_index_sent => 1})},
     State = (base_state(3))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
@@ -1347,7 +1347,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                                         next_index => N2NextIndex}), % stale peer - previous leader
                   n3 => new_peer_with(#{match_index => 3,
                                         next_index => 4,
-                                        commit_index => 3})}, % uptodate peer
+                                        commit_index_sent => 3})}, % uptodate peer
                 cluster_change_permitted => true,
                 cluster_index_term => {0,0},
                 commit_index => 3,
@@ -1384,7 +1384,7 @@ leader_receives_install_snapshot_result(_Config) ->
     Leader = #{cluster =>
                #{n1 => new_peer_with(#{match_index => 0}),
                  n2 => new_peer_with(#{match_index => 4, next_index => 5,
-                                       commit_index => 4}),
+                                       commit_index_sent => 4}),
                  n3 => new_peer_with(#{match_index => 0, next_index => 1})},
                cluster_change_permitted => true,
                cluster_index_term => {0,0},
@@ -1400,7 +1400,7 @@ leader_receives_install_snapshot_result(_Config) ->
                                    last_index = 2,
                                    last_term = 1},
     {leader, #{cluster := #{n3 := #{match_index := 2,
-                                    commit_index := 4,
+                                    commit_index_sent := 4,
                                     next_index := 5}}},
      [{send_rpcs, Rpcs}]} = ra_server:handle_leader({n3, ISR}, Leader),
     ?assert(lists:any(fun({n3,
@@ -1488,7 +1488,7 @@ dump(T) ->
 new_peer() ->
     #{next_index => 1,
       match_index => 0,
-      commit_index => 0}.
+      commit_index_sent => 0}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).

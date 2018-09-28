@@ -122,18 +122,18 @@
                         | {module, module(), map()}.
 
 -type ra_server_config() :: #{id := ra_server_id(),
-                            uid := ra_uid(),
-                            cluster_id := ra_cluster_id(),
-                            log_init_args := ra_log:ra_log_init_args(),
-                            initial_members := [ra_server_id()],
-                            machine := machine_conf(),
-                            % TODO: review - only really used for
-                            % setting election timeouts
-                            broadcast_time => non_neg_integer(), % ms
-                            % for periodic actions such as sending stale rpcs
-                            % and persisting last_applied index
-                            tick_timeout => non_neg_integer(), % ms
-                            await_condition_timeout => non_neg_integer()}.
+                              uid := ra_uid(),
+                              cluster_id := ra_cluster_id(),
+                              log_init_args := ra_log:ra_log_init_args(),
+                              initial_members := [ra_server_id()],
+                              machine := machine_conf(),
+                              % TODO: review - only really used for
+                              % setting election timeouts
+                              broadcast_time => non_neg_integer(), % ms
+                              % for periodic actions such as sending stale rpcs
+                              % and persisting last_applied index
+                              tick_timeout => non_neg_integer(), % ms
+                              await_condition_timeout => non_neg_integer()}.
 
 -export_type([ra_server_state/0,
               ra_state/0,
@@ -432,7 +432,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
         Peer0 = #{next_index := NI} ->
             State1 = update_peer(PeerId,
                                  Peer0#{match_index => LastIndex,
-                                        commit_index => LastIndex,
+                                        commit_index_sent => LastIndex,
                                         % leader might have pipelined
                                         % append entries
                                         % since snapshot was sent
@@ -993,7 +993,7 @@ make_pipelined_rpcs(MaxBatchSize, #{commit_index := CommitIndex} = State0) ->
                           append_entries_or_snapshot(PeerId, Next,
                                                      MaxBatchSize, S0),
                       Peer = Peer0#{next_index => LastIdx+1,
-                                    commit_index => CommitIndex},
+                                    commit_index_sent => CommitIndex},
                       {update_peer(PeerId, Peer, S), [Entry | Entries]}
               end, {State0, []}, pipelineable_peers(State0)).
 
@@ -1207,7 +1207,7 @@ pre_vote_result(Term, Token, Success) ->
 new_peer() ->
     #{next_index => 1,
       match_index => 0,
-      commit_index => 0}.
+      commit_index_sent => 0}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
@@ -1223,7 +1223,7 @@ pipelineable_peers(#{commit_index := CommitIndex,
                           match_index := MI}) when NI < NextIdx ->
                         % there are unsent items
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
-                    (_, #{commit_index := CI,
+                    (_, #{commit_index_sent := CI,
                           next_index := NI,
                           match_index := MI}) when CI < CommitIndex ->
                         % the commit index has been updated
@@ -1238,7 +1238,7 @@ stale_peers(#{commit_index := CommitIndex} = State) ->
                             match_index := MI}) when MI < NI - 1 ->
                         % there are unconfirmed items
                         true;
-                    (_Id, #{commit_index := CI}) when CI < CommitIndex ->
+                    (_Id, #{commit_index_sent := CI}) when CI < CommitIndex ->
                         % the commit index has been updated
                         true;
                     (_Id, _Peer) ->
