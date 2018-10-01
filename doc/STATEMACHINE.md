@@ -218,7 +218,7 @@ or a node.
 
 ### Call a function
 
-Use the `{modcall, module(), function(), Args :: [term()]}` to call an arbitrary
+Use the `{mod_call, module(), function(), Args :: [term()]}` to call an arbitrary
 function. Care need to be taken not to block the `ra` process whilst doing so.
 It is recommended that expensive operations are done in another process.
 

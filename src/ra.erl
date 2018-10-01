@@ -443,18 +443,18 @@ pipeline_command(ServerId, Command, Correlation) ->
     pipeline_command(ServerId, Command, Correlation, low).
 
 
-%% @doc process_commands a command to the ra server using a gen_statem:cast.
+%% @doc Sends a command to the ra server using a gen_statem:cast.
 %% Effectively the same as
 %% `ra:pipeline_command(ServerId, Command, low, no_correlation)'
-%% This is the least reliable way to inteact with a ra system and should only
+%% This is the least reliable way to interact with a ra system and should only
 %% be used for commands that are of little importance and where waiting for
 %% a response is prohibitively slow.
 -spec pipeline_command(ServerId :: ra_server_id(),
-                           Command :: term()) -> ok.
+                       Command :: term()) -> ok.
 pipeline_command(ServerId, Command) ->
     pipeline_command(ServerId, Command, no_correlation, low).
 
-%% @doc query the machine state on any server
+%% @doc Query the machine state on any server
 %% This allows you to run the QueryFun over the server machine state and
 %% return the result. Any ra server can be addressed.
 %% This can return infinitely stale results.

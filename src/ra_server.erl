@@ -118,8 +118,14 @@
 
 -type simple_apply_fun(State) :: fun((term(), State) -> State).
 
--type machine_conf() :: {simple, simple_apply_fun(term()), State :: term()}
-                        | {module, module(), map()}.
+-type machine_conf() :: {module, module(), InitConfig :: map()} |
+                        {simple, simple_apply_fun(term()),
+                         InitialState :: term()}.
+%% The machine configuration.
+%% This is how ra knows which module to use to invoke the ra_machine callbacks
+%% and the config to pass to the {@link ra_machine:init/1} implementation.
+%% The simple machine config is version that can only be used for simple state
+%% machines that cannot access any of the advanced features.
 
 -type ra_server_config() :: #{id := ra_server_id(),
                               uid := ra_uid(),

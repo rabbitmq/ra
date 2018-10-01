@@ -36,8 +36,12 @@
 
 
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><tt>machine_conf() = {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), State::term()} | {module, module(), map()}</tt></p>
-
+<p><tt>machine_conf() = {module, module(), InitConfig::map()} | {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState::term()}</tt></p>
+<p>  The machine configuration.
+  This is how ra knows which module to use to invoke the ra_machine callbacks
+  and the config to pass to the <a href="ra_machine.html#init-1"><code>ra_machine:init/1</code></a> implementation.
+  The simple machine config is version that can only be used for simple state
+  machines that cannot access any of the advanced features.</p>
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
 <p><tt>ra_await_condition_fun() = fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; boolean())</tt></p>

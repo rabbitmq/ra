@@ -736,15 +736,15 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 perform_local_query(QueryFun, leader, #{machine := {machine, MacMod, _},
-                                            machine_state := MacState,
-                                            last_applied := Last,
-                                            id := Leader,
-                                            current_term := Term}) ->
+                                        machine_state := MacState,
+                                        last_applied := Last,
+                                        id := Leader,
+                                        current_term := Term}) ->
     {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader};
 perform_local_query(QueryFun, _, #{machine := {machine, MacMod, _},
-                                       machine_state := MacState,
-                                       last_applied := Last,
-                                       current_term := Term} = ServerState) ->
+                                   machine_state := MacState,
+                                   last_applied := Last,
+                                   current_term := Term} = ServerState) ->
     Leader = maps:get(leader_id, ServerState, not_known),
     {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader}.
 
