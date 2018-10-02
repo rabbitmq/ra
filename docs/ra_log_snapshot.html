@@ -16,18 +16,15 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-file_err">file_err()</a></h3>
-<p><tt>file_err() = <a href="file.html#type-posix">file:posix()</a> | badarg | terminated | system_limit</tt></p>
+<p><pre>file_err() = <a href="file.html#type-posix">file:posix()</a> | badarg | terminated | system_limit</pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
-<p><tt>state() = {<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-ra_cluster_servers">ra_cluster_servers()</a>, term()}</tt></p>
+<p><pre>state() = {<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, <a href="#type-ra_cluster_servers">ra_cluster_servers()</a>, term()}</pre></p>
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#read-1">read/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read_indexterm-1">read_indexterm/1</a></td><td>reads the index and term from the snapshot file without reading the
-  entire binary body.</td></tr>
-<tr><td valign="top"><a href="#write-2">write/2</a></td><td>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#write-2">write/2</a></td><td>
   Snapshot file format:
   "RASN"
   Version (byte)
@@ -37,24 +34,17 @@
   Num cluster servers (byte)
   [DataLen (byte), Data (binary)]
   Snapshot Data (binary).</td></tr>
+<tr><td valign="top"><a href="#read-1">read/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read_indexterm-1">read_indexterm/1</a></td><td>reads the index and term from the snapshot file without reading the
+  entire binary body.</td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="read-1">read/1</a></h3>
-<div class="spec">
-<p><tt>read(File::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, invalid_format | {invalid_version, integer()} | checksum_error | <a href="#type-file_err">file_err()</a>}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="read_indexterm-1">read_indexterm/1</a></h3>
-<div class="spec">
-<p><tt>read_indexterm(File::<a href="file.html#type-filename">file:filename()</a>) -&gt; {ok, <a href="#type-ra_idxterm">ra_idxterm()</a>} | {error, invalid_format | {invalid_version, integer()} | checksum_error | <a href="#type-file_err">file_err()</a>}</tt><br></p>
-</div><p>reads the index and term from the snapshot file without reading the
-  entire binary body. NB: this does not do checksum validation.</p>
-
 <h3 class="function"><a name="write-2">write/2</a></h3>
 <div class="spec">
-<p><tt>write(File::<a href="file.html#type-filename">file:filename()</a>, X2::<a href="#type-state">state()</a>) -&gt; ok | {error, <a href="#type-file_err">file_err()</a>}</tt><br></p>
+<p><pre>write(File :: <a href="file.html#type-filename">file:filename()</a>, X2 :: <a href="#type-state">state()</a>) -&gt;
+         ok | {error, <a href="#type-file_err">file_err()</a>}</pre></p>
 </div><p>
   Snapshot file format:
   "RASN"
@@ -65,6 +55,29 @@
   Num cluster servers (byte)
   [DataLen (byte), Data (binary)]
   Snapshot Data (binary)</p>
+
+<h3 class="function"><a name="read-1">read/1</a></h3>
+<div class="spec">
+<p><pre>read(File :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
+        {ok, <a href="#type-state">state()</a>} |
+        {error,
+         invalid_format |
+         {invalid_version, integer()} |
+         checksum_error |
+         <a href="#type-file_err">file_err()</a>}</pre></p>
+</div>
+
+<h3 class="function"><a name="read_indexterm-1">read_indexterm/1</a></h3>
+<div class="spec">
+<p><pre>read_indexterm(File :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
+                  {ok, <a href="#type-ra_idxterm">ra_idxterm()</a>} |
+                  {error,
+                   invalid_format |
+                   {invalid_version, integer()} |
+                   checksum_error |
+                   <a href="#type-file_err">file_err()</a>}</pre></p>
+</div><p>reads the index and term from the snapshot file without reading the
+  entire binary body. NB: this does not do checksum validation.</p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>

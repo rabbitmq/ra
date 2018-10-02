@@ -487,8 +487,8 @@ start_batch(State) ->
 
 
 flush_pending(#state{wal = #wal{fd = Fd},
-                      batch = #batch{pending = Pend} = Batch,
-                      write_strategy = WriteStrat} = State0) ->
+                     batch = #batch{pending = Pend} = Batch,
+                     write_strategy = WriteStrat} = State0) ->
     case WriteStrat of
         default ->
             ok = ra_file_handle:write(Fd, lists:reverse(Pend)),

@@ -170,18 +170,16 @@ validate_sequential_reads(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{data_dir => Dir, uid => UId,
-                         max_open_segments => 1000}),
+                         max_open_segments => 100}),
     % write a few entries
-    Log1 = append_and_roll(1, 100, 1, Log0),
-    Log2 = append_and_roll(100, 200, 1, Log1),
-    Log3 = append_and_roll(200, 400, 1, Log2),
-    Log4 = append_and_roll(400, 500, 1, Log3),
-    Log = append_and_roll(500, 1001, 1, Log4),
+    Log1 = append_and_roll(1, 500, 1, Log0),
+    Log = append_and_roll(500, 1001, 1, Log1),
+    _ = erlang:statistics(exact_reductions),
     {ColdTaken, {ColdReds, FinLog}} =
         timer:tc(fun () ->
-                         {_, Reds0} = process_info(self(), reductions),
+                         {_, Reds0} = erlang:statistics(exact_reductions),
                          L = validate_read(1, 1001, 1, Log),
-                         {_, Reds} = process_info(self(), reductions),
+                         {_, Reds} = erlang:statistics(exact_reductions),
                          {Reds - Reds0, L}
                  end),
     [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_metrics, UId),
@@ -191,17 +189,24 @@ validate_sequential_reads(Config) ->
            [ColdTaken/1000, ColdReds, Metrics]),
     % we'd like to know if we regress beyond this
     % some of the reductions are spent validating the reads
-    ?assert(ColdReds < 110000),
+    % NB: in OTP 21.1 reduction counts shot up mostly probably due to lists:reverse
+    % not previously using up enough reductions
+    ?assert(ColdReds < 200000),
+    _ = erlang:statistics(exact_reductions),
     {WarmTaken, {WarmReds, FinLog2}} =
         timer:tc(fun () ->
-                         {_, R0} = process_info(self(), reductions),
+                         {_, R0} = erlang:statistics(exact_reductions),
+                         % start_profile(Config, [lists, ra_log, ra_flru,
+                         %                        file, ra_file_handle,
+                         %                        ra_log_segment]),
                          L = validate_read(1, 1001, 1, FinLog),
-                         {_, R} = process_info(self(), reductions),
+                         % stop_profile(Config),
+                         {_, R} = erlang:statistics(exact_reductions),
                          {R - R0, L}
                  end),
     ct:pal("validate_sequential_reads WARM took ~pms Reductions: ~p~n",
            [WarmTaken/1000, WarmReds]),
-    % we'd like to know if we regress beyond this
+    % warm reductions should always be less than cold
     ?assert(WarmReds < ColdReds),
     ra_log:close(FinLog2),
     ok.
@@ -691,12 +696,12 @@ open_segments_limit(Config) ->
 validate_read(To, To, _Term, Log0) ->
     Log0;
 validate_read(From, To, Term, Log0) ->
-    End = min(From + 5, To),
+    End = min(From + 25, To),
     {Entries, Log} = ra_log:take(From, End - From, Log0),
     % validate entries are correctly read
     Expected = [ {I, Term, <<I:64/integer>>} ||
                  I <- lists:seq(From, End - 1) ],
-    Expected = Entries,
+    ?assertEqual(Expected, Entries),
     validate_read(End, To, Term, Log).
 
 
@@ -814,3 +819,22 @@ empty_mailbox(T) ->
     after T ->
               ok
     end.
+start_profile(Config, Modules) ->
+    Dir = ?config(priv_dir, Config),
+    Case = ?config(test_case, Config),
+    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
+    ct:pal("Profiling to ~p~n", [GzFile]),
+
+    lg:trace(Modules, lg_file_tracer,
+             GzFile, #{running => false, mode => profile}).
+
+stop_profile(Config) ->
+    Case = ?config(test_case, Config),
+    ct:pal("Stopping profiling for ~p~n", [Case]),
+    lg:stop(),
+    % this segfaults
+    % timer:sleep(2000),
+    Dir = ?config(priv_dir, Config),
+    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
+    ok.

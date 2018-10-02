@@ -16,7 +16,8 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-ra_log_segment_options">ra_log_segment_options()</a></h3>
-<p><tt>ra_log_segment_options() = #{max_count =&gt; non_neg_integer(), mode =&gt; append | read}</tt></p>
+<p><pre>ra_log_segment_options() = 
+    #{max_count =&gt; non_neg_integer(), mode =&gt; append | read}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
@@ -24,93 +25,110 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#append-4">append/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#dump_index-1">dump_index/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#filename-1">filename/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#is_same_as-2">is_same_as/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#max_count-1">max_count/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#open-1">open/1</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#open-1">open/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#open-2">open/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#range-1">range/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#append-4">append/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read-3">read/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_cons-5">read_cons/5</a></td><td></td></tr>
-<tr><td valign="top"><a href="#segref-1">segref/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#term_query-2">term_query/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#range-1">range/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#max_count-1">max_count/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#filename-1">filename/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#segref-1">segref/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_same_as-2">is_same_as/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#dump_index-1">dump_index/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
+<h3 class="function"><a name="open-1">open/1</a></h3>
+<div class="spec">
+<p><pre>open(Filename :: <a href="file.html#type-filename_all">file:filename_all()</a>) -&gt;
+        {ok, <a href="#type-state">state()</a>} | {error, term()}</pre></p>
+</div>
+
+<h3 class="function"><a name="open-2">open/2</a></h3>
+<div class="spec">
+<p><pre>open(Filename :: <a href="file.html#type-filename_all">file:filename_all()</a>,
+     Options :: <a href="#type-ra_log_segment_options">ra_log_segment_options()</a>) -&gt;
+        {ok, <a href="#type-state">state()</a>} | {error, term()}</pre></p>
+</div>
+
 <h3 class="function"><a name="append-4">append/4</a></h3>
 <div class="spec">
-<p><tt>append(State::<a href="#type-state">state()</a>, Index::<a href="#type-ra_index">ra_index()</a>, Term::<a href="#type-ra_term">ra_term()</a>, Data::binary()) -&gt; {ok, <a href="#type-state">state()</a>} | {error, full}</tt><br></p>
+<p><pre>append(State :: <a href="#type-state">state()</a>,
+       Index :: <a href="#type-ra_index">ra_index()</a>,
+       Term :: <a href="#type-ra_term">ra_term()</a>,
+       Data :: binary()) -&gt;
+          {ok, <a href="#type-state">state()</a>} | {error, full}</pre></p>
+</div>
+
+<h3 class="function"><a name="sync-1">sync/1</a></h3>
+<div class="spec">
+<p><pre>sync(State :: <a href="#type-state">state()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</pre></p>
+</div>
+
+<h3 class="function"><a name="read-3">read/3</a></h3>
+<div class="spec">
+<p><pre>read(State :: <a href="#type-state">state()</a>,
+     Idx :: <a href="#type-ra_index">ra_index()</a>,
+     Num :: non_neg_integer()) -&gt;
+        [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</pre></p>
+</div>
+
+<h3 class="function"><a name="read_cons-5">read_cons/5</a></h3>
+<div class="spec">
+<p><pre>read_cons(State :: <a href="#type-state">state()</a>,
+          Idx :: <a href="#type-ra_index">ra_index()</a>,
+          Num :: non_neg_integer(),
+          Fun :: fun((binary()) -&gt; term()),
+          Acc) -&gt;
+             Acc</pre>
+<ul class="definitions"><li><pre>Acc = [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</pre></li></ul></p>
+</div>
+
+<h3 class="function"><a name="term_query-2">term_query/2</a></h3>
+<div class="spec">
+<p><pre>term_query(State :: <a href="#type-state">state()</a>, Idx :: <a href="#type-ra_index">ra_index()</a>) -&gt;
+              <a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>)</pre></p>
+</div>
+
+<h3 class="function"><a name="range-1">range/1</a></h3>
+<div class="spec">
+<p><pre>range(State :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>({<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_index">ra_index()</a>})</pre></p>
+</div>
+
+<h3 class="function"><a name="max_count-1">max_count/1</a></h3>
+<div class="spec">
+<p><pre>max_count(State :: <a href="#type-state">state()</a>) -&gt; non_neg_integer()</pre></p>
+</div>
+
+<h3 class="function"><a name="filename-1">filename/1</a></h3>
+<div class="spec">
+<p><pre>filename(State :: <a href="#type-state">state()</a>) -&gt; <a href="file.html#type-filename">file:filename()</a></pre></p>
+</div>
+
+<h3 class="function"><a name="segref-1">segref/1</a></h3>
+<div class="spec">
+<p><pre>segref(State :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="ra_log.html#type-segment_ref">ra_log:segment_ref()</a>)</pre></p>
+</div>
+
+<h3 class="function"><a name="is_same_as-2">is_same_as/2</a></h3>
+<div class="spec">
+<p><pre>is_same_as(State :: <a href="#type-state">state()</a>, Fn :: <a href="file.html#type-filename_all">file:filename_all()</a>) -&gt;
+              boolean()</pre></p>
 </div>
 
 <h3 class="function"><a name="close-1">close/1</a></h3>
 <div class="spec">
-<p><tt>close(State::<a href="#type-state">state()</a>) -&gt; ok</tt><br></p>
+<p><pre>close(State :: <a href="#type-state">state()</a>) -&gt; ok</pre></p>
 </div>
 
 <h3 class="function"><a name="dump_index-1">dump_index/1</a></h3>
 <div class="spec">
 <p><tt>dump_index(File) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="filename-1">filename/1</a></h3>
-<div class="spec">
-<p><tt>filename(State::<a href="#type-state">state()</a>) -&gt; <a href="file.html#type-filename">file:filename()</a></tt><br></p>
-</div>
-
-<h3 class="function"><a name="is_same_as-2">is_same_as/2</a></h3>
-<div class="spec">
-<p><tt>is_same_as(State::<a href="#type-state">state()</a>, Fn::<a href="file.html#type-filename_all">file:filename_all()</a>) -&gt; boolean()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="max_count-1">max_count/1</a></h3>
-<div class="spec">
-<p><tt>max_count(State::<a href="#type-state">state()</a>) -&gt; non_neg_integer()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="open-1">open/1</a></h3>
-<div class="spec">
-<p><tt>open(Filename::<a href="file.html#type-filename_all">file:filename_all()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="open-2">open/2</a></h3>
-<div class="spec">
-<p><tt>open(Filename::<a href="file.html#type-filename_all">file:filename_all()</a>, Options::<a href="#type-ra_log_segment_options">ra_log_segment_options()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="range-1">range/1</a></h3>
-<div class="spec">
-<p><tt>range(State::<a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>({<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_index">ra_index()</a>})</tt><br></p>
-</div>
-
-<h3 class="function"><a name="read-3">read/3</a></h3>
-<div class="spec">
-<p><tt>read(State::<a href="#type-state">state()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer()) -&gt; [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</tt><br></p>
-</div>
-
-<h3 class="function"><a name="read_cons-5">read_cons/5</a></h3>
-<div class="spec">
-<p><tt>read_cons(State::<a href="#type-state">state()</a>, Idx::<a href="#type-ra_index">ra_index()</a>, Num::non_neg_integer(), Fun::fun((binary()) -&gt; term()), Acc) -&gt; Acc</tt>
-<ul class="definitions"><li><tt>Acc = [{<a href="#type-ra_index">ra_index()</a>, <a href="#type-ra_term">ra_term()</a>, binary()}]</tt></li></ul></p>
-</div>
-
-<h3 class="function"><a name="segref-1">segref/1</a></h3>
-<div class="spec">
-<p><tt>segref(State::<a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="ra_log.html#type-segment_ref">ra_log:segment_ref()</a>)</tt><br></p>
-</div>
-
-<h3 class="function"><a name="sync-1">sync/1</a></h3>
-<div class="spec">
-<p><tt>sync(State::<a href="#type-state">state()</a>) -&gt; {ok, <a href="#type-state">state()</a>} | {error, term()}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="term_query-2">term_query/2</a></h3>
-<div class="spec">
-<p><tt>term_query(State::<a href="#type-state">state()</a>, Idx::<a href="#type-ra_index">ra_index()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>)</tt><br></p>
 </div>
 <hr>
 

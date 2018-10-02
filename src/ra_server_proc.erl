@@ -83,7 +83,8 @@
     % used to send message side-effects emitted by the state machine
     {machine, term()}.
 
--type ra_event() :: {ra_event, ra_event_body()}.
+-type ra_event() :: {ra_event, Sender :: ra_server_id(), ra_event_body()}.
+%% the Sender is the ra process that emitted the ra_event.
 
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
@@ -767,7 +768,20 @@ handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
-    ok = send_ra_event(To, Msg, machine, State),
+    %% default is to send without any wrapping
+    ok = send(To, Msg),
+    {State, Actions};
+handle_effect(_, {send_msg, To, Msg, Options}, _, State, Actions) ->
+    case  parse_send_msg_options(Options) of
+        {true, true} ->
+            gen_cast(To, wrap_ra_event(id(State), machine, Msg));
+        {true, false} ->
+            send(To, wrap_ra_event(id(State), machine, Msg));
+        {false, true} ->
+            gen_cast(To, Msg);
+        {false, false} ->
+            send(To, Msg)
+    end,
     {State, Actions};
 handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
     %% TODO: thread through state
@@ -876,7 +890,17 @@ gen_cast(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
 send_ra_event(To, Msg, EvtType, State) ->
-    send(To, {ra_event, id(State), {EvtType, Msg}}).
+    send(To, wrap_ra_event(id(State), EvtType, Msg)).
+
+wrap_ra_event(ServerId, EvtType, Evt) ->
+    {ra_event, ServerId, {EvtType, Evt}}.
+
+parse_send_msg_options(ra_event) ->
+    {true, false};
+parse_send_msg_options(cast) ->
+    {false, true};
+parse_send_msg_options(Options) when is_list(Options) ->
+    {lists:member(ra_event, Options), lists:member(cast, Options)}.
 
 id(#state{server_state = ServerState}) ->
     ra_server:id(ServerState).
@@ -992,8 +1016,7 @@ reject_command(Pid, Corr, State) ->
     LeaderId = leader_id(State),
     ?INFO("~w: follower received leader command - rejecting to ~w ~n",
           [id(State), LeaderId]),
-    send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected,
-                       State).
+    send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected, State).
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.

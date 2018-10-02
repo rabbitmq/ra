@@ -16,28 +16,28 @@
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#ceiling-1">ceiling/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#default-2">default/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#derive_safe_string-2">derive_safe_string/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#lazy_default-2">lazy_default/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#dump-1">dump/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#dump-2">dump/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#ensure_dir-1">ensure_dir/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#id-1">id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#iter_maybe-2">iter_maybe/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#lazy_default-2">lazy_default/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#make_uid-0">make_uid/0</a></td><td></td></tr>
-<tr><td valign="top"><a href="#make_uid-1">make_uid/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#partition_parallel-2">partition_parallel/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#ra_server_id_node-1">ra_server_id_node/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#ra_server_id_to_local_name-1">ra_server_id_to_local_name/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#recursive_delete-1">recursive_delete/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#to_atom-1">to_atom/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#to_binary-1">to_binary/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#to_list-1">to_list/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_binary-1">to_binary/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#to_string-1">to_string/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_atom-1">to_atom/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#ra_server_id_to_local_name-1">ra_server_id_to_local_name/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#ra_server_id_node-1">ra_server_id_node/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_element-3">update_element/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#validate_base64uri-1">validate_base64uri/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#zpad_extract_num-1">zpad_extract_num/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#zpad_filename-3">zpad_filename/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#zpad_filename_incr-1">zpad_filename_incr/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#zpad_extract_num-1">zpad_extract_num/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#recursive_delete-1">recursive_delete/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#make_uid-0">make_uid/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#make_uid-1">make_uid/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#ensure_dir-1">ensure_dir/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#validate_base64uri-1">validate_base64uri/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#derive_safe_string-2">derive_safe_string/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#partition_parallel-2">partition_parallel/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -52,9 +52,11 @@
 <p><tt>default(Value, Def) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="derive_safe_string-2">derive_safe_string/2</a></h3>
+<h3 class="function"><a name="lazy_default-2">lazy_default/2</a></h3>
 <div class="spec">
-<p><tt>derive_safe_string(S, Num) -&gt; any()</tt></p>
+<p><pre>lazy_default(Value :: undefined | term(),
+             DefGen :: fun(() -&gt; term())) -&gt;
+                term()</pre></p>
 </div>
 
 <h3 class="function"><a name="dump-1">dump/1</a></h3>
@@ -67,11 +69,6 @@
 <p><tt>dump(Prefix, Term) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="ensure_dir-1">ensure_dir/1</a></h3>
-<div class="spec">
-<p><tt>ensure_dir(Dir::<a href="file.html#type-name_all">file:name_all()</a>) -&gt; ok | {error, <a href="file.html#type-posix">file:posix()</a> | badarg}</tt><br></p>
-</div>
-
 <h3 class="function"><a name="id-1">id/1</a></h3>
 <div class="spec">
 <p><tt>id(X) -&gt; any()</tt></p>
@@ -79,32 +76,27 @@
 
 <h3 class="function"><a name="iter_maybe-2">iter_maybe/2</a></h3>
 <div class="spec">
-<p><tt>iter_maybe(M::undefined | term(), F::function()) -&gt; ok</tt><br></p>
+<p><pre>iter_maybe(M :: undefined | term(), F :: function()) -&gt; ok</pre></p>
 </div>
 
-<h3 class="function"><a name="lazy_default-2">lazy_default/2</a></h3>
+<h3 class="function"><a name="to_list-1">to_list/1</a></h3>
 <div class="spec">
-<p><tt>lazy_default(Value::undefined | term(), DefGen::fun(() -&gt; term())) -&gt; term()</tt><br></p>
+<p><pre>to_list(A :: atom() | binary() | list() | integer()) -&gt; list()</pre></p>
 </div>
 
-<h3 class="function"><a name="make_uid-0">make_uid/0</a></h3>
+<h3 class="function"><a name="to_binary-1">to_binary/1</a></h3>
 <div class="spec">
-<p><tt>make_uid() -&gt; binary()</tt><br></p>
+<p><pre>to_binary(B :: atom() | binary() | list() | integer()) -&gt; binary()</pre></p>
 </div>
 
-<h3 class="function"><a name="make_uid-1">make_uid/1</a></h3>
+<h3 class="function"><a name="to_string-1">to_string/1</a></h3>
 <div class="spec">
-<p><tt>make_uid(Prefix0::atom() | binary() | string()) -&gt; binary()</tt><br></p>
+<p><pre>to_string(B :: binary() | string()) -&gt; string()</pre></p>
 </div>
 
-<h3 class="function"><a name="partition_parallel-2">partition_parallel/2</a></h3>
+<h3 class="function"><a name="to_atom-1">to_atom/1</a></h3>
 <div class="spec">
-<p><tt>partition_parallel(F, Es) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="ra_server_id_node-1">ra_server_id_node/1</a></h3>
-<div class="spec">
-<p><tt>ra_server_id_node(Name) -&gt; any()</tt></p>
+<p><pre>to_atom(A :: atom() | list() | binary()) -&gt; atom()</pre></p>
 </div>
 
 <h3 class="function"><a name="ra_server_id_to_local_name-1">ra_server_id_to_local_name/1</a></h3>
@@ -112,44 +104,14 @@
 <p><tt>ra_server_id_to_local_name(Name) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="recursive_delete-1">recursive_delete/1</a></h3>
+<h3 class="function"><a name="ra_server_id_node-1">ra_server_id_node/1</a></h3>
 <div class="spec">
-<p><tt>recursive_delete(Dir) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="to_atom-1">to_atom/1</a></h3>
-<div class="spec">
-<p><tt>to_atom(A::atom() | list() | binary()) -&gt; atom()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="to_binary-1">to_binary/1</a></h3>
-<div class="spec">
-<p><tt>to_binary(B::atom() | binary() | list() | integer()) -&gt; binary()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="to_list-1">to_list/1</a></h3>
-<div class="spec">
-<p><tt>to_list(A::atom() | binary() | list() | integer()) -&gt; list()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="to_string-1">to_string/1</a></h3>
-<div class="spec">
-<p><tt>to_string(B::binary() | string()) -&gt; string()</tt><br></p>
+<p><tt>ra_server_id_node(Name) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="update_element-3">update_element/3</a></h3>
 <div class="spec">
 <p><tt>update_element(Index, T, Update) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="validate_base64uri-1">validate_base64uri/1</a></h3>
-<div class="spec">
-<p><tt>validate_base64uri(Str::string()) -&gt; boolean()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="zpad_extract_num-1">zpad_extract_num/1</a></h3>
-<div class="spec">
-<p><tt>zpad_extract_num(Fn) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="zpad_filename-3">zpad_filename/3</a></h3>
@@ -160,6 +122,47 @@
 <h3 class="function"><a name="zpad_filename_incr-1">zpad_filename_incr/1</a></h3>
 <div class="spec">
 <p><tt>zpad_filename_incr(Fn) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="zpad_extract_num-1">zpad_extract_num/1</a></h3>
+<div class="spec">
+<p><tt>zpad_extract_num(Fn) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="recursive_delete-1">recursive_delete/1</a></h3>
+<div class="spec">
+<p><tt>recursive_delete(Dir) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="make_uid-0">make_uid/0</a></h3>
+<div class="spec">
+<p><pre>make_uid() -&gt; binary()</pre></p>
+</div>
+
+<h3 class="function"><a name="make_uid-1">make_uid/1</a></h3>
+<div class="spec">
+<p><pre>make_uid(Prefix0 :: atom() | binary() | string()) -&gt; binary()</pre></p>
+</div>
+
+<h3 class="function"><a name="ensure_dir-1">ensure_dir/1</a></h3>
+<div class="spec">
+<p><pre>ensure_dir(Dir :: <a href="file.html#type-name_all">file:name_all()</a>) -&gt;
+              ok | {error, <a href="file.html#type-posix">file:posix()</a> | badarg}</pre></p>
+</div>
+
+<h3 class="function"><a name="validate_base64uri-1">validate_base64uri/1</a></h3>
+<div class="spec">
+<p><pre>validate_base64uri(Str :: string()) -&gt; boolean()</pre></p>
+</div>
+
+<h3 class="function"><a name="derive_safe_string-2">derive_safe_string/2</a></h3>
+<div class="spec">
+<p><tt>derive_safe_string(S, Num) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="partition_parallel-2">partition_parallel/2</a></h3>
+<div class="spec">
+<p><tt>partition_parallel(F, Es) -&gt; any()</tt></p>
 </div>
 <hr>
 

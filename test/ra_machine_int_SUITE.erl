@@ -20,6 +20,10 @@ all() ->
 
 all_tests() ->
     [
+     send_msg_without_options,
+     send_msg_with_ra_event_option,
+     send_msg_with_cast_option,
+     send_msg_with_ra_event_and_cast_options,
      machine_replies,
      leader_monitors,
      follower_takes_over_monitor,
@@ -71,6 +75,81 @@ end_per_testcase(_TestCase, _Config) ->
 %%% Test cases
 %%%===================================================================
 
+send_msg_without_options(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
+                                    {State, [{send_msg, Pid, Msg}], ok}
+                            end),
+    ClusterId = ?config(cluster_id, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
+    receive ?FUNCTION_NAME -> ok
+    after 250 ->
+              flush(),
+              exit(receive_msg_timeout)
+    end,
+    ok.
+
+send_msg_with_ra_event_option(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
+                                    {State, [{send_msg, Pid, Msg, ra_event}], ok}
+                            end),
+    ClusterId = ?config(cluster_id, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
+    receive
+        {ra_event, ServerId, {machine, ?FUNCTION_NAME}} -> ok
+    after 250 ->
+              flush(),
+              exit(receive_msg_timeout)
+    end,
+    ok.
+
+send_msg_with_cast_option(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
+                                    {State, [{send_msg, Pid, Msg, cast}], ok}
+                            end),
+    ClusterId = ?config(cluster_id, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
+    receive
+        {'$gen_cast', ?FUNCTION_NAME} -> ok
+    after 250 ->
+              flush(),
+              exit(receive_msg_timeout)
+    end,
+    ok.
+
+send_msg_with_ra_event_and_cast_options(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply,
+                fun (_, {echo, Pid, Msg}, _, State) ->
+                        {State, [{send_msg, Pid, Msg, [ra_event, cast]}], ok}
+                end),
+    ClusterId = ?config(cluster_id, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
+    receive
+        {'$gen_cast', {ra_event, ServerId, {machine, ?FUNCTION_NAME}}} -> ok
+    after 250 ->
+              flush(),
+              exit(receive_msg_timeout)
+    end,
+    ok.
 machine_replies(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
@@ -180,8 +259,7 @@ deleted_cluster_emits_eol_effect(Config) ->
                 end),
     meck:expect(Mod, state_enter,
                 fun (eol, State) ->
-                        ct:pal("EOL"),
-                        [{send_msg, P, eol} || P <- State];
+                        [{send_msg, P, eol, ra_event} || P <- State];
                     (_, _) ->
                         []
                 end),
@@ -214,7 +292,7 @@ machine_state_enter_effects(Config) ->
                 end),
     meck:expect(Mod, state_enter,
                 fun (RaftState, _State) ->
-                        [{send_msg, Self, {state_enter, RaftState}}]
+                        [{send_msg, Self, {state_enter, RaftState}, ra_event}]
                 end),
     ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
     ra:delete_cluster([ServerId]),

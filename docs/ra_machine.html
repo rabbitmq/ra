@@ -53,108 +53,193 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
-<p><tt>builtin_command() = {down, pid(), term()} | {nodeup | nodedown, node()}</tt></p>
+<p><pre>builtin_command() = 
+    {down, pid(), term()} | {nodeup | nodedown, node()}</pre></p>
 <p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
   to monitor effects</p>
 
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
-<p><tt>command() = <a href="#type-user_command">user_command()</a> | <a href="#type-builtin_command">builtin_command()</a></tt></p>
+<p><pre>command() = <a href="#type-user_command">user_command()</a> | <a href="#type-builtin_command">builtin_command()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_meta_data">command_meta_data()</a></h3>
-<p><tt>command_meta_data() = <a href="ra_server.html#type-command_meta">ra_server:command_meta()</a> | #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</tt></p>
+<p><pre>command_meta_data() = 
+    <a href="ra_server.html#type-command_meta">ra_server:command_meta()</a> |
+    #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
-<p><tt>effect() = {send_msg, pid() | atom() | {atom(), atom()}, term()} | {mod_call, module(), Function::atom(), [term()]} | {monitor, process, pid()} | {monitor, node, node()} | {demonitor, process, pid()} | {demonitor, node, node()} | {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} | {aux, term()} | garbage_collection</tt></p>
-
+<p><pre>effect() = 
+    {send_msg, To :: <a href="#type-locator">locator()</a>, Msg :: term()} |
+    {send_msg,
+     To :: <a href="#type-locator">locator()</a>,
+     Msg :: term(),
+     Options :: <a href="#type-send_msg_opts">send_msg_opts()</a>} |
+    {mod_call, module(), Function :: atom(), [term()]} |
+    {monitor, process, pid()} |
+    {monitor, node, node()} |
+    {demonitor, process, pid()} |
+    {demonitor, node, node()} |
+    {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
+    {aux, term()} |
+    garbage_collection</pre></p>
+<p><p>  Effects are data structure that can be returned by <a href="#apply-4"><code>apply/4</code></a> to ask  
+ra to realise a side-effect in the real works, such as sending  
+a message to a process.</p>
+ 
+  <p>Although both leaders and followers will process the same commands effects
+  are typically only applied on the leader. The only exceptions to this are
+  the <code>relaase_cursor</code> effect that is realised on all effects as it is part
+  of the ra implementation log truncation mechanism and the <code>garbage_collect</code>  
+effects that is used to explicitly triggering a garbage collection in the  
+ra servers's process.</p>
+ 
+  <p>When leaders change and when clusters are restarted there is a small chance  
+that effects are issued multiple times so designing effects to be idempotent  
+is a good idea.</p>
+ 
+ 
+  <dl>
+  <dt><b>send_msg</b></dt>
+  <dd> send a message to a pid or registered process
+  NB: this is sent using <code>noconnect</code> and <code>nosuspend</code> in order to avoid
+  blocking the ra process during failures. It can optionally be wrapped up as
+  a <code>ra_event</code> and/or as a gen cast message (<code>{'$cast', Msg}</code>)
+  </dd>
+  <dt><b>mod_call</b></dt>
+  <dd> Call an arbitrary Module:Function with the supplied arguments </dd>
+  <dt><b>monitor</b></dt>
+  <dd> monitor a process or erlang node </dd>
+  <dt><b>demonitor</b></dt>
+  <dd> demonitor a process or erlang node </dd>
+  <dt><b>release_cursor</b></dt>
+  <dd> indicate to Ra that none of the preceeding entries contribute to the
+  current machine state </dd>
+  </dl></p>
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
-<p><tt>effects() = [<a href="#type-effect">effect()</a>]</tt></p>
+<p><pre>effects() = [<a href="#type-effect">effect()</a>]</pre></p>
 <p>  See: <a href="effect.html"><code>effect</code></a></p>
 
+<h3 class="typedecl"><a name="type-locator">locator()</a></h3>
+<p><pre>locator() = pid() | atom() | {atom(), node()}</pre></p>
+
+
 <h3 class="typedecl"><a name="type-machine">machine()</a></h3>
-<p><tt>machine() = {machine, module(), AddInitArgs::#{term() =&gt; term()}}</tt></p>
+<p><pre>machine() = 
+    {machine, module(), AddInitArgs :: #{term() =&gt; term()}}</pre></p>
 <p>  Machine configuration.
   the <code>module()</code> should implement the <a href="ra_machine.html"><code>ra_machine</code></a> behaviour.</p>
 
 <h3 class="typedecl"><a name="type-milliseconds">milliseconds()</a></h3>
-<p><tt>milliseconds() = non_neg_integer()</tt></p>
+<p><pre>milliseconds() = non_neg_integer()</pre></p>
 
 
 <h3 class="typedecl"><a name="type-reply">reply()</a></h3>
-<p><tt>reply() = term()</tt></p>
+<p><pre>reply() = term()</pre></p>
 <p>  an arbitrary term that can be returned to the caller, _if_ the caller
   used <a href="ra.html#process_command-2"><code>ra:process_command/2</code></a> or
   <a href="ra.html#process_command-3"><code>ra:process_command/3</code></a></p>
 
+<h3 class="typedecl"><a name="type-send_msg_opt">send_msg_opt()</a></h3>
+<p><pre>send_msg_opt() = [ra_event | cast]</pre></p>
+<p><p>  ra_event: the message will be wrapped up and sent as a ra event
+  e.g: <code>{ra_event, ra_server_id(), Msg}</code></p>
+ 
+  cast: the message will be wrapped as a gen cast: <code>{'$cast', Msg}</code></p>
+
+<h3 class="typedecl"><a name="type-send_msg_opts">send_msg_opts()</a></h3>
+<p><pre>send_msg_opts() = <a href="#type-send_msg_opt">send_msg_opt()</a> | [<a href="#type-send_msg_opt">send_msg_opt()</a>]</pre></p>
+
+
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
-<p><tt>state() = term()</tt></p>
+<p><pre>state() = term()</pre></p>
 <p>  The state for a given machine implementation.</p>
 
 <h3 class="typedecl"><a name="type-user_command">user_command()</a></h3>
-<p><tt>user_command() = term()</tt></p>
+<p><pre>user_command() = term()</pre></p>
 <p>  the command type for a given machine implementation</p>
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
-<tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
+<tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
+<tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
+<tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="apply-5">apply/5</a></h3>
-<div class="spec">
-<p><tt>apply(X1::<a href="#type-machine">machine()</a>, Idx::<a href="#type-command_meta_data">command_meta_data()</a>, Cmd::<a href="#type-command">command()</a>, Effects::<a href="#type-effects">effects()</a>, State) -&gt; {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
-<div class="spec">
-<p><tt>handle_aux(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>, Type::{call, From::<a href="#type-from">from()</a>} | cast, Command::term(), AuxState, LogState, MacState::<a href="#type-state">state()</a>) -&gt; {reply, Reply::term(), AuxState, LogState} | {no_reply, AuxState, LogState} | undefined</tt>
-<ul class="definitions"><li><tt>AuxState = term()</tt></li><li><tt>LogState = <a href="ra_log.html#type-ra_log">ra_log:ra_log()</a></tt></li></ul></p>
-</div>
-
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
-<p><tt>init(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><pre>init(X1 :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
 </div><p>initialise a new machine</p>
 
-<h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>
+<h3 class="function"><a name="apply-5">apply/5</a></h3>
 <div class="spec">
-<p><tt>init_aux(X1::<a href="#type-machine">machine()</a>, Name::atom()) -&gt; term()</tt><br></p>
+<p><pre>apply(X1 :: <a href="#type-machine">machine()</a>,
+      Idx :: <a href="#type-command_meta_data">command_meta_data()</a>,
+      Cmd :: <a href="#type-command">command()</a>,
+      Effects :: <a href="#type-effects">effects()</a>,
+      State) -&gt;
+         {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</pre></p>
 </div>
 
-<h3 class="function"><a name="module-1">module/1</a></h3>
+<h3 class="function"><a name="tick-3">tick/3</a></h3>
 <div class="spec">
-<p><tt>module(X1::<a href="#type-machine">machine()</a>) -&gt; module()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="overview-2">overview/2</a></h3>
-<div class="spec">
-<p><tt>overview(X1::<a href="#type-machine">machine()</a>, State::<a href="#type-state">state()</a>) -&gt; map()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="query-3">query/3</a></h3>
-<div class="spec">
-<p><tt>query(Mod::module(), Fun::fun((<a href="#type-state">state()</a>) -&gt; Result), State::<a href="#type-state">state()</a>) -&gt; Result</tt>
-<ul class="definitions"><li><tt>Result = term()</tt></li></ul></p>
+<p><pre>tick(X1 :: <a href="#type-machine">machine()</a>, TimeMs :: <a href="#type-milliseconds">milliseconds()</a>, State :: <a href="#type-state">state()</a>) -&gt;
+        <a href="#type-effects">effects()</a></pre></p>
 </div>
 
 <h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
 <div class="spec">
-<p><tt>state_enter(X1::<a href="#type-machine">machine()</a>, RaftState::<a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+<p><pre>state_enter(X1 :: <a href="#type-machine">machine()</a>,
+            RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol,
+            State :: <a href="#type-state">state()</a>) -&gt;
+               <a href="#type-effects">effects()</a></pre></p>
 </div><p>called when the ra_server_proc enters a new state</p>
 
-<h3 class="function"><a name="tick-3">tick/3</a></h3>
+<h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
-<p><tt>tick(X1::<a href="#type-machine">machine()</a>, TimeMs::<a href="#type-milliseconds">milliseconds()</a>, State::<a href="#type-state">state()</a>) -&gt; <a href="#type-effects">effects()</a></tt><br></p>
+<p><pre>overview(X1 :: <a href="#type-machine">machine()</a>, State :: <a href="#type-state">state()</a>) -&gt; map()</pre></p>
+</div>
+
+<h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>
+<div class="spec">
+<p><pre>init_aux(X1 :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; term()</pre></p>
+</div>
+
+<h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
+<div class="spec">
+<p><pre>handle_aux(X1 :: <a href="#type-machine">machine()</a>,
+           RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>,
+           Type :: {call, From :: <a href="#type-from">from()</a>} | cast,
+           Command :: term(),
+           AuxState,
+           LogState,
+           MacState :: <a href="#type-state">state()</a>) -&gt;
+              {reply, Reply :: term(), AuxState, LogState} |
+              {no_reply, AuxState, LogState} |
+              undefined</pre>
+<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-ra_log">ra_log:ra_log()</a></pre></li></ul></p>
+</div>
+
+<h3 class="function"><a name="query-3">query/3</a></h3>
+<div class="spec">
+<p><pre>query(Mod :: module(),
+      Fun :: fun((<a href="#type-state">state()</a>) -&gt; Result),
+      State :: <a href="#type-state">state()</a>) -&gt;
+         Result</pre>
+<ul class="definitions"><li><pre>Result = term()</pre></li></ul></p>
+</div>
+
+<h3 class="function"><a name="module-1">module/1</a></h3>
+<div class="spec">
+<p><pre>module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
 </div>
 <hr>
 

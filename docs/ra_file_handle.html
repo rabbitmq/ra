@@ -15,35 +15,85 @@
 <p><b>Behaviours:</b> <a href="gen_server.html"><tt>gen_server</tt></a>.</p>
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#open-2">open/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#write-2">write/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read-2">read/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#position-2">position/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#pwrite-2">pwrite/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#pwrite-3">pwrite/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#pread-2">pread/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#pread-3">pread/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#open-2">open/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#position-2">position/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#pread-2">pread/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#pread-3">pread/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#pwrite-2">pwrite/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#pwrite-3">pwrite/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read-2">read/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td></td></tr>
-<tr><td valign="top"><a href="#sync-1">sync/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#write-2">write/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="open-2">open/2</a></h3>
+<div class="spec">
+<p><tt>open(File, Modes) -&gt; any()</tt></p>
+</div>
 
 <h3 class="function"><a name="close-1">close/1</a></h3>
 <div class="spec">
 <p><tt>close(Fd) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
+<h3 class="function"><a name="sync-1">sync/1</a></h3>
 <div class="spec">
-<p><tt>code_change(OldVsn, State, Extra) -&gt; any()</tt></p>
+<p><tt>sync(Fd) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="write-2">write/2</a></h3>
+<div class="spec">
+<p><tt>write(Fd, Bytes) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="read-2">read/2</a></h3>
+<div class="spec">
+<p><tt>read(Fd, Bytes) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="position-2">position/2</a></h3>
+<div class="spec">
+<p><tt>position(Fd, Location) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="pwrite-2">pwrite/2</a></h3>
+<div class="spec">
+<p><tt>pwrite(Fd, LocBytes) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="pwrite-3">pwrite/3</a></h3>
+<div class="spec">
+<p><tt>pwrite(Fd, Location, Bytes) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="pread-2">pread/2</a></h3>
+<div class="spec">
+<p><tt>pread(Fd, LocBytes) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="pread-3">pread/3</a></h3>
+<div class="spec">
+<p><tt>pread(Fd, Location, Number) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><tt>start_link() -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><tt>init(X1) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
@@ -61,64 +111,14 @@
 <p><tt>handle_info(Info, State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><tt>init(X1) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="open-2">open/2</a></h3>
-<div class="spec">
-<p><tt>open(File, Modes) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="position-2">position/2</a></h3>
-<div class="spec">
-<p><tt>position(Fd, Location) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="pread-2">pread/2</a></h3>
-<div class="spec">
-<p><tt>pread(Fd, LocBytes) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="pread-3">pread/3</a></h3>
-<div class="spec">
-<p><tt>pread(Fd, Location, Number) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="pwrite-2">pwrite/2</a></h3>
-<div class="spec">
-<p><tt>pwrite(Fd, LocBytes) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="pwrite-3">pwrite/3</a></h3>
-<div class="spec">
-<p><tt>pwrite(Fd, Location, Bytes) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="read-2">read/2</a></h3>
-<div class="spec">
-<p><tt>read(Fd, Bytes) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
-<div class="spec">
-<p><tt>start_link() -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="sync-1">sync/1</a></h3>
-<div class="spec">
-<p><tt>sync(Fd) -&gt; any()</tt></p>
-</div>
-
 <h3 class="function"><a name="terminate-2">terminate/2</a></h3>
 <div class="spec">
 <p><tt>terminate(Reason, State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="write-2">write/2</a></h3>
+<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
 <div class="spec">
-<p><tt>write(Fd, Bytes) -&gt; any()</tt></p>
+<p><tt>code_change(OldVsn, State, Extra) -&gt; any()</tt></p>
 </div>
 <hr>
 

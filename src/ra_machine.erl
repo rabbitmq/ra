@@ -74,8 +74,18 @@
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
+-type send_msg_opt() :: [ra_event | cast].
+%% ra_event: the message will be wrapped up and sent as a ra event
+%% e.g: `{ra_event, ra_server_id(), Msg}'
+%%
+%% cast: the message will be wrapped as a gen cast: ``{'$cast', Msg}''
+
+-type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
+-type locator() :: pid() | atom() | {atom(), node()}.
+
 -type effect() ::
-    {send_msg, pid() | atom() | {atom(), atom()}, term()} |
+    {send_msg, To :: locator(), Msg :: term()} |
+    {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {mod_call, module(), Function :: atom(), [term()]} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
@@ -84,15 +94,16 @@
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
-
-%% Effects are data structure that can be returned by {@link apply/2} to ask
+%% Effects are data structure that can be returned by {@link apply/4} to ask
 %% ra to realise a side-effect in the real works, such as sending
 %% a message to a process.
 %%
 %% Although both leaders and followers will process the same commands effects
-%% are typically only applied on the leader. The only exception to this is
+%% are typically only applied on the leader. The only exceptions to this are
 %% the `relaase_cursor' effect that is realised on all effects as it is part
-%% of the ra implementation log truncation mechanism.
+%% of the ra implementation log truncation mechanism and the `garbage_collect'
+%% effects that is used to explicitly triggering a garbage collection in the
+%% ra servers's process.
 %%
 %% When leaders change and when clusters are restarted there is a small chance
 %% that effects are issued multiple times so designing effects to be idempotent
@@ -103,7 +114,8 @@
 %% <dt><b>send_msg</b></dt>
 %% <dd> send a message to a pid or registered process
 %% NB: this is sent using `noconnect' and `nosuspend' in order to avoid
-%% blocking the ra process during failures.
+%% blocking the ra process during failures. It can optionally be wrapped up as
+%% a `ra_event' and/or as a gen cast message (``{'$cast', Msg}'')
 %% </dd>
 %% <dt><b>mod_call</b></dt>
 %% <dd> Call an arbitrary Module:Function with the supplied arguments </dd>

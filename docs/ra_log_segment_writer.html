@@ -15,26 +15,31 @@
 <p><b>Behaviours:</b> <a href="gen_server.html"><tt>gen_server</tt></a>.</p>
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept_mem_tables-2">accept_mem_tables/2</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#accept_mem_tables-2">accept_mem_tables/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#accept_mem_tables-3">accept_mem_tables/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#await-0">await/0</a></td><td></td></tr>
-<tr><td valign="top"><a href="#await-1">await/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_segments-3">delete_segments/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_segments-4">delete_segments/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#release_segments-2">release_segments/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#my_segments-1">my_segments/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#my_segments-2">my_segments/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-0">overview/0</a></td><td></td></tr>
-<tr><td valign="top"><a href="#release_segments-2">release_segments/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#await-0">await/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#await-1">await/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><tt>start_link(Config) -&gt; any()</tt></p>
+</div>
 
 <h3 class="function"><a name="accept_mem_tables-2">accept_mem_tables/2</a></h3>
 <div class="spec">
@@ -44,6 +49,45 @@
 <h3 class="function"><a name="accept_mem_tables-3">accept_mem_tables/3</a></h3>
 <div class="spec">
 <p><tt>accept_mem_tables(SegmentWriter, Tables, WalFile) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="delete_segments-3">delete_segments/3</a></h3>
+<div class="spec">
+<p><pre>delete_segments(Who :: <a href="#type-ra_uid">ra_uid()</a>,
+                SnapIdx :: <a href="#type-ra_index">ra_index()</a>,
+                SegmentFiles :: [<a href="file.html#type-filename_all">file:filename_all()</a>]) -&gt;
+                   ok</pre></p>
+</div>
+
+<h3 class="function"><a name="delete_segments-4">delete_segments/4</a></h3>
+<div class="spec">
+<p><pre>delete_segments(SegWriter :: atom() | pid(),
+                Who :: <a href="#type-ra_uid">ra_uid()</a>,
+                SnapIdx :: <a href="#type-ra_index">ra_index()</a>,
+                SegmentFiles :: [<a href="file.html#type-filename_all">file:filename_all()</a>]) -&gt;
+                   ok</pre></p>
+</div>
+
+<h3 class="function"><a name="release_segments-2">release_segments/2</a></h3>
+<div class="spec">
+<p><pre>release_segments(SegWriter :: atom() | pid(), Who :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
+                    ok</pre></p>
+</div>
+
+<h3 class="function"><a name="my_segments-1">my_segments/1</a></h3>
+<div class="spec">
+<p><pre>my_segments(Who :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; [<a href="file.html#type-filename">file:filename()</a>]</pre></p>
+</div>
+
+<h3 class="function"><a name="my_segments-2">my_segments/2</a></h3>
+<div class="spec">
+<p><pre>my_segments(SegWriter :: atom() | pid(), Who :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
+               [<a href="file.html#type-filename">file:filename()</a>]</pre></p>
+</div>
+
+<h3 class="function"><a name="overview-0">overview/0</a></h3>
+<div class="spec">
+<p><pre>overview() -&gt; #{}</pre></p>
 </div>
 
 <h3 class="function"><a name="await-0">await/0</a></h3>
@@ -56,19 +100,9 @@
 <p><tt>await(SegWriter) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
+<h3 class="function"><a name="init-1">init/1</a></h3>
 <div class="spec">
-<p><tt>code_change(OldVsn, State, Extra) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="delete_segments-3">delete_segments/3</a></h3>
-<div class="spec">
-<p><tt>delete_segments(Who::<a href="#type-ra_uid">ra_uid()</a>, SnapIdx::<a href="#type-ra_index">ra_index()</a>, SegmentFiles::[<a href="file.html#type-filename_all">file:filename_all()</a>]) -&gt; ok</tt><br></p>
-</div>
-
-<h3 class="function"><a name="delete_segments-4">delete_segments/4</a></h3>
-<div class="spec">
-<p><tt>delete_segments(SegWriter::atom() | pid(), Who::<a href="#type-ra_uid">ra_uid()</a>, SnapIdx::<a href="#type-ra_index">ra_index()</a>, SegmentFiles::[<a href="file.html#type-filename_all">file:filename_all()</a>]) -&gt; ok</tt><br></p>
+<p><tt>init(X1) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
@@ -86,39 +120,14 @@
 <p><tt>handle_info(Info, State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><tt>init(X1) -&gt; any()</tt></p>
-</div>
-
-<h3 class="function"><a name="my_segments-1">my_segments/1</a></h3>
-<div class="spec">
-<p><tt>my_segments(Who::<a href="#type-ra_uid">ra_uid()</a>) -&gt; [<a href="file.html#type-filename">file:filename()</a>]</tt><br></p>
-</div>
-
-<h3 class="function"><a name="my_segments-2">my_segments/2</a></h3>
-<div class="spec">
-<p><tt>my_segments(SegWriter::atom() | pid(), Who::<a href="#type-ra_uid">ra_uid()</a>) -&gt; [<a href="file.html#type-filename">file:filename()</a>]</tt><br></p>
-</div>
-
-<h3 class="function"><a name="overview-0">overview/0</a></h3>
-<div class="spec">
-<p><tt>overview() -&gt; #{}</tt><br></p>
-</div>
-
-<h3 class="function"><a name="release_segments-2">release_segments/2</a></h3>
-<div class="spec">
-<p><tt>release_segments(SegWriter::atom() | pid(), Who::<a href="#type-ra_uid">ra_uid()</a>) -&gt; ok</tt><br></p>
-</div>
-
-<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
-<div class="spec">
-<p><tt>start_link(Config) -&gt; any()</tt></p>
-</div>
-
 <h3 class="function"><a name="terminate-2">terminate/2</a></h3>
 <div class="spec">
 <p><tt>terminate(Reason, State) -&gt; any()</tt></p>
+</div>
+
+<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
+<div class="spec">
+<p><tt>code_change(OldVsn, State, Extra) -&gt; any()</tt></p>
 </div>
 <hr>
 

@@ -167,9 +167,15 @@ read(State, Idx, Num) ->
     Acc when Acc :: [{ra_index(), ra_term(), binary()}].
 read_cons(#state{fd = Fd, mode = read, index = Index}, Idx,
           Num, Fun, Acc) ->
-    {Locs, Metas} = read_locs(Idx, Idx + Num, Index, {[], []}),
-    {ok, Datas} = ra_file_handle:pread(Fd, Locs),
-    combine_with(Metas, Datas, Fun, Acc).
+    pread_cons(Fd, Idx + Num - 1, Idx, Index,
+               fun (Crc, Data) ->
+                       case erlang:crc32(Data) of
+                           Crc ->
+                               Fun(Data);
+                           _ ->
+                               exit(ra_log_segment_crc_check_failure)
+                       end
+               end, Acc).
 
 -spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
 term_query(#state{index = Index}, Idx) ->
@@ -179,28 +185,17 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
-combine_with([], [], _, Acc) ->
+pread_cons(_Fd, Idx, FinalIdx, _, _Fun, Acc)
+  when Idx < FinalIdx ->
     Acc;
-combine_with([{_, _, Crc} = Meta | MetaTail],
-             [Data | DataTail], Fun, Acc) ->
-    % TODO: make checksum check optional?
-    case erlang:crc32(Data) of
-        Crc -> ok;
-        _ ->
-            exit(ra_log_segment_crc_check_failure)
-    end,
-    combine_with(MetaTail, DataTail, Fun,
-                 [setelement(3, Meta, Fun(Data)) | Acc]).
-
-read_locs(Idx, Idx, _, Acc) ->
-    Acc;
-read_locs(Idx, FinalIdx, Index, {Locs, Meta} = Acc) ->
+pread_cons(Fd, Idx, FinalIdx, Index, Fun, Acc) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc}} ->
-            read_locs(Idx+1, FinalIdx, Index,
-                      {[{Offset, Length} | Locs], [{Idx, Term, Crc} | Meta]});
+            {ok, Data} = ra_file_handle:pread(Fd, Offset, Length),
+            pread_cons(Fd, Idx-1, FinalIdx, Index, Fun,
+                       [{Idx, Term, Fun(Crc, Data)} | Acc]);
         _ ->
-            read_locs(Idx+1, FinalIdx, Index, Acc)
+            pread_cons(Fd, Idx-1, FinalIdx, Index, Fun, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).

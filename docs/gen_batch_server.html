@@ -16,54 +16,50 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-action">action()</a></h3>
-<p><tt>action() = {reply, <a href="#type-from">from()</a>, Msg::term()} | {notify, pid(), Msg::term()}</tt></p>
+<p><pre>action() = 
+    {reply, <a href="#type-from">from()</a>, Msg :: term()} |
+    {notify, pid(), Msg :: term()}</pre></p>
 <p>  action that can be returned from handle_batch/2</p>
 
 <h3 class="typedecl"><a name="type-from">from()</a></h3>
-<p><tt>from() = {Pid::<a href="#type-server_ref">server_ref()</a>, Tag::reference()}</tt></p>
+<p><pre>from() = {Pid :: <a href="#type-server_ref">server_ref()</a>, Tag :: reference()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-op">op()</a></h3>
-<p><tt>op() = {cast, <a href="#type-server_ref">server_ref()</a>, UserOp::term()} | {call, <a href="#type-from">from()</a>, UserOp::term()}</tt></p>
+<p><pre>op() = 
+    {cast, <a href="#type-server_ref">server_ref()</a>, UserOp :: term()} |
+    {call, <a href="#type-from">from()</a>, UserOp :: term()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-server_ref">server_ref()</a></h3>
-<p><tt>server_ref() = pid() | (LocalName::atom()) | {Name::atom(), Node::atom()}</tt></p>
+<p><pre>server_ref() = 
+    pid() |
+    (LocalName :: atom()) |
+    {Name :: atom(), Node :: atom()}</pre></p>
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-2">call/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#call-3">call/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#cast-2">cast/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#format_status-2">format_status/2</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start_link-4">start_link/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init_it-6">init_it/6</a></td><td></td></tr>
-<tr><td valign="top"><a href="#start_link-4">start_link/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#cast-2">cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#call-2">call/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#call-3">call/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#system_continue-3">system_continue/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#system_get_state-1">system_get_state/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#system_terminate-4">system_terminate/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#system_get_state-1">system_get_state/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format_status-2">format_status/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#write_debug-3">write_debug/3</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="call-2">call/2</a></h3>
+<h3 class="function"><a name="start_link-4">start_link/4</a></h3>
 <div class="spec">
-<p><tt>call(Name::pid() | atom(), Request::term()) -&gt; term()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="call-3">call/3</a></h3>
-<div class="spec">
-<p><tt>call(Name::pid() | atom(), Request::term(), Timeout::non_neg_integer()) -&gt; term()</tt><br></p>
-</div>
-
-<h3 class="function"><a name="cast-2">cast/2</a></h3>
-<div class="spec">
-<p><tt>cast(Ref::pid() | atom(), Msg::term()) -&gt; ok</tt><br></p>
-</div>
-
-<h3 class="function"><a name="format_status-2">format_status/2</a></h3>
-<div class="spec">
-<p><tt>format_status(Reason, X2) -&gt; any()</tt></p>
+<p><pre>start_link(Name :: {local, atom()},
+           Mod :: module(),
+           Args :: term(),
+           Options :: list()) -&gt;
+              {ok, pid()} | {error, {already_started, pid()}}</pre></p>
 </div>
 
 <h3 class="function"><a name="init_it-6">init_it/6</a></h3>
@@ -71,9 +67,22 @@
 <p><tt>init_it(Starter, Parent, Name, Mod, Args, Options) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="start_link-4">start_link/4</a></h3>
+<h3 class="function"><a name="cast-2">cast/2</a></h3>
 <div class="spec">
-<p><tt>start_link(Name::{local, atom()}, Mod::module(), Args::term(), Options::list()) -&gt; {ok, pid()} | {error, {already_started, pid()}}</tt><br></p>
+<p><pre>cast(Ref :: pid() | atom(), Msg :: term()) -&gt; ok</pre></p>
+</div>
+
+<h3 class="function"><a name="call-2">call/2</a></h3>
+<div class="spec">
+<p><pre>call(Name :: pid() | atom(), Request :: term()) -&gt; term()</pre></p>
+</div>
+
+<h3 class="function"><a name="call-3">call/3</a></h3>
+<div class="spec">
+<p><pre>call(Name :: pid() | atom(),
+     Request :: term(),
+     Timeout :: non_neg_integer()) -&gt;
+        term()</pre></p>
 </div>
 
 <h3 class="function"><a name="system_continue-3">system_continue/3</a></h3>
@@ -81,14 +90,19 @@
 <p><tt>system_continue(Parent, Debug, State) -&gt; any()</tt></p>
 </div>
 
+<h3 class="function"><a name="system_terminate-4">system_terminate/4</a></h3>
+<div class="spec">
+<p><tt>system_terminate(Reason, Parent, Debug, State) -&gt; any()</tt></p>
+</div>
+
 <h3 class="function"><a name="system_get_state-1">system_get_state/1</a></h3>
 <div class="spec">
 <p><tt>system_get_state(State) -&gt; any()</tt></p>
 </div>
 
-<h3 class="function"><a name="system_terminate-4">system_terminate/4</a></h3>
+<h3 class="function"><a name="format_status-2">format_status/2</a></h3>
 <div class="spec">
-<p><tt>system_terminate(Reason, Parent, Debug, State) -&gt; any()</tt></p>
+<p><tt>format_status(Reason, X2) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="write_debug-3">write_debug/3</a></h3>

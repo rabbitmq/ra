@@ -31,6 +31,7 @@ DEP_PLUGINS = elvis_mk
 PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass
 
 EDOC_OUTPUT = docs
+EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}
 
 all::
 

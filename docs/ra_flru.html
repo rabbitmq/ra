@@ -16,11 +16,11 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-handler_fun">handler_fun()</a></h3>
-<p><tt>handler_fun() = fun((<a href="#type-kv_item">kv_item()</a>) -&gt; ok)</tt></p>
+<p><pre>handler_fun() = fun((<a href="#type-kv_item">kv_item()</a>) -&gt; ok)</pre></p>
 
 
 <h3 class="typedecl"><a name="type-kv_item">kv_item()</a></h3>
-<p><tt>kv_item() = {Key::term(), Value::term()}</tt></p>
+<p><pre>kv_item() = {Key :: term(), Value :: term()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
@@ -28,44 +28,48 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#evict-2">evict/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#evict_all-1">evict_all/1</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#new-2">new/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#insert-3">insert/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#new-2">new/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#evict-2">evict/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#evict_all-1">evict_all/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#size-1">size/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="evict-2">evict/2</a></h3>
+<h3 class="function"><a name="new-2">new/2</a></h3>
 <div class="spec">
-<p><tt>evict(Key::term(), State::<a href="#type-state">state()</a>) -&gt; {Evicted::<a href="#type-kv_item">kv_item()</a>, <a href="#type-state">state()</a>} | error</tt><br></p>
-</div>
-
-<h3 class="function"><a name="evict_all-1">evict_all/1</a></h3>
-<div class="spec">
-<p><tt>evict_all(State::<a href="#type-state">state()</a>) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><pre>new(MaxSize :: non_neg_integer(), Handler :: <a href="#type-handler_fun">handler_fun()</a>) -&gt;
+       <a href="#type-state">state()</a></pre></p>
 </div>
 
 <h3 class="function"><a name="fetch-2">fetch/2</a></h3>
 <div class="spec">
-<p><tt>fetch(Key::term(), State::<a href="#type-state">state()</a>) -&gt; {ok, term(), <a href="#type-state">state()</a>} | error</tt><br></p>
+<p><pre>fetch(Key :: term(), State :: <a href="#type-state">state()</a>) -&gt;
+         {ok, term(), <a href="#type-state">state()</a>} | error</pre></p>
 </div>
 
 <h3 class="function"><a name="insert-3">insert/3</a></h3>
 <div class="spec">
-<p><tt>insert(Key::term(), Value::term(), State::<a href="#type-state">state()</a>) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><pre>insert(Key :: term(), Value :: term(), State :: <a href="#type-state">state()</a>) -&gt;
+          <a href="#type-state">state()</a></pre></p>
 </div>
 
-<h3 class="function"><a name="new-2">new/2</a></h3>
+<h3 class="function"><a name="evict-2">evict/2</a></h3>
 <div class="spec">
-<p><tt>new(MaxSize::non_neg_integer(), Handler::<a href="#type-handler_fun">handler_fun()</a>) -&gt; <a href="#type-state">state()</a></tt><br></p>
+<p><pre>evict(Key :: term(), State :: <a href="#type-state">state()</a>) -&gt;
+         {Evicted :: <a href="#type-kv_item">kv_item()</a>, <a href="#type-state">state()</a>} | error</pre></p>
+</div>
+
+<h3 class="function"><a name="evict_all-1">evict_all/1</a></h3>
+<div class="spec">
+<p><pre>evict_all(State :: <a href="#type-state">state()</a>) -&gt; <a href="#type-state">state()</a></pre></p>
 </div>
 
 <h3 class="function"><a name="size-1">size/1</a></h3>
 <div class="spec">
-<p><tt>size(State::<a href="#type-state">state()</a>) -&gt; non_neg_integer()</tt><br></p>
+<p><pre>size(State :: <a href="#type-state">state()</a>) -&gt; non_neg_integer()</pre></p>
 </div>
 <hr>
 

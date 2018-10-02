@@ -340,12 +340,12 @@ init(_) ->
 'apply'(_Meta, {deq, Pid}, Effects, State0) ->
     case queue:out(State0) of
         {{value, Item}, State} ->
-            {State, [{send_msg, Pid, Item} | Effects], ok};
+            {State, [{send_msg, Pid, Item, ra_event} | Effects], ok};
         {empty, _} ->
             {State0, Effects, ok}
     end.
 
 state_enter(eol, State) ->
-    [{send_msg, P, eol} || {P, _} <- queue:to_list(State), is_pid(P)];
+    [{send_msg, P, eol, ra_event} || {P, _} <- queue:to_list(State), is_pid(P)];
 state_enter(_, _) ->
     [].

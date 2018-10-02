@@ -567,7 +567,7 @@ queue_apply({dequeue, For},
 
 waitfor(Msg, ExitWith) ->
     receive
-        {ra_event, _, {machine, Msg}} -> ok
+        Msg -> ok
     after 3000 ->
               exit(ExitWith)
     end.
