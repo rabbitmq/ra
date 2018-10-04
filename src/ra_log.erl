@@ -177,8 +177,8 @@ init(#{uid := UId} = Conf) ->
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_0_0_entry(State0),
-    ?INFO("ra_log:init recovered last_index_term ~w~n",
-          [last_index_term(State)]),
+    ?INFO("~s: ra_log:init recovered last_index_term ~w~n",
+          [State#state.uid, last_index_term(State)]),
     State.
 
 -spec close(ra_log()) -> ok.

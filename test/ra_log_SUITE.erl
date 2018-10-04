@@ -147,7 +147,7 @@ write_recover_then_overwrite(Config) ->
     Idx = ra_log:next_index(Log0),
     Log1 = write_two(Idx, Term, Log0),
     ok = ra_log:close(Log1),
-    Log2 = InitFun(write_recover_then_overwrite),
+    Log2 = InitFun(?FUNCTION_NAME),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
     Log3 = ra_log:write_sync([Entry2], Log2),
