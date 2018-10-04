@@ -174,7 +174,7 @@ init(#{dir := Dir} = Conf0) ->
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
-    {ok, [gen_batch_server:action()], state()}.
+    {ok, state()}.
 handle_batch(Ops, State0) ->
     State = lists:foldl(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
@@ -515,13 +515,13 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     State = State0#state{metrics_cursor = NextCursor,
                          batch = undefined},
 
-    % make notification actions
-    Actions = maps:fold(fun (Pid, WrittenInfo, Acc) ->
-                                [{notify, Pid, {ra_log_event,
-                                                {written, WrittenInfo}}}
-                                 | Acc]
-                        end, [], Waiting),
-    {ok, Actions, State}.
+
+    %% notify writers
+    _ = maps:map(fun (Pid, WrittenInfo) ->
+                         Pid ! {ra_log_event, {written, WrittenInfo}},
+                         ok
+                 end, Waiting),
+    {ok, State}.
 
 incr_batch(#batch{writes = Writes,
                   waiting = Waiting0,

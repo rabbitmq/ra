@@ -122,7 +122,6 @@ append_then_fetch_no_wait(Config) ->
     after 0 ->
               ok
     end,
-
     ok.
 
 
