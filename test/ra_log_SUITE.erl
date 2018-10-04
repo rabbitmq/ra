@@ -116,7 +116,7 @@ append_then_fetch_no_wait(Config) ->
     % if we get async written notification check that handling that
     % results in the last written being updated
     receive
-        {log_event, {written, _} = Evt} ->
+        {ra_log_event, {written, _} = Evt} ->
             Log1 = ra_log:handle_event(Evt, Log),
             {Idx, Term} = ra_log:last_written(Log1)
     after 0 ->

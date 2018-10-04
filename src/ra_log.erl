@@ -321,7 +321,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
                   [State#state.uid, Term, ToIdx, _X]),
             State
     end;
-handle_event({written, {FromIdx, _ToIdx, _Term}},
+handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
              #state{uid = UId,
                     last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
@@ -578,23 +578,13 @@ write_meta(Key, Value, #state{uid = Id}, false) ->
 
 append_sync({Idx, Term, _} = Entry, Log0) ->
     Log = ra_log:append(Entry, Log0),
-    receive
-        {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
-            ra_log:handle_event(Evt, Log)
-    after ?LOG_APPEND_TIMEOUT ->
-              throw(ra_log_append_timeout)
-    end.
+    await_written_idx(Idx, Term, Log).
 
 write_sync(Entries, Log0) ->
     {Idx, Term, _} = lists:last(Entries),
     case ra_log:write(Entries, Log0) of
         {ok, Log} ->
-            receive
-                {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
-                    ra_log:handle_event(Evt, Log)
-            after ?LOG_APPEND_TIMEOUT ->
-                      throw(ra_log_append_timeout)
-            end;
+            await_written_idx(Idx, Term, Log);
         {error, _} = Err ->
             Err
     end.
@@ -993,6 +983,17 @@ pick_range([H | Tail], undefined) ->
 pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
     pick_range(Tail, {min(Fst, CurFst), CurLst}).
 
+
+%% TODO: implent synchronous writes using gen_batch_server:call/3
+await_written_idx(Idx, Term, Log) ->
+    receive
+        {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
+            handle_event(Evt, Log);
+        {ra_log_event, {written, _} = Evt} ->
+            await_written_idx(Idx, Term, handle_event(Evt, Log))
+    after ?LOG_APPEND_TIMEOUT ->
+              throw(ra_log_append_timeout)
+    end.
 
 
 %%%% TESTS
