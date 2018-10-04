@@ -1,0 +1,8 @@
+[{<<"aten">>,
+  {git,"https://github.com/rabbitmq/aten.git",
+       {ref,"716273301f6aa9eae3d429a7260e163dc43c797b"}},
+  0},
+ {<<"gen_batch_server">>,
+  {git,"git@github.com:rabbitmq/gen-batch-server.git",
+       {ref,"3416be7427b32e0880a5ff968d0a989ce022f7c0"}},
+  0}].
