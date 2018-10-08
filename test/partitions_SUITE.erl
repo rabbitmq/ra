@@ -202,20 +202,12 @@ setup_ra_cluster(Config, Machine) ->
     Configs = lists:map(
                 fun(Node) ->
                         ct:pal("Start app on ~p~n", [Node]),
-                        C = make_server_config(Name, Nodes, Node,
-                                                    Machine, DataDir),
+                        C = make_server_config(Name, Nodes, Node, Machine),
                         ok = ct_rpc:call(Node, ?MODULE, node_setup, [DataDir]),
                         ok = ct_rpc:call(Node, application, load, [ra]),
                         ok = ct_rpc:call(Node, application, set_env,
-                                         [ra, data_dir,
-                                          filename:join([DataDir,
-                                                         atom_to_list(Node)])]),
-                        {ok, _} = ct_rpc:call(Node, application,
-                                              ensure_all_started, [ra]),
-                        spawn(Node, fun() ->
-                                            ets:new(ra_fifo_metrics, [public, named_table, {write_concurrency, true}]),
-                                            receive stop -> ok end
-                                    end),
+                                         [ra, data_dir, [DataDir]]),
+                        ok = ct_rpc:call(Node, ra, start, []),
                         C
                 end,
                 Nodes),
@@ -245,14 +237,13 @@ data_dir(Config) ->
     Cwd = ?config(priv_dir, Config),
     filename:join(Cwd, "part").
 
-make_server_config(Name, Nodes, Node, Machine, DataDir) ->
+make_server_config(Name, Nodes, Node, Machine) ->
     #{cluster_id => Name,
       id => {Name, Node},
       uid => atom_to_binary(Name, utf8),
       initial_members => [{Name, N} || N <- Nodes],
       log_init_args =>
-      #{data_dir => filename:join([DataDir, atom_to_list(Node)]),
-        uid => atom_to_binary(Name, utf8)},
+      #{uid => atom_to_binary(Name, utf8)},
       machine =>  Machine
      }.
 

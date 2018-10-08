@@ -14,16 +14,20 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
+    DataDir = ra_env:data_dir(),
+    ok = filelib:ensure_dir(DataDir),
+    %% the ra log ets process is supervised by the system to keep mem tables
+    %% alive whilst the rest of the log infra might be down
     Ets = #{id => ra_log_ets,
-            start => {ra_log_ets, start_link, []}},
+            start => {ra_log_ets, start_link, [DataDir]}},
     SupFlags = #{strategy => one_for_all, intensity => 1, period => 5},
-    RaLogFileSup = #{id => ra_log_sup,
-                     type => supervisor,
-                     start => {ra_log_sup, start_link, []}},
-    RaNodesSup = #{id => ra_server_sup,
-                   type => supervisor,
-                   start => {ra_server_sup, start_link, []}},
-    {ok, {SupFlags, [Ets, RaLogFileSup, RaNodesSup]}}.
+    RaLogSup = #{id => ra_log_sup,
+                 type => supervisor,
+                 start => {ra_log_sup, start_link, [DataDir]}},
+    RaServerSup = #{id => ra_server_sup,
+                    type => supervisor,
+                    start => {ra_server_sup, start_link, []}},
+    {ok, {SupFlags, [Ets, RaLogSup, RaServerSup]}}.
 
 
 

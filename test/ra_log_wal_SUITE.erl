@@ -48,7 +48,7 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     G = ?config(write_strategy, Config),
     Dir = filename:join([PrivDir, G, TestCase]),
-    {ok, Ets} = ra_log_ets:start_link(),
+    {ok, Ets} = ra_log_ets:start_link(PrivDir),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
     WalConf = #{dir => Dir, write_strategy => G},

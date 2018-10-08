@@ -35,9 +35,7 @@ groups() ->
 
 init_per_group(_, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, PrivDir),
-    application:ensure_all_started(ra),
+    {ok, _} = ra:start_in(PrivDir),
     application:ensure_all_started(lg),
     Config.
 
@@ -124,7 +122,6 @@ cluster_is_deleted_with_server_down(Config) ->
     %% the leader waits until the poison pill message has been replicated to
     %% _all_ followers then terminates and deletes it's own data.
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     ServerId1 = ?config(server_id, Config),
     ServerId2 = ?config(server_id2, Config),
     ServerId3 = ?config(server_id3, Config),
@@ -133,7 +130,7 @@ cluster_is_deleted_with_server_down(Config) ->
     timer:sleep(100),
     [ begin
           UId = ra_directory:uid_of(Name),
-          ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
+          ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
       end || {Name, _} <- Peers],
 
     % check data dirs exist for all nodes
@@ -153,13 +150,12 @@ cluster_is_deleted_with_server_down(Config) ->
     % validate there are no data dirs anymore
     [ begin
           UId = ra_directory:uid_of(Name),
-          ?assert(false =:= filelib:is_dir(filename:join([PrivDir, UId])))
+          ?assert(false =:= filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
       end || {Name, _} <- Peers],
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
     ClusterId = ?config(cluster_id, Config),
-    PrivDir = ?config(priv_dir, Config),
     ServerId1 = ?config(server_id, Config),
     ServerId2 = ?config(server_id2, Config),
     ServerId3 = ?config(server_id3, Config),
@@ -168,7 +164,7 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     % check data dirs exist for all nodes
     [ begin
           UId = ra_directory:uid_of(Name),
-          ?assert(filelib:is_dir(filename:join([PrivDir, UId])))
+          ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
       end || {Name, _} <- Peers],
     ra:stop_server(ServerId2),
     ra:stop_server(ServerId3),

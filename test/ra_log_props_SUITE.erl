@@ -42,10 +42,8 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
-    ok = application:set_env(ra, segment_max_entries, 128),
-    application:ensure_all_started(ra),
+    {ok, _} = ra:start([{data_dir, ?config(priv_dir, Config)},
+                        {segment_max_entries, 128}]),
     Config.
 
 end_per_suite(Config) ->

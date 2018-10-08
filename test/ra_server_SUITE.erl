@@ -61,18 +61,6 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
-% init_per_group(_, Config) ->
-%     PrivDir = ?config(priv_dir, Config),
-%     _ = application:load(ra),
-%     ok = application:set_env(ra, data_dir, PrivDir),
-%     application:ensure_all_started(ra),
-%     application:ensure_all_started(lg),
-%     Config.
-
-% end_per_group(_, Config) ->
-%     _ = application:stop(ra),
-%     Config.
-
 init_per_testcase(TestCase, Config) ->
     ok = setup_log(),
     [{test_case, TestCase} | Config].

@@ -44,9 +44,7 @@ end_per_suite(_Config) ->
 
 init_per_group(_, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, PrivDir),
-    application:ensure_all_started(ra),
+    {ok, _} = ra:start_in(PrivDir),
     Config.
 
 end_per_group(_Group, _Config) ->

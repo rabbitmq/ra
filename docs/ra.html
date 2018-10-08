@@ -16,12 +16,24 @@
 <h2><a name="description">Description</a></h2>The primary module for interacting with ra servers and clusters.
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-environment_param">environment_param()</a></h3>
+<p><pre>environment_param() = 
+    {data_dir, <a href="file.html#type-filename">file:filename()</a>} |
+    {wal_data_dir, <a href="file.html#type-filename">file:filename()</a>} |
+    {segment_max_entries, non_neg_integer()} |
+    {wal_max_size_bytes, non_neg_integer()} |
+    {wal_compute_checksums, boolean()} |
+    {wal_write_strategy, default | o_sync}</pre></p>
+
+
 <h3 class="typedecl"><a name="type-ra_cmd_ret">ra_cmd_ret()</a></h3>
 <p><pre>ra_cmd_ret() = <a href="ra_server_proc.html#type-ra_cmd_ret">ra_server_proc:ra_cmd_ret()</a></pre></p>
 
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
+<tr><td valign="top"><a href="#start-1">start/1</a></td><td>Starts the ra application.</td></tr>
+<tr><td valign="top"><a href="#start_in-1">start_in/1</a></td><td>Starts the ra application with a provided data directory.</td></tr>
 <tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server.</td></tr>
 <tr><td valign="top"><a href="#restart_server-1">restart_server/1</a></td><td>Restarts a previously succesfully started ra server.</td></tr>
 <tr><td valign="top"><a href="#stop_server-1">stop_server/1</a></td><td>Stops a ra server.</td></tr>
@@ -76,6 +88,23 @@ an optional process scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>start() -&gt; ok</pre></p>
 </div><p>Starts the ra application</p>
+
+<h3 class="function"><a name="start-1">start/1</a></h3>
+<div class="spec">
+<p><pre>start(Params :: [<a href="#type-environment_param">environment_param()</a>]) -&gt;
+         {ok, [Started]} | {error, term()}</pre>
+<ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
+</div><p>Starts the ra application.
+  If the application is running it will be stopped and restarted.</p>
+
+<h3 class="function"><a name="start_in-1">start_in/1</a></h3>
+<div class="spec">
+<p><pre>start_in(DataDir :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
+            {ok, [Started]} | {error, term()}</pre>
+<ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
+</div><p>Starts the ra application with a provided data directory.
+  The same as ra:start([{data_dir, dir}])
+  If the application is running it will be stopped and restarted.</p>
 
 <h3 class="function"><a name="start_server-1">start_server/1</a></h3>
 <div class="spec">

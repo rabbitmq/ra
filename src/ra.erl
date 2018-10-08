@@ -6,6 +6,8 @@
 
 -export([
          start/0,
+         start/1,
+         start_in/1,
          %% new api
          process_command/2,
          process_command/3,
@@ -49,11 +51,41 @@
 
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
 
+-type environment_param() ::
+    {data_dir, file:filename()} |
+    {wal_data_dir, file:filename()} |
+    {segment_max_entries, non_neg_integer()} |
+    {wal_max_size_bytes, non_neg_integer()} |
+    {wal_compute_checksums, boolean()} |
+    {wal_write_strategy, default | o_sync}.
+
 %% @doc Starts the ra application
 -spec start() -> ok.
 start() ->
     {ok, _} = application:ensure_all_started(ra),
     ok.
+
+%% @doc Starts the ra application.
+%% If the application is running it will be stopped and restarted.
+%% @param DataDir: the data directory to run the application in.
+-spec start(Params :: [environment_param()]) ->
+    {ok, [Started]} | {error, term()} when Started :: term().
+start(Params) when is_list(Params) ->
+    _ = application:stop(ra),
+    _ = application:load(ra),
+    [ok = application:set_env(ra, Param, Value)
+     || {Param, Value} <- Params],
+    application:ensure_all_started(ra).
+
+%% @doc Starts the ra application with a provided data directory.
+%% The same as ra:start([{data_dir, dir}])
+%% If the application is running it will be stopped and restarted.
+%% @param DataDir: the data directory to run the application in.
+-spec start_in(DataDir :: file:filename()) ->
+    {ok, [Started]} | {error, term()}
+      when Started :: term().
+start_in(DataDir) ->
+    start([{data_dir, DataDir}]).
 
 %% @doc Starts a ra server
 %% @param Conf a ra_server_config() configuration map.

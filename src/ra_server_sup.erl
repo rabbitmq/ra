@@ -23,7 +23,7 @@
 -spec start_server(ra_server:ra_server_config()) ->
     supervisor:startchild_ret() | {error, not_new}.
 start_server(#{id := NodeId,
-             uid := UId} = Config) ->
+               uid := UId} = Config) ->
     %% check that the node isn't already registered
     Node = ra_lib:ra_server_id_node(NodeId),
     case rpc:call(Node, ?MODULE, prepare_start_rpc, [UId]) of
@@ -60,7 +60,7 @@ prepare_restart_rpc(RaName) ->
         undefined ->
             name_not_registered;
         UId ->
-            Dir = ra_env:data_dir(UId),
+            Dir = ra_env:server_data_dir(UId),
             % can it be made generic without already knowing the config state?
             ra_log:read_config(Dir)
     end.
@@ -92,7 +92,7 @@ delete_server(NodeId) ->
 delete_server_rpc(RaName) ->
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
-    Dir = ra_env:data_dir(UId),
+    Dir = ra_env:server_data_dir(UId),
     ok = ra_log_segment_writer:release_segments(
            ra_log_segment_writer, UId),
     supervisor:terminate_child(?MODULE, UId),

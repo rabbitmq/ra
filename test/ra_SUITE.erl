@@ -54,12 +54,8 @@ end_per_suite(Config) ->
     Config.
 
 restart_ra(DataDir) ->
-    application:stop(ra),
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, DataDir),
     ok = application:set_env(ra, segment_max_entries, 128),
-    application:ensure_all_started(ra),
-    application:ensure_all_started(sasl),
+    {ok, _} = ra:start_in(DataDir),
     ok.
 
 init_per_group(_G, Config) ->

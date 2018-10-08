@@ -20,9 +20,7 @@ groups() ->
 -type op() :: {add, 1..100} | {subtract, 1..100} | {divide, 2..10} | {mult, 1..10}.
 
 init_per_suite(Config) ->
-    _ = application:load(ra),
-    ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
-    application:ensure_all_started(ra),
+    {ok, _} = ra:start_in(?config(priv_dir, Config)),
     Config.
 
 init_per_testcase(non_assoc, Config) ->

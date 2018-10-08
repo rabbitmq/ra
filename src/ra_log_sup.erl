@@ -3,21 +3,19 @@
 -behaviour(supervisor).
 
 %% API functions
--export([start_link/0]).
+-export([start_link/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
--spec start_link() ->
+-spec start_link(DataDir :: file:filename()) ->
     {ok, pid()} | ignore | {error, term()}.
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(DataDir) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [DataDir]).
 
-init([]) ->
-    {ok, DataDir} = application:get_env(data_dir),
+init([DataDir]) ->
     Meta = #{id => ra_log_meta,
-             start => {ra_log_meta, start_link,
-                       [DataDir]}},
+             start => {ra_log_meta, start_link, [DataDir]}},
 
     SegmentMaxEntries = application:get_env(ra, segment_max_entries, 4096),
     SegWriterConf = #{data_dir => DataDir,
@@ -25,7 +23,7 @@ init([]) ->
     SegWriter = #{id => ra_log_segment_writer,
                   start => {ra_log_segment_writer, start_link,
                             [SegWriterConf]}},
-    WalConf = #{dir => DataDir},
+    WalConf = #{dir => ra_env:wal_data_dir()},
     SupFlags = #{strategy => one_for_all, intensity => 5, period => 5},
     WalSup = #{id => ra_log_wal_sup,
                type => supervisor,

@@ -1,7 +1,7 @@
 -module(ra_log_ets).
 -behaviour(gen_server).
 
--export([start_link/0,
+-export([start_link/1,
          give_away/1]).
 
 -export([init/1,
@@ -21,8 +21,8 @@
 %%% API functions
 %%%===================================================================
 
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+start_link(DataDir) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [DataDir], []).
 
 -spec give_away(ets:tid()) -> true.
 give_away(Tid) ->
@@ -32,7 +32,7 @@ give_away(Tid) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([]) ->
+init([DataDir]) ->
     process_flag(trap_exit, true),
     TableFlags =  [named_table,
                    {read_concurrency, true},
@@ -50,7 +50,6 @@ init([]) ->
     %% {RaUId, ra_index()}
     _ = ets:new(ra_log_snapshot_state, [set | TableFlags]),
 
-    DataDir = ra_env:data_dir(),
     ra_directory:init(DataDir),
     {ok, #state{}}.
 

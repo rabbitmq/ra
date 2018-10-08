@@ -147,7 +147,8 @@ delete_one_server_cluster(Config) ->
     false = undefined =:= UId,
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
-    Wc = filename:join([PrivDir, s1, "*"]),
+    S1DataDir = rpc:call(Node, ra_env, data_dir, []),
+    Wc = filename:join([S1DataDir, "*"]),
     [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
     {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
@@ -275,7 +276,7 @@ start_slave(N, PrivDir) ->
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
     ct:pal("starting slave node with ~s~n", [Pa]),
     {ok, S} = slave:start_link(Host, N, Pa),
-    _ = rpc:call(S, application, ensure_all_started, [ra]),
+    _ = rpc:call(S, ra, start, []),
     S.
 
 %% ra_machine impl

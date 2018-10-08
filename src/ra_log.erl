@@ -108,13 +108,12 @@ init(#{uid := UId} = Conf) ->
     %% overriding the data_dir is only here for test compatibility
     %% as it needs to match what the segment writer has it makes no real
     %% sense to make it independently configurable
-    BaseDir = case Conf of
-                  #{data_dir := D} -> D;
-                  _ ->
-                      ra_env:data_dir()
-              end,
+    Dir = case Conf of
+              #{data_dir := D} -> D;
+              _ ->
+                  ra_env:server_data_dir(UId)
+          end,
     MaxOpen = maps:get(max_open_segments, Conf, 5),
-    Dir = filename:join(BaseDir, ra_lib:to_list(UId)),
 
     ok =  ra_lib:ensure_dir(Dir),
 
