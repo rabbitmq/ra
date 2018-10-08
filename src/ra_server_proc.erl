@@ -35,7 +35,9 @@
          state_query/3,
          trigger_election/2,
          ping/2,
-         log_fold/4
+         log_fold/4,
+         aux_command/2,
+         cast_aux_command/2
         ]).
 
 -export([send_rpc/2]).
@@ -126,6 +128,14 @@ cast_command(ServerRef, Cmd) ->
 -spec cast_command(ra_server_id(), ra_command_priority(), ra_command()) -> ok.
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
+
+-spec aux_command(ra_server_id(), term()) -> ok.
+aux_command(ServerRef, Cmd) ->
+    gen_statem:call(ServerRef, {aux_command, Cmd}).
+
+-spec cast_aux_command(ra_server_id(), term()) -> ok.
+cast_aux_command(ServerRef, Cmd) ->
+    gen_statem:cast(ServerRef, {aux_command, Cmd}).
 
 -spec query(ra_server_id(), query_fun(), local | consistent, timeout()) ->
     {ok, term(), ra_server_id()}.
@@ -274,6 +284,11 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             ok
     end,
     {keep_state, State0#state{delayed_commands = queue:in(Cmd, Delayed)}, []};
+leader(From, {aux_command, Cmd}, State) ->
+    {_, ServerState, Actions} = ra_server:handle_aux(?FUNCTION_NAME, From, Cmd,
+                                                     State#state.server_state),
+
+    {keep_state, State#state{server_state = ServerState}, Actions};
 leader(EventType, flush_commands,
        #state{server_state = ServerState0,
               delayed_commands = Delayed0} = State0) ->
@@ -506,6 +521,11 @@ follower(cast, {command, _Priority,
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
+follower(From, {aux_command, Cmd}, State) ->
+    {_, ServerState, Actions} = ra_server:handle_aux(?FUNCTION_NAME, From, Cmd,
+                                                     State#state.server_state),
+
+    {State#state{server_state = ServerState}, Actions};
 follower({call, From}, {local_query, QueryFun},
          #state{server_state = ServerState} = State) ->
     Reply = perform_local_query(QueryFun, follower, ServerState),

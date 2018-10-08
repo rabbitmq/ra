@@ -158,6 +158,7 @@
                      ]).
 
 -define(OPT_CALL(Call, Def),
+    %% TODO: this will swallow genuine error:undef errors
     try Call of
         Res -> Res
     catch
