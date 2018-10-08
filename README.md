@@ -6,8 +6,31 @@ Ra is a [Raft](https://ramcloud.stanford.edu/~ongaro/thesis.pdf) implementation
 by Team RabbitMQ. It is not tied to RabbitMQ and can be used in any Erlang or Elixir
 project. It is, however, heavily inspired by and geared towards RabbitMQ needs.
 
+Ra (by virtue of being a Raft implementaiton) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
+
 Requires OTP-20 or above.
 
+## Quick start
+
+```erlang
+%% All servers in a Ra cluster are named processes.
+%% Create some Server Ids to pass to the configuration
+ErlangNodes = [ra@node1, ra@node2, ra@node3]
+ServerIds = [{quick_start, N} || N <- ErlangNodes]
+
+%% start a simple distributed addition state machine with an initial state of 0
+{ok, ServersStarted, ServersNotStarted} = ra:start_cluster(quick_start, {simple, fun erlang:'+'/2, 0}, ServerIds),
+
+%% Add a number to the state machine
+%% Simple state machines always return the full state after each operation
+{ok, StateMachineResult, LeaderId} = ra:process_command(hd(ServersStarted), 5),
+
+%% use the leader id from the last command result for the next
+{ok, 12, LeaderId1} = ra:process_command(LeaderId, 7),
+
+```
+
+"Simple" state machines like the above can only take you so far. See [doc/STATEMACHINE.md](doc/STATEMACHINE.md) for how to write a state machine by implementing the `ra_machine` behaviour.
 
 ## Design Goals
 
@@ -49,6 +72,7 @@ which has two major shortcomings:
 * API docs: https://rabbitmq.github.io/ra/
 * How to write a ra statemachine: [doc/STATEMACHINE.md](doc/STATEMACHINE.md)
 * Log implementation: [doc/LOG.md](doc/LOG.md)
+* Internals: [doc/INTERNALS.md](doc/INTERNALS.md)
 
 ## Configuration
 
@@ -89,10 +113,6 @@ Example:
  {wal_write_strategy, default},
 ]
 ```
-
-## Internals
-
-See: [doc/INTERNALS.md](doc/INTERNALS.md)
 
 ## Copyright and License
 
