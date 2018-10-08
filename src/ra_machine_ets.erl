@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_machine_ets).
 -behaviour(gen_server).
 

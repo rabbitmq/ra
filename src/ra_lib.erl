@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_lib).
 
 -export([

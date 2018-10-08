@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_file_handle).
 
 -behaviour(gen_server).

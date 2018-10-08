@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log).
 
 -compile([inline_list_funcs]).

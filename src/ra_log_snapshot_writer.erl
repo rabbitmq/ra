@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_snapshot_writer).
 
 -behaviour(gen_server).

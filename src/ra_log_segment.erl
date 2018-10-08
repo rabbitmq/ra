@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_segment).
 
 -export([open/1,

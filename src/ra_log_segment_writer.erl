@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_segment_writer).
 -behaviour(gen_server).
 

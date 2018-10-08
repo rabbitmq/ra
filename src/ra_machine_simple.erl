@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_machine_simple).
 -behaviour(ra_machine).
 

@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_ets).
 -behaviour(gen_server).
 

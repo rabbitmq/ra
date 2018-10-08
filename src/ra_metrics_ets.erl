@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_metrics_ets).
 -behaviour(gen_server).
 

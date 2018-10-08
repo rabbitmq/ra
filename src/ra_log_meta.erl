@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_meta).
 -behaviour(gen_batch_server).
 

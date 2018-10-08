@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_system_sup).
 
 -behaviour(supervisor).

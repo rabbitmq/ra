@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_flru).
 
 %% small fixed size simple lru cache

@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_server_proc).
 
 -behaviour(gen_statem).

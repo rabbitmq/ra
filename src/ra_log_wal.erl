@@ -1,3 +1,4 @@
+%% @hidden
 -module(ra_log_wal).
 -behaviour(gen_batch_server).
 
