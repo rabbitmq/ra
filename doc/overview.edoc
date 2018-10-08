@@ -1,0 +1,14 @@
+  ** Ra **
+
+@author Team RabbitMQ
+@version 0.9.0
+@title Ra
+@doc `ra' is an implementation of the Raft consensus algorithm
+([https://raft.github.io/]).
+It allows users to write persistent, replicated and fault-tolerant
+state machines by implementing the {@link ra_machine} behaviour.
+
+The {@link ra} module provides the API for starting, stopping and deleting
+Ra clusters, managing membership as well as interacting
+with `ra_machine' implementations running inside `ra' clusters.
+
