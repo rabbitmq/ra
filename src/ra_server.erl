@@ -1430,7 +1430,7 @@ apply_with(_, {Idx, _, _} = Cmd, Acc) ->
 
 add_next_cluster_change(Effects,
                         #{pending_cluster_changes := [C | Rest]} = State) ->
-    {_, From , _, _} = C,
+    {_, #{from := From} , _, _} = C,
     {[{next_event, {call, From}, {command, C}} | Effects],
      State#{pending_cluster_changes => Rest}};
 add_next_cluster_change(Effects, State) ->
