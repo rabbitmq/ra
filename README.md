@@ -6,7 +6,7 @@ Ra is a [Raft](https://ramcloud.stanford.edu/~ongaro/thesis.pdf) implementation
 by Team RabbitMQ. It is not tied to RabbitMQ and can be used in any Erlang or Elixir
 project. It is, however, heavily inspired by and geared towards RabbitMQ needs.
 
-Ra (by virtue of being a Raft implementaiton) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
+Ra (by virtue of being a Raft implementation) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
 
 Requires OTP-20 or above.
 
