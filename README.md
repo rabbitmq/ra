@@ -8,7 +8,26 @@ project. It is, however, heavily inspired by and geared towards RabbitMQ needs.
 
 Ra (by virtue of being a Raft implementation) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
 
-Requires Erlang/OTP 20.3 or later.
+## Project Maturity
+
+This library is maturing and is currently in a pre-1.0 phase. This means that
+the primary APIs (`ra`, `ra_machine` modules) and on disk formats are unlikely
+to change significantly until 1.0 is tagged but _may_ need to be if deemed
+necessary.
+
+### Status
+
+The following Raft features are implemented:
+
+ * Leader election
+ * Log replication
+ * Cluster membership changes: one server (member) at a time
+ * Log compaction (with limitations and RabbitMQ-specific extensions)
+ * Snapshot installation
+
+## Supported Erlang/OTP Versions
+
+Ra requires Erlang/OTP 20.3 or later.
 
 ## Quick start
 
@@ -37,25 +56,6 @@ ServerIds = [{quick_start, N} || N <- ErlangNodes]
  * Low footprint: use as few resources as possible, avoid process tree explosion
  * Able to run thousands of `ra` clusters within an Erlang node
  * Provide adequate performance for use as a basis for a distributed data service
-
-
-## Project Maturity
-
-This library is maturing and is currently in a pre-1.0 phase. This means that
-the primary APIs (`ra`, `ra_machine` modules) and on disk formats are unlikely
-to change significantly until 1.0 is tagged but _may_ need to be if deemed
-necessary.
-
-### Status
-
-The following Raft features are implemented:
-
- * Leader election
- * Log replication
- * Cluster membership changes: one server (member) at a time
- * Log compaction (with limitations and RabbitMQ-specific extensions)
- * Snapshot installation
-
 
 ## Use Cases
 
