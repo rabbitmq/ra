@@ -8,7 +8,7 @@ project. It is, however, heavily inspired by and geared towards RabbitMQ needs.
 
 Ra (by virtue of being a Raft implementation) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
 
-Requires OTP-20 or above.
+Requires Erlang/OTP 20.3 or later.
 
 ## Quick start
 
@@ -116,7 +116,7 @@ Example:
 
 ## Copyright and License
 
-(c) 2017, Pivotal Software Inc.
+(c) 2017-2018, Pivotal Software Inc.
 
 Double licensed under the ASL2 and MPL1.1.
 See [LICENSE](./LICENSE) for details.
