@@ -10,7 +10,7 @@ implemented:
 ```erlang
 -callback init(Conf :: machine_init_args()) -> state().
 
--callback 'apply'(Meta :: command_meta_data(), command(), State) ->
+-callback 'apply'(command_meta_data(), command(), effects(), State) ->
     {State, effects(), reply()}.
 ```
 
@@ -37,12 +37,12 @@ As an example we are going to write a simple key-value store that takes
 ### Writing the store
 
 Create a new erlang module named `ra_kv` using the `ra_machine` behaviour and
-export the `init/1` and `apply/3` functions:
+export the `init/1` and `apply/4` functions:
 
 ```erlang
 -module(ra_kv).
 -behaviour(ra_machine).
--export([init/1, apply/3]).
+-export([init/1, apply/4]).
 ```
 
 First we are going to define a type spec for the state and commands that we will
@@ -55,26 +55,25 @@ use. The state is simply a map of arbitrary keys and values. We can store anythi
                          {read, Key :: term()}.
 ```
 
-To implement `init/1` simply return and empty map and an empty list of effects.
-This is the initial state of our kv store.
+To implement `init/1` simply return an empty map as the initial state of our kv store.
 
 ```erlang
-init(_Config) -> {#{}, []}.
+init(_Config) -> #{}.
 ```
 
-To implement the `apply/3` function we need to handle each of the commands
+To implement the `apply/4` function we need to handle each of the commands
 we support.
 
 ```erlang
-apply(_Meta, {write, Key, Value}, State) ->
-    {maps:put(Key, Value, State), [], ok};
-apply(_Meta, {read, Key}, State) ->
+apply(_Meta, {write, Key, Value}, Effects, State) ->
+    {maps:put(Key, Value, State), Effects, ok};
+apply(_Meta, {read, Key}, Effects, State) ->
     Reply = maps:get(Key, State, undefined),
-    {State, [], Reply}.
+    {State, Effects, Reply}.
 ```
 
 For the `{write, Key, Value}` command we simply put the key and value into the
-map and return the new state as well as an empty list of effects and an `ok`
+map and return the new state, pass through the list of effects and an `ok`
 return value.
 
 For `{read, Key}` we additional return the value of the key or `undefined` if
@@ -97,7 +96,7 @@ start() ->
     Servers = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
     %% an arbitrary cluster id
     ClusterId = <<"ra_kv">>,
-    %% the config passed to `init/1`
+    %% the config passed to `init/1`, must be a `map`
     Config = #{},
     %% the machine configuration
     Machine = {module, ?MODULE, Config},
@@ -111,9 +110,9 @@ If you then start an erlang shell with `make shell` or similar and call
 `ra_kv:start/0` you should hopefully be returned with something like:
 
 ```erlang
-{ok,[{ra_kv1,nonode@nohost},
+{ok,[{ra_kv3,nonode@nohost},
      {ra_kv2,nonode@nohost},
-     {ra_kv3,nonode@nohost}],
+     {ra_kv1,nonode@nohost}],
     []}
 ```
 
@@ -122,17 +121,17 @@ last element of the tuple would contain the servers that were not successfully
 started. If a quorum of servers could not be started the function would return
 and error.
 
-Now you can write your first value into the databas.
+Now you can write your first value into the cluster.
 
 ```erlang
 2> ra:process_command(ra_kv1, {write, k, v}).
-{ok, ok, ra_kv1}
+{ok, ok, {ra_kv1,nonode@nohost}}
 3> ra:process_command(ra_kv1, {read, k}).
-{ok, v, ra_kv1}
+{ok, v, {ra_kv1,nonode@nohost}}
 4> ra:process_command(ra_kv1, {write, k, v2}).
-{ok, ok, ra_kv1}
+{ok, ok, {ra_kv1,nonode@nohost}}
 5> ra:process_command(ra_kv1, {read, k}).
-{ok, v2, ra_kv1}
+{ok, v2, {ra_kv1,nonode@nohost}}
 ```
 
 `ra:process_command/2` blocks until the command has achieved consensus
@@ -153,8 +152,8 @@ than calling `ra:process_command/2` directly.
 write(Key, Value) ->
     %% it would make sense to cache this to avoid redirection costs when this
     %% server happens not to be the current leader
-    Node = ra_kv1,
-    case ra:process_command(Node, {write, Key, Value}) of
+    Server = ra_kv1,
+    case ra:process_command(Server, {write, Key, Value}) of
         {ok, _, _} ->
             ok;
         Err ->
@@ -162,8 +161,8 @@ write(Key, Value) ->
     end.
 
 read(Key) ->
-    Node = ra_kv1,
-    case ra:process_command(Node, {read, Key}) of
+    Server = ra_kv1,
+    case ra:process_command(Server, {read, Key}) of
         {ok, Value, _} ->
             {ok, Value};
         Err ->
@@ -173,8 +172,8 @@ read(Key) ->
 
 ## Effects
 
-Effects are used to separate the state machine logic from the effects it wants
-to take inside it's environment. Each call to the `apply/3` function can return
+Effects are used to separate the state machine logic from the side effects it wants
+to take inside it's environment. Each call to the `apply/4` function can return
 a list of effects for the leader to realise. This includes sending messages,
 setting up server and process monitors and calling arbitrary functions.
 Only the leader that first applies an entry will attempt the effect. Followers
@@ -207,7 +206,7 @@ if needed.
 
 ### Monitors
 
-Use '`{monitor, process | node, pid() | node()}` to ask the `ra` leader to
+Use `{monitor, process | node, pid() | node()}` to ask the `ra` leader to
 monitor a process or node. If `ra` receives a `DOWN` for a process it
 is monitoring it will commit a `{down,  pid(), term()}` command to the log that
 the state machine needs to handle. If it detects a monitored node as down or up
@@ -228,5 +227,5 @@ or similar.
 ### Update the release cursor (Snapshotting)
 
 To (potentially) trigger a snapshot return the `{release_cursor, RaftIndex, MachineState}`
-effect. This is why the raft index is included in the `apply/3` function. Ra will
+effect. This is why the raft index is included in the `apply/4` function. Ra will
 only create a snapshot if doing so will result in log segments being deleted.
