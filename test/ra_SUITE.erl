@@ -436,7 +436,7 @@ follower_catchup(Config) ->
     N2 = {nn(Config, 2), node()},
     % start the first server and wait a bit
     Conf = fun (NodeId, NodeIds, UId) ->
-               #{cluster_id => Name,
+               #{cluster_name => Name,
                  id => NodeId,
                  uid => UId,
                  initial_members => NodeIds,
@@ -572,8 +572,8 @@ terminate_cluster(Nodes) ->
     [ra:stop_server(P) || P <- Nodes].
 
 new_server(Name, Config) ->
-    ClusterId = ?config(test_name, Config),
-    ok = ra:start_server(ClusterId, {Name, node()}, add_machine(), []),
+    ClusterName = ?config(test_name, Config),
+    ok = ra:start_server(ClusterName, {Name, node()}, add_machine(), []),
     ok.
 
 stop_server(Name) ->

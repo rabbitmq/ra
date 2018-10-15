@@ -20,8 +20,8 @@
 
 %% Sections 5.1-5.3.
 
-%% uniquely identifies the ra cluster
--type ra_cluster_id() :: term().
+%% a friendly name for the cluster
+-type ra_cluster_name() :: binary() | string() | atom().
 
 %% Uniquely identifies a ra server on a local erlang node
 %% used for on disk resources and local name to pid mapping

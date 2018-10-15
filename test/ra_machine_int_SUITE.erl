@@ -56,7 +56,7 @@ init_per_testcase(TestCase, Config) ->
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {modname, TestCase},
-     {cluster_id, TestCase},
+     {cluster_name, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
      {server_id, {TestCase, node()}},
      {uid2, atom_to_binary(ServerName2, utf8)},
@@ -80,9 +80,9 @@ send_msg_without_options(Config) ->
     meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
                                     {State, [{send_msg, Pid, Msg}], ok}
                             end),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
     receive ?FUNCTION_NAME -> ok
     after 250 ->
@@ -98,9 +98,9 @@ send_msg_with_ra_event_option(Config) ->
     meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
                                     {State, [{send_msg, Pid, Msg, ra_event}], ok}
                             end),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
     receive
         {ra_event, ServerId, {machine, ?FUNCTION_NAME}} -> ok
@@ -117,9 +117,9 @@ send_msg_with_cast_option(Config) ->
     meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
                                     {State, [{send_msg, Pid, Msg, cast}], ok}
                             end),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
     receive
         {'$gen_cast', ?FUNCTION_NAME} -> ok
@@ -137,9 +137,9 @@ send_msg_with_ra_event_and_cast_options(Config) ->
                 fun (_, {echo, Pid, Msg}, _, State) ->
                         {State, [{send_msg, Pid, Msg, [ra_event, cast]}], ok}
                 end),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
     receive
         {'$gen_cast', {ra_event, ServerId, {machine, ?FUNCTION_NAME}}} -> ok
@@ -157,9 +157,9 @@ machine_replies(Config) ->
                                 (_, c2, _, State) ->
                                     {State, [], {error, some_error_reply}}
                             end),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, the_reply, ServerId} = ra:process_command(ServerId, c1),
     %% ensure we can return any reply type
     {ok, {error, some_error_reply}, ServerId} =
@@ -167,7 +167,7 @@ machine_replies(Config) ->
     ok.
 
 leader_monitors(Config) ->
-    ClusterId = ?config(priv_dir, Config),
+    ClusterName = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     Name = element(1, ServerId),
     Mod = ?config(modname, Config),
@@ -182,7 +182,7 @@ leader_monitors(Config) ->
                     (_, _) ->
                         []
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
@@ -198,7 +198,7 @@ leader_monitors(Config) ->
     ok.
 
 follower_takes_over_monitor(Config) ->
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     {_Name1, _} = ServerId1 = ?config(server_id, Config),
     {Name2, _} = ServerId2 = ?config(server_id2, Config),
     {Name3, _} = ServerId3 = ?config(server_id3, Config),
@@ -220,7 +220,7 @@ follower_takes_over_monitor(Config) ->
                     (_, _) ->
                         []
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, Cluster),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, ok, {LeaderName, _}} =
         ra:process_command(ServerId1, {monitor_me, self()}),
     %% sleep here as it seems monitors, or this stat aren't updated synchronously
@@ -247,7 +247,7 @@ deleted_cluster_emits_eol_effect(Config) ->
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
@@ -261,7 +261,7 @@ deleted_cluster_emits_eol_effect(Config) ->
                     (_, _) ->
                         []
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {monitor_me, self()}),
     {ok, _} = ra:delete_cluster([ServerId]),
     % validate
@@ -279,7 +279,7 @@ deleted_cluster_emits_eol_effect(Config) ->
 
 machine_state_enter_effects(Config) ->
     ServerId = ?config(server_id, Config),
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     Mod = ?config(modname, Config),
     Self = self(),
     meck:new(Mod, [non_strict]),
@@ -292,7 +292,7 @@ machine_state_enter_effects(Config) ->
                 fun (RaftState, _State) ->
                         [{send_msg, Self, {state_enter, RaftState}, ra_event}]
                 end),
-    ok = start_cluster(ClusterId, {module, Mod, #{}}, [ServerId]),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     ra:delete_cluster([ServerId]),
     validate_state_enters([follower, candidate, leader, eol]),
     ok.
@@ -309,8 +309,8 @@ validate_state_enters(States) ->
                           end
                   end, States).
 
-start_cluster(ClusterId, Machine, ServerIds) ->
-    {ok, Started, _} = ra:start_cluster(ClusterId, Machine, ServerIds),
+start_cluster(ClusterName, Machine, ServerIds) ->
+    {ok, Started, _} = ra:start_cluster(ClusterName, Machine, ServerIds),
     ?assertEqual(length(ServerIds), length(Started)),
     ok.
 

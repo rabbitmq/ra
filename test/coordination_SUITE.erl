@@ -51,7 +51,7 @@ end_per_group(_Group, _Config) ->
 
 init_per_testcase(TestCase, Config) ->
     DataDir = filename:join(?config(priv_dir, Config), TestCase),
-    [{data_dir, DataDir}, {cluster_id, TestCase} | Config].
+    [{data_dir, DataDir}, {cluster_name, TestCase} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -62,7 +62,7 @@ end_per_testcase(_TestCase, _Config) ->
 
 conf({Name, _Node} = NodeId, Nodes) ->
     UId = atom_to_binary(Name, utf8),
-    #{cluster_id => c1,
+    #{cluster_name => c1,
       id => NodeId,
       uid => UId,
       initial_members => Nodes,
@@ -95,10 +95,10 @@ start_stop_restart_delete_on_remote(Config) ->
 
 start_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
-    {ok, Started, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
     % assert all nodes are actually started
@@ -110,11 +110,11 @@ start_cluster(Config) ->
 
 start_or_restart_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     %% this should start
-    {ok, Started, []} = ra:start_or_restart_cluster(ClusterId, Machine,
+    {ok, Started, []} = ra:start_or_restart_cluster(ClusterName, Machine,
                                                     NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
@@ -124,9 +124,9 @@ start_or_restart_cluster(Config) ->
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
     % timer:sleep(1000),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     %% this should restart
-    {ok, Started2, []} = ra:start_or_restart_cluster(ClusterId, Machine,
+    {ok, Started2, []} = ra:start_or_restart_cluster(ClusterName, Machine,
                                                      NodeIds),
     [] = Started2 -- NodeIds,
     timer:sleep(1000),
@@ -138,12 +138,12 @@ start_or_restart_cluster(Config) ->
 
 delete_one_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     [{_, Node}] = NodeIds,
-    UId = rpc:call(Node, ra_directory, uid_of, [ClusterId]),
+    UId = rpc:call(Node, ra_directory, uid_of, [ClusterName]),
     false = undefined =:= UId,
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
@@ -154,7 +154,7 @@ delete_one_server_cluster(Config) ->
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     % restart node
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
     receive
         Anything ->
             ct:pal("got weird message ~p~n", [Anything]),
@@ -164,7 +164,7 @@ delete_one_server_cluster(Config) ->
     end,
     %% validate there is no data
     Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
-    undefined = rpc:call(Node, ra_directory, uid_of, [ClusterId]),
+    undefined = rpc:call(Node, ra_directory, uid_of, [ClusterName]),
     undefined = rpc:call(Node, ra_log_meta, fetch, [UId, current_term]),
     ct:pal("Files  ~p~n", [Files]),
     [] = Files,
@@ -173,10 +173,10 @@ delete_one_server_cluster(Config) ->
 
 delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
@@ -194,10 +194,10 @@ delete_two_server_cluster(Config) ->
 
 delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(ClusterId, Machine, NodeIds),
+    {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
@@ -208,14 +208,14 @@ delete_three_server_cluster(Config) ->
 
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
     % s3 isn't available
     S3 = make_node_name(s3),
-    NodeIds = NodeIds0 ++ [{ClusterId, S3}],
+    NodeIds = NodeIds0 ++ [{ClusterName, S3}],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, NotStarted} =
-        ra:start_cluster(ClusterId, Machine, NodeIds),
+        ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert  two were started
     ?assertEqual(2,  length(Started)),
     ?assertEqual(1,  length(NotStarted)),
@@ -228,15 +228,15 @@ start_cluster_majority(Config) ->
 
 start_cluster_minority(Config) ->
     PrivDir = ?config(data_dir, Config),
-    ClusterId = ?config(cluster_id, Config),
-    NodeIds0 = [{ClusterId, start_slave(N, PrivDir)} || N <- [s1]],
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
     % s3 isn't available
     S2 = make_node_name(s2),
     S3 = make_node_name(s3),
-    NodeIds = NodeIds0 ++ [{ClusterId, S2}, {ClusterId, S3}],
+    NodeIds = NodeIds0 ++ [{ClusterName, S2}, {ClusterName, S3}],
     Machine = {module, ?MODULE, #{}},
     {error, cluster_not_formed} =
-        ra:start_cluster(ClusterId, Machine, NodeIds),
+        ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert none is started
     [{error, _} = ra_server_proc:ping(N, 50) || N <- NodeIds],
     [ok = slave:stop(S) || {_, S} <- NodeIds0],

@@ -4,27 +4,26 @@
 
 Identity is a somewhat convoluted topic in `ra` consisting of multiple parts used for different aspects of the system.
 
-1. Cluster Id
+1. Cluster Name (`binary() | string() | atom()`)
 
-    Each `ra` cluster is assigned an id that needs to be unique within the erlang cluster it is running on.
+    The cluster name is mostly a "friendly" name for the ra cluster. Something that identifies the entity the cluster is meant to represent. The cluster name isn't strictly part of a clusters identity.
 
-2. Server Id
+2. Server Id (`{atom(), node)_}`)
 
     The server id is a tuple of a `ra` server's locally registered name and the erlang server it resides on. This is the primary id used for membership in ra and needs to be a persistent addressable (can be used to send messages) id. A `pid()` would not work as it isn't persisted across process restarts. Although typically each `ra` server within a `ra` cluster is started on a separate erlang node `ra` supports servers within the same cluster sharing erlang nodes. Hence we cannot simply re-use the cluster id as the registered name.
 
-3. UID
+3. UId (base64url encoded `binary()`)
 
-    Each `ra` server also needs an id that is unique to the local erlang node _and_ unique across incarnations of `ra` clusters with the same cluster id. This is used for interactions with the write ahead log, segment and snapshot writer processes who use the `ra_directory` to lookup the current `pid()` for a given id. It is also, critically, used to provide a identity for the server on disk. NB: Hence it is _required_ for this UId to be or readyly converted to a filename safe string as it is used to create the server's data
-directory on disk. When using `ra:start_server/4` the UId is automatically generated.
+    Each `ra` server also needs an id that is unique to the local erlang node _and_ unique across incarnations of `ra` clusters with the same cluster id. This is used for interactions with the write ahead log, segment and snapshot writer processes who use the `ra_directory` to lookup the current `pid()` for a given id. It is also, critically, used to provide a identity for the server on disk. NB: Hence it is _required_ for this UId to be filename safe as it is used to create the server's data directory on disk. When using `ra:start_server/4` or `ra:start_cluster/3` the UId is automatically generated. Otherwise it should confirm to the [base64url standard](https://tools.ietf.org/html/rfc4648#section-5).
 
-    This is to handle the case where a `ra` cluster with the same name is deleted and then re-created with the same cluster id and server ids shortly after. In this instance the write ahead log may contain entries from the previous incarnation which means we could be mixing entries written in the previous incarnation with ones written in the current incarnation which obviously is unacceptable. Hence providing a unique local identity is critical for correct operation. We suggest using a combination of the locally registered name combined with a time stamp or some random material.
+    This is to handle the case where a `ra` cluster with the same name is deleted and then re-created with the same cluster id and server ids shortly after. In this instance the write ahead log may contain entries from the previous incarnation which means we could be mixing entries written in the previous incarnation with ones written in the current incarnation which obviously is unacceptable. Hence providing a unique local identity is critical for correct operation. We suggest using a combination of the locally registered name combined with some random material.
 
 
 Example config:
 
 
 ```
-Config = #{cluster_id => <<"ra-cluster-1">>,
+Config = #{cluster_name => <<"ra-cluster-1">>,
            server_id => {ra_cluster_1, ra1@snowman},
            uid => <<"ra_cluster_1_1519808362841">>
            ...},

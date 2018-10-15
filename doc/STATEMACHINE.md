@@ -86,16 +86,16 @@ An that is it! The state machine is finished.
 
 To actually run this we need to configure a ra cluster to use the `ra_kv`
 state machine and start it. The simplest way is to use the `ra:start_cluster/3`
-function. It takes a ClusterId that can be an arbitrary term, we here use a
-binary, a machine configuration and a list of servers that define the initial
+function. It takes a ClusterName that can be a binary, string or atom,
+a machine configuration and a list of servers that define the initial
 set of members.
 
 ```erlang
 start() ->
     %% the initial cluster members
-    Servers = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
-    %% an arbitrary cluster id
-    ClusterId = <<"ra_kv">>,
+    Members = [{ra_kv1, node()}, {ra_kv2, node()}, {ra_kv3, node()}],
+    %% an arbitrary cluster name
+    ClusterName = <<"ra_kv">>,
     %% the config passed to `init/1`, must be a `map`
     Config = #{},
     %% the machine configuration
@@ -103,7 +103,7 @@ start() ->
     %% ensure ra is started
     application:ensure_all_started(ra),
     %% start a cluster instance running the `ra_kv` machine
-    ra:start_cluster(ClusterId, Machine, Servers).
+    ra:start_cluster(ClusterName, Machine, Members).
 ```
 
 If you then start an erlang shell with `make shell` or similar and call

@@ -130,7 +130,7 @@
 
 -type ra_server_config() :: #{id := ra_server_id(),
                               uid := ra_uid(),
-                              cluster_id := ra_cluster_id(),
+                              cluster_name := ra_cluster_name(),
                               log_init_args := ra_log:ra_log_init_args(),
                               initial_members := [ra_server_id()],
                               machine := machine_conf(),
@@ -159,14 +159,14 @@
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
 
--spec name(ClusterId::string(), UniqueSuffix::string()) -> atom().
-name(ClusterId, UniqueSuffix) ->
-    list_to_atom("ra_" ++ ClusterId ++ "_server_" ++ UniqueSuffix).
+-spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
+name(ClusterName, UniqueSuffix) ->
+    list_to_atom("ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix).
 
 -spec init(ra_server_config()) -> ra_server_state().
 init(#{id := Id,
        uid := UId,
-       cluster_id := _ClusterId,
+       cluster_name := _ClusterName,
        initial_members := InitialNodes,
        log_init_args := LogInitArgs,
        machine := MachineConf} = Config) ->

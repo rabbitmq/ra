@@ -49,7 +49,7 @@ init_per_testcase(TestCase, Config) ->
     NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {modname, TestCase},
-     {cluster_id, TestCase},
+     {cluster_name, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
      {server_id, {TestCase, node()}},
      {uid2, atom_to_binary(NodeName2, utf8)},
@@ -68,11 +68,11 @@ dequeue(Server) ->
 
 start_stopped_server(Config) ->
     %% ra:start_server should fail if the node already exists
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, ServerId, PrivDir, []),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
     ok = ra:start_server(Conf),
     ok = ra:trigger_election(ServerId),
     ok = enqueue(ServerId, msg1),
@@ -85,11 +85,11 @@ start_stopped_server(Config) ->
 
 
 server_is_deleted(Config) ->
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
-    Conf = conf(ClusterId, UId, ServerId, PrivDir, []),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
     _ = ra:start_server(Conf),
     ok = ra:trigger_election(ServerId),
     ok = enqueue(ServerId, msg1),
@@ -121,12 +121,12 @@ cluster_is_deleted_with_server_down(Config) ->
     %% it's data
     %% the leader waits until the poison pill message has been replicated to
     %% _all_ followers then terminates and deletes it's own data.
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId1 = ?config(server_id, Config),
     ServerId2 = ?config(server_id2, Config),
     ServerId3 = ?config(server_id3, Config),
     Peers = [ServerId1, ServerId2, ServerId3],
-    ok = start_cluster(ClusterId, Peers),
+    ok = start_cluster(ClusterName, Peers),
     timer:sleep(100),
     [ begin
           UId = ra_directory:uid_of(Name),
@@ -155,12 +155,12 @@ cluster_is_deleted_with_server_down(Config) ->
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
-    ClusterId = ?config(cluster_id, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId1 = ?config(server_id, Config),
     ServerId2 = ?config(server_id2, Config),
     ServerId3 = ?config(server_id3, Config),
     Peers = [ServerId1, ServerId2, ServerId3],
-    ok = start_cluster(ClusterId, Peers),
+    ok = start_cluster(ClusterName, Peers),
     % check data dirs exist for all nodes
     [ begin
           UId = ra_directory:uid_of(Name),
@@ -175,8 +175,8 @@ cluster_cannot_be_deleted_in_minority(Config) ->
 
 server_restart_after_application_restart(Config) ->
     ServerId = ?config(server_id, Config),
-    ClusterId = ?config(cluster_id, Config),
-    ok = start_cluster(ClusterId, [ServerId]),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
     ok= enqueue(ServerId, msg1),
     application:stop(ra),
     application:start(ra),
@@ -192,8 +192,8 @@ server_restart_after_application_restart(Config) ->
 restarted_server_does_not_reissue_side_effects(Config) ->
     ServerId = ?config(server_id, Config),
     Name = element(1, ServerId),
-    ClusterId = ?config(cluster_id, Config),
-    ok = start_cluster(ClusterId, [ServerId]),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
     ok = enqueue(ServerId, msg1),
     {ok, _, _} = ra:process_command(ServerId, {deq, self()}),
     receive
@@ -219,8 +219,8 @@ restarted_server_does_not_reissue_side_effects(Config) ->
 
 recover(Config) ->
     ServerId = ?config(server_id, Config),
-    ClusterId = ?config(cluster_id, Config),
-    ok = start_cluster(ClusterId, [ServerId]),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
     ok = enqueue(ServerId, msg1),
     ra:members(ServerId),
     ra:stop_server(ServerId),
@@ -233,8 +233,8 @@ recover(Config) ->
 
 recover_after_kill(Config) ->
     ServerId = {Name, _} = ?config(server_id, Config),
-    ClusterId = ?config(cluster_id, Config),
-    ok = start_cluster(ClusterId, [ServerId]),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
     ra:members(ServerId),
     ok = enqueue(ServerId, msg1),
     {F2, Deqd} = enq_deq_n(64, ServerId),
@@ -269,7 +269,7 @@ recover_after_kill(Config) ->
 start_server_uid_validation(Config) ->
     ServerId = ?config(server_id, Config),
     UId = <<"ADSFASDFø"/utf8>>,
-    Conf = #{cluster_id => ?config(cluster_id, Config),
+    Conf = #{cluster_name => ?config(cluster_name, Config),
              id => ServerId,
              uid => UId,
              initial_members => [ServerId],
@@ -290,8 +290,8 @@ enq_deq_n(N, ServerId, Acc) ->
     true = Deq /= empty,
     enq_deq_n(N-1, ServerId, [Deq | Acc]).
 
-conf(ClusterId, UId, ServerId, _, Peers) ->
-    #{cluster_id => ClusterId,
+conf(ClusterName, UId, ServerId, _, Peers) ->
+    #{cluster_name => ClusterName,
       id => ServerId,
       uid => UId,
       log_init_args => #{uid => UId},
@@ -310,15 +310,15 @@ validate_process_down(Name, Num) ->
             validate_process_down(Name, Num-1)
     end.
 
-start_cluster(ClusterId, ServerIds, Config) ->
-    {ok, Started, _} = ra:start_cluster(ClusterId,
+start_cluster(ClusterName, ServerIds, Config) ->
+    {ok, Started, _} = ra:start_cluster(ClusterName,
                                         {module, ?MODULE, Config},
                                         ServerIds),
     ?assertEqual(lists:sort(ServerIds), lists:sort(Started)),
     ok.
 
-start_cluster(ClusterId, ServerIds) ->
-    start_cluster(ClusterId, ServerIds, #{}).
+start_cluster(ClusterName, ServerIds) ->
+    start_cluster(ClusterName, ServerIds, #{}).
 
 %% ra_machine test impl
 init(_) ->

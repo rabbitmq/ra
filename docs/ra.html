@@ -144,14 +144,14 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start_or_restart_cluster-3">start_or_restart_cluster/3</a></h3>
 <div class="spec">
-<p><pre>start_or_restart_cluster(ClusterId :: <a href="#type-ra_cluster_id">ra_cluster_id()</a>,
+<p><pre>start_or_restart_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
                          Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
                          RemServers :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                             {ok,
                              [<a href="#type-ra_server_id">ra_server_id()</a>],
                              [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterId</tt>: the cluster id of the cluster.<br>
+<p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 </p>
 <p>returns: <p>
@@ -171,12 +171,12 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
 <div class="spec">
-<p><pre>start_cluster(ClusterId :: <a href="#type-ra_cluster_id">ra_cluster_id()</a>,
+<p><pre>start_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
               Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
               ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                  {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                  {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterId</tt>: the cluster id of the cluster.<br>
+<p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 <tt>ServerIds</tt>: The list of ra server ids.<br>
 </p>
@@ -190,13 +190,12 @@ an optional process scoped term as correlation identifier.</td></tr>
  
   If a cluster could not be formed any servers that did manage to start are
   forcefully deleted.</p>
-</div><p><p>Starts a new distributed ra cluster.</p>
- 
+</div><p>Starts a new distributed ra cluster.
  </p>
 
 <h3 class="function"><a name="start_server-4">start_server/4</a></h3>
 <div class="spec">
-<p><pre>start_server(ClusterId :: <a href="#type-ra_cluster_id">ra_cluster_id()</a>,
+<p><pre>start_server(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
              ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
              Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
              ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;

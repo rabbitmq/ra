@@ -122,7 +122,7 @@ init(_Config) ->
       current_term := CurrentTerm,
       log := Log0} = base_state(3),
     % ensure it is written to the log
-    InitConf = #{cluster_id => init,
+    InitConf = #{cluster_name => init,
                  id => Id,
                  uid => UId,
                  log_init_args => #{data_dir => "", uid => <<>>},
@@ -150,7 +150,7 @@ init(_Config) ->
     ok.
 
 init_restores_cluster_changes(_Config) ->
-    InitConf = #{cluster_id => init_restores_cluster_changes,
+    InitConf = #{cluster_name => init_restores_cluster_changes,
                  id => n1,
                  uid => <<"n1">>,
                  log_init_args => #{data_dir => "", uid => <<>>},
@@ -1130,7 +1130,7 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
     ok.
 
 is_new(_Config) ->
-    Args = #{cluster_id => some_id,
+    Args = #{cluster_name => some_id,
              id => {ra, node()},
              uid => <<"ra">>,
              initial_members => [],
@@ -1402,7 +1402,7 @@ leader_receives_install_snapshot_result(_Config) ->
 
 init_servers(ServerIds, Machine) ->
     lists:foldl(fun (ServerId, Acc) ->
-                        Args = #{cluster_id => some_id,
+                        Args = #{cluster_name => some_id,
                                  id => ServerId,
                                  uid => atom_to_binary(ServerId, utf8),
                                  initial_members => ServerIds,
@@ -1421,7 +1421,7 @@ empty_state(NumServers, Id) ->
     Servers = lists:foldl(fun(N, Acc) ->
                                 [list_to_atom("n" ++ integer_to_list(N)) | Acc]
                         end, [], lists:seq(1, NumServers)),
-    ra_server_init(#{cluster_id => someid,
+    ra_server_init(#{cluster_name => someid,
                      id => Id,
                      uid => atom_to_binary(Id, utf8),
                      initial_members => Servers,

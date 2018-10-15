@@ -146,7 +146,7 @@ delete_server(ServerId) ->
 %% @doc Starts or restarts a ra cluster.
 %%
 %%
-%% @param ClusterId the cluster id of the cluster.
+%% @param ClusterName the name of the cluster.
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @param ServerIds The list of ra server ids.
 %% @returns
@@ -160,11 +160,11 @@ delete_server(ServerId) ->
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
 %% forcefully deleted.
--spec start_or_restart_cluster(ra_cluster_id(), ra_server:machine_conf(),
+-spec start_or_restart_cluster(ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
-start_or_restart_cluster(ClusterId, Machine,
+start_or_restart_cluster(ClusterName, Machine,
                          [FirstServer | RemServers] = ServerIds) ->
     case ra_server_sup:restart_server(FirstServer) of
         {ok, _} ->
@@ -173,13 +173,12 @@ start_or_restart_cluster(ClusterId, Machine,
             {ok, ServerIds, []};
         {error, Err} ->
             ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
-            start_cluster(ClusterId, Machine, ServerIds)
+            start_cluster(ClusterName, Machine, ServerIds)
     end.
 
 %% @doc Starts a new distributed ra cluster.
 %%
-%%
-%% @param ClusterId the cluster id of the cluster.
+%% @param ClusterName the name of the cluster.
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @param ServerIds The list of ra server ids.
 %% @returns
@@ -192,19 +191,19 @@ start_or_restart_cluster(ClusterId, Machine,
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
--spec start_cluster(ra_cluster_id(), ra_server:machine_conf(), [ra_server_id()]) ->
+-spec start_cluster(ra_cluster_name(), ra_server:machine_conf(), [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
-start_cluster(ClusterId, Machine, ServerIds) ->
+start_cluster(ClusterName, Machine, ServerIds) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(fun (N) ->
-                                          ok == start_server(ClusterId, N,
+                                          ok == start_server(ClusterName, N,
                                                              Machine, ServerIds)
                                   end, ServerIds),
     case Started of
         [] ->
             ?WARN("ra: failed to form new cluster ~w.~n "
-                  "No servers were succesfully started.~n", [ClusterId]),
+                  "No servers were succesfully started.~n", [ClusterName]),
             {error, cluster_not_formed};
         _ ->
             %% try triggering elections until one succeeds
@@ -215,14 +214,14 @@ start_cluster(ClusterId, Machine, ServerIds) ->
                 {ok, _, Leader} ->
                     ?INFO("ra: started cluster ~s with ~b servers~n"
                           "~b servers failed to start: ~w~n"
-                          "Leader: ~w", [ClusterId, length(ServerIds),
+                          "Leader: ~w", [ClusterName, length(ServerIds),
                                          length(NotStarted), NotStarted,
                                          Leader]),
                     % we have a functioning cluster
                     {ok, Started, NotStarted};
                 Err ->
                     ?WARN("ra: failed to form new cluster ~w.~n "
-                          "Error: ~w~n", [ClusterId, Err]),
+                          "Error: ~w~n", [ClusterName, Err]),
                     [delete_server(N) || N <- Started],
                     % we do not have a functioning cluster
                     {error, cluster_not_formed}
@@ -230,13 +229,13 @@ start_cluster(ClusterId, Machine, ServerIds) ->
     end.
 
 
--spec start_server(ra_cluster_id(), ra_server_id(),
+-spec start_server(ra_cluster_name(), ra_server_id(),
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
-start_server(ClusterId, ServerId, Machine, ServerIds) ->
-    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterId), 4),
+start_server(ClusterName, ServerId, Machine, ServerIds) ->
+    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterName), 4),
     UId = ra_lib:make_uid(string:uppercase(Prefix)),
-    Conf = #{cluster_id => ClusterId,
+    Conf = #{cluster_name => ClusterName,
              id => ServerId,
              uid => UId,
              initial_members => ServerIds,
