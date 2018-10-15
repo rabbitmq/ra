@@ -9,7 +9,7 @@
                'ra_machine_simple','ra_metrics_ets','ra_server','ra_server_proc',
                'ra_server_sup','ra_sup','ra_system_sup']},
 	{registered, [ra_sup]},
-	{applications, [kernel,stdlib,sasl,crypto,aten]},
+	{applications, [kernel,stdlib,sasl,crypto,aten,gen_batch_server]},
 	{mod, {ra_app, []}},
 	{env, [
 	{data_dir, "/tmp/ra_data"}
