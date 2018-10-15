@@ -1,6 +1,6 @@
 {application, 'ra', [
 	{description, "Experimental Raft library"},
-	{vsn, "0.1.0"},
+	{vsn, "0.9.1"},
 	{modules, ['ra','ra_app','ra_directory','ra_env',
                'ra_file_handle','ra_flru','ra_lib','ra_log','ra_log_ets',
                'ra_log_meta','ra_log_segment','ra_log_segment_writer',
