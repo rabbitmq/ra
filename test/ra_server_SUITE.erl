@@ -88,8 +88,9 @@ setup_log() ->
                                              ra_log_memory:read_meta(K, L), D)
                                    end),
     meck:expect(ra_log, read_snapshot, fun ra_log_memory:read_snapshot/1),
+    meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory: snapshot_index_term/1),
-    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/2),
+    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/3),
     meck:expect(ra_log, take, fun ra_log_memory:take/3),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/2),
     meck:expect(ra_log, append_sync,
@@ -138,8 +139,9 @@ init(_Config) ->
     #{current_term := 5,
       voted_for := some_server} = ra_server_init(InitConf),
     % snapshot
-    Snapshot = {3, 5, maps:keys(Cluster), {simple, ?MACFUN, "hi1+2+3"}},
-    LogS = ra_log_memory:install_snapshot(Snapshot, Log),
+    SnapshotMeta = {3, 5, maps:keys(Cluster)},
+    SnapshotData = {simple, ?MACFUN, "hi1+2+3"},
+    {LogS, _} = ra_log_memory:install_snapshot(SnapshotMeta, SnapshotData, Log),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -1368,7 +1370,7 @@ leader_receives_install_snapshot_result(_Config) ->
                       [{1, 1, noop}, {2, 1, noop},
                        {3, 1, {'$usr', meta(), {enq,apple}, after_log_append}},
                        {4, 1, {'$usr', meta(), {enq,pear}, after_log_append}}]),
-    Log = ra_log:install_snapshot({2,1, [n1, n2, n3], []}, Log0),
+    {Log, _} = ra_log:install_snapshot({2,1, [n1, n2, n3]}, [], Log0),
     Leader = #{cluster =>
                #{n1 => new_peer_with(#{match_index => 0}),
                  n2 => new_peer_with(#{match_index => 4, next_index => 5,

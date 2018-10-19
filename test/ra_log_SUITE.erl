@@ -255,8 +255,9 @@ snapshot(Config) ->
     Log2 = append_in(1, "entry2", Log1),
     {LastIdx, LastTerm} = ra_log:last_index_term(Log2),
     Cluster = [server1],
-    Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
-    Log4 = ra_log:install_snapshot(Snapshot, Log2),
+    SnapshotMeta = {LastIdx, LastTerm, Cluster},
+    SnapshotData = "entry1+2",
+    {Log4, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log2),
 
     % ensure entries prior to snapshot are no longer there
     {undefined, Log5} = ra_log:fetch(LastIdx, Log4),

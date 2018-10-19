@@ -8,8 +8,8 @@
 
 %% API functions
 -export([start_link/0,
-         write_snapshot/3,
-         write_snapshot_call/2
+         write_snapshot/4,
+         save_snapshot_call/3
         ]).
 
 %% gen_server callbacks
@@ -25,14 +25,14 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
--spec write_snapshot(pid(), file:filename_all(), ra_log:snapshot()) -> ok.
-write_snapshot(From, Dir, Snapshot) ->
-    gen_server:cast(?MODULE, {write_snapshot, From, Dir, Snapshot}).
+-spec write_snapshot(pid(), file:filename_all(), ra_snapshot:meta(), term()) -> ok.
+write_snapshot(From, Dir, Meta, Ref) ->
+    gen_server:cast(?MODULE, {write_snapshot, From, Dir, Meta, Ref}).
 
--spec write_snapshot_call(file:filename(), ra_log:snapshot()) ->
+-spec save_snapshot_call(file:filename(), ra_snapshot:meta(), term()) ->
     {ok, File :: file:filename(), Old :: [file:filename()]}.
-write_snapshot_call(Dir, Snapshot) ->
-    gen_server:call(?MODULE, {write_snapshot, Dir, Snapshot}).
+save_snapshot_call(Dir, Meta, Data) ->
+    gen_server:call(?MODULE, {save_snapshot, Dir, Meta, Data}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -44,12 +44,12 @@ start_link() ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({write_snapshot, Dir, Snapshot}, _From, State) ->
-    Reply = write_snapshot(Dir, Snapshot),
+handle_call({save_snapshot, Dir, Meta, Data}, _From, State) ->
+    Reply = save_snapshot(Dir, Meta, Data),
     {reply, Reply, State}.
 
-handle_cast({write_snapshot, From, Dir, Snapshot}, State) ->
-    ok = handle_write_snapshot(From, Dir, Snapshot),
+handle_cast({write_snapshot, From, Dir, Meta, Ref}, State) ->
+    ok = handle_write_snapshot(From, Dir, Meta, Ref),
     {noreply, State}.
 
 handle_info(_Info, State) ->
@@ -65,25 +65,40 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-handle_write_snapshot(From, Dir, {Index, Term, _, _} = Snapshot) ->
-    {ok, File, Old} = write_snapshot(Dir, Snapshot),
+handle_write_snapshot(From, Dir, {Index, Term, _} = Meta, Ref) ->
+    {ok, File, Old} = write_snapshot(Dir, Meta, Ref),
     From ! {ra_log_event, {snapshot_written, {Index, Term}, File, Old}},
     ok.
 
-write_snapshot(Dir, Snapshot) ->
+write_snapshot(Dir, Meta, Ref) ->
+    with_filename_incr(Dir, fun(File) ->
+        write(File, Meta, Ref)
+    end).
+
+save_snapshot(Dir, Meta, Data) ->
+    with_filename_incr(Dir, fun(File) ->
+        save(File, Meta, Data)
+    end).
+
+with_filename_incr(Dir, WriteFun) ->
     case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
         [] ->
             % no snapshots - initialise snapshot counter
             File = filename:join(Dir, ra_lib:zpad_filename("", "snapshot", 1)),
-            ok = write(File, Snapshot),
+            ok = WriteFun(File),
             {ok, File, []};
         [LastFile | _] = Old ->
             File = ra_lib:zpad_filename_incr(LastFile),
-            ok = write(File, Snapshot),
+            ok = WriteFun(File),
             {ok, File, Old}
     end.
 
-write(File, Snapshot) ->
+write(File, Meta, Ref) ->
     % TODO: snapshots should be checksummed
     ?INFO("snapshot_writer: Writing file ~p", [File]),
-    ra_log_snapshot:write(File, Snapshot).
+    ra_log_snapshot:write(File, Meta, Ref).
+
+save(File, Meta, Data) ->
+    % TODO: snapshots should be checksummed
+    ?INFO("snapshot_writer: Writing file ~p", [File]),
+    ra_log_snapshot:save(File, Meta, Data).

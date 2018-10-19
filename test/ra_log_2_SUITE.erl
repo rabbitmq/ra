@@ -326,7 +326,7 @@ last_index_reset(Config) ->
     5 = ra_log:next_index(Log2),
     {4, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index
-    % needs to be done if a new leader sends an empty AER 
+    % needs to be done if a new leader sends an empty AER
     {ok, Log3} = ra_log:set_last_index(3, Log2),
     {3, 1} = ra_log:last_written(Log3),
     4 = ra_log:next_index(Log3),
@@ -341,7 +341,7 @@ last_index_reset_before_written(Config) ->
     5 = ra_log:next_index(Log1),
     {4, 1} = ra_log:last_index_term(Log1),
     % reverts last index to a previous index
-    % needs to be done if a new leader sends an empty AER 
+    % needs to be done if a new leader sends an empty AER
     {ok, Log2} = ra_log:set_last_index(3, Log1),
     {0, 0} = ra_log:last_written(Log2),
     4 = ra_log:next_index(Log2),
@@ -520,8 +520,9 @@ snapshot_recovery(Config) ->
     Log0 = ra_log:init(#{uid => UId}),
     {0, 0} = ra_log:last_index_term(Log0),
     Log1 = append_and_roll(1, 10, 2, Log0),
-    Snapshot = {9, 2, [n1], <<"9">>},
-    Log2 = ra_log:install_snapshot(Snapshot, Log1),
+    SnapshotMeta = {9, 2, [n1]},
+    SnapshotData = <<"9">>,
+    {Log2, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log:close(Log3),
     Log = ra_log:init(#{uid => UId}),
@@ -539,8 +540,9 @@ snapshot_installation(Config) ->
     Log0 = ra_log:init(#{uid => UId}),
     {0, 0} = ra_log:last_index_term(Log0),
     Log1 = write_n(1, 10, 2, Log0),
-    Snapshot = {15, 2, [n1], <<"9">>},
-    Log2 = ra_log:install_snapshot(Snapshot, Log1),
+    SnapshotMeta = {15, 2, [n1]},
+    SnapshotData = <<"9">>,
+    {Log2, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
 
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes

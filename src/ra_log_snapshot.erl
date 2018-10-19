@@ -1,9 +1,15 @@
 %% @hidden
 -module(ra_log_snapshot).
 
+-behaviour(ra_snapshot).
+
 -export([
-         write/2,
+         prepare/3,
+         write/3,
+         save/3,
          read/1,
+         install/2,
+         recover/1,
          read_indexterm/1
          ]).
 
@@ -12,10 +18,12 @@
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
 
--type file_err() :: file:posix() | badarg | terminated | system_limit.
--type state() :: {ra_index(), ra_term(), ra_cluster_servers(), term()}.
+-type file_err() :: ra_snapshot:file_err().
+-type meta() :: ra_snapshot:meta().
 
--export_type([state/0]).
+%% Entire state is saved to the snapshot.
+%% Use it as a reference.
+prepare(_Index, _Args, State) -> {ok, State, State}.
 
 %% @doc
 %% Snapshot file format:
@@ -29,10 +37,9 @@
 %% Snapshot Data (binary)
 %% @end
 
--spec write(file:filename(), state()) ->
+-spec write(file:filename(), meta(), term()) ->
     ok | {error, file_err()}.
-write(File, {Idx, Term, ClusterServers, MacState}) ->
-
+write(File, {Idx, Term, ClusterServers}, MacState) ->
     Bin = term_to_binary(MacState),
     Data = [<<Idx:64/unsigned,
               Term:64/unsigned,
@@ -49,9 +56,13 @@ write(File, {Idx, Term, ClusterServers, MacState}) ->
                              Checksum:32/integer>>,
                            Data]).
 
+-spec save(file:filename(), meta(), term()) ->
+    ok | {error, file_err()}.
+save(File, Meta, Data) -> write(File, Meta, Data).
+
 
 -spec read(file:filename()) ->
-    {ok, state()} | {error, invalid_format |
+    {ok, meta(), term()} | {error, invalid_format |
                      {invalid_version, integer()} |
                      checksum_error |
                      file_err()}.
@@ -66,6 +77,12 @@ read(File) ->
         {error, _} = Err ->
             Err
     end.
+
+-spec install(term(), file:filename()) -> {ok, term()}.
+install(Data, _File) -> {ok, Data}.
+
+-spec recover(file:filename()) -> {ok, meta(), term()} | {error, invalid_format | {invalid_version, integer()} | checksum_error | file_err()}.
+recover(File) -> read(File).
 
 %% @doc reads the index and term from the snapshot file without reading the
 %% entire binary body. NB: this does not do checksum validation.
@@ -98,7 +115,7 @@ read_indexterm(File) ->
 validate(Crc, Data) ->
     case erlang:crc32(Data) of
         Crc ->
-            {ok, parse_snapshot(Data)};
+            parse_snapshot(Data);
         _ ->
             {error, checksum_error}
     end.
@@ -106,7 +123,7 @@ validate(Crc, Data) ->
 parse_snapshot(<<Idx:64/unsigned, Term:64/unsigned,
                  NumServers:8/unsigned, Rest0/binary>>) ->
     {Servers, Rest} = parse_servers(NumServers, [], Rest0),
-    {Idx, Term, Servers, binary_to_term(Rest)}.
+    {ok, {Idx, Term, Servers}, binary_to_term(Rest)}.
 
 parse_servers(0, Servers, Data) ->
     {lists:reverse(Servers), Data};
