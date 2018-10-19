@@ -186,11 +186,11 @@ init(#{id := Id,
               end,
     InitialMachineState = ra_machine:init(Machine, Name),
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
-        case ra_log:read_snapshot(Log0) of
+        case ra_log:recover_snapshot(Log0) of
             undefined ->
                 {0, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
-            {Idx, Term, ClusterNodes, MacSt} ->
+            {ok, {Idx, Term, ClusterNodes}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
                 {Idx, Clu, MacSt, {Idx, Term}}
@@ -801,13 +801,14 @@ handle_follower(#install_snapshot_rpc{term = Term,
     ?INFO("~w: installing snapshot at index ~b in term ~b~n",
           [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
-    Log = ra_log:install_snapshot({LastIndex, LastTerm, ClusterNodes, Data}, Log0),
+
+    {Log, MachineState} = ra_log:install_snapshot({LastIndex, LastTerm, ClusterNodes}, Data, Log0),
     State1 = State0#{log => Log,
                      current_term => Term,
                      commit_index => LastIndex,
                      last_applied => LastIndex,
                      cluster => make_cluster(Id, ClusterNodes),
-                     machine_state => Data,
+                     machine_state => MachineState,
                      leader_id => LeaderId},
     State = persist_last_applied(State1),
 
@@ -1038,7 +1039,7 @@ append_entries_or_snapshot(PeerId, Next, MaxBatchSize,
                     make_aer_chunk(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
                                    State#{log => Log});
                 _ ->
-                    {LastIndex, LastTerm, Config, MacState} =
+                    {ok, {LastIndex, LastTerm, Config}, Data} =
                         ra_log:read_snapshot(Log),
                     {LastIndex,
                      {PeerId, #install_snapshot_rpc{term = Term,
@@ -1046,7 +1047,7 @@ append_entries_or_snapshot(PeerId, Next, MaxBatchSize,
                                                     last_index = LastIndex,
                                                     last_term = LastTerm,
                                                     last_config = Config,
-                                                    data = MacState}},
+                                                    data = Data}},
                      State#{log => Log}}
             end
     end.

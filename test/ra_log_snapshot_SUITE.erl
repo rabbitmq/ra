@@ -58,10 +58,10 @@ end_per_testcase(_TestCase, _Config) ->
 
 roundtrip(Config) ->
     File = ?config(file, Config),
-    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
-                my_state},
-    ok = ra_log_snapshot:write(File, Snapshot),
-    {ok, Snapshot} = ra_log_snapshot:read(File),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotRef = my_state,
+    ok = ra_log_snapshot:write(File, SnapshotMeta, SnapshotRef),
+    {ok, SnapshotMeta, SnapshotRef} = ra_log_snapshot:read(File),
     ok.
 
 read_missing(Config) ->
@@ -92,11 +92,31 @@ read_invalid_checksum(Config) ->
 
 read_index_term(Config) ->
     File = ?config(file, Config),
-    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
-                my_state},
-    ok = ra_log_snapshot:write(File, Snapshot),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotRef = my_state,
+    ok = ra_log_snapshot:write(File, SnapshotMeta, SnapshotRef),
     {ok, {33, 94}} = ra_log_snapshot:read_indexterm(File),
     ok.
+
+save_same_as_write(Config) ->
+    File = ?config(file, Config),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotData = my_state,
+    ok = ra_log_snapshot:save(File, SnapshotMeta, SnapshotData),
+    {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:read(File),
+    ok.
+
+recover_same_as_read(Config) ->
+    File = ?config(file, Config),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotData = my_state,
+    ok = ra_log_snapshot:save(File, SnapshotMeta, SnapshotData),
+    {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(File),
+    ok.
+
+install_does_nothing(Config) ->
+    SnapshotData = my_state,
+    {ok, SnapshotData} = ra_log_snapshot:install(SnapshotData, "some.file").
 
 
 %% Utility

@@ -41,25 +41,27 @@ init_per_testcase(TestCase, Config) ->
 write_snapshot(Config) ->
     Dir = ?config(data_dir, Config),
     _ = ra_log_snapshot_writer:start_link(),
-    Snapshot = {10, 5, [server1], some_data},
+    SnapshotMeta = {10, 5, [server1]},
+    SnapshotRef = some_data,
     Self = self(),
-    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot),
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta, SnapshotRef),
     receive
         {ra_log_event, {snapshot_written, {10, 5}, File, []}} ->
-            % TODO: validate snapshot
-            {ok, Snapshot} = ra_log_snapshot:read(File),
+            % TODO: validate snapshot data for ref
+            {ok, SnapshotMeta, _SnapshotData} = ra_log_snapshot:read(File),
             ok
     after 2000 ->
               throw(ra_log_event_timeout)
     end,
     % Write a second snapshot
-    Snapshot2 = {20, 6, [server1, server2], some_data2},
-    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, Snapshot2),
+    SnapshotMeta2 = {20, 6, [server1, server2]},
+    SnapshotRef2 = some_data2,
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta2, SnapshotRef2),
     receive
         {ra_log_event, {snapshot_written, {20, 6}, File2, [Old]}} ->
-            % TODO: validate snapshot
+            % TODO: validate snapshot data for ref
             true = filelib:is_file(Old),
-            {ok, Snapshot2} = ra_log_snapshot:read(File2),
+            {ok, SnapshotMeta2, _SnapshotData2} = ra_log_snapshot:read(File2),
             ok
     after 2000 ->
               throw(ra_log_event_timeout)
@@ -70,7 +72,9 @@ write_snapshot(Config) ->
 write_snapshot_call(Config) ->
     Dir = ?config(data_dir, Config),
     _ = ra_log_snapshot_writer:start_link(),
-    Snapshot = {10, 5, [server1], some_data},
-    {ok, File, _} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
+    SnapshotMeta = {10, 5, [server1]},
+    SnapshotData = some_data,
+    {ok, File, _} = ra_log_snapshot_writer:save_snapshot_call(Dir, SnapshotMeta, SnapshotData),
     ?assert(filelib:is_file(File)),
+    {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:read(File),
     ok.

@@ -17,8 +17,9 @@
          fetch/2,
          fetch_term/2,
          next_index/1,
-         install_snapshot/2,
+         install_snapshot/3,
          read_snapshot/1,
+         recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
          %% meta
@@ -50,7 +51,6 @@
 -define(LOG_APPEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
--type snapshot() :: ra_log_snapshot:state().
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
                         File :: string()}.
 -type event_body() :: {written, {From :: ra_index(),
@@ -98,7 +98,6 @@
 -export_type([ra_log_init_args/0,
               ra_log/0,
               ra_meta_key/0,
-              snapshot/0,
               segment_ref/0,
               event/0,
               event_body/0
@@ -467,25 +466,40 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
             end
     end.
 
--spec install_snapshot(Snapshot :: ra_log:snapshot(),
+-spec install_snapshot(Meta :: ra_snapshot:meta(),
+                       Data :: term(),
                        State :: ra_log()) ->
-    ra_log().
-install_snapshot({Idx, Term, _, _} = Snapshot,
+    {ra_log(), term()}.
+install_snapshot({Idx, Term, _} = Meta, Data,
                  #state{directory = Dir} = State) ->
     % syncronous call when follower receives a snapshot
-    {ok, File, Old} = ra_log_snapshot_writer:write_snapshot_call(Dir, Snapshot),
-    handle_event({snapshot_written, {Idx, Term}, File, Old},
-                 State#state{last_index = Idx,
-                             last_written_index_term = {Idx, Term}}).
+    {ok, File, Old} = ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data),
+    {ok, MacState} = ra_log_snapshot:install(Data, File),
+    State1 = handle_event({snapshot_written, {Idx, Term}, File, Old},
+                          State#state{last_index = Idx,
+                                      last_written_index_term = {Idx, Term}}),
+    {State1, MacState}.
 
 -spec read_snapshot(State :: ra_log()) ->
-    maybe(ra_log:snapshot()).
+    maybe({ok, ra_snapshot:meta(), term()}).
 read_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
 read_snapshot(#state{snapshot_state = {_, _, File}}) ->
     case ra_log_snapshot:read(File) of
-        {ok, Snapshot} ->
-            Snapshot;
+        {ok, Meta, Data} ->
+            {ok, Meta, Data};
+        {error, enoent} ->
+            undefined
+    end.
+
+-spec recover_snapshot(State :: ra_log()) ->
+    maybe({ok, ra_snapshot:meta(), term()}).
+recover_snapshot(#state{snapshot_state = undefined}) ->
+    undefined;
+recover_snapshot(#state{snapshot_state = {_, _, File}}) ->
+    case ra_log_snapshot:recover(File) of
+        {ok, Meta, Data} ->
+            {ok, Meta, Data};
         {error, enoent} ->
             undefined
     end.
@@ -497,7 +511,7 @@ snapshot_index_term(_State) ->
     undefined.
 
 -spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
-                            MachineState :: term(), State :: ra_log()) ->
+                            Ref :: term(), State :: ra_log()) ->
     ra_log().
 update_release_cursor(_, _, _, %% Idx, Cluster, MacState
                       #state{snapshot_index_in_progress = SIIP} = State)
@@ -506,7 +520,7 @@ update_release_cursor(_, _, _, %% Idx, Cluster, MacState
     % new segments will always set snapshot_index_in_progress = undefined
     % to ensure liveliness in case a snapshot_written message is lost.
     State;
-update_release_cursor(Idx, Cluster, MachineState,
+update_release_cursor(Idx, Cluster, Ref,
                       #state{segment_refs = SegRefs,
                              snapshot_state = SnapState,
                              snapshot_interval = SnapInter} = State0) ->
@@ -530,14 +544,15 @@ update_release_cursor(Idx, Cluster, MachineState,
             % are applied as they are received I cannot think of any scenarios
             % where this can cause a problem. That said there may
             % well be :dragons: here.
-            % The MachineState is a dehydrated version of the state at
+            % The Ref is a reference to the state at
             % the release_cursor point.
+            % It can be some dehydrated form of the state itself
+            % or a reference for external storage (e.g. ETS table)
             case fetch_term(Idx, State0) of
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterServerIds, MachineState},
-                                   State)
+                    write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
             end;
         false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
@@ -546,8 +561,7 @@ update_release_cursor(Idx, Cluster, MachineState,
                 {undefined, State} ->
                     State;
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterServerIds, MachineState},
-                                   State)
+                    write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
             end;
         false ->
             State0
@@ -940,9 +954,9 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot(Snapshot, #state{directory = Dir} = State) ->
-    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Snapshot),
-    State#state{snapshot_index_in_progress = element(1, Snapshot)}.
+write_snapshot({Index, _, _} = Meta, Data, #state{directory = Dir} = State) ->
+    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Data),
+    State#state{snapshot_index_in_progress = Index}.
 
 flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
