@@ -195,10 +195,18 @@ start_or_restart_cluster(ClusterName, Machine,
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterName, Machine, ServerIds) ->
+    start_cluster(ClusterName, Machine, ?DEFAULT_SNAPSHOT_MODULE, ServerIds).
+
+-spec start_cluster(ra_cluster_name(), ra_server:machine_conf(), module(), [ra_server_id()]) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
+start_cluster(ClusterName, Machine, SnapshotModule, ServerIds) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(fun (N) ->
                                           ok == start_server(ClusterName, N,
-                                                             Machine, ServerIds)
+                                                             Machine,
+                                                             SnapshotModule,
+                                                             ServerIds)
                                   end, ServerIds),
     case Started of
         [] ->
@@ -233,13 +241,20 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
 start_server(ClusterName, ServerId, Machine, ServerIds) ->
+    start_server(ClusterName, ServerId, Machine, ?DEFAULT_SNAPSHOT_MODULE, ServerIds).
+
+-spec start_server(ra_cluster_name(), ra_server_id(),
+                   ra_server:machine_conf(), module(), [ra_server_id()]) ->
+    ok | {error, term()}.
+start_server(ClusterName, ServerId, Machine, SnapshotModule, ServerIds) ->
     Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterName), 4),
     UId = ra_lib:make_uid(string:uppercase(Prefix)),
     Conf = #{cluster_name => ClusterName,
              id => ServerId,
              uid => UId,
              initial_members => ServerIds,
-             log_init_args => #{uid => UId},
+             log_init_args => #{uid => UId,
+                                snapshot_module => SnapshotModule},
              machine => Machine},
     start_server(Conf).
 

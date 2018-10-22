@@ -154,3 +154,6 @@
 
 -define(DEFAULT_TIMEOUT, 5000).
 
+-define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
+
+
