@@ -1,3 +1,0 @@
-%% encoding: UTF-8
-{application,ra}.
-{modules,[ra,ra_directory,ra_env,ra_machine]}.
