@@ -77,7 +77,7 @@
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
-         snapshot_module = ra_log_snapshot :: module(),
+         snapshot_module = ?DEFAULT_SNAPSHOT_MODULE :: module(),
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
@@ -115,7 +115,7 @@ init(#{uid := UId} = Conf) ->
                   ra_env:server_data_dir(UId)
           end,
     MaxOpen = maps:get(max_open_segments, Conf, 5),
-    SnapModule = maps:get(snapshot_module, Conf, ra_log_snapshot),
+    SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
 
     ok =  ra_lib:ensure_dir(Dir),
 
