@@ -77,6 +77,7 @@
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+         snapshot_module = ra_log_snapshot :: module(),
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
@@ -114,6 +115,7 @@ init(#{uid := UId} = Conf) ->
                   ra_env:server_data_dir(UId)
           end,
     MaxOpen = maps:get(max_open_segments, Conf, 5),
+    SnapModule = maps:get(snapshot_module, Conf, ra_log_snapshot),
 
     ok =  ra_lib:ensure_dir(Dir),
 
@@ -138,7 +140,7 @@ init(#{uid := UId} = Conf) ->
             [File | _] ->
                 %% TODO provide function that only reads the index and term
                 %% of the snapshot file.
-                {ok, {SI, ST}} = ra_log_snapshot:read_indexterm(File),
+                {ok, {SI, ST}} = SnapModule:read_indexterm(File),
                 {SI, ST, File};
             [] ->
                 undefined
@@ -156,7 +158,8 @@ init(#{uid := UId} = Conf) ->
                       snapshot_interval = SnapInterval,
                       wal = Wal,
                       open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
-                      resend_window_seconds = ResendWindow},
+                      resend_window_seconds = ResendWindow,
+                      snapshot_module = SnapModule},
 
     LastIdx = State000#state.last_index,
     % recover the last term
@@ -471,10 +474,11 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
                        State :: ra_log()) ->
     {ra_log(), term()}.
 install_snapshot({Idx, Term, _} = Meta, Data,
-                 #state{directory = Dir} = State) ->
+                 #state{directory = Dir,
+                        snapshot_module = SnapModule} = State) ->
     % syncronous call when follower receives a snapshot
-    {ok, File, Old} = ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data),
-    {ok, MacState} = ra_log_snapshot:install(Data, File),
+    {ok, File, Old} = ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data, SnapModule),
+    {ok, MacState} = SnapModule:install(Data, File),
     State1 = handle_event({snapshot_written, {Idx, Term}, File, Old},
                           State#state{last_index = Idx,
                                       last_written_index_term = {Idx, Term}}),
@@ -484,8 +488,9 @@ install_snapshot({Idx, Term, _} = Meta, Data,
     maybe({ok, ra_snapshot:meta(), term()}).
 read_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
-read_snapshot(#state{snapshot_state = {_, _, File}}) ->
-    case ra_log_snapshot:read(File) of
+read_snapshot(#state{snapshot_state = {_, _, File},
+                     snapshot_module = SnapModule}) ->
+    case SnapModule:read(File) of
         {ok, Meta, Data} ->
             {ok, Meta, Data};
         {error, enoent} ->
@@ -496,8 +501,9 @@ read_snapshot(#state{snapshot_state = {_, _, File}}) ->
     maybe({ok, ra_snapshot:meta(), term()}).
 recover_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
-recover_snapshot(#state{snapshot_state = {_, _, File}}) ->
-    case ra_log_snapshot:recover(File) of
+recover_snapshot(#state{snapshot_state = {_, _, File},
+                        snapshot_module = SnapModule}) ->
+    case SnapModule:recover(File) of
         {ok, Meta, Data} ->
             {ok, Meta, Data};
         {error, enoent} ->
@@ -954,8 +960,10 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot({Index, _, _} = Meta, Data, #state{directory = Dir} = State) ->
-    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Data),
+write_snapshot({Index, _, _} = Meta, Data,
+               #state{directory = Dir,
+                      snapshot_module = SnapModule} = State) ->
+    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Data, SnapModule),
     State#state{snapshot_index_in_progress = Index}.
 
 flru_handler({_, Seg}) ->

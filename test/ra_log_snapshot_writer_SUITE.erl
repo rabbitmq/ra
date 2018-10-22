@@ -44,7 +44,7 @@ write_snapshot(Config) ->
     SnapshotMeta = {10, 5, [server1]},
     SnapshotRef = some_data,
     Self = self(),
-    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta, SnapshotRef),
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta, SnapshotRef, ra_log_snapshot),
     receive
         {ra_log_event, {snapshot_written, {10, 5}, File, []}} ->
             % TODO: validate snapshot data for ref
@@ -56,7 +56,7 @@ write_snapshot(Config) ->
     % Write a second snapshot
     SnapshotMeta2 = {20, 6, [server1, server2]},
     SnapshotRef2 = some_data2,
-    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta2, SnapshotRef2),
+    ok = ra_log_snapshot_writer:write_snapshot(Self, Dir, SnapshotMeta2, SnapshotRef2, ra_log_snapshot),
     receive
         {ra_log_event, {snapshot_written, {20, 6}, File2, [Old]}} ->
             % TODO: validate snapshot data for ref
@@ -74,7 +74,7 @@ write_snapshot_call(Config) ->
     _ = ra_log_snapshot_writer:start_link(),
     SnapshotMeta = {10, 5, [server1]},
     SnapshotData = some_data,
-    {ok, File, _} = ra_log_snapshot_writer:save_snapshot_call(Dir, SnapshotMeta, SnapshotData),
+    {ok, File, _} = ra_log_snapshot_writer:save_snapshot_call(Dir, SnapshotMeta, SnapshotData, ra_log_snapshot),
     ?assert(filelib:is_file(File)),
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:read(File),
     ok.
