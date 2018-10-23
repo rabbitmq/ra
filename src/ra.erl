@@ -23,6 +23,7 @@
          consistent_query/3,
          % cluster operations
          start_cluster/3,
+         start_cluster/4,
          start_or_restart_cluster/3,
          delete_cluster/1,
          delete_cluster/2,
