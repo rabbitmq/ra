@@ -20,6 +20,7 @@
          install_snapshot/3,
          read_snapshot/1,
          recover_snapshot/1,
+         release_snapshot/3,
          snapshot_index_term/1,
          update_release_cursor/4,
          %% meta
@@ -510,6 +511,13 @@ recover_snapshot(#state{snapshot_state = {_, _, File},
             undefined
     end.
 
+-spec release_snapshot({snapshot_written, {ra_index(), ra_term()}, term(), term()},
+                       ra_log(), MacState) -> MacState.
+release_snapshot({snapshot_written, {Index, _}, _, _},
+                 #state{snapshot_module = SnapModule},
+                 MacState) ->
+    SnapModule:release(Index, MacState).
+
 -spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
 snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
     {Idx, Term};
@@ -558,6 +566,7 @@ update_release_cursor(Idx, Cluster, Ref,
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
+                io:format("~nWrite snapshot~n"),
                     write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
             end;
         false when Idx > SnapLimit ->
@@ -567,6 +576,7 @@ update_release_cursor(Idx, Cluster, Ref,
                 {undefined, State} ->
                     State;
                 {Term, State} ->
+                io:format("~nWrite snapshot~n"),
                     write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
             end;
         false ->

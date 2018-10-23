@@ -7,10 +7,10 @@
 
 -export_type([meta/0, file_err/0]).
 
-%% Side-effect function.
-%% Fixes curent external state to be snapshotted later.
--callback prepare(Index :: ra_index(), Arg :: term(), State) ->
-    {ok, Ref :: term(), State}.
+%% Update the state to release any locks aquired for the snapshot
+%% called when the snapshot is written to disk.
+-callback release(Index :: ra_index(), State) ->
+    State.
 
 %% Saves snapshot from external state to disk.
 %% Runs in a separate process.

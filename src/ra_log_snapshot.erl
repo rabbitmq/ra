@@ -4,7 +4,7 @@
 -behaviour(ra_snapshot).
 
 -export([
-         prepare/3,
+         release/2,
          write/3,
          save/3,
          read/1,
@@ -21,9 +21,8 @@
 -type file_err() :: ra_snapshot:file_err().
 -type meta() :: ra_snapshot:meta().
 
-%% Entire state is saved to the snapshot.
-%% Use it as a reference.
-prepare(_Index, _Args, State) -> {ok, State, State}.
+%% DO nothing. There is no preparation for snapshotting
+release(_Index, State) -> State.
 
 %% @doc
 %% Snapshot file format:
@@ -52,7 +51,7 @@ write(File, {Idx, Term, ClusterServers}, MacState) ->
            Bin],
     Checksum = erlang:crc32(Data),
     file:write_file(File, [<<?MAGIC,
-                             1:8/unsigned,
+                             ?VERSION:8/unsigned,
                              Checksum:32/integer>>,
                            Data]).
 
