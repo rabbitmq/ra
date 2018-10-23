@@ -61,7 +61,7 @@ ServerIds = [{quick_start, N} || N <- ErlangNodes]
 
 This library is primarily developed as the foundation for replication layer for
 replicated queues in a future version of RabbitMQ. The design it aims to replace uses
-a variant of [Chain Based Repliction](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
+a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
 which has two major shortcomings:
 
  * Replication algorithm is linear
