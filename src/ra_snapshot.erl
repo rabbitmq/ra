@@ -12,6 +12,10 @@
 -callback release(Index :: ra_index(), State) ->
     State.
 
+%% Side effect function
+%% Turn the current state into immutable reference.
+-callback prepare(Index :: ra_index(), State :: term()) -> Ref :: term().
+
 %% Saves snapshot from external state to disk.
 %% Runs in a separate process.
 %% External storage should be available to read
