@@ -203,12 +203,14 @@ start_cluster(ClusterName, Machine, ServerIds) ->
     {error, cluster_not_formed}.
 start_cluster(ClusterName, Machine, SnapshotModule, ServerIds) ->
     {Started, NotStarted} =
-        ra_lib:partition_parallel(fun (N) ->
-                                          ok == start_server(ClusterName, N,
-                                                             Machine,
-                                                             SnapshotModule,
-                                                             ServerIds)
-                                  end, ServerIds),
+        ra_lib:partition_parallel(
+            fun (N) ->
+                case start_server(ClusterName, N, Machine, SnapshotModule, ServerIds) of
+                    ok  -> true;
+                    Err -> ?WARN("ra: failed to start a server ~w : ~p~n", [N, Err]),
+                           false
+                end
+            end, ServerIds),
     case Started of
         [] ->
             ?WARN("ra: failed to form new cluster ~w.~n "

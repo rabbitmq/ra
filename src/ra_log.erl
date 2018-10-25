@@ -518,6 +518,10 @@ release_snapshot({snapshot_written, {Index, _}, _, _},
                  MacState) ->
     SnapModule:release(Index, MacState).
 
+-spec prepare_snapshot(ra_index(), term(), ra_log()) -> term().
+prepare_snapshot(Index, MacState, #state{snapshot_module = SnapModule}) ->
+    SnapModule:prepare(Index, MacState).
+
 -spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
 snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
     {Idx, Term};
@@ -534,7 +538,7 @@ update_release_cursor(_, _, _, %% Idx, Cluster, MacState
     % new segments will always set snapshot_index_in_progress = undefined
     % to ensure liveliness in case a snapshot_written message is lost.
     State;
-update_release_cursor(Idx, Cluster, Ref,
+update_release_cursor(Idx, Cluster, MacState,
                       #state{segment_refs = SegRefs,
                              snapshot_state = SnapState,
                              snapshot_interval = SnapInter} = State0) ->
@@ -558,7 +562,7 @@ update_release_cursor(Idx, Cluster, Ref,
             % are applied as they are received I cannot think of any scenarios
             % where this can cause a problem. That said there may
             % well be :dragons: here.
-            % The Ref is a reference to the state at
+            % The MacState is a reference to the state at
             % the release_cursor point.
             % It can be some dehydrated form of the state itself
             % or a reference for external storage (e.g. ETS table)
@@ -567,7 +571,7 @@ update_release_cursor(Idx, Cluster, Ref,
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
                 io:format("~nWrite snapshot~n"),
-                    write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
+                    write_snapshot({Idx, Term, ClusterServerIds}, MacState, State)
             end;
         false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
@@ -577,7 +581,7 @@ update_release_cursor(Idx, Cluster, Ref,
                     State;
                 {Term, State} ->
                 io:format("~nWrite snapshot~n"),
-                    write_snapshot({Idx, Term, ClusterServerIds}, Ref, State)
+                    write_snapshot({Idx, Term, ClusterServerIds}, MacState, State)
             end;
         false ->
             State0
@@ -970,10 +974,11 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot({Index, _, _} = Meta, Data,
+write_snapshot({Index, _, _} = Meta, MacState,
                #state{directory = Dir,
                       snapshot_module = SnapModule} = State) ->
-    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Data, SnapModule),
+    Ref = prepare_snapshot(Index, MacState, State),
+    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Ref, SnapModule),
     State#state{snapshot_index_in_progress = Index}.
 
 flru_handler({_, Seg}) ->
