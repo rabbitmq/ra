@@ -155,6 +155,7 @@
              ]).
 
 -define(AER_CHUNK_SIZE, 25).
+-define(FOLD_LOG_BATCH_SIZE, 25).
 % TODO: test what is a good defult here
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
@@ -1587,13 +1588,13 @@ log_unhandled_msg(RaState, Msg, #{id := Id}) ->
     ?WARN("~w ~w received unhandled msg: ~W~n", [Id, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
-    case ra_log:take(From, 5, Log0) of
+    case ra_log:take(From, ?FOLD_LOG_BATCH_SIZE, Log0) of
         {[], Log} ->
             {ok, {St, Log}};
         {Entries, Log}  ->
             try
                 St1 = lists:foldl(Folder, St, Entries),
-                fold_log_from(From + 5, Folder, {St1, Log})
+                fold_log_from(From + ?FOLD_LOG_BATCH_SIZE, Folder, {St1, Log})
             catch
                 _:Reason ->
                     {error, Reason, Log}
