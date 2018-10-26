@@ -540,7 +540,7 @@ follower(info, {server_event, Node, down}, State) ->
 follower(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
     true = erlang:garbage_collect(),
-    {keep_state, State, [hibernate]};
+    {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
