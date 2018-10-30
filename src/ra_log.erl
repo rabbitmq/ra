@@ -94,7 +94,8 @@
                               wal => atom(),
                               snapshot_interval => non_neg_integer(),
                               resend_window => integer(),
-                              max_open_segments => non_neg_integer()}.
+                              max_open_segments => non_neg_integer(),
+                              snapshot_module => module()}.
 
 -export_type([ra_log_init_args/0,
               ra_log/0,
