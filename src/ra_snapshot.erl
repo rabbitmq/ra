@@ -7,11 +7,6 @@
 
 -export_type([meta/0, file_err/0]).
 
-%% Update the state to release any locks aquired for the snapshot
-%% called when the snapshot is written to disk.
--callback release(Index :: ra_index(), State) ->
-    State.
-
 %% Side effect function
 %% Turn the current state into immutable reference.
 -callback prepare(Index :: ra_index(), State :: term()) -> Ref :: term().

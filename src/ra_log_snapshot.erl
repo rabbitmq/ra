@@ -4,7 +4,6 @@
 -behaviour(ra_snapshot).
 
 -export([
-         release/2,
          prepare/2,
          write/3,
          save/3,
@@ -23,8 +22,6 @@
 -type meta() :: ra_snapshot:meta().
 
 %% DO nothing. There is no preparation for snapshotting
-release(_Index, State) -> State.
-
 prepare(_Index, State) -> State.
 
 %% @doc
