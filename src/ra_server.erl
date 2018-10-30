@@ -413,10 +413,9 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {leader, State, [{send_rpcs, Rpcs},
                      {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, {snapshot_written, _, _, _} = Evt},
-              State = #{log := Log0, machine_state := MacState0}) ->
+              State = #{log := Log0}) ->
     Log1 = ra_log:handle_event(Evt, Log0),
-    MacState1 = ra_log:release_snapshot(Evt, Log1, MacState0),
-    {leader, State#{log => Log1, machine_state => MacState1}, []};
+    {leader, State#{log => Log1}, []};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     Log1 = ra_log:handle_event(Evt, Log0),
     {leader, State#{log => Log1}, []};
@@ -736,10 +735,9 @@ handle_follower({ra_log_event, {written, _} = Evt},
     State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
     evaluate_commit_index_follower(State0);
 handle_follower({ra_log_event, {snapshot_written, _, _, _} = Evt},
-                State = #{log := Log0, machine_state := MacState0}) ->
+                State = #{log := Log0}) ->
     Log1 = ra_log:handle_event(Evt, Log0),
-    MacState1 = ra_log:release_snapshot(Evt, Log1, MacState0),
-    {follower, State#{log => Log1, machine_state => MacState1}, []};
+    {follower, State#{log => Log1}, []};
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};

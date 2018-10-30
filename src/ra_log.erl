@@ -20,7 +20,6 @@
          install_snapshot/3,
          read_snapshot/1,
          recover_snapshot/1,
-         release_snapshot/3,
          snapshot_index_term/1,
          update_release_cursor/4,
          %% meta
@@ -510,13 +509,6 @@ recover_snapshot(#state{snapshot_state = {_, _, File},
         {error, enoent} ->
             undefined
     end.
-
--spec release_snapshot({snapshot_written, {ra_index(), ra_term()}, term(), term()},
-                       ra_log(), MacState) -> MacState.
-release_snapshot({snapshot_written, {Index, _}, _, _},
-                 #state{snapshot_module = SnapModule},
-                 MacState) ->
-    SnapModule:release(Index, MacState).
 
 -spec prepare_snapshot(ra_index(), term(), ra_log()) -> term().
 prepare_snapshot(Index, MacState, #state{snapshot_module = SnapModule}) ->
