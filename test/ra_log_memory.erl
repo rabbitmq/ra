@@ -33,7 +33,7 @@
 -include("ra.hrl").
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
--type snapshot() :: {ra_index(), ra_term(), ra_cluster_servers(), term()}.
+-type snapshot() :: {{ra_index(), ra_term(), ra_cluster_servers()}, term()}.
 
 -record(state, {last_index = 0 :: ra_index(),
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
@@ -192,7 +192,7 @@ flush(_Idx, Log) -> Log.
 -spec install_snapshot(SnapshotMeta :: ra_snapshot:meta(),
                        SnapshotData :: term(),
                        State :: ra_log_memory_state()) ->
-    ra_log_memory_state().
+    {ra_log_memory_state(), term()}.
 install_snapshot(Meta, Data, #state{entries = Log0} = State) ->
     Index  = element(1, Meta),
     % discard log
@@ -200,12 +200,12 @@ install_snapshot(Meta, Data, #state{entries = Log0} = State) ->
     {State#state{entries = Log, snapshot = {Meta, Data}}, Data}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
-    snapshot().
+    {ok, ra_snapshot:meta(), term()}.
 read_snapshot(#state{snapshot = {Meta, Data}}) ->
     {ok, Meta, Data}.
 
 -spec recover_snapshot(State :: ra_log_memory_state()) ->
-    snapshot().
+    undefined | {ok, ra_snapshot:meta(), term()}.
 recover_snapshot(#state{snapshot = undefined}) ->
     undefined;
 recover_snapshot(#state{snapshot = {Meta, Data}}) ->
