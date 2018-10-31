@@ -64,8 +64,8 @@
 
 -type ra_state() :: leader | follower | candidate
                     | pre_vote | await_condition | delete_and_terminate
-                    | terminating_leader | terminating_follower | recover |
-                    stop.
+                    | terminating_leader | terminating_follower | recover
+                    | recovered | stop.
 
 -type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.

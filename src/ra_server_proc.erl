@@ -6,7 +6,9 @@
 -include("ra.hrl").
 
 %% State functions
--export([recover/3,
+-export([
+         recover/3,
+         recovered/3,
          leader/3,
          follower/3,
          pre_vote/3,
@@ -213,6 +215,21 @@ recover(enter, _OldState, State) ->
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
     true = erlang:garbage_collect(),
+    %% we have to issue the next_event here so that the recovered state is
+    %% only passed through very briefly
+    {next_state, recovered, State#state{server_state = ServerState},
+     [{next_event, internal, next}]};
+recover(_, _, State) ->
+    % all other events need to be postponed until we can return
+    % `next_event` from init
+    {keep_state, State, {postpone, true}}.
+
+%% this is a passthrough state to allow state machines to emit node local
+%% effects post recovery
+recovered(enter, _OldState, State) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+    {keep_state, State, Actions};
+recovered(internal, next, #state{server_state = ServerState} = State) ->
     % New cluster starts should be coordinated and elections triggered
     % explicitly hence if this is a new one we wait here.
     % Else we set an election timer
@@ -224,12 +241,7 @@ recover(_EventType, go, State = #state{server_state = ServerState0}) ->
                             [id(State)]),
                       [election_timeout_action(short, State)]
               end,
-    {next_state, follower, State#state{server_state = ServerState},
-     set_tick_timer(State, Actions)};
-recover(_, _, State) ->
-    % all other events need to be postponed until we can return
-    % `next_event` from init
-    {keep_state, State, {postpone, true}}.
+    {next_state, follower, State, set_tick_timer(State, Actions)}.
 
 leader(enter, _, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, State0),

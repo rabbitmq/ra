@@ -343,5 +343,6 @@ init(_) ->
 
 state_enter(eol, State) ->
     [{send_msg, P, eol, ra_event} || {P, _} <- queue:to_list(State), is_pid(P)];
-state_enter(_, _) ->
+state_enter(S, _) ->
+    ct:pal("state_enter ~w", [S]),
     [].

@@ -134,7 +134,7 @@ init(#{uid := UId} = Conf) ->
                                           R ->  R
                                       end,
     % recove las snapshot file
-    SnapshotState  =
+    SnapshotState =
         case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
             [File | _] ->
                 %% TODO provide function that only reads the index and term
