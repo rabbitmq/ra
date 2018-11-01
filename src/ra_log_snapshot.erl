@@ -8,7 +8,6 @@
          write/3,
          save/3,
          read/1,
-         install/2,
          recover/1,
          read_indexterm/1
          ]).
@@ -76,9 +75,6 @@ read(File) ->
         {error, _} = Err ->
             Err
     end.
-
--spec install(term(), file:filename()) -> {ok, term()}.
-install(Data, _File) -> {ok, Data}.
 
 -spec recover(file:filename()) ->
     {ok, meta(), term()} |

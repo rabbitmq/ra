@@ -141,7 +141,7 @@ init(#{uid := UId} = Conf) ->
             [File | _] ->
                 %% TODO provide function that only reads the index and term
                 %% of the snapshot file.
-                {ok, {SI, ST}} = SnapModule:read_indexterm(File),
+                {ok, {SI, ST}} = ra_snapshot:read_indexterm(SnapModule, File),
                 {SI, ST, File};
             [] ->
                 undefined
@@ -479,7 +479,8 @@ install_snapshot({Idx, Term, _} = Meta, Data,
                         snapshot_module = SnapModule} = State) ->
     % syncronous call when follower receives a snapshot
     {ok, File, Old} = ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data, SnapModule),
-    {ok, MacState} = SnapModule:install(Data, File),
+
+    {ok, _Meta, MacState} = ra_snapshot:recover(SnapModule, File),
     State1 = handle_event({snapshot_written, {Idx, Term}, File, Old},
                           State#state{last_index = Idx,
                                       last_written_index_term = {Idx, Term}}),
@@ -491,7 +492,7 @@ read_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
 read_snapshot(#state{snapshot_state = {_, _, File},
                      snapshot_module = SnapModule}) ->
-    case SnapModule:read(File) of
+    case ra_snapshot:read(SnapModule, File) of
         {ok, Meta, Data} ->
             {ok, Meta, Data};
         {error, enoent} ->
@@ -504,7 +505,7 @@ recover_snapshot(#state{snapshot_state = undefined}) ->
     undefined;
 recover_snapshot(#state{snapshot_state = {_, _, File},
                         snapshot_module = SnapModule}) ->
-    case SnapModule:recover(File) of
+    case ra_snapshot:recover(SnapModule, File) of
         {ok, Meta, Data} ->
             {ok, Meta, Data};
         {error, enoent} ->
@@ -513,7 +514,7 @@ recover_snapshot(#state{snapshot_state = {_, _, File},
 
 -spec prepare_snapshot(ra_index(), term(), ra_log()) -> term().
 prepare_snapshot(Index, MacState, #state{snapshot_module = SnapModule}) ->
-    SnapModule:prepare(Index, MacState).
+    ra_snapshot:prepare(SnapModule, Index, MacState).
 
 -spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
 snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
