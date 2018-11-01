@@ -9,7 +9,7 @@
          save/3,
          read/1,
          recover/1,
-         read_indexterm/1
+         read_meta/1
          ]).
 
 -include("ra.hrl").
@@ -86,23 +86,32 @@ recover(File) -> read(File).
 
 %% @doc reads the index and term from the snapshot file without reading the
 %% entire binary body. NB: this does not do checksum validation.
--spec read_indexterm(file:filename()) ->
-    {ok, ra_idxterm()} | {error, invalid_format |
+-spec read_meta(file:filename()) ->
+    {ok, meta()} | {error, invalid_format |
                           {invalid_version, integer()} |
                           checksum_error |
                           file_err()}.
-read_indexterm(File) ->
+read_meta(File) ->
     case file:open(File, [read, binary, raw]) of
         {ok, Fd} ->
-            case file:read(Fd, 9 + 16) of
+            HeaderSize = 9 + 16 + 1,
+            case file:read(Fd, HeaderSize) of
                 {ok, <<?MAGIC, ?VERSION:8/unsigned, _:32/integer,
                        Idx:64/unsigned,
-                       Term:64/unsigned>>} ->
-                    {ok, {Idx, Term}};
+                       Term:64/unsigned,
+                       NumServers:8/unsigned>>} ->
+                    case read_servers(NumServers, [], Fd, HeaderSize) of
+                        {ok, Servers} ->
+                            {ok, {Idx, Term, Servers}};
+                        Err ->
+                            Err
+                    end;
                 {ok, <<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>} ->
                     {error, {invalid_version, Version}};
                 {ok, _} ->
                     {error, invalid_format};
+                eof ->
+                    {error, unexpected_eof_when_parsing_header};
                 Err ->
                     Err
             end;
@@ -124,6 +133,28 @@ parse_snapshot(<<Idx:64/unsigned, Term:64/unsigned,
                  NumServers:8/unsigned, Rest0/binary>>) ->
     {Servers, Rest} = parse_servers(NumServers, [], Rest0),
     {ok, {Idx, Term, Servers}, binary_to_term(Rest)}.
+
+read_servers(0, Servers, _, _) ->
+    {ok, lists:reverse(Servers)};
+read_servers(Num, Servers, Fd, Offset) ->
+    case file:pread(Fd, Offset, 1) of
+        {ok, <<Len:8/unsigned>>} ->
+            case file:pread(Fd, Offset+1, Len) of
+                {ok, <<ServerData:Len/binary>>} ->
+                    read_servers(Num - 1,
+                                 [binary_to_term(ServerData) | Servers],
+                                 Fd,
+                                 Offset + 1 + Len);
+                eof ->
+                    {error, unexpected_eof_when_parsing_servers};
+                Err ->
+                    Err
+            end;
+        eof ->
+            {error, unexpected_eof_when_parsing_servers};
+        Err ->
+            Err
+    end.
 
 parse_servers(0, Servers, Data) ->
     {lists:reverse(Servers), Data};

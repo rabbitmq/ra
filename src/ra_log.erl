@@ -141,7 +141,7 @@ init(#{uid := UId} = Conf) ->
             [File | _] ->
                 %% TODO provide function that only reads the index and term
                 %% of the snapshot file.
-                {ok, {SI, ST}} = ra_snapshot:read_indexterm(SnapModule, File),
+                {ok, {SI, ST, _}} = ra_snapshot:read_meta(SnapModule, File),
                 {SI, ST, File};
             [] ->
                 undefined
