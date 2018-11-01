@@ -114,9 +114,4 @@ recover_same_as_read(Config) ->
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(File),
     ok.
 
-install_does_nothing(Config) ->
-    SnapshotData = my_state,
-    {ok, SnapshotData} = ra_log_snapshot:install(SnapshotData, "some.file").
-
-
 %% Utility
