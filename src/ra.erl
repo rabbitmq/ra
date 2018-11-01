@@ -30,6 +30,7 @@
          % server management
          start_server/1,
          start_server/4,
+         start_server/5,
          restart_server/1,
          stop_server/1,
          delete_server/1,
