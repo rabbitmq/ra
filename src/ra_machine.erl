@@ -196,8 +196,8 @@ init({machine, Mod, Args}, Name) ->
 
 -spec apply(machine(), command_meta_data(), command(), effects(), State) ->
     {State, effects(), reply()}.
-apply({machine, Mod, _}, Idx, Cmd, Effects, State) ->
-    Mod:apply(Idx, Cmd, Effects, State).
+apply({machine, Mod, _}, Metadata, Cmd, Effects, State) ->
+    Mod:apply(Metadata, Cmd, Effects, State).
 
 -spec tick(machine(), milliseconds(), state()) -> effects().
 tick({machine, Mod, _}, TimeMs, State) ->
