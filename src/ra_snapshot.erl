@@ -11,7 +11,7 @@
     save/4,
     read/2,
     recover/2,
-    read_indexterm/2
+    read_meta/2
 ]).
 -export_type([meta/0, file_err/0]).
 
@@ -46,8 +46,8 @@
     {ok, Meta :: meta(), State :: term()} | {error, term()}.
 
 %% Only read index and term from snapshot
--callback read_indexterm(Location :: file:filename()) ->
-    {ok, ra_idxterm()} |
+-callback read_meta(Location :: file:filename()) ->
+    {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
             checksum_error |
@@ -91,15 +91,15 @@ read(Module, Location) ->
 recover(Module, Location) ->
     Module:recover(Location).
 
--spec read_indexterm(Module :: module(), Location :: file:filename()) ->
-    {ok, ra_idxterm()} |
+-spec read_meta(Module :: module(), Location :: file:filename()) ->
+    {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
             checksum_error |
             file_err() |
             term()}.
-read_indexterm(Module, Location) ->
-    Module:read_indexterm(Location).
+read_meta(Module, Location) ->
+    Module:read_meta(Location).
 
 
 

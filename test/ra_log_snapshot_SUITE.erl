@@ -95,7 +95,7 @@ read_index_term(Config) ->
     SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
     SnapshotRef = my_state,
     ok = ra_log_snapshot:write(File, SnapshotMeta, SnapshotRef),
-    {ok, {33, 94}} = ra_log_snapshot:read_indexterm(File),
+    {ok, {33, 94, _}} = ra_log_snapshot:read_meta(File),
     ok.
 
 save_same_as_write(Config) ->
