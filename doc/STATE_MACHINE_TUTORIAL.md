@@ -1,4 +1,4 @@
-# Writing a state machine.
+# Writing a State Machine
 
 For `ra` to do anything useful you need to provide it with a state machine
 implementation that solves a particular problem.
@@ -20,21 +20,19 @@ is created. It takes an arbitrary map of configuration parameters.
 `apply/4` is the primary function that is called for every command in the
 raft log. It takes a meta data map containing the raft index and term (more on that later),
 a command, a list of effects and the
-current state and either returns the new state and a list of effects (more on
-effects later) or the new state, effects _and_ a reply that can be returned
+current state and returns the new state, effects _and_ a reply that can be returned
 to the caller _if_ they issued a synchronous call (see: `ra:process_command/2`).
-Effects should be prepended to the incoming effects list. Ra will reverse
-the list of effects for each batch of applied entries before processing.
+Effects should be prepended to the incoming effects list.
 
 There are also some optional callbacks that advanced state machines may choose to
 implement.
 
-## A simple KV store.
+## A simple KV Store
 
 As an example we are going to write a simple key-value store that takes
 `write` and `read` operations.
 
-### Writing the store
+### Writing the Store
 
 Create a new erlang module named `ra_kv` using the `ra_machine` behaviour and
 export the `init/1` and `apply/4` functions:
@@ -142,7 +140,7 @@ The return tuple has either the raft index and term the entry was added to the
 raft log _or_ the return value optionally returned by the state machine. The
 `{read, Key}` command returns the current value of the key.
 
-### Providing a client api.
+### Providing a client API
 
 We have already added the `start/0` function to start a local ra cluster. It would
 make sense to abstract interactions with the kv store behind a nicer interface
@@ -176,22 +174,13 @@ Effects are used to separate the state machine logic from the side effects it wa
 to take inside it's environment. Each call to the `apply/4` function can return
 a list of effects for the leader to realise. This includes sending messages,
 setting up server and process monitors and calling arbitrary functions.
-Only the leader that first applies an entry will attempt the effect. Followers
-process the same set of commands but simply throw away any effects returned by
+
+Ra will reverse the list of effects for each batch of applied entries before processing.
+
+Only the leader that first applies an entry will attempt the effect.
+Followers process the same set of commands but simply throw away any effects returned by
 the state machine.
 
-How does ra ensure we not re-issue effects on recovery?
-
-Each ra server persists it's `last_applied` index. When the server restarts it
-replays it's log until this point and throws away any resulting effects as they
-should already have been issued.
-
-NB: as the `last_applied` index is only persisted periodically there is a small
-chance that some effects may be issued multiple times when all the servers in the
-cluster crash suddenly and at the same time. It is worth taking this into account
-when implementing your state machine. There is also a chance that effects will
-never be issued or reach their recipients. Ra makes no allowance for this.
-(See recommendation about using an ARQ protocol below).
 
 ### Send a message
 
@@ -200,7 +189,7 @@ to the specified
 `pid`. Not that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
 options which are the least reliable message sending options. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
-To ensure message reliability normal [Autmatic Repeat Query ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
+To ensure message reliability normal [Autmatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
 like protocols between the state machine and the receiver should be implemented
 if needed.
 
