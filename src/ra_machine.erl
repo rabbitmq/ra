@@ -51,7 +51,8 @@
          query/3,
          module/1,
          init_aux/2,
-         handle_aux/7
+         handle_aux/7,
+         snapshot_module/1
         ]).
 
 -type state() :: term().
@@ -154,7 +155,8 @@
                      state_enter/2,
                      init_aux/1,
                      handle_aux/6,
-                     overview/1
+                     overview/1,
+                     snapshot_module/0
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -188,6 +190,8 @@
            LogState :: ra_log:ra_log().
 
 -callback overview(state()) -> map().
+
+-callback snapshot_module() -> module().
 
 %% @doc initialise a new machine
 -spec init(machine(), atom()) -> state().
@@ -240,3 +244,6 @@ query(ra_machine_simple, Fun, {simple, _, State}) ->
 -spec module(machine()) -> module().
 module({machine, Mod, _}) -> Mod.
 
+-spec snapshot_module(machine()) -> module().
+snapshot_module({machine, Mod, _}) ->
+    ?OPT_CALL(Mod:snapshot_module(), ?DEFAULT_SNAPSHOT_MODULE).

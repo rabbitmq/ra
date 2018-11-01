@@ -172,11 +172,6 @@ init(#{id := Id,
        log_init_args := LogInitArgs,
        machine := MachineConf} = Config) ->
     Name = ra_lib:ra_server_id_to_local_name(Id),
-    Log0 = ra_log:init(LogInitArgs),
-    ok = ra_log:write_config(Config, Log0),
-    CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
-    LastApplied = ra_log:read_meta(last_applied, Log0, 0),
-    VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
     Machine = case MachineConf of
                   {simple, Fun, S} ->
                       {machine, ra_machine_simple, #{simple_fun => Fun,
@@ -185,6 +180,14 @@ init(#{id := Id,
                       {machine, Mod, Args}
               end,
     InitialMachineState = ra_machine:init(Machine, Name),
+    SnapModule = ra_machine:snapshot_module(Machine),
+
+    Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule}),
+    ok = ra_log:write_config(Config, Log0),
+    CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
+    LastApplied = ra_log:read_meta(last_applied, Log0, 0),
+    VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
+
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
@@ -235,7 +238,6 @@ init(#{id := Id,
     State0#{log => Log,
             cluster => Cluster,
             cluster_index_term => ClusterIndexTerm}.
-
 
 recover(#{id := Id,
           commit_index := CommitIndex,

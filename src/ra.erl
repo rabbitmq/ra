@@ -23,14 +23,12 @@
          consistent_query/3,
          % cluster operations
          start_cluster/3,
-         start_cluster/4,
          start_or_restart_cluster/3,
          delete_cluster/1,
          delete_cluster/2,
          % server management
          start_server/1,
          start_server/4,
-         start_server/5,
          restart_server/1,
          stop_server/1,
          delete_server/1,
@@ -197,16 +195,10 @@ start_or_restart_cluster(ClusterName, Machine,
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterName, Machine, ServerIds) ->
-    start_cluster(ClusterName, Machine, ?DEFAULT_SNAPSHOT_MODULE, ServerIds).
-
--spec start_cluster(ra_cluster_name(), ra_server:machine_conf(), module(), [ra_server_id()]) ->
-    {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
-start_cluster(ClusterName, Machine, SnapshotModule, ServerIds) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(
             fun (N) ->
-                case start_server(ClusterName, N, Machine, SnapshotModule, ServerIds) of
+                case start_server(ClusterName, N, Machine, ServerIds) of
                     ok  -> true;
                     Err -> ?WARN("ra: failed to start a server ~w : ~p~n", [N, Err]),
                            false
@@ -245,20 +237,13 @@ start_cluster(ClusterName, Machine, SnapshotModule, ServerIds) ->
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
 start_server(ClusterName, ServerId, Machine, ServerIds) ->
-    start_server(ClusterName, ServerId, Machine, ?DEFAULT_SNAPSHOT_MODULE, ServerIds).
-
--spec start_server(ra_cluster_name(), ra_server_id(),
-                   ra_server:machine_conf(), module(), [ra_server_id()]) ->
-    ok | {error, term()}.
-start_server(ClusterName, ServerId, Machine, SnapshotModule, ServerIds) ->
     Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterName), 4),
     UId = ra_lib:make_uid(string:uppercase(Prefix)),
     Conf = #{cluster_name => ClusterName,
              id => ServerId,
              uid => UId,
              initial_members => ServerIds,
-             log_init_args => #{uid => UId,
-                                snapshot_module => SnapshotModule},
+             log_init_args => #{uid => UId},
              machine => Machine},
     start_server(Conf).
 

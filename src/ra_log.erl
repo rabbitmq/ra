@@ -77,7 +77,7 @@
          snapshot_state :: maybe({ra_index(), ra_term(),
                                   maybe(file:filename())}),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
-         snapshot_module = ?DEFAULT_SNAPSHOT_MODULE :: module(),
+         snapshot_module :: module(),
          % if this is set a snapshot write is in progress for the
          % index specified
          snapshot_index_in_progress :: maybe(ra_index()),
