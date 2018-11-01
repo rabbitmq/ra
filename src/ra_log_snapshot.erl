@@ -80,7 +80,12 @@ read(File) ->
 -spec install(term(), file:filename()) -> {ok, term()}.
 install(Data, _File) -> {ok, Data}.
 
--spec recover(file:filename()) -> {ok, meta(), term()} | {error, invalid_format | {invalid_version, integer()} | checksum_error | file_err()}.
+-spec recover(file:filename()) ->
+    {ok, meta(), term()} |
+    {error, invalid_format |
+    {invalid_version, integer()} |
+    checksum_error |
+    file_err()}.
 recover(File) -> read(File).
 
 %% @doc reads the index and term from the snapshot file without reading the

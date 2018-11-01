@@ -17,16 +17,20 @@
 -callback write(Location :: file:filename(),
                 Meta :: meta(),
                 Ref :: term()) ->
-    ok | {error, file_err()}.
+    ok | {error, file_err() | term()}.
 
 %% Read the snapshot from disk into serialised structure for transfer.
 -callback read(Location :: file:filename()) ->
     {ok, Meta :: meta(), Data :: term()} |
-    {error, invalid_format | {invalid_version, integer()} | checksum_error | file_err()}.
+    {error, invalid_format |
+            {invalid_version, integer()} |
+            checksum_error |
+            file_err() |
+            term()}.
 
 %% Dump the snapshot data to disk withtou touching the external state
 -callback save(Location :: file:filename(), Meta :: meta(), Data :: term()) ->
-    ok | {error, file_err()}.
+    ok | {error, file_err() | term()}.
 
 %% Side-effect function
 %% Deserialize the snapshot to external state.
@@ -41,4 +45,8 @@
 %% Only read index and term from snapshot
 -callback read_indexterm(Location :: file:filename()) ->
     {ok, ra_idxterm()} |
-    {error, invalid_format | {invalid_version, integer()} | checksum_error | file_err()}.
+    {error, invalid_format |
+            {invalid_version, integer()} |
+            checksum_error |
+            file_err() |
+            term()}.
