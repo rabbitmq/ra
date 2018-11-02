@@ -294,7 +294,8 @@ machine_state_enter_effects(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     ra:delete_cluster([ServerId]),
-    validate_state_enters([recover, recovered, follower, candidate, leader, eol]),
+    validate_state_enters([recover, recovered, follower,
+                           candidate, leader, eol]),
     ok.
 
 %% Utility

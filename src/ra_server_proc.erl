@@ -260,10 +260,10 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
            end,
     {leader, ServerState, Effects} =
         ra_server:handle_leader({command, {CmdType, #{from => From},
-                                         Data, ReplyMode}},
-                              ServerState0),
+                                           Data, ReplyMode}},
+                                ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
-                                      State0#state{server_state = ServerState}),
+                                       State0#state{server_state = ServerState}),
     {keep_state, State, Actions};
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
@@ -291,8 +291,6 @@ leader(EventType, flush_commands,
               delayed_commands = Delayed0} = State0) ->
 
     {DelQ, Delayed} = queue_take(25, Delayed0),
-
-    % ?INFO("flushing commands ~w~n", [Delayed]),
     %% write a batch of delayed commands
     {leader, ServerState, Effects} =
         ra_server:handle_leader({commands, Delayed}, ServerState0),
@@ -325,9 +323,10 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
         {MRef, Monitors} ->
             % there is a monitor for the ref
             {leader, ServerState, Effects} =
-                ra_server:handle_leader({command, {'$usr', #{from => undefined},
-                                                 {down, Pid, Info}, noreply}},
-                                      ServerState0),
+                ra_server:handle_leader({command,
+                                         {'$usr', #{from => undefined},
+                                          {down, Pid, Info}, noreply}},
+                                        ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
                                 State0#state{server_state = ServerState,
@@ -345,12 +344,12 @@ leader(info, {NodeEvt, Node},
             % there is a monitor for the node
             {leader, ServerState, Effects} =
                 ra_server:handle_leader({command,
-                                       {'$usr', #{from => undefined},
-                                        {NodeEvt, Node}, noreply}},
-                                      ServerState0),
+                                         {'$usr', #{from => undefined},
+                                          {NodeEvt, Node}, noreply}},
+                                        ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
-                               State0#state{server_state = ServerState}),
+                                State0#state{server_state = ServerState}),
             {keep_state, State, Actions};
         _ ->
             {keep_state, State0, []}
@@ -373,8 +372,12 @@ leader(EventType, Msg, State0) ->
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             % demonitor when stepping down
-            ok = lists:foreach(fun erlang:demonitor/1,
-                               maps:values(State#state.monitors)),
+            ok = lists:foreach(fun (Ref) when is_reference(Ref) ->
+                                       erlang:demonitor(Ref);
+                                   (_) ->
+                                       %% the monitor is a node
+                                       ok
+                               end, maps:values(State#state.monitors)),
             {next_state, follower, State#state{monitors = #{}},
              maybe_set_election_timeout(State, Actions)};
         {stop, State1, Effects} ->
@@ -839,7 +842,7 @@ handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
 handle_effect(_, {monitor, process, Pid}, _,
               #state{monitors = Monitors} = State, Actions) ->
     case Monitors of
-        #{Pid := _MRef} ->
+        #{Pid := _} ->
             % monitor is already in place - do nothing
             {State, Actions};
         _ ->
