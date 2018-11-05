@@ -261,15 +261,15 @@ messages will be sent to reduce network bandwidth usage.
 
 ### Failure Detection
 
-Ra doesn't rely the Raft paper's approach to peer failure detection
+Ra doesn't rely on the Raft paper's approach to peer failure detection
 where the leader periodically sends append entries messages to enforce its leadership.
 
 Ra is designed to support potentially thousands of concurrently running clusters within an
 Erlang cluster and having all these doing their own failure detection
 has proven excessive in terms of bandwidth usage.
 
-In Ra leaders will not send append entries unless there is an update to be
-sent it means followers don't (typically) set election timers.
+In Ra, leaders will not send append entries unless there is an update to be
+sent. It means followers don't (typically) set election timers.
 
 This leaves the question on how failures are detected and elections
 are triggered.
@@ -283,13 +283,13 @@ replying the follower _then_ sets a short, randomised election
 timeout.
 
 This only works well in crash-stop scenarios. For network partition
-scenarios it would rely on Erlang distribution's net ticks mechanism to detect the partition
-which could easily take 30-60 seconds by default to happen which is too slow.
+scenarios Ra could rely on Erlang distribution's net ticks mechanism to detect the partition
+but this could easily take 30-60 seconds by default to happen which is too slow.
 
-The `ra` application uses a separate [node failure
-detection library](https://github.com/rabbitmq/aten) developed alongside it.
+This is why the `ra` application uses [Aten](https://github.com/rabbitmq/aten), a separate node failure
+detection library developed alongside it.
 
-The library, `aten`, monitors Erlang nodes. When it suspects an Erlang node is down
+Aten monitors Erlang nodes. When it suspects an Erlang node is down
 it notifies local `ra` servers of this. If this Erlang node hosts the currently
 known `ra` leader the follower will start an election.
 
