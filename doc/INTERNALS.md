@@ -148,12 +148,12 @@ The goal is to minimise disk I/O activity when possible.
 
 
 
-### Identity
+## Identity
 
 Since Ra assumes multiple clusters running side by side in a given Erlang cluster,
 each cluster and cluster member must have their own identities.
 
-#### Cluster Name
+### Cluster Name
 
 A cluster name in Ra is defined as `binary() | string() | atom()`.
 
@@ -163,7 +163,7 @@ The cluster name isn't strictly part of a clusters identity.
 
 For example, in RabbitMQ's quorum queues case cluster names are derived from queue's identity.
 
-#### Server ID
+### Server ID
 
 A Ra server is a Ra cluster member. Server ID is defined as a pair of `{atom(), node()}`.
 Server ID combines a locally registered name and the Erlang node it resides on.
@@ -182,7 +182,7 @@ Ra servers are locally registered process to avoid depending on a
 distributed registry (such as the `global` module) which does not
 provide the same consistency and recovery guarantees.
 
-#### UID
+### UID
 
 Each Ra server also needs an ID that is unique to the local Erlang
 node _and_ unique across incarnations of `ra` clusters with the same
@@ -228,12 +228,12 @@ Config = #{cluster_name => <<"ra-cluster-1">>,
 ```
 
 
-### Raft Extensions and Deviations
+## Raft Extensions and Deviations
 
 Ra aims to fit well within the Erlang environment as well as provide good adaptive throughput.
 Therefore it has deviated from the original Raft protocol in certain areas.
 
-#### Replication
+### Replication
 
 Log replication in Ra is mostly asynchronous, so there is no actual use of RPC (as in the Raft paper) calls.
 New entries are pipelined and followers reply after receiving a written event which incurs
@@ -259,7 +259,7 @@ liveness. In an idle system where all followers are in sync no further
 messages will be sent to reduce network bandwidth usage.
 
 
-#### Failure Detection
+### Failure Detection
 
 Ra doesn't rely the Raft paper's approach to peer failure detection
 where the leader periodically sends append entries messages to enforce its leadership.
