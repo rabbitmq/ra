@@ -670,14 +670,14 @@ append_entries_reply_success(_Config) ->
                commit_index := 3,
                last_applied := 3,
                machine_state := {simple, _, <<"hi3">>}},
-     [{send_rpcs,
-         [{n3, #append_entries_rpc{term = 5, leader_id = n1,
-                                   prev_log_index = 1,
-                                   prev_log_term = 1,
-                                   leader_commit = 3,
-                                   entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
-                                              {3, 5, {'$usr', _, <<"hi3">>, _}}]}}
-         ]}, _Metrics]} = ra_server:handle_leader(Msg, State),
+     [{send_rpc, n3,
+       #append_entries_rpc{term = 5, leader_id = n1,
+                           prev_log_index = 1,
+                           prev_log_term = 1,
+                           leader_commit = 3,
+                           entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                      {3, 5, {'$usr', _, <<"hi3">>, _}}]}
+      }, _Metrics]} = ra_server:handle_leader(Msg, State),
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
@@ -709,15 +709,15 @@ append_entries_reply_no_success(_Config) ->
                commit_index := 1,
                last_applied := 1,
                machine_state := {simple, _, <<"hi1">>}},
-     [{send_rpcs,
-       [{n3, #append_entries_rpc{term = 5, leader_id = n1,
-                                 prev_log_index = 1,
-                                 prev_log_term = 1,
-                                 leader_commit = 1,
-                                 entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
-                                            {3, 5, {'$usr', _, <<"hi3">>, _}}]}},
-        {n2, _}]}]} =
-        ra_server:handle_leader(Msg, State),
+     [{send_rpc, n3,
+       #append_entries_rpc{term = 5, leader_id = n1,
+                           prev_log_index = 1,
+                           prev_log_term = 1,
+                           leader_commit = 1,
+                           entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                      {3, 5, {'$usr', _, <<"hi3">>, _}}]}},
+        {send_rpc, n2, _}
+      ]} = ra_server:handle_leader(Msg, State),
     ok.
 
 follower_request_vote(_Config) ->
@@ -946,29 +946,32 @@ leader_server_join(_Config) ->
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                          n4, await_consensus}}, State0),
     % {leader, State, Effects} = ra_server:handle_leader({written, 4}, State1),
-    [{send_rpcs,
-      [{n4, #append_entries_rpc{entries =
-                                [_, _, _, {4, 5, {'$ra_cluster_change', _,
-                                                  #{n1 := _, n2 := _,
-                                                    n3 := _, n4 := _},
-                                                  await_consensus}}]}},
-       {n3, #append_entries_rpc{entries =
-                                [{4, 5, {'$ra_cluster_change', _,
-                                         #{n1 := _, n2 := _, n3 := _, n4 := _},
-                                         await_consensus}}],
-                                term = 5, leader_id = n1,
-                                prev_log_index = 3,
-                                prev_log_term = 5,
-                                leader_commit = 3}},
-       {n2, #append_entries_rpc{entries =
-                                [{4, 5, {'$ra_cluster_change', _,
-                                         #{n1 := _, n2 := _, n3 := _, n4 := _},
-                                         await_consensus}}],
-                                term = 5, leader_id = n1,
-                                prev_log_index = 3,
-                                prev_log_term = 5,
-                                leader_commit = 3}}]},
-     _] = Effects,
+    [{incr_metrics, _, _},
+     {send_rpc, n4,
+      #append_entries_rpc{entries =
+                          [_, _, _, {4, 5, {'$ra_cluster_change', _,
+                                            #{n1 := _, n2 := _,
+                                              n3 := _, n4 := _},
+                                            await_consensus}}]}},
+     {send_rpc, n3,
+      #append_entries_rpc{entries =
+                          [{4, 5, {'$ra_cluster_change', _,
+                                   #{n1 := _, n2 := _, n3 := _, n4 := _},
+                                   await_consensus}}],
+                          term = 5, leader_id = n1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 3}},
+     {send_rpc, n2,
+      #append_entries_rpc{entries =
+                          [{4, 5, {'$ra_cluster_change', _,
+                                   #{n1 := _, n2 := _, n3 := _, n4 := _},
+                                   await_consensus}}],
+                          term = 5, leader_id = n1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 3}}
+     | _] = Effects,
     ok.
 
 leader_server_leave(_Config) ->
@@ -979,24 +982,24 @@ leader_server_leave(_Config) ->
     State = (base_state(3))#{cluster => OldCluster},
     % raft servers should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
-     [{send_rpcs, [N3, N2]} | _]} =
+     [_, {send_rpc, n3, N3}, {send_rpc, n2, N2} | _]} =
         ra_server:handle_leader({command, {'$ra_leave', meta(), n4, await_consensus}},
                               State),
     % the leaving server is no longer included
-    {n3, #append_entries_rpc{term = 5, leader_id = n1,
-                             prev_log_index = 3,
-                             prev_log_term = 5,
-                             leader_commit = 3,
-                             entries = [{4, 5, {'$ra_cluster_change', _,
-                                                #{n1 := _, n2 := _, n3 := _},
-                                                await_consensus}}]}} = N3,
-    {n2, #append_entries_rpc{term = 5, leader_id = n1,
-                             prev_log_index = 3,
-                             prev_log_term = 5,
-                             leader_commit = 3,
-                             entries = [{4, 5, {'$ra_cluster_change', _,
-                                                #{n1 := _, n2 := _, n3 := _},
-                                                await_consensus}}]}} = N2,
+    #append_entries_rpc{term = 5, leader_id = n1,
+                        prev_log_index = 3,
+                        prev_log_term = 5,
+                        leader_commit = 3,
+                        entries = [{4, 5, {'$ra_cluster_change', _,
+                                           #{n1 := _, n2 := _, n3 := _},
+                                           await_consensus}}]} = N3,
+    #append_entries_rpc{term = 5, leader_id = n1,
+                        prev_log_index = 3,
+                        prev_log_term = 5,
+                        leader_commit = 3,
+                        entries = [{4, 5, {'$ra_cluster_change', _,
+                                           #{n1 := _, n2 := _, n3 := _},
+                                           await_consensus}}]} = N2,
     ok.
 
 leader_is_removed(_Config) ->
@@ -1159,7 +1162,8 @@ command(_Config) ->
                             },
     From = maps:get(from, Meta),
     {leader, _, [{reply, From, {4, 5}},
-                 {send_rpcs, [{n3, AE}, {n2, AE}]} |
+                 _,  % metrics
+                 {send_rpc, n3, AE}, {send_rpc, n2, AE} |
                  _]} =
         ra_server:handle_leader({command, Cmd}, State),
     ok.
@@ -1183,12 +1187,18 @@ candidate_election(_Config) ->
                                 match_index => 0}), % initd to 0
     % when candidate becomes leader the next operation should be a noop
     % and all peers should be initialised with the appropriate state
+    % Also rpcs for all members should be issued
     {leader, #{cluster := #{n2 := PeerState,
                             n3 := PeerState,
                             n4 := PeerState,
                             n5 := PeerState}},
-     [{send_rpcs, _}, {next_event, cast, {command, noop}}]}
-        = ra_server:handle_candidate(Reply, State1).
+     [
+      {next_event, cast, {command, noop}},
+      {send_rpc, _, _},
+      {send_rpc, _, _},
+      {send_rpc, _, _},
+      {send_rpc, _, _}
+     ]} = ra_server:handle_candidate(Reply, State1).
 
 pre_vote_election(_Config) ->
     Token = make_ref(),
@@ -1246,14 +1256,19 @@ pre_vote_election_reverts(_Config) ->
     ok.
 
 leader_receives_pre_vote(_Config) ->
-    % leader should reply immediately with append entries if it receives
-    % a pre_vote
+    % leader should emit rpcs to all nodes immediately upon receiving
+    % an pre_vote_rpc to put upstart followers back in their place
     Token = make_ref(),
     State = (base_state(5))#{votes => 1},
     PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = n1,
                                token = Token,
                                last_log_index = 3, last_log_term = 5},
-    {leader, #{}, [{send_rpcs, _}]}
+    {leader, #{}, [
+                   {send_rpc, _, _},
+                   {send_rpc, _, _},
+                   {send_rpc, _, _},
+                   {send_rpc, _, _}
+                   | _]}
         = ra_server:handle_leader(PreVoteRpc, State),
     % leader abdicates for higher term
     {follower, #{current_term := 6}, _}
@@ -1355,8 +1370,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     % should decrement next_index for n2
     % ExpectedN2NextIndex = 2,
     {leader, #{cluster := #{n2 := #{next_index := 4}}},
-     [{send_rpcs,
-       [{n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}]}
+     [{send_rpc, n2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}
        = ra_server:handle_leader({n2, AER}, Leader0),
     ok.
 
@@ -1392,12 +1406,12 @@ leader_receives_install_snapshot_result(_Config) ->
     {leader, #{cluster := #{n3 := #{match_index := 2,
                                     commit_index_sent := 4,
                                     next_index := 5}}},
-     [{send_rpcs, Rpcs}]} = ra_server:handle_leader({n3, ISR}, Leader),
-    ?assert(lists:any(fun({n3,
+     Effects} = ra_server:handle_leader({n3, ISR}, Leader),
+    ?assert(lists:any(fun({send_rpc, n3,
                            #append_entries_rpc{entries = [{3, _, _},
                                                           {4, _, _}]}}) ->
                               true;
-                         (_) -> false end, Rpcs)),
+                         (_) -> false end, Effects)),
     ok.
 
 % %%% helpers

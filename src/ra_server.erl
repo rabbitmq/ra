@@ -108,7 +108,8 @@
     {cast, ra_server_id(), term()} |
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
-    {send_rpcs, [{ra_server_id(), #append_entries_rpc{}}]} |
+    {send_rpc, ra_server_id(), #append_entries_rpc{}} |
+    {send_snapshot, ra_server_id(), #install_snapshot_rpc{}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
     {notify, pid(), reference()} |
@@ -281,12 +282,14 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1),
-            {State, Rpcs} = make_pipelined_rpcs(State2),
+            {State, RpcEffects} =
+                make_pipelined_rpc_effects(State2,
+                                           [{incr_metrics, ra_metrics,
+                                             [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
-            Effects = Effects0 ++ [{send_rpcs, Rpcs},
-                                   {incr_metrics, ra_metrics, [{3, Applied}]}],
+            Effects = Effects0 ++ RpcEffects,
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -364,8 +367,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{next_index => max(min(NI-1, LastIdx), MI)}, L}
                   end,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
-    {State, Rpcs} = make_pipelined_rpcs(State1),
-    {leader, State, [{send_rpcs, Rpcs}]};
+    {State, Effects} = make_pipelined_rpc_effects(State1, []),
+    {leader, State, Effects};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
@@ -376,9 +379,8 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             % ?INFO("~p ~p command appended to log at ~p term ~p~n",
             %      [Id, Cmd, Idx, Term]),
             % Only "pipeline" in response to a command
-            {State, Rpcs} = make_pipelined_rpcs(State0),
-            Effects1 = [{send_rpcs, Rpcs},
-                        {incr_metrics, ra_metrics, [{2, 1}]}],
+            {State, Effects0} = make_pipelined_rpc_effects(State0, []),
+            Effects1 = [{incr_metrics, ra_metrics, [{2, 1}]} | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
@@ -405,15 +407,14 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
                              end
                      end, {State00, []}, Cmds),
 
-    {State, Rpcs} = make_pipelined_rpcs(length(Cmds), State0),
+    {State, Effects} = make_pipelined_rpc_effects(length(Cmds), State0, Effects0),
     %% TOOD: ra_metrics
-    {leader, State, [{send_rpcs, Rpcs} | Effects0]};
+    {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     Log = ra_log:handle_event(Evt, Log0),
-    {State1, Effects, Applied} = evaluate_quorum(State0#{log => Log}),
-    {State, Rpcs} = make_pipelined_rpcs(State1),
-    {leader, State, [{send_rpcs, Rpcs},
-                     {incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
+    {State1, Effects0, Applied} = evaluate_quorum(State0#{log => Log}),
+    {State, Effects} = make_pipelined_rpc_effects(State1, Effects0),
+    {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     Log1 = ra_log:handle_event(Evt, Log0),
     {leader, State#{log => Log1}, []};
@@ -451,8 +452,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                                         next_index => max(NI, LastIndex+1) },
                                  State0),
 
-            {State, Rpcs} = make_pipelined_rpcs(State1),
-            Effects = [{send_rpcs, Rpcs}],
+            {State, Effects} = make_pipelined_rpc_effects(State1, []),
             {leader, State, Effects}
     end;
 handle_leader(#install_snapshot_rpc{term = Term,
@@ -514,8 +514,7 @@ handle_leader(#pre_vote_rpc{term = Term},
               #{current_term := CurTerm} = State0)
   when Term =< CurTerm ->
     % enforce leadership
-    {State, Rpcs} = make_all_rpcs(State0),
-    Effects = [{send_rpcs, Rpcs}],
+    {State, Effects} = make_all_rpcs(State0),
     {leader, State, Effects};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
@@ -530,11 +529,10 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            {State, Rpcs} = make_all_rpcs(initialise_peers(State0)),
+            {State, Effects} = make_all_rpcs(initialise_peers(State0)),
             % Effects = ra_machine:leader_effects(Machine, MacState),
             {leader, maps:without([votes, leader_id], State),
-             [{send_rpcs, Rpcs},
-              {next_event, cast, {command, noop}}]};
+             [{next_event, cast, {command, noop}} | Effects]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
@@ -995,18 +993,19 @@ filter_follower_effects(Effects) ->
                      (_) -> false
                  end, Effects).
 
-make_pipelined_rpcs(State) ->
-    make_pipelined_rpcs(?AER_CHUNK_SIZE, State).
+make_pipelined_rpc_effects(State, Effects) ->
+    make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
 
-make_pipelined_rpcs(MaxBatchSize, #{commit_index := CommitIndex} = State0) ->
-    maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Entries}) ->
-                      {LastIdx, Entry, S} =
-                          append_entries_or_snapshot(PeerId, Next,
-                                                     MaxBatchSize, S0),
+make_pipelined_rpc_effects(MaxBatchSize,
+                           #{commit_index := CommitIndex} = State0,
+                          Effects) ->
+    maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Effs}) ->
+                      {LastIdx, Eff, S} =
+                          make_rpc_effect(PeerId, Next, MaxBatchSize, S0),
                       Peer = Peer0#{next_index => LastIdx+1,
                                     commit_index_sent => CommitIndex},
-                      {update_peer(PeerId, Peer, S), [Entry | Entries]}
-              end, {State0, []}, pipelineable_peers(State0)).
+                      {update_peer(PeerId, Peer, S), [Eff | Effs]}
+              end, {State0, Effects}, pipelineable_peers(State0)).
 
 make_rpcs(State) ->
     make_rpcs_for(stale_peers(State), State).
@@ -1016,47 +1015,47 @@ make_all_rpcs(State) ->
     make_rpcs_for(peers(State), State).
 
 make_rpcs_for(Peers, State) ->
-    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Entries}) ->
-                      {_, Entry, S} =
-                          append_entries_or_snapshot(PeerId, Next,
-                                                     ?AER_CHUNK_SIZE,
-                                                     S0),
-                      {S, [Entry | Entries]}
+    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Effs}) ->
+                      {_, Eff, S} =
+                          make_rpc_effect(PeerId, Next, ?AER_CHUNK_SIZE, S0),
+                      {S, [Eff | Effs]}
               end, {State, []}, Peers).
 
-append_entries_or_snapshot(PeerId, Next, MaxBatchSize,
-                           #{id := Id, log := Log0,
-                             current_term := Term} = State) ->
+make_rpc_effect(PeerId, Next, MaxBatchSize,
+                #{id := Id, log := Log0,
+                  current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when PrevTerm =/= undefined ->
-            make_aer_chunk(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
-                           State#{log => Log});
+            make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
+                                    State#{log => Log});
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
             % to send a snapshot.
             case ra_log:snapshot_index_term(Log) of
                 {PrevIdx, PrevTerm} ->
                     % Previous index is the same as snapshot index
-                    make_aer_chunk(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
-                                   State#{log => Log});
+                    make_append_entries_rpc(PeerId, PrevIdx,
+                                            PrevTerm, MaxBatchSize,
+                                            State#{log => Log});
                 _ ->
                     {ok, {LastIndex, LastTerm, Config}, Data} =
                         ra_log:read_snapshot(Log),
                     {LastIndex,
-                     {PeerId, #install_snapshot_rpc{term = Term,
-                                                    leader_id = Id,
-                                                    last_index = LastIndex,
-                                                    last_term = LastTerm,
-                                                    last_config = Config,
-                                                    data = Data}},
+                     {send_snapshot, PeerId,
+                      #install_snapshot_rpc{term = Term,
+                                            leader_id = Id,
+                                            last_index = LastIndex,
+                                            last_term = LastTerm,
+                                            last_config = Config,
+                                            data = Data}},
                      State#{log => Log}}
             end
     end.
 
-make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
-               #{log := Log0, current_term := Term, id := Id,
-                 commit_index := CommitIndex} = State) ->
+make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
+                        #{log := Log0, current_term := Term, id := Id,
+                          commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
     %% TODO: refactor to avoid lists:last call later
     %% ra_log:take should be able to return the actual number of entries
@@ -1071,12 +1070,12 @@ make_aer_chunk(PeerId, PrevIdx, PrevTerm, Num,
                         LastIdx
                 end,
     {LastIndex,
-     {PeerId, #append_entries_rpc{entries = Entries,
-                                  term = Term,
-                                  leader_id = Id,
-                                  prev_log_index = PrevIdx,
-                                  prev_log_term = PrevTerm,
-                                  leader_commit = CommitIndex}},
+     {send_rpc, PeerId, #append_entries_rpc{entries = Entries,
+                                            term = Term,
+                                            leader_id = Id,
+                                            prev_log_index = PrevIdx,
+                                            prev_log_term = PrevTerm,
+                                            leader_commit = CommitIndex}},
      State#{log => Log}}.
 
 % stores the cluster config at an index such that we can later snapshot

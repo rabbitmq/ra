@@ -773,11 +773,15 @@ handle_effects(RaftState, Effects, EvtType, State0) ->
                                       State, Actions)
                 end, {State0, []}, Effects).
 
-handle_effect(_, {send_rpcs, Rpcs}, _, State0, Actions) ->
+handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
-    % TODO: review / refactor
-    [?MODULE:send_rpc(To, Rpc) || {To, Rpc} <- Rpcs],
-    % TODO: record metrics for sending times
+    % TODO: review / refactor to remove the mod call here
+    ?MODULE:send_rpc(To, Rpc),
+    {State0, Actions};
+handle_effect(_, {send_snapshot, To, ISRpc}, _, State0, Actions) ->
+    % fully qualified use only so that we can mock it for testing
+    % TODO: review / refactor to remove the mod call here
+    gen_cast(To, ISRpc),
     {State0, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
@@ -891,7 +895,7 @@ send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
     % TODO: review
-    [ok = ?MODULE:send_rpc(To, Rpc) || {To, Rpc} <-  Rpcs],
+    [ok = ?MODULE:send_rpc(To, Rpc) || {send_rpc, To, Rpc} <-  Rpcs],
     State.
 
 make_rpcs(State) ->
