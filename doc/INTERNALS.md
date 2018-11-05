@@ -8,7 +8,7 @@ that work together. They are reflected in the Ra API.
 Ra assumes that there can (and usually will be) multiple Raft clusters in a given Erlang node cluster.
 In case of a messaging system, a topic or queue can be its own cluster. In a data store
 a data partition can be its own Raft cluster. Any long lived stateful entity that the user
-would to replicate across cluster nodes can use a Raft cluster.
+would like to replicate across cluster nodes can use a Raft cluster.
 
 Raft clusters in a single cluster are logically independent but do share some Ra infrastructure
 such as the write-ahead log. This is a practical decision that avoids a lot of concurrent fsync
@@ -74,7 +74,7 @@ using `ra:pipeline_command/{3/4}`.
 ## Effects
 
 Effects are used to separate the state machine logic from the side effects it wants
-to take inside it's environment. Each call to the `apply/4` function can return
+to take inside its environment. Each call to the `apply/4` function can return
 a list of effects for the leader to realise. This includes sending messages,
 setting up server and process monitors and calling arbitrary functions.
 
@@ -98,7 +98,7 @@ never be issued or reach their recipients. Ra makes no allowance for this.
 
 It is worth taking this into account when implementing a state machine.
 
-The [Autmatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request) protocol
+The [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request) protocol
 can be used to implement reliable communication (Erlang message delivery) given the
 above limitations.
 
@@ -113,8 +113,7 @@ to the specified `pid`.
 options which is the least reliable way of doing it. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
 
-To ensure message reliability, [Autmatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
-like protocols between the state machine and the receiver should be implemented
+To ensure message reliability, [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)-like protocols between the state machine and the receiver should be implemented
 if needed.
 
 ### Monitoring
