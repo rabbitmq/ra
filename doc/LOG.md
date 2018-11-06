@@ -34,7 +34,7 @@ After each batch it notifies each Ra server that had a write in
 that batch so that it can consider the entry written.
 
 The WAL writes each entry to a per-Ra-server ETS table (a "mem table") which
-the Ra server uses to read data from it's log.
+the Ra server uses to read data from its log.
 
 The WAL tries to soak up load by dynamically increasing the max number of
 writes per batch, trading latency for throughput.
@@ -49,9 +49,9 @@ disk, calls `fsync(1)` which will accumulate further writes and so on.
 To avoid perpetually appending to and ever growing file the WAL periodically
 "rolls over" to a new file. The old file and the mem tables written during
 the lifetime of that file are passed to the segment writer process that is
-responsible for flusing the mem tables to per-ra-server specific on disk
+responsible for flushing the mem tables to per-ra-server specific on disk
 storage. The data is stored in variably sized segments with a fixed number of
-of log entries.
+log entries.
 
 When the segment writer has finished flushing all the mem tables for all the
 Ra servers that wrote to the WAL file it deletes the WAL file.
@@ -59,7 +59,7 @@ Ra servers that wrote to the WAL file it deletes the WAL file.
 #### The Snapshot Writer
 
 Ra servers offload the work of persisting snapshots to the snapshot writer
-process to that a large snapshot write does not block the Ra server
+process so that a large snapshot write does not block the Ra server
 unnecessarily. After a Ra server has written a snapshot it can delete any
 segments that only contain entries with a lower index than the snapshot.
 
