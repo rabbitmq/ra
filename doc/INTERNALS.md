@@ -1,5 +1,9 @@
 # Internals
 
+This guide covers key implementation aspects of Ra. It is intentionally
+high level since implementation details change often but overall design usually
+doesn't (or the authors believe Ra is well past that point).
+
 ## Concepts and Key Modules
 
 Ra is an implementation of Raft, a distributed consensus protocol. Raft has multiple features
@@ -98,7 +102,7 @@ never be issued or reach their recipients. Ra makes no allowance for this.
 
 It is worth taking this into account when implementing a state machine.
 
-The [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request) protocol
+The [Automatic Repeat Query (ARQ)][3] protocol
 can be used to implement reliable communication (Erlang message delivery) given the
 above limitations.
 
@@ -113,7 +117,7 @@ to the specified `pid`.
 options which is the least reliable way of doing it. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
 
-To ensure message reliability, [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)-like protocols between the state machine and the receiver should be implemented
+To ensure message reliability, [Automatic Repeat Query (ARQ)][3]-like protocols between the state machine and the receiver should be implemented
 if needed.
 
 ### Monitoring
@@ -228,6 +232,17 @@ Config = #{cluster_name => <<"ra-cluster-1">>,
 ```
 
 
+## Group Membership
+
+Ra implements the single server cluster membership change strategy
+covered in [Consensus: Bridging Theory and Practice][1]. In practice that
+means that join and leave requests are processed sequentially one by one.
+
+The function that manage cluster members, `ra:add_member/2` and `ra:remove_member/2`, respectively,
+will return as soon as the membership change state transition has been written to the log and the leader
+has switched to the new configuration.
+
+
 ## Raft Extensions and Deviations
 
 Ra aims to fit well within the Erlang environment as well as provide good adaptive throughput.
@@ -286,13 +301,106 @@ This only works well in crash-stop scenarios. For network partition
 scenarios Ra could rely on Erlang distribution's net ticks mechanism to detect the partition
 but this could easily take 30-60 seconds by default to happen which is too slow.
 
-This is why the `ra` application uses [Aten](https://github.com/rabbitmq/aten), a separate node failure
+This is why the `ra` application uses [Aten][2], a separate node failure
 detection library developed alongside it.
 
 Aten monitors Erlang nodes. When it suspects an Erlang node is down
 it notifies local `ra` servers of this. If this Erlang node hosts the currently
 known `ra` leader the follower will start an election.
 
-Ra implements a ["pre-vote" member state](https://ramcloud.stanford.edu/~ongaro/thesis.pdf)
+Ra implements a ["pre-vote" member state][1]
 that sits between the "follower" and "candidate" states.
 This avoids cluster disruptions due to leader failure false positives.
+
+
+
+## Log Implementation
+
+Ra is designed to support potentially thousands of Ra servers per Erlang node.
+As all data needs to be safely persisted and fsync-ed to disk before it can be
+actioned it is not practical or performant to have each server write log entries
+to their own log files. Ra's log design instead is optimised to avoid
+parallel calls to `fsync(1)` and thus need to funnel all log entry writes
+through a common file, named the write ahead log
+(although strictly speaking there is no "ahead" in this sense).
+
+All messages are sent asynchronously to maximise throughput with [ARQ][3] like
+protocols where needed.
+
+There are several processes involved in the Ra log implementation.
+
+### The Ra Server
+
+The Ra server initiates all write operations and coordinates all notifications
+received from the other processes. It is the only process that reads from
+the log.
+
+Under normal operations reads from the log are done from in memory ETS tables but it may
+occasionally read from log segments on disk, particularly when recovering
+after a restart.
+
+### The Write Ahead Log (WAL)
+
+This is the process that's first to accept all write operations.
+
+The WAL appends entries from all Ra servers running on the current Erlang node to a single file
+and calls `fsync(1)` after a certain number of writes have been performed _or_ there are no further
+write operations pending in its mailbox.
+
+After each batch it notifies each Ra server that had a write in
+that batch so that it can consider the entry written.
+
+The WAL writes each entry to a per-Ra-server ETS table (similar to
+Cassandra and RocksDB MemTables, see [Log Structured Storage][4])
+which the Ra server uses to read data from its log.
+
+The WAL tries to adapt to load by dynamically increasing the max number of
+writes per batch, trading latency for throughput.
+
+Depending on the system a call to `fsync(1)` can block for several milliseconds.
+Typically the size of a WAL batch is tuned to the number of messages received
+during the `fsync(1)` call. The WAL then quickly writes all pending entries to
+disk, calls `fsync(1)` which will accumulate further writes and so on.
+
+### The Segment Writer
+
+To avoid perpetually appending to and ever growing file the WAL periodically
+"rolls over" to a new file. The old file and the mem tables written during
+the lifetime of that file are passed to the segment writer process that is
+responsible for flushing the mem tables to per-Ra-server specific on disk
+storage. The data is stored in variably sized segments with a fixed number of
+log entries.
+
+When the segment writer has finished flushing all the mem tables for all the
+Ra servers that wrote to the WAL file it deletes the WAL file.
+
+The segment writes keeps track of the most recent snapshot index for each
+Ra server; it then uses that information to avoid performing writes for entries
+that potentially have been truncated.
+
+### The Snapshot Writer
+
+Ra servers offload the work of persisting snapshots to the snapshot writer
+process so that a large snapshot write does not block the Ra server
+unnecessarily. After a Ra server has written a snapshot it can delete any
+segments that only contain entries with a lower index than the snapshot.
+
+### Write interaction overview
+
+A simplified view of the lifetime of a single write.
+
+
+![blah](log_write.svg)
+
+
+
+
+## Snapshotting
+
+TBD: currently undergoing changes
+
+
+1. https://ramcloud.stanford.edu/~ongaro/thesis.pdf
+2. https://github.com/rabbitmq/aten
+3. https://en.wikipedia.org/wiki/Automatic_repeat_request
+4. https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/
