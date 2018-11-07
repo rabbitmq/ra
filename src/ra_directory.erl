@@ -9,7 +9,8 @@
          name_of/1,
          uid_of/1,
          send/2,
-         overview/0
+         overview/0,
+         list_registered/0
          ]).
 
 -export_type([
@@ -108,3 +109,7 @@ overview() ->
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}
                 end, #{}, Dir).
+
+-spec list_registered() -> [{atom(), ra_uid()}].
+list_registered() ->
+    dets:select(?REVERSE_TBL, [{'_', [], ['$_']}]).
