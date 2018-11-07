@@ -19,6 +19,7 @@
          next_index/1,
          install_snapshot/3,
          read_snapshot/1,
+         read_snapshot_module_state/1,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
@@ -499,6 +500,14 @@ read_snapshot(#state{snapshot_state = {_, _, File},
         {error, enoent} ->
             undefined
     end.
+
+-spec read_snapshot_module_state(State :: ra_log()) ->
+    maybe({module(), term()}).
+read_snapshot_module_state(#state{snapshot_state = undefined}) ->
+    exit({unexpected_snapshot_state, undefined});
+read_snapshot_module_state(#state{snapshot_state = {_, _, File},
+                     snapshot_module = SnapModule}) ->
+    {SnapModule, File}.
 
 -spec recover_snapshot(State :: ra_log()) ->
     maybe({ok, ra_snapshot:meta(), term()}).

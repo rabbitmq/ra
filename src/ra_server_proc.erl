@@ -50,7 +50,7 @@
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(USE_AVG_HALF_LIFE, 1000000.0).
--define(INSTALL_SNAP_RPC_TIMEOUT, 30000).
+-define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -839,16 +839,26 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-handle_effect(_, {send_snapshot, To, ISRpc}, _,
+handle_effect(_, {send_snapshot, To, {SnapMod, SnapRef, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors} = State0, Actions) ->
     %% leader effect only
     Me = self(),
-    Pid = spawn(fun () ->
-                        Reply = gen_statem:call(To, ISRpc,
-                                                ?INSTALL_SNAP_RPC_TIMEOUT),
-                        ok = gen_statem:cast(Me, {To, Reply})
-                end),
+    Pid = spawn(
+            fun () ->
+                    {ok, {LastIdx, LastTerm, Config}, Data} =
+                        ra_snapshot:read(SnapMod, SnapRef),
+                    Request = #install_snapshot_rpc{term = Term,
+                                                    leader_id = Id,
+                                                    last_index = LastIdx,
+                                                    last_term = LastTerm,
+                                                    last_config = Config,
+                                                    data = Data},
+                    Reply = gen_statem:call(To, Request,
+                                            {dirty_timeout,
+                                             ?INSTALL_SNAP_RPC_TIMEOUT}),
+                    ok = gen_statem:cast(Me, {To, Reply})
+            end),
     ?INFO("~w: sending snapshot to ~w with ~w~n", [id(State0), To, Pid]),
     MRef = erlang:monitor(process, Pid),
     %% update the peer state so that no pipelined entries are sent during

@@ -462,16 +462,11 @@ snapshot_installation_with_call_crash(Config) ->
      end || N <- lists:seq(1, 2500)],
 
     {ok, _, _} = ra:process_command(Leader, deq),
-    % [begin
-    %      ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
-    %      ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
-    %  end || N <- lists:seq(2500, 6000)],
-    % {ok, _, _} = ra:process_command(Leader, deq),
 
     meck:expect(gen_statem, call, fun (_,  #install_snapshot_rpc{}, _) ->
                                           exit(snap);
                                       (A, B, C) ->
-                                         meck:passthrough([A, B, C])
+                                          meck:passthrough([A, B, C])
                                   end),
     %% start the down node again, catchup should involve sending a snapshot
     ok = ra:restart_server(Down),

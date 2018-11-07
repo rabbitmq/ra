@@ -855,7 +855,7 @@ handle_await_condition(Msg, #{condition := Cond} = State) ->
         true ->
             {follower, State, [{next_event, Msg}]};
         false ->
-            log_unhandled_msg(await_condition, Msg, State),
+            % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
 
@@ -1020,9 +1020,9 @@ make_pipelined_rpc_effects(MaxBatchSize,
                            #{commit_index := CommitIndex} = State0,
                           Effects) ->
     maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Effs}) ->
-                      {LastIdx, Eff, S} =
+                      {NextIdx, Eff, S} =
                           make_rpc_effect(PeerId, Next, MaxBatchSize, S0),
-                      Peer = Peer0#{next_index => LastIdx + 1,
+                      Peer = Peer0#{next_index => NextIdx,
                                     commit_index_sent => CommitIndex},
                       {update_peer(PeerId, Peer, S), [Eff | Effs]}
               end, {State0, Effects}, pipelineable_peers(State0)).
@@ -1058,17 +1058,13 @@ make_rpc_effect(PeerId, Next, MaxBatchSize,
                     make_append_entries_rpc(PeerId, PrevIdx,
                                             PrevTerm, MaxBatchSize,
                                             State#{log => Log});
-                _ ->
-                    {ok, {LastIndex, LastTerm, Config}, Data} =
-                        ra_log:read_snapshot(Log),
-                    {LastIndex - 1,
-                     {send_snapshot, PeerId,
-                      #install_snapshot_rpc{term = Term,
-                                            leader_id = Id,
-                                            last_index = LastIndex,
-                                            last_term = LastTerm,
-                                            last_config = Config,
-                                            data = Data}},
+                {LastIdx, _} ->
+                    {SnapMod, SnapRef} = ra_log:read_snapshot_module_state(Log),
+                    %% don't increment the next index here as we will do
+                    %% that once the snapshot is fully replicated
+                    %% and we don't pipeline entries until after snapshot
+                    {LastIdx,
+                     {send_snapshot, PeerId, {SnapMod, SnapRef, Id, Term}},
                      State#{log => Log}}
             end
     end.
@@ -1081,15 +1077,15 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
     %% ra_log:take should be able to return the actual number of entries
     %% read at fixed cost
     {Entries, Log} = ra_log:take(Next, Num, Log0),
-    LastIndex = case Entries of
-                    [] -> PrevIdx;
+    NextIndex = case Entries of
+                    [] -> Next;
                     _ ->
                         {LastIdx, _, _} = lists:last(Entries),
                         %% assertion
                         {Next, _, _} = hd(Entries),
-                        LastIdx
+                        LastIdx + 1
                 end,
-    {LastIndex,
+    {NextIndex,
      {send_rpc, PeerId, #append_entries_rpc{entries = Entries,
                                             term = Term,
                                             leader_id = Id,
@@ -1131,7 +1127,7 @@ update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
 
 -spec peer_snapshot_process_crashed(SnapshotPid :: pid(), ra_server_state()) ->
     ra_server_state().
- peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
+peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =
          maps:to_list(
            maps:filter(fun(_, #{status := {sending_snapshot, Pid}})
