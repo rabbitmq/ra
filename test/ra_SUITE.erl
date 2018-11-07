@@ -29,6 +29,8 @@ all_tests() ->
      members,
      consistent_query,
      server_catches_up,
+     snapshot_installation,
+     snapshot_installation_with_call_crash,
      add_member,
      queue_example,
      ramp_up_and_ramp_down,
@@ -377,6 +379,130 @@ server_catches_up(Config) ->
     {ok, {_, Res}, _} = ra:local_query(N3, fun ra_lib:id/1),
     % check that the message isn't delivered multiple times
     terminate_cluster([N3 | InitialNodes]).
+
+snapshot_installation(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
+    Name = ?config(test_name, Config),
+    Servers = [{N1, node()}, {N2, node()}, {N3, node()}],
+    Mac = {module, ra_queue, #{}},
+    % start two servers
+    {ok, [Leader0, _, Down], []}  = ra:start_cluster(Name, Mac, Servers),
+    ok = ra:stop_server(Down),
+    {ok, _, Leader} = ra:members(Leader0),
+    %% process enough commands to trigger two snapshots, ra will snapshot
+    %% every ~4000 log entries or so by default
+    [begin
+         ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+         ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+     end || N <- lists:seq(1, 2500)],
+
+    {ok, _, _} = ra:process_command(Leader, deq),
+    [begin
+         ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+         ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+     end || N <- lists:seq(2500, 6000)],
+    {ok, _, _} = ra:process_command(Leader, deq),
+
+    N1Dir = ra_env:server_data_dir(ra_directory:uid_of(N1)),
+    N2Dir = ra_env:server_data_dir(ra_directory:uid_of(N2)),
+    N3Dir = ra_env:server_data_dir(ra_directory:uid_of(N3)),
+
+    %% start the down node again, catchup should involve sending a snapshot
+    ok = ra:restart_server(Down),
+
+    %% assert all contains snapshots
+    TryFun = fun(Dir) ->
+                     length(filelib:wildcard(
+                              filename:join(Dir, "*.snapshot"))) > 0
+             end,
+    ?assert(try_n_times(fun () -> TryFun(N1Dir) end, 20)),
+    ?assert(try_n_times(fun () -> TryFun(N2Dir) end, 20)),
+    ?assert(try_n_times(fun () -> TryFun(N3Dir) end, 20)),
+
+    % then do some more
+    [begin
+         ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+         ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+     end || N <- lists:seq(6000, 7000)],
+    {ok, _, _} = ra:process_command(Leader, deq),
+
+    %% check snapshot was taken by leader
+    ?assert(try_n_times(
+              fun () ->
+                      {ok, {N1Idx, _}, _} = ra:local_query({N1, node()},
+                                                           fun ra_lib:id/1),
+                      {ok, {N2Idx, _}, _} = ra:local_query({N2, node()},
+                                                           fun ra_lib:id/1),
+                      {ok, {N3Idx, _}, _} = ra:local_query({N3, node()},
+                                                           fun ra_lib:id/1),
+                      (N1Idx == N2Idx) and (N1Idx == N3Idx)
+              end, 20)),
+    ok.
+
+snapshot_installation_with_call_crash(Config) ->
+    N1 = nn(Config, 1),
+    N2 = nn(Config, 2),
+    N3 = nn(Config, 3),
+    Name = ?config(test_name, Config),
+    Servers = [{N1, node()}, {N2, node()}, {N3, node()}],
+    Mac = {module, ra_queue, #{}},
+    meck:new(gen_statem, [unstick, passthrough]),
+
+    % start two servers
+    {ok, [Leader0, _, Down], []}  = ra:start_cluster(Name, Mac, Servers),
+    ok = ra:stop_server(Down),
+    {ok, _, Leader} = ra:members(Leader0),
+    %% process enough commands to trigger two snapshots, ra will snapshot
+    %% every ~4000 log entries or so by default
+    [begin
+         ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+         ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+     end || N <- lists:seq(1, 2500)],
+
+    {ok, _, _} = ra:process_command(Leader, deq),
+    % [begin
+    %      ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+    %      ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+    %  end || N <- lists:seq(2500, 6000)],
+    % {ok, _, _} = ra:process_command(Leader, deq),
+
+    meck:expect(gen_statem, call, fun (_,  #install_snapshot_rpc{}, _) ->
+                                          exit(snap);
+                                      (A, B, C) ->
+                                         meck:passthrough([A, B, C])
+                                  end),
+    %% start the down node again, catchup should involve sending a snapshot
+    ok = ra:restart_server(Down),
+
+    timer:sleep(2500),
+    meck:unload(gen_statem),
+
+    ?assert(try_n_times(
+              fun () ->
+                      {ok, {N1Idx, _}, _} = ra:local_query({N1, node()},
+                                                           fun ra_lib:id/1),
+                      {ok, {N2Idx, _}, _} = ra:local_query({N2, node()},
+                                                           fun ra_lib:id/1),
+                      {ok, {N3Idx, _}, _} = ra:local_query({N3, node()},
+                                                           fun ra_lib:id/1),
+                      (N1Idx == N2Idx) and (N1Idx == N3Idx)
+              end, 20)),
+    ok.
+
+
+try_n_times(_Fun, 0) ->
+    false;
+try_n_times(Fun, N) ->
+    case Fun() of
+        true -> true;
+        false ->
+            timer:sleep(250),
+            try_n_times(Fun, N -1)
+    end.
+
+
 
 stop_leader_and_wait_for_elections(Config) ->
     Name = ?config(test_name, Config),

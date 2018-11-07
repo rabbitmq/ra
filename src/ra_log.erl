@@ -65,6 +65,12 @@
 
 -type event() :: {ra_log_event, event_body()}.
 
+-type effect() :: {delete_snapshots, term()} |
+                  {delete_segments, ra_uid(), ra_index(), [file:filename()]}.
+%% logs can have effects too so that they can be coordinated with other state
+%% such as avoiding to delete old snapshots whilst they are still being
+%% replicated
+
 -record(state,
         {uid :: ra_uid(),
          first_index = -1 :: ra_index(),
@@ -102,7 +108,8 @@
               ra_meta_key/0,
               segment_ref/0,
               event/0,
-              event_body/0
+              event_body/0,
+              effect/0
              ]).
 
 -spec init(ra_log_init_args()) -> ra_log().
@@ -179,7 +186,7 @@ init(#{uid := UId} = Conf) ->
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
-    State = maybe_append_0_0_entry(State0),
+    State = maybe_append_first_entry(State0),
     ?INFO("~s: ra_log:init recovered last_index_term ~w~n",
           [State#state.uid, last_index_term(State)]),
     State.
@@ -292,7 +299,7 @@ set_last_index(Idx, #state{last_written_index_term = {LWIdx0, _}} = State0) ->
     end.
 
 -spec handle_event(event_body(), ra_log()) ->
-    ra_log().
+    {ra_log(), [effect()]}.
 handle_event({written, {FromIdx, ToIdx, Term}},
              #state{last_written_index_term = {LastWrittenIdx0,
                                                LastWrittenTerm0},
@@ -308,7 +315,8 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % only containes the unflushed window of entries typically less than
             % 10ms worth of entries
             truncate_cache(ToIdx,
-                           State#state{last_written_index_term = {ToIdx, Term}});
+                           State#state{last_written_index_term = {ToIdx, Term}},
+                          []);
         {undefined, State} when FromIdx =< element(1, SnapState) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
@@ -317,12 +325,12 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % ensure last_written_index_term does not go backwards
             LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
                                   max(LastWrittenTerm0, Term)},
-            State#state{last_written_index_term = LastWrittenIdxTerm};
+            {State#state{last_written_index_term = LastWrittenIdxTerm}, []};
         {_X, State} ->
             ?INFO("~s: written event did not find term ~b for index ~b "
                   "found ~w",
                   [State#state.uid, Term, ToIdx, _X]),
-            State
+            {State, []}
     end;
 handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
              #state{uid = UId,
@@ -332,56 +340,42 @@ handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
     Expected = LastWrittenIdx + 1,
     ?WARN("~s: ra_log: written gap detected at ~b expected ~b!",
          [UId, FromIdx, Expected]),
-    resend_from(Expected, State0);
+    {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
              #state{uid = UId,
                     open_segments = Open0,
                     segment_refs = SegmentRefs} = State0) ->
-    % Append new segment refs
-    % mem_table cleanup
-    % any closed mem tables older than the one just having been flushed should
-    % be ok to delete
     ClosedTables = closed_mem_tables(UId),
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
     % not fast but we rarely should have more than one or two closed tables
     % at any time
     Obsolete = ClosedTables -- Active,
-    % assert at least one table was found
-    % commented out as if the wal restarts more than once in short succession
-    % we may be processing a segments event referring to open mem tables
-    % that the wal replaced during init. the segment file is still valid and
-    % we'll probably receive another copy shortly.
-    % [_|_] = Obsolete,
+
     [begin
+         %% first delete the entry in the closed table lookup
          true = ets:delete_object(ra_log_closed_mem_tables, ClosedTbl),
-         % Then delete the actual ETS table
+         % then delete the actual ETS table
          true = ets:delete(T)
      end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
-    %% check if any of the segrefs refer to open segment and re-load their
-    %% new indexs if so
+
+    %% check if any of the updated segrefs refer to open segments
+    %% we close these segments so that they can be re-opened with updated
+    %% indexes if needed
     Open = lists:foldl(fun ({_, _, F}, Acc0) ->
                                case ra_flru:evict(F, Acc0) of
-                                   {_, Acc} ->
-                                       %% TODO: evicting here could result in
-                                       %% unecessary
-                                       %% file handle churn but may not be worth
-                                       %% optimising
-                                       %% Alternative would be something like:
-                                       %% ra_log_segment:reload_index/1
-                                       Acc;
-                                   error ->
-                                       Acc0
+                                   {_, Acc} -> Acc;
+                                   error -> Acc0
                                end
                        end, Open0, SegmentRefs),
 
     % compact seg ref list so that only the latest range for a segment
     % file has an entry
-    State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
-                 open_segments = Open,
-                 % re-enable snapshots based on release cursor updates
-                 % in case snapshot_written was lost
-                 snapshot_index_in_progress = undefined};
+    {State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
+                  open_segments = Open,
+                  % re-enable snapshots based on release cursor updates
+                  % in case snapshot_written was lost
+                  snapshot_index_in_progress = undefined}, []};
 handle_event({snapshot_written, {Idx, Term}, File, Old},
              #state{uid = UId, open_segments = OpenSegs0,
                     directory = Dir,
@@ -401,14 +395,10 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
                 % close any open segments
                 OpenSegs1 = lists:foldl(fun (K, OS0) ->
                                                 case ra_flru:evict(K, OS0) of
-                                                    {_, OS} ->
-                                                        OS;
-                                                    error ->
-                                                        OS0
+                                                    {_, OS} -> OS;
+                                                    error -> OS0
                                                 end
                                         end, OpenSegs0, ObsoleteKeys),
-                % [ok = ra_log_segment:close(S)
-                %  || S <- maps:values(maps:with(ObsoleteKeys, OpenSegs0))],
                 ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
                 ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                            ObsoleteFiles),
@@ -418,18 +408,26 @@ handle_event({snapshot_written, {Idx, Term}, File, Old},
           " obsolete segments~n",
           [UId, Idx, Term, NumObsolete]),
     true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
-    %% delete old files
-    [file:delete(F) || F <- Old],
+    %% delete old snapshot files
+    %% This is done as an effect
+    %% so that if an old snapshot is still being replicated
+    %% the cleanup can be delayed until it is safe
+    Effects = case Old of
+                  [] -> [];
+                  _ ->
+                      [{delete_snapshot, Old}]
+              end,
     truncate_cache(Idx,
                    State0#state{first_index = Idx + 1,
                                 segment_refs = SegRefs,
                                 open_segments = OpenSegs,
                                 snapshot_index_in_progress = undefined,
-                                snapshot_state = {Idx, Term, File}});
+                                snapshot_state = {Idx, Term, File}},
+                  Effects);
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
-    resend_from(Idx, State).
+    {resend_from(Idx, State), []}.
 
 -spec next_index(ra_log()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -473,18 +471,21 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
 -spec install_snapshot(Meta :: ra_snapshot:meta(),
                        Data :: term(),
                        State :: ra_log()) ->
-    {ra_log(), term()}.
+    {ra_log(), term(), [effect()]}.
 install_snapshot({Idx, Term, _} = Meta, Data,
                  #state{directory = Dir,
                         snapshot_module = SnapModule} = State) ->
     % syncronous call when follower receives a snapshot
-    {ok, File, Old} = ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data, SnapModule),
+    {ok, File, Old} =
+        ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data,
+                                                  SnapModule),
 
     {ok, _Meta, MacState} = ra_snapshot:recover(SnapModule, File),
-    State1 = handle_event({snapshot_written, {Idx, Term}, File, Old},
-                          State#state{last_index = Idx,
-                                      last_written_index_term = {Idx, Term}}),
-    {State1, MacState}.
+    {State1, Effects} =
+        handle_event({snapshot_written, {Idx, Term}, File, Old},
+                     State#state{last_index = Idx,
+                                 last_written_index_term = {Idx, Term}}),
+    {State1, MacState, Effects}.
 
 -spec read_snapshot(State :: ra_log()) ->
     maybe({ok, ra_snapshot:meta(), term()}).
@@ -564,8 +565,8 @@ update_release_cursor(Idx, Cluster, MacState,
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
-                io:format("~nWrite snapshot~n"),
-                    write_snapshot({Idx, Term, ClusterServerIds}, MacState, State)
+                    write_snapshot({Idx, Term, ClusterServerIds},
+                                   MacState, State)
             end;
         false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
@@ -574,8 +575,8 @@ update_release_cursor(Idx, Cluster, MacState,
                 {undefined, State} ->
                     State;
                 {Term, State} ->
-                io:format("~nWrite snapshot~n"),
-                    write_snapshot({Idx, Term, ClusterServerIds}, MacState, State)
+                    write_snapshot({Idx, Term, ClusterServerIds},
+                                   MacState, State)
             end;
         false ->
             State0
@@ -703,11 +704,11 @@ wal_write(#state{uid = UId, cache = Cache, wal = Wal} = State,
             exit(wal_down)
     end.
 
-truncate_cache(Idx, #state{cache = Cache0} = State) ->
+truncate_cache(Idx, #state{cache = Cache0} = State, Effects) ->
     Cache = maps:filter(fun (K, _) when K > Idx -> true;
                             (_, _) -> false
                         end, Cache0),
-    State#state{cache = Cache}.
+    {State#state{cache = Cache}, Effects}.
 
 update_metrics(Id, Ops) ->
     _ = ets:update_counter(ra_log_metrics, Id, Ops),
@@ -730,7 +731,8 @@ closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
         Tables ->
             {Entries, Count, Rem} =
             lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
-                                mem_tbl_take(Range, TblSt, TblEnd, Tid, Count, Ac)
+                                mem_tbl_take(Range, TblSt, TblEnd,
+                                             Tid, Count, Ac)
                         end, {Acc0, 0, {Start0, End}}, Tables),
             {Entries, [{?METRICS_CLOSED_MEM_TBL_POS, Count} | MetricOps], Rem}
     end.
@@ -884,13 +886,13 @@ cache_take0(Next, Last, Cache, Acc) ->
             Acc
     end.
 
-maybe_append_0_0_entry(State0 = #state{last_index = -1}) ->
+maybe_append_first_entry(State0 = #state{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
         {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
     State#state{first_index = 0, last_written_index_term = {0, 0}};
-maybe_append_0_0_entry(State) ->
+maybe_append_first_entry(State) ->
     State.
 
 resend_from(Idx, #state{uid = UId} = State0) ->
@@ -972,7 +974,8 @@ write_snapshot({Index, _, _} = Meta, MacState,
                #state{directory = Dir,
                       snapshot_module = SnapModule} = State) ->
     Ref = prepare_snapshot(Index, MacState, State),
-    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta, Ref, SnapModule),
+    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta,
+                                               Ref, SnapModule),
     State#state{snapshot_index_in_progress = Index}.
 
 flru_handler({_, Seg}) ->
@@ -1014,12 +1017,14 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 
 
 %% TODO: implent synchronous writes using gen_batch_server:call/3
-await_written_idx(Idx, Term, Log) ->
+await_written_idx(Idx, Term, Log0) ->
     receive
         {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
-            handle_event(Evt, Log);
+            {Log, _} = handle_event(Evt, Log0),
+            Log;
         {ra_log_event, {written, _} = Evt} ->
-            await_written_idx(Idx, Term, handle_event(Evt, Log))
+            {Log, _} = handle_event(Evt, Log0),
+            await_written_idx(Idx, Term, Log)
     after ?LOG_APPEND_TIMEOUT ->
               throw(ra_log_append_timeout)
     end.
@@ -1060,7 +1065,8 @@ open_mem_tbl_take_test() ->
 
     {Entries, _, undefined} = open_mem_tbl_take(test_id, {3, 7}, [], []),
     EntriesPlus8 = Entries ++ [{8, 2, "8"}],
-    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [], [{8, 2, "8"}]),
+    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [],
+                                                  [{8, 2, "8"}]),
     {[{6, 2, "6"}], _, undefined} = open_mem_tbl_take(test_id, {6, 6}, [], []),
     {[], _, {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, [], []),
 
@@ -1085,7 +1091,8 @@ closed_mem_tbl_take_test() ->
 
     {Entries1, _, undefined} = closed_mem_tbl_take(test_id, {5, 7}, [], []),
     {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, [], []),
-    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, [], []),
+    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9},
+                                                        [], []),
     ok.
 
 pick_range_test() ->

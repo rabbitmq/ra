@@ -13,6 +13,7 @@
     recover/2,
     read_meta/2
 ]).
+
 -export_type([meta/0, file_err/0]).
 
 %% Side effect function
@@ -69,9 +70,9 @@ write(Module, Location, Meta, Ref) ->
     Module:write(Location, Meta, Ref).
 
 -spec save(Module :: module(),
-               Location :: file:filename(),
-               Meta :: meta(),
-               Data :: term()) ->
+           Location :: file:filename(),
+           Meta :: meta(),
+           Data :: term()) ->
     ok | {error, file_err() | term()}.
 save(Module, Location, Meta, Data) ->
     Module:save(Location, Meta, Data).
@@ -100,6 +101,3 @@ recover(Module, Location) ->
             term()}.
 read_meta(Module, Location) ->
     Module:read_meta(Location).
-
-
-

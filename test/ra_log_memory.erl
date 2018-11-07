@@ -155,14 +155,14 @@ last_written(#state{last_written = LastWritten}) ->
     LastWritten.
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
-    ra_log_memory_state().
+    {ra_log_memory_state(), list()}.
 handle_event({written, {_From, Idx, Term}}, State0) ->
     case fetch_term(Idx, State0) of
         {Term, State} ->
-            State#state{last_written = {Idx, Term}};
+            {State#state{last_written = {Idx, Term}}, []};
         _ ->
             % if the term doesn't match we just ignore it
-            State0
+            {State0, []}
     end.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
@@ -192,12 +192,12 @@ flush(_Idx, Log) -> Log.
 -spec install_snapshot(SnapshotMeta :: ra_snapshot:meta(),
                        SnapshotData :: term(),
                        State :: ra_log_memory_state()) ->
-    {ra_log_memory_state(), term()}.
+    {ra_log_memory_state(), term(), list()}.
 install_snapshot(Meta, Data, #state{entries = Log0} = State) ->
     Index  = element(1, Meta),
     % discard log
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
-    {State#state{entries = Log, snapshot = {Meta, Data}}, Data}.
+    {State#state{entries = Log, snapshot = {Meta, Data}}, Data, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
     {ok, ra_snapshot:meta(), term()}.

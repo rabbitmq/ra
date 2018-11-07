@@ -115,7 +115,7 @@ append_then_fetch_no_wait(Config) ->
     % results in the last written being updated
     receive
         {ra_log_event, {written, _} = Evt} ->
-            Log1 = ra_log:handle_event(Evt, Log),
+            {Log1, _} = ra_log:handle_event(Evt, Log),
             {Idx, Term} = ra_log:last_written(Log1)
     after 0 ->
               ok
@@ -257,7 +257,7 @@ snapshot(Config) ->
     Cluster = [server1],
     SnapshotMeta = {LastIdx, LastTerm, Cluster},
     SnapshotData = "entry1+2",
-    {Log4, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log2),
+    {Log4, _, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log2),
 
     % ensure entries prior to snapshot are no longer there
     {undefined, Log5} = ra_log:fetch(LastIdx, Log4),

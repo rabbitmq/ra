@@ -158,7 +158,8 @@ read_servers(Num, Servers, Fd, Offset) ->
 
 parse_servers(0, Servers, Data) ->
     {lists:reverse(Servers), Data};
-parse_servers(Num, Servers, <<Len:8/unsigned, ServerData:Len/binary, Rem/binary>>) ->
+parse_servers(Num, Servers,
+              <<Len:8/unsigned, ServerData:Len/binary, Rem/binary>>) ->
     parse_servers(Num - 1, [binary_to_term(ServerData) | Servers], Rem).
 
 -ifdef(TEST).

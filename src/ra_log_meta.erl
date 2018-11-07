@@ -55,8 +55,7 @@ handle_batch(Commands, #state{ref = Ref} = State) ->
                                 Data = {Id, T, V, A},
                                 Inserts0#{Id => update_key(Key, Value, Data)};
                             [] ->
-                                Data = {Id, undefined, undefined,
-                                        undefined},
+                                Data = {Id, undefined, undefined, undefined},
                                 Inserts0#{Id => update_key(Key, Value, Data)}
                         end
                 end

@@ -30,32 +30,35 @@
          make_rpcs/1,
          update_release_cursor/3,
          persist_last_applied/1,
+         update_peer_status/3,
+         peer_snapshot_process_crashed/2,
          terminate/2,
          log_fold/3,
          recover/1
         ]).
 
--type ra_await_condition_fun() :: fun((ra_msg(), ra_server_state()) -> boolean()).
+-type ra_await_condition_fun() ::
+    fun((ra_msg(), ra_server_state()) -> boolean()).
 
 -type ra_server_state() ::
-    #{id => ra_server_id(),
-      uid => ra_uid(),
+    #{id := ra_server_id(),
+      uid := ra_uid(),
       leader_id => maybe(ra_server_id()),
-      cluster => ra_cluster(),
-      cluster_change_permitted => boolean(),
-      cluster_index_term => ra_idxterm(),
-      pending_cluster_changes => [term()],
+      cluster := ra_cluster(),
+      cluster_change_permitted := boolean(),
+      cluster_index_term := ra_idxterm(),
+      pending_cluster_changes := [term()],
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
-      current_term => ra_term(),
-      log => term(),
+      current_term := ra_term(),
+      log := term(),
       voted_for => maybe(ra_server_id()), % persistent
       votes => non_neg_integer(),
-      commit_index => ra_index(),
-      last_applied => ra_index(),
+      commit_index := ra_index(),
+      last_applied := ra_index(),
       persisted_last_applied => ra_index(),
       stop_after => ra_index(),
-      machine => ra_machine:machine(),
-      machine_state => term(),
+      machine := ra_machine:machine(),
+      machine_state := term(),
       aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
@@ -99,10 +102,12 @@
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
+                         #install_snapshot_result{} |
                          #pre_vote_result{}.
 
 -type ra_effect() ::
     ra_machine:effect() |
+    ra_log:effect() |
     {reply, ra_reply_body()} |
     {reply, term(), ra_reply_body()} |
     {cast, ra_server_id(), term()} |
@@ -256,7 +261,7 @@ recover(#{id := Id,
                                      setelement(4,
                                                 apply_with(Machine, E, S), [])
                              end,
-                             State0),
+                             State0, []),
     % close and re-open log to ensure segments aren't unnecessarily kept
     % open
     Log = ra_log:release_resources(1, Log0),
@@ -281,7 +286,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
-            {State2, Effects0, Applied} = evaluate_quorum(State1),
+            {State2, Effects0, Applied} = evaluate_quorum(State1, []),
             {State, RpcEffects} =
                 make_pipelined_rpc_effects(State2,
                                            [{incr_metrics, ra_metrics,
@@ -407,17 +412,19 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
                              end
                      end, {State00, []}, Cmds),
 
-    {State, Effects} = make_pipelined_rpc_effects(length(Cmds), State0, Effects0),
+    {State, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
+                                                  Effects0),
     %% TOOD: ra_metrics
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
-    Log = ra_log:handle_event(Evt, Log0),
-    {State1, Effects0, Applied} = evaluate_quorum(State0#{log => Log}),
-    {State, Effects} = make_pipelined_rpc_effects(State1, Effects0),
+    {Log, Effects0} = ra_log:handle_event(Evt, Log0),
+    {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
+                                                  Effects0),
+    {State, Effects} = make_pipelined_rpc_effects(State1, Effects1),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
-    Log1 = ra_log:handle_event(Evt, Log0),
-    {leader, State#{log => Log1}, []};
+    {Log1, Effects} = ra_log:handle_event(Evt, Log0),
+    {leader, State#{log => Log1}, Effects};
 handle_leader({aux_command, Type, Cmd}, State0) ->
     handle_aux(leader, Type, Cmd, State0);
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
@@ -440,19 +447,28 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             ?WARN("~w saw install_snapshot_result from unknown peer ~w~n",
                   [Id, PeerId]),
             {leader, State0, []};
-        Peer0 = #{next_index := NI} ->
+        Peer0 ->
             State1 = update_peer(PeerId,
-                                 Peer0#{match_index => LastIndex,
+                                 Peer0#{status => normal,
+                                        match_index => LastIndex,
                                         commit_index_sent => LastIndex,
                                         % leader might have pipelined
                                         % append entries
                                         % since snapshot was sent
                                         % need to ensure next index is at least
                                         % LastIndex + 1 though
-                                        next_index => max(NI, LastIndex+1) },
+                                        % next_index => max(NI, LastIndex+1) },
+                                        next_index => LastIndex + 1},
                                  State0),
 
-            {State, Effects} = make_pipelined_rpc_effects(State1, []),
+            %% we can now demonitor the process
+            Effects0 = case Peer0 of
+                           #{status := {sending_snapshot, Pid}} ->
+                               [{demonitor, process, Pid}];
+                           _ -> []
+                       end,
+
+            {State, Effects} = make_pipelined_rpc_effects(State1, Effects0),
             {leader, State, Effects}
     end;
 handle_leader(#install_snapshot_rpc{term = Term,
@@ -662,7 +678,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                      leader_id => LeaderId},
                     % evaluate commit index as we may have received an updated
                     % commit index for previously written entries
-                    evaluate_commit_index_follower(State1);
+                    evaluate_commit_index_follower(State1, []);
                 [{FirstIdx, _, _} | _] -> % FirstTerm
 
                     {LastIdx, State1} = lists:foldl(
@@ -727,12 +743,14 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
           [Id, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
-                State00 = #{log := Log0}) ->
-    State0 = State00#{log => ra_log:handle_event(Evt, Log0)},
-    evaluate_commit_index_follower(State0);
+                State0 = #{log := Log0}) ->
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    State = State0#{log => Log},
+    evaluate_commit_index_follower(State, Effects);
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
-    {follower, State#{log => ra_log:handle_event(Evt, Log0)}, []};
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    {follower, State#{log => Log}, Effects};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
@@ -777,7 +795,6 @@ handle_follower({_PeerId, #append_entries_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      leader_id = LeaderId,
                                       last_index = LastIndex,
                                       last_term = LastTerm},
                 State = #{id := Id, current_term := CurTerm})
@@ -788,21 +805,23 @@ handle_follower(#install_snapshot_rpc{term = Term,
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
-    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
+    {follower, State, [{reply, Reply}]};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       leader_id = LeaderId,
                                       last_term = LastTerm,
                                       last_index = LastIndex,
                                       last_config = ClusterNodes,
                                       data = Data},
-                State0 = #{id := Id, log := Log0,
-                           current_term := CurTerm})
+                #{id := Id, log := Log0,
+                  current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     ?INFO("~w: installing snapshot at index ~b in term ~b~n",
           [Id, LastIndex, LastTerm]),
     % follower receives a snapshot to be installed
 
-    {Log, MachineState} = ra_log:install_snapshot({LastIndex, LastTerm, ClusterNodes}, Data, Log0),
+    {Log, MachineState, Effects} =
+        ra_log:install_snapshot({LastIndex, LastTerm,
+                                 ClusterNodes}, Data, Log0),
     State1 = State0#{log => Log,
                      current_term => Term,
                      commit_index => LastIndex,
@@ -815,7 +834,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
-    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
+    {follower, State, [{reply, Reply} | Effects]};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(Msg, State) ->
@@ -834,9 +853,9 @@ handle_await_condition(await_condition_timeout,
 handle_await_condition(Msg, #{condition := Cond} = State) ->
     case Cond(Msg, State) of
         true ->
-            {follower, State, [{next_event, cast, Msg}]};
+            {follower, State, [{next_event, Msg}]};
         false ->
-            % log_unhandled_msg(await_condition, Msg, State),
+            log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
 
@@ -958,7 +977,7 @@ wal_down_condition(_Msg, #{log := Log}) ->
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := Id, leader_id := LeaderId,
                                  current_term := Term,
-                                 log := Log} = State0)
+                                 log := Log} = State0, Effects0)
   when LeaderId =/= undefined ->
     % as writes are async we can't use the index of the last available entry
     % in the log as they may not have been fully persisted yet
@@ -967,29 +986,30 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
     {Idx, _} = ra_log:last_written(Log),
     EffectiveCommitIndex = min(Idx, CommitIndex),
     % neet catch termination throw
-    case catch apply_to(EffectiveCommitIndex, State0) of
+    case catch apply_to(EffectiveCommitIndex, State0, Effects0) of
         {delete_and_terminate, State1, Effects} ->
             Reply = append_entries_reply(Term, true, State1),
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State, Effects0, Applied} ->
+        {State, Effects1, Applied} ->
             % filter the effects that should be applied on a follower
-            Effects = filter_follower_effects(Effects0),
+            Effects = filter_follower_effects(Effects1),
             Reply = append_entries_reply(Term, true, State),
             {follower, State, [cast_reply(Id, LeaderId, Reply),
                                {incr_metrics, ra_metrics, [{3, Applied}]}
                                | Effects]}
     end;
-evaluate_commit_index_follower(State) ->
+evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
-    {follower, State, []}.
+    {follower, State, Effects}.
 
 filter_follower_effects(Effects) ->
     lists:filter(fun ({release_cursor, _, _}) -> true;
                      ({incr_metrics, _, _}) -> true;
                      ({aux, _}) -> true;
                      (garbage_collection) -> true;
+                     ({delete_snapshot, _}) -> true;
                      (_) -> false
                  end, Effects).
 
@@ -1002,7 +1022,7 @@ make_pipelined_rpc_effects(MaxBatchSize,
     maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Effs}) ->
                       {LastIdx, Eff, S} =
                           make_rpc_effect(PeerId, Next, MaxBatchSize, S0),
-                      Peer = Peer0#{next_index => LastIdx+1,
+                      Peer = Peer0#{next_index => LastIdx + 1,
                                     commit_index_sent => CommitIndex},
                       {update_peer(PeerId, Peer, S), [Eff | Effs]}
               end, {State0, Effects}, pipelineable_peers(State0)).
@@ -1012,7 +1032,7 @@ make_rpcs(State) ->
 
 % makes empty append entries for peers that aren't pipelineable
 make_all_rpcs(State) ->
-    make_rpcs_for(peers(State), State).
+    make_rpcs_for(peers_not_sending_snapshots(State), State).
 
 make_rpcs_for(Peers, State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Effs}) ->
@@ -1041,7 +1061,7 @@ make_rpc_effect(PeerId, Next, MaxBatchSize,
                 _ ->
                     {ok, {LastIndex, LastTerm, Config}, Data} =
                         ra_log:read_snapshot(Log),
-                    {LastIndex,
+                    {LastIndex - 1,
                      {send_snapshot, PeerId,
                       #install_snapshot_rpc{term = Term,
                                             leader_id = Id,
@@ -1102,6 +1122,31 @@ persist_last_applied(#{last_applied := L, log := Log0} = State) ->
     ok = ra_log:write_meta(last_applied, L, Log0, false),
     State#{persisted_last_applied => L}.
 
+
+-spec update_peer_status(ra_server_id(), ra_peer_status(),
+                         ra_server_state()) -> ra_server_state().
+update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
+    Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
+    State#{cluster => maps:put(PeerId, Peer, Peers)}.
+
+-spec peer_snapshot_process_crashed(SnapshotPid :: pid(), ra_server_state()) ->
+    ra_server_state().
+ peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
+     PeerKv =
+         maps:to_list(
+           maps:filter(fun(_, #{status := {sending_snapshot, Pid}})
+                             when Pid =:= SnapshotPid ->
+                               true;
+                          (_, _) -> false
+                       end, Peers)),
+     case PeerKv of
+         [{PeerId, Peer}] ->
+             ?INFO("updating peer ~w ~w", [PeerId, Peer]),
+             update_peer(PeerId, Peer#{status => normal}, State);
+         _ ->
+             ?INFO("peer not found! ~w ~w", [SnapshotPid, Peers]),
+             State
+     end.
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log} = _State, {shutdown, delete}) ->
@@ -1222,14 +1267,24 @@ new_peer() ->
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
 
-peers(#{id := Id, cluster := Nodes}) ->
-    maps:remove(Id, Nodes).
+peers(#{id := Id, cluster := Peers}) ->
+    maps:remove(Id, Peers).
+
+%% remove any peers that are currently receiving a snapshot
+peers_not_sending_snapshots(State) ->
+    maps:filter(fun (_, #{status := {sending_snapshot, _}}) -> false;
+                    (_, _) -> true
+                end, peers(State)).
 
 % returns the peers that should receive piplined entries
 pipelineable_peers(#{commit_index := CommitIndex,
                      log := Log} = State) ->
     NextIdx = ra_log:next_index(Log),
-    maps:filter(fun (_, #{next_index := NI,
+    maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
+                        %% if a peers is currently receiving a snapshot
+                        %% we should not pipeline
+                        false;
+                    (_, #{next_index := NI,
                           match_index := MI}) when NI < NextIdx ->
                         % there are unsent items
                         NI - MI < ?MAX_PIPELINE_DISTANCE;
@@ -1244,14 +1299,18 @@ pipelineable_peers(#{commit_index := CommitIndex,
 
 % peers that could need an update
 stale_peers(#{commit_index := CommitIndex} = State) ->
-    maps:filter(fun (_Id, #{next_index := NI,
-                            match_index := MI}) when MI < NI - 1 ->
+    maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
+                        false;
+                    (_, #{next_index := NI,
+                          match_index := MI})
+                      when MI < NI - 1 ->
                         % there are unconfirmed items
                         true;
-                    (_Id, #{commit_index_sent := CI}) when CI < CommitIndex ->
+                    (_, #{commit_index_sent := CI})
+                      when CI < CommitIndex ->
                         % the commit index has been updated
                         true;
-                    (_Id, _Peer) ->
+                    (_, _Peer) ->
                         false
                 end, peers(State)).
 
@@ -1340,11 +1399,11 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 
-apply_to(ApplyTo, #{machine := Machine} = State) ->
-    apply_to(ApplyTo, fun(E, S) -> apply_with(Machine, E, S) end, State).
+apply_to(ApplyTo, #{machine := Machine} = State, Effs) ->
+    apply_to(ApplyTo, fun(E, S) -> apply_with(Machine, E, S) end, State, Effs).
 
-apply_to(ApplyTo, ApplyFun, State) ->
-    apply_to(ApplyTo, ApplyFun, 0, #{}, [], State).
+apply_to(ApplyTo, ApplyFun, State, Effs) ->
+    apply_to(ApplyTo, ApplyFun, 0, #{}, Effs, State).
 
 apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
          #{last_applied := LastApplied,
@@ -1557,9 +1616,9 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           last_index = LWIdx,
                           last_term = LWTerm}.
 
-evaluate_quorum(State0) ->
+evaluate_quorum(State0, Effects) ->
     State = #{commit_index := CI} = increment_commit_index(State0),
-    apply_to(CI, State).
+    apply_to(CI, State, Effects).
 
 increment_commit_index(State = #{current_term := CurrentTerm}) ->
     PotentialNewCommitIndex = agreed_commit(match_indexes(State)),

@@ -824,7 +824,7 @@ deliver_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("ra_log_evt: ~w~n", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_log_events(Log, Timeout)
     after Timeout ->
             Log0
@@ -833,7 +833,7 @@ deliver_log_events(Log0, Timeout) ->
 consume_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 0 ->
             {Log0, Last}
@@ -842,7 +842,7 @@ consume_events(Log0, Last) ->
 consume_all_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 15000 ->
             {Log0, Last}

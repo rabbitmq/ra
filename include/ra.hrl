@@ -32,11 +32,16 @@
 %% name after restarts. Pids won't do.
 -type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
 
--type ra_peer_state() :: #{next_index => non_neg_integer(),
-                           match_index => non_neg_integer(),
+-type ra_peer_status() :: normal | {sending_snapshot, pid()}.
+
+-type ra_peer_state() :: #{next_index := non_neg_integer(),
+                           match_index := non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
-                           commit_index_sent => non_neg_integer()}.
+                           commit_index_sent := non_neg_integer(),
+                           %% indicates that a snapshot is being sent
+                           %% to the peer
+                           status => ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 

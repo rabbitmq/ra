@@ -18,7 +18,8 @@
 %% processing.
 %%
 %%<br></br>
-%% <code>-callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
+%% <code>
+%% -callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 %% </code>
 %%
 %% Optional. Called when the ra server enters a new state. Called for all states

@@ -591,7 +591,8 @@ recover_records(<<Trunc:1/integer, 0:1/unsigned, IdRef:22/unsigned,
     true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
     % TODO: recover writers info, i.e. last index seen
     recover_records(Rest,
-                    Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}});
+                    Cache#{IdRef =>
+                           {UId, <<1:1/unsigned, IdRef:22/unsigned>>}});
 recover_records(<<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/integer,

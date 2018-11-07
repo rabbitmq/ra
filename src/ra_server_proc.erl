@@ -50,6 +50,7 @@
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(USE_AVG_HALF_LIFE, 1000000.0).
+-define(INSTALL_SNAP_RPC_TIMEOUT, 30000).
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -96,11 +97,17 @@
               ra_event/0,
               ra_event_body/0]).
 
+-type monitors() ::
+    #{pid() | node() => {machine | snapshot_sender, maybe(reference())}}.
+%% the ra server proc keeps monitors on behalf of different components
+%% the state machine, log and server code. The tag is used to determine
+%% which component to dispatch the down to
+
 -record(state, {server_state :: ra_server:ra_server_state(),
                 name :: atom(),
                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
                 tick_timeout :: non_neg_integer(),
-                monitors = #{} :: #{pid() | node() => maybe(reference())},
+                monitors = #{} :: monitors(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
@@ -320,7 +327,7 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
        #state{monitors = Monitors0,
               server_state = ServerState0} = State0) ->
     case maps:take(Pid, Monitors0) of
-        {MRef, Monitors} ->
+        {{machine, MRef}, Monitors} ->
             % there is a monitor for the ref
             {leader, ServerState, Effects} =
                 ra_server:handle_leader({command,
@@ -332,6 +339,17 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
                                 State0#state{server_state = ServerState,
                                              monitors = Monitors}),
             {keep_state, State, Actions};
+        {{snapshot_sender, MRef}, Monitors} ->
+            ?WARN("~w: Snapshot sender process ~w crashed with ~w~n",
+                  [id(State0), Pid, Info]),
+            %% the snapshot sender is down,
+            %% update the state of the peer to normal
+            %% this will most likely just trigger another snapshot send
+            ServerState =
+                ra_server:peer_snapshot_process_crashed(Pid, ServerState0),
+            State = State0#state{monitors = Monitors,
+                                 server_state = ServerState},
+            {keep_state, State, []};
         error ->
             {keep_state, State0, []}
     end;
@@ -355,9 +373,9 @@ leader(info, {NodeEvt, Node},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    State1 = maybe_persist_last_applied(send_rpcs(State0)),
+    {State1, RpcEffs} = make_rpcs(maybe_persist_last_applied(State0)),
     Effects = ra_server:tick(State1#state.server_state),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
+    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({call, From}, trigger_election, State) ->
@@ -372,10 +390,11 @@ leader(EventType, Msg, State0) ->
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             % demonitor when stepping down
-            ok = lists:foreach(fun (Ref) when is_reference(Ref) ->
+            ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
                                        erlang:demonitor(Ref);
                                    (_) ->
                                        %% the monitor is a node
+                                       %% all nodes are always monitored
                                        ok
                                end, maps:values(State#state.monitors)),
             {next_state, follower, State#state{monitors = #{}},
@@ -778,11 +797,6 @@ handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % TODO: review / refactor to remove the mod call here
     ?MODULE:send_rpc(To, Rpc),
     {State0, Actions};
-handle_effect(_, {send_snapshot, To, ISRpc}, _, State0, Actions) ->
-    % fully qualified use only so that we can mock it for testing
-    % TODO: review / refactor to remove the mod call here
-    gen_cast(To, ISRpc),
-    {State0, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
@@ -823,8 +837,33 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect(_, {reply, Reply}, _, _, _) ->
-    exit({undefined_reply, Reply});
+handle_effect(_, {reply, Reply}, EvtType, _, _) ->
+    exit({undefined_reply, Reply, EvtType});
+handle_effect(_, {send_snapshot, To, ISRpc}, _,
+              #state{server_state = SS0,
+                     monitors = Monitors} = State0, Actions) ->
+    %% leader effect only
+    Me = self(),
+    Pid = spawn(fun () ->
+                        Reply = gen_statem:call(To, ISRpc,
+                                                ?INSTALL_SNAP_RPC_TIMEOUT),
+                        ok = gen_statem:cast(Me, {To, Reply})
+                end),
+    ?INFO("~w: sending snapshot to ~w with ~w~n", [id(State0), To, Pid]),
+    MRef = erlang:monitor(process, Pid),
+    %% update the peer state so that no pipelined entries are sent during
+    %% the snapshot sending phase
+    SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
+    {State0#state{server_state = SS,
+                  monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
+                  Actions};
+handle_effect(_, {delete_snapshot, SnapshotFiles}, _, State0, Actions) ->
+    %% delete snapshots in separate process
+    %% TODO: call ra_snapshot:delete instead
+    _ = spawn(fun() ->
+                      [_ = file:delete(F) || F <- SnapshotFiles]
+              end),
+    {State0, Actions};
 handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
               State, Actions) ->
     % transient election processes
@@ -838,7 +877,8 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
     {State, Actions};
 handle_effect(_, {release_cursor, Index, MacState}, _EvtType,
               #state{server_state = ServerState0} = State, Actions) ->
-    ServerState = ra_server:update_release_cursor(Index, MacState, ServerState0),
+    ServerState = ra_server:update_release_cursor(Index, MacState,
+                                                  ServerState0),
     {State#state{server_state = ServerState}, Actions};
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
@@ -851,7 +891,8 @@ handle_effect(_, {monitor, process, Pid}, _,
             {State, Actions};
         _ ->
             MRef = erlang:monitor(process, Pid),
-            {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
+            {State#state{monitors = Monitors#{Pid => {machine, MRef}}},
+             Actions}
     end;
 handle_effect(_, {monitor, node, Node}, _,
               #state{monitors = Monitors} = State, Actions) ->
@@ -867,7 +908,7 @@ handle_effect(_, {monitor, node, Node}, _,
 handle_effect(_, {demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Pid, Monitors0) of
-        {MRef, Monitors} ->
+        {{_, MRef}, Monitors} ->
             true = erlang:demonitor(MRef),
             {State#state{monitors = Monitors}, Actions};
         error ->

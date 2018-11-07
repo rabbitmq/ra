@@ -92,11 +92,11 @@ handle_overwrite(Config) ->
     {ok, Log4} = ra_log:write([{2, 2, "value"}], Log3),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    Log = ra_log:handle_event({written, {1, 2, 1}}, Log4),
+    {Log, _} = ra_log:handle_event({written, {1, 2, 1}}, Log4),
     % ensure last written has not been incremented
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
-                ra_log:handle_event({written, {1, 2, 2}}, Log)),
+               element(1, ra_log:handle_event({written, {1, 2, 2}}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 1000),
     ra_log:close(Log),
@@ -252,12 +252,12 @@ written_event_after_snapshot(Config) ->
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
     Log2 = ra_log:update_release_cursor(2, #{}, <<"one+two">>, Log1b),
-    {Snap1, Log3} = receive
-                        {ra_log_event, {snapshot_written, {2, 1}, F, _} = Evt} ->
-                            {F, ra_log:handle_event(Evt, Log2)}
-                    after 500 ->
-                              exit(snapshot_written_timeout)
-                    end,
+    {Snap1, {Log3, _}} = receive
+                             {ra_log_event, {snapshot_written, {2, 1}, F, _} = Evt} ->
+                                 {F, ra_log:handle_event(Evt, Log2)}
+                         after 500 ->
+                                   exit(snapshot_written_timeout)
+                         end,
     Log4 = deliver_all_log_events(Log3, 100),
     true = filelib:is_file(Snap1),
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
@@ -270,7 +270,10 @@ written_event_after_snapshot(Config) ->
                      after 500 ->
                                exit(snapshot_written_timeout)
                      end,
-    false = filelib:is_file(Snap1),
+
+    %% this will no longer be false as the snapshot deletion is an effect
+    %% and not done by the log itself
+    % false = filelib:is_file(Snap1),
     true = filelib:is_file(Snap2),
     ok.
 
@@ -417,7 +420,7 @@ resend_write(Config) ->
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
-                   ra_log:handle_event(Evt, Log3)
+                   element(1, ra_log:handle_event(Evt, Log3))
            after 500 ->
                      throw(resend_write_timeout)
            end,
@@ -522,11 +525,11 @@ snapshot_recovery(Config) ->
     Log1 = append_and_roll(1, 10, 2, Log0),
     SnapshotMeta = {9, 2, [n1]},
     SnapshotData = <<"9">>,
-    {Log2, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
+    {Log2, _, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
     Log3 = deliver_all_log_events(Log2, 500),
     ra_log:close(Log3),
     Log = ra_log:init(#{uid => UId}),
-    Snapshot = ra_log:read_snapshot(Log),
+    {ok, SnapshotMeta, SnapshotData} = ra_log:read_snapshot(Log),
     {9, 2} = ra_log:last_index_term(Log),
     {[], _} = ra_log:take(1, 9, Log),
     ok.
@@ -542,7 +545,7 @@ snapshot_installation(Config) ->
     Log1 = write_n(1, 10, 2, Log0),
     SnapshotMeta = {15, 2, [n1]},
     SnapshotData = <<"9">>,
-    {Log2, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
+    {Log2, _, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
 
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
@@ -562,7 +565,8 @@ update_release_cursor(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    Log2 = ra_log:update_release_cursor(127, #{n1 => #{}, n2 => #{}},
+    Log2 = ra_log:update_release_cursor(127, #{n1 => new_peer(),
+                                               n2 => new_peer()},
                                         initial_state, Log1),
 
     Log3 = deliver_all_log_events(Log2, 500),
@@ -573,7 +577,8 @@ update_release_cursor(Config) ->
     [_] = find_segments(Config),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
-    Log4 = ra_log:update_release_cursor(149, #{n1 => #{}, n2 => #{}},
+    Log4 = ra_log:update_release_cursor(149, #{n1 => new_peer(),
+                                               n2 => new_peer()},
                                         initial_state, Log3b),
     Log5 = deliver_all_log_events(Log4, 500),
 
@@ -624,7 +629,8 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     Log5 = validate_read(1, 155, 2, Log4),
 
     % then update the release cursor
-    Log6 = ra_log:update_release_cursor(154, #{n1 => #{}, n2 => #{}},
+    Log6 = ra_log:update_release_cursor(154, #{n1 => new_peer(),
+                                               n2 => new_peer()},
                                         initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
@@ -718,7 +724,7 @@ deliver_all_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events(Log, Timeout)
     after Timeout ->
               Log0
@@ -728,7 +734,7 @@ wait_for_segments(Log0, Timeout) ->
     receive
         {ra_log_event, {segments, _, _} = Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events(Log, 100)
     after Timeout ->
               Log0
@@ -741,7 +747,7 @@ deliver_all_log_events_except_segments(Log0, Timeout) ->
             deliver_all_log_events_except_segments(Log0, Timeout);
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events_except_segments(Log, Timeout)
     after Timeout ->
               Log0
@@ -751,7 +757,7 @@ deliver_one_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            ra_log:handle_event(Evt, Log0)
+            element(1, ra_log:handle_event(Evt, Log0))
     after Timeout ->
               Log0
     end.
@@ -760,7 +766,7 @@ deliver_written_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, {written, _} = Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_written_log_events(Log, 100)
     after Timeout ->
               Log0
@@ -808,3 +814,8 @@ stop_profile(Config) ->
     Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
     lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
     ok.
+
+new_peer() ->
+    #{next_index => 1,
+      match_index => 0,
+      commit_index_sent => 0}.
