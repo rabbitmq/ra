@@ -859,7 +859,6 @@ handle_effect(_, {send_snapshot, To, {SnapMod, SnapRef, Id, Term}}, _,
                                              ?INSTALL_SNAP_RPC_TIMEOUT}),
                     ok = gen_statem:cast(Me, {To, Reply})
             end),
-    ?INFO("~w: sending snapshot to ~w with ~w~n", [id(State0), To, Pid]),
     MRef = erlang:monitor(process, Pid),
     %% update the peer state so that no pipelined entries are sent during
     %% the snapshot sending phase

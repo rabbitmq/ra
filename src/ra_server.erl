@@ -1137,10 +1137,8 @@ peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
                        end, Peers)),
      case PeerKv of
          [{PeerId, Peer}] ->
-             ?INFO("updating peer ~w ~w", [PeerId, Peer]),
              update_peer(PeerId, Peer#{status => normal}, State);
          _ ->
-             ?INFO("peer not found! ~w ~w", [SnapshotPid, Peers]),
              State
      end.
 
