@@ -19,12 +19,11 @@
 
 -type handler_fun() :: fun((kv_item()) -> ok).
 
--record(state, {max_size = ?MAX_SIZE :: non_neg_integer(),
-                items = [] :: [term()],
-                handler = fun (_) -> ok end :: handler_fun()
-}).
+-record(?MODULE, {max_size = ?MAX_SIZE :: non_neg_integer(),
+                  items = [] :: [term()],
+                  handler = fun (_) -> ok end :: handler_fun()}).
 
--opaque state() :: #state{}.
+-opaque state() :: #?MODULE{}.
 
 -export_type([
               state/0
@@ -33,24 +32,24 @@
 -spec new(non_neg_integer(), handler_fun()) ->
      state().
 new(MaxSize, Handler) ->
-    #state{handler = Handler,
-           max_size = MaxSize}.
+    #?MODULE{handler = Handler,
+             max_size = MaxSize}.
 
 -spec fetch(term(), state()) ->
     {ok, term(), state()} | error.
-fetch(Key, #state{items = [{Key, Value} | _]} = State) ->
+fetch(Key, #?MODULE{items = [{Key, Value} | _]} = State) ->
     %% head optimisation
     {ok, Value, State};
-fetch(Key, #state{items = Items0} = State0) ->
+fetch(Key, #?MODULE{items = Items0} = State0) ->
     case lists:keytake(Key, 1, Items0) of
         {value, {_, Value} = T, Items} ->
-            {ok, Value, State0#state{items = [T | Items]}};
+            {ok, Value, State0#?MODULE{items = [T | Items]}};
         false ->
             error
     end.
 
 -spec insert(term(), term(), state()) -> state().
-insert(Key, Value, #state{items = Items,
+insert(Key, Value, #?MODULE{items = Items,
                           max_size = M,
                           handler = Handler} = State)
   when length(Items) =:= M ->
@@ -58,32 +57,32 @@ insert(Key, Value, #state{items = Items,
     [Old | Rem] = lists:reverse(Items),
     %% call the handler
     ok = Handler(Old),
-    State#state{items = [{Key, Value} | lists:reverse(Rem)]};
-insert(Key, Value, #state{items = Items} = State) ->
+    State#?MODULE{items = [{Key, Value} | lists:reverse(Rem)]};
+insert(Key, Value, #?MODULE{items = Items} = State) ->
     %% else just append it
-    State#state{items = [{Key, Value} | Items]}.
+    State#?MODULE{items = [{Key, Value} | Items]}.
 
 -spec evict(Key :: term(), state()) ->
     {Evicted :: kv_item(), state()} | error.
-evict(Key, #state{items = Items0,
+evict(Key, #?MODULE{items = Items0,
                   handler = Handler} = State) ->
     case lists:keytake(Key, 1, Items0) of
         {value, T, Items} ->
             ok = Handler(T),
-            {T, State#state{items = Items}};
+            {T, State#?MODULE{items = Items}};
         false ->
             error
     end.
 
 
 -spec evict_all(state()) -> state().
-evict_all(#state{items = Items,
+evict_all(#?MODULE{items = Items,
                  handler = Handler}) ->
     [Handler(T) || T <- Items],
-    #state{items = []}.
+    #?MODULE{items = []}.
 
 -spec size(state()) -> non_neg_integer().
-size(#state{items = Items}) ->
+size(#?MODULE{items = Items}) ->
     length(Items).
 
 -ifdef(TEST).

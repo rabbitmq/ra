@@ -81,8 +81,7 @@
          segment_refs = [] :: [segment_ref()],
          open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
          directory :: file:filename(),
-         snapshot_state :: maybe({ra_index(), ra_term(),
-                                  maybe(file:filename())}),
+         snapshot_state :: maybe(ra_snapshot:state()),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
          snapshot_module :: module(),
          % if this is set a snapshot write is in progress for the
@@ -147,8 +146,7 @@ init(#{uid := UId} = Conf) ->
     SnapshotState =
         case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
             [File | _] ->
-                %% TODO provide function that only reads the index and term
-                %% of the snapshot file.
+                %% TODO: what to do about old files
                 {ok, {SI, ST, _}} = ra_snapshot:read_meta(SnapModule, File),
                 {SI, ST, File};
             [] ->

@@ -15,7 +15,7 @@
 -define(COUNT_TIME, [io_sync, io_seek, io_file_handle_open_attempt]).
 -define(COUNT_TIME_BYTES, [io_read, io_write]).
 
--record(state, {monitors}).
+-record(state, {monitors = #{} :: #{pid() => reference()}}).
 
 open(File, Modes) ->
     gen_server:cast(?MODULE, {open, self()}),
@@ -79,7 +79,7 @@ init([]) ->
                                                Counter <- [count, bytes, time]],
     [ets:insert(?TABLE, {{Op, Counter}, 0}) || Op      <- ?COUNT_TIME,
                                                Counter <- [count, time]],
-    {ok, #state{monitors = #{}}}.
+    {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,

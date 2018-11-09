@@ -18,6 +18,7 @@
          ra_server_id_to_local_name/1,
          ra_server_id_node/1,
          update_element/3,
+         zpad_hex/1,
          zpad_filename/3,
          zpad_filename_incr/1,
          zpad_extract_num/1,
@@ -110,6 +111,8 @@ ra_server_id_node(Name) when is_atom(Name) -> node().
 update_element(Index, T, Update) when is_tuple(T) ->
     setelement(Index, T, Update(element(Index, T))).
 
+zpad_hex(Num) ->
+    lists:flatten(io_lib:format("~16.16.0B", [Num])).
 
 zpad_filename("", Ext, Num) ->
     lists:flatten(io_lib:format("~8..0B.~s", [Num, Ext]));
@@ -288,6 +291,10 @@ validate_base64uri_test() ->
     true = validate_base64uri(?BASE64_URI_CHARS),
     false = validate_base64uri("asdføasdf"),
     false = validate_base64uri("asdf/asdf"),
+    ok.
+
+zeropad_test() ->
+    "0000000000000037" = zpad_hex(55),
     ok.
 
 -endif.

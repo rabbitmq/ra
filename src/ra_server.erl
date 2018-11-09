@@ -114,7 +114,9 @@
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
     {send_rpc, ra_server_id(), #append_entries_rpc{}} |
-    {send_snapshot, ra_server_id(), #install_snapshot_rpc{}} |
+    {send_snapshot, To :: ra_server_id(),
+     {Module :: module(), Ref :: ra_snapshot:reference(),
+      LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
     {notify, pid(), reference()} |
