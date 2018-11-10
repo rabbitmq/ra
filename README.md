@@ -49,7 +49,8 @@ ServerIds = [{quick_start, N} || N <- ErlangNodes]
 
 ```
 
-"Simple" state machines like the above can only take you so far. See [doc/STATEMACHINE.md](doc/STATEMACHINE.md) for how to write a state machine by implementing the `ra_machine` behaviour.
+"Simple" state machines like the above can only take you so far. See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
+for how to write a state machine by implementing the `ra_machine` behaviour.
 
 ## Design Goals
 
@@ -70,9 +71,8 @@ which has two major shortcomings:
 ## Documentation
 
 * API docs: https://rabbitmq.github.io/ra/
-* How to write a ra statemachine: [doc/STATEMACHINE.md](doc/STATEMACHINE.md)
-* Log implementation: [doc/LOG.md](doc/LOG.md)
-* Internals: [doc/INTERNALS.md](doc/INTERNALS.md)
+* How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
+* Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
 
 ## Configuration
 
