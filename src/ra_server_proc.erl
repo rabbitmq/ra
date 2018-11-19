@@ -314,7 +314,7 @@ leader({call, From}, {state_query, Spec},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
-leader(info, {server_event, _Node, _Evt}, State) ->
+leader(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State, []};
 leader(info, {'DOWN', MRef, process, Pid, Info},
        #state{monitors = Monitors0,
@@ -415,7 +415,7 @@ candidate({call, From}, {local_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
-candidate(info, {server_event, _Node, _Evt}, State) ->
+candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
@@ -467,7 +467,7 @@ pre_vote({call, From}, {local_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
-pre_vote(info, {server_event, _Node, _Evt}, State) ->
+pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
@@ -543,7 +543,7 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(really_short, State)]}
     end;
-follower(info, {server_event, Node, down}, State) ->
+follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
             ?WARN("~w: Leader node ~w may be down, setting election timeout",
@@ -637,7 +637,7 @@ await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
     ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(short, State)]};
-await_condition(info, {server_event, Node, down}, State) ->
+await_condition(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
             ?WARN("~p: Node ~p might be down. Setting election timeout.",
