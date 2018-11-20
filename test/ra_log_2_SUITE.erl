@@ -518,22 +518,6 @@ detect_lost_written_range(Config) ->
     Entries = RecoveredEntries,
     ok.
 
-% snapshot_recovery(Config) ->
-%     UId = ?config(uid, Config),
-%     Log0 = ra_log:init(#{uid => UId}),
-%     {0, 0} = ra_log:last_index_term(Log0),
-%     Log1 = append_and_roll(1, 10, 2, Log0),
-%     SnapshotMeta = {9, 2, [n1]},
-%     SnapshotData = <<"9">>,
-%     {Log2, _, _} = ra_log:install_snapshot(SnapshotMeta, SnapshotData, Log1),
-%     Log3 = deliver_all_log_events(Log2, 500),
-%     ra_log:close(Log3),
-%     Log = ra_log:init(#{uid => UId}),
-%     {ok, SnapshotMeta, SnapshotData} = ra_log:read_snapshot(Log),
-%     {9, 2} = ra_log:last_index_term(Log),
-%     {[], _} = ra_log:take(1, 9, Log),
-%     ok.
-
 snapshot_installation(Config) ->
     % write a few entries
     % simulate outage/ message loss
@@ -565,7 +549,7 @@ snapshot_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Crc, Meta, 1, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, SnapState1),
 
-    Log2 = ra_log:install_snapshot(SnapState, Log1),
+    Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),
     {Log2b, _} = ra_log:handle_event({snapshot_written, {15,2}}, Log2),
 
     % after a snapshot we need a "truncating write" that ignores missing

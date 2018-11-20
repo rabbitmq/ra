@@ -116,7 +116,7 @@
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
     {send_rpc, ra_server_id(), #append_entries_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
-     {Module :: module(), Ref :: ra_snapshot:reference(),
+     {Module :: module(), Ref :: term(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
@@ -851,7 +851,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     case Num of
         OutOf ->
             %% this is the last chunk
-            Log = ra_log:install_snapshot(SnapState, Log0),
+            Log = ra_log:install_snapshot({LastIndex, LastTerm},
+                                          SnapState, Log0),
             {{_, _, ClusterNodes}, MacState} = ra_log:recover_snapshot(Log),
             State = State0#{log => Log,
                             current_term => Term,
@@ -1163,7 +1164,7 @@ update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
     Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
     State#{cluster => maps:put(PeerId, Peer, Peers)}.
 
-peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
+peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =
          maps:to_list(
            maps:filter(fun(_, #{status := {sending_snapshot, Pid}})
@@ -1187,12 +1188,12 @@ handle_down(leader, machine, Pid, Info, State) ->
                              {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info, #{id := Id} = State) ->
-    ?WARN("~w: Snapshot sender process ~w crashed with ~w~n",
+    ?INFO("~w: Snapshot sender process ~w exited with ~w~n",
           [Id, Pid, Info]),
-    {leader, peer_snapshot_process_crashed(Pid, State), []};
+    {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{id := Id, log := Log0} = State) ->
-    ?WARN("~w: Snapshot write process ~w crashed with ~w~n",
+    ?WARN("~w: Snapshot write process ~w exited with ~w~n",
           [Id, Pid, Info]),
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),

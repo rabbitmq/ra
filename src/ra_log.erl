@@ -19,7 +19,7 @@
          next_index/1,
          snapshot_state/1,
          set_snapshot_state/2,
-         install_snapshot/2,
+         install_snapshot/3,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
@@ -65,7 +65,7 @@
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
 
--type effects() :: [effect() | ra_snapshot:effec()].
+-type effects() :: [effect() | ra_snapshot:effect()].
 
 -record(state,
         {uid :: ra_uid(),
@@ -428,9 +428,8 @@ snapshot_state(State) ->
 set_snapshot_state(SnapState, State) ->
     State#state{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_snapshot:state(), ra_log()) -> ra_log().
-install_snapshot(SnapState, State0) ->
-    {Idx, _} = IdxTerm = ra_snapshot:current(SnapState),
+-spec install_snapshot(ra_idxterm(), ra_snapshot:state(), ra_log()) -> ra_log().
+install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
     State = delete_segments(Idx, State0),
     State#state{snapshot_state = SnapState,
                 first_index = Idx + 1,
