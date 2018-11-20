@@ -120,14 +120,16 @@
          % the term at the point of snapshot
          last_term :: ra_term(),
          last_config :: ra_cluster_servers(),
+         crc :: integer(),
+         chunk_state :: {pos_integer(), pos_integer()},
          data :: term()
         }).
 
 -record(install_snapshot_result,
         {term :: ra_term(),
-         % because we aren't doing true rpc we may have multiple append
-         % entries in flight we need to communicate what we are replying
-         % to
+         % because we need to inform the leader of the snapshot that has been
+         % replicated from another process we here inlcude the index and
+         % term of the snapshot in question
          last_index :: ra_index(),
          last_term :: ra_term()}).
 

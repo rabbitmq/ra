@@ -163,7 +163,9 @@ handle_event({written, {_From, Idx, Term}}, State0) ->
         _ ->
             % if the term doesn't match we just ignore it
             {State0, []}
-    end.
+    end;
+handle_event(_Evt, State0) ->
+            {State0, []}.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -209,7 +211,7 @@ read_snapshot(#state{snapshot = {Meta, Data}}) ->
 recover_snapshot(#state{snapshot = undefined}) ->
     undefined;
 recover_snapshot(#state{snapshot = {Meta, Data}}) ->
-    {ok, Meta, Data}.
+    {Meta, Data}.
 
 
 -spec read_meta(Key :: ra_log:ra_meta_key(), State :: ra_log_memory_state()) ->

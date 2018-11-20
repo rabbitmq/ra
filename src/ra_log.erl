@@ -17,17 +17,12 @@
          fetch/2,
          fetch_term/2,
          next_index/1,
-         install_snapshot/3,
-         read_snapshot/1,
-         read_snapshot_module_state/1,
+         snapshot_state/1,
+         set_snapshot_state/2,
+         install_snapshot/2,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
-         %% meta
-         read_meta/2,
-         read_meta/3,
-         write_meta/3,
-         write_meta/4,
 
          can_write/1,
          exists/2,
@@ -60,17 +55,17 @@
                       {segments, ets:tid(), [segment_ref()]} |
                       {resend_write, ra_index()} |
                       {snapshot_written,
-                       ra_idxterm(),
-                       File :: file:filename(),
-                       Old :: [file:filename()]}.
+                       ra_idxterm()}.
 
 -type event() :: {ra_log_event, event_body()}.
 
--type effect() :: {delete_snapshots, term()} |
+-type effect() :: {delete_snapshot, Dir :: file:filename(), ra_idxterm()} |
                   {delete_segments, ra_uid(), ra_index(), [file:filename()]}.
 %% logs can have effects too so that they can be coordinated with other state
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
+
+-type effects() :: [effect() | ra_snapshot:effec()].
 
 -record(state,
         {uid :: ra_uid(),
@@ -81,12 +76,11 @@
          segment_refs = [] :: [segment_ref()],
          open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
          directory :: file:filename(),
-         snapshot_state :: maybe(ra_snapshot:state()),
+         snapshot_state :: ra_snapshot:state(),
          snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
          snapshot_module :: module(),
          % if this is set a snapshot write is in progress for the
          % index specified
-         snapshot_index_in_progress :: maybe(ra_index()),
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
          wal :: atom(), % registered name
          last_resend_time :: maybe(integer()),
@@ -142,19 +136,13 @@ init(#{uid := UId} = Conf) ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
-    % recove las snapshot file
-    SnapshotState =
-        case lists:sort(filelib:wildcard(filename:join(Dir, "*.snapshot"))) of
-            [File | _] ->
-                %% TODO: what to do about old files
-                {ok, {SI, ST, _}} = ra_snapshot:read_meta(SnapModule, File),
-                {SI, ST, File};
-            [] ->
-                undefined
-        end,
-    {SnapIdx, SnapTerm} = case SnapshotState of
+    % recover last snapshot file
+    SnapshotsDir = filename:join(Dir, "snapshots"),
+    ok = ra_lib:ensure_dir(SnapshotsDir),
+    SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
+    {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, -1};
-                              {I, T, _} -> {I, T}
+                              Curr -> Curr
                           end,
     State000 = #state{directory = Dir,
                       uid = UId,
@@ -214,8 +202,8 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
       #state{last_index = LastIdx,
              snapshot_state = SnapState} = State00)
   when FstIdx =< LastIdx + 1 andalso FstIdx >= 0 ->
-    case SnapState of
-        {SnapIdx, _, _} when FstIdx =:= SnapIdx + 1 ->
+    case ra_snapshot:current(SnapState) of
+        {SnapIdx, _} when FstIdx =:= SnapIdx + 1 ->
             % it is the next entry after a snapshot
             % we need to tell the wal to truncate as we
             % are not going to receive any entries prior to the snapshot
@@ -304,6 +292,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
                                                LastWrittenTerm0},
                     snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
+    MaybeCurrent = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
@@ -316,7 +305,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}},
                           []);
-        {undefined, State} when FromIdx =< element(1, SnapState) ->
+        {undefined, State} when FromIdx =< element(1, MaybeCurrent ) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -371,58 +360,22 @@ handle_event({segments, Tid, NewSegs},
     % compact seg ref list so that only the latest range for a segment
     % file has an entry
     {State0#state{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
-                  open_segments = Open,
-                  % re-enable snapshots based on release cursor updates
-                  % in case snapshot_written was lost
-                  snapshot_index_in_progress = undefined}, []};
-handle_event({snapshot_written, {Idx, Term}, File, Old},
-             #state{uid = UId, open_segments = OpenSegs0,
-                    directory = Dir,
-                    segment_refs = SegRefs0} = State0) ->
+                  open_segments = Open}, []};
+handle_event({snapshot_written, {Idx, _} = Snap},
+             #state{snapshot_state = SnapState0} = State0) ->
     % delete any segments outside of first_index
-    {SegRefs, OpenSegs, NumObsolete} =
-        % all segments created prior to the first reclaimable should be
-        % reclaimed even if they have a more up to date end point
-        case lists:partition(fun({_, To, _}) when To > Idx -> true;
-                                (_) -> false
-                             end, SegRefs0) of
-            {_, []} ->
-                {SegRefs0, OpenSegs0, 0};
-            {Active, Obsolete} ->
-                % close all relevant active segments
-                ObsoleteKeys = [element(3, O) || O <- Obsolete],
-                % close any open segments
-                OpenSegs1 = lists:foldl(fun (K, OS0) ->
-                                                case ra_flru:evict(K, OS0) of
-                                                    {_, OS} -> OS;
-                                                    error -> OS0
-                                                end
-                                        end, OpenSegs0, ObsoleteKeys),
-                ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
-                ok = ra_log_segment_writer:delete_segments(UId, Idx,
-                                                           ObsoleteFiles),
-                {Active, OpenSegs1, length(ObsoleteKeys)}
-        end,
-    ?INFO("~s: Snapshot written at index ~b in term ~b. ~b"
-          " obsolete segments~n",
-          [UId, Idx, Term, NumObsolete]),
-    true = ets:insert(ra_log_snapshot_state, {UId, Idx}),
+    State1 = delete_segments(Idx, State0),
+    SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
     %% delete old snapshot files
     %% This is done as an effect
     %% so that if an old snapshot is still being replicated
     %% the cleanup can be delayed until it is safe
-    Effects = case Old of
-                  [] -> [];
-                  _ ->
-                      [{delete_snapshot, Old}]
-              end,
-    truncate_cache(Idx,
-                   State0#state{first_index = Idx + 1,
-                                segment_refs = SegRefs,
-                                open_segments = OpenSegs,
-                                snapshot_index_in_progress = undefined,
-                                snapshot_state = {Idx, Term, File}},
-                  Effects);
+    Effects = [{delete_snapshot,
+                ra_snapshot:directory(SnapState),
+                ra_snapshot:current(SnapState0)}],
+    %% do not set last index here as the snapshot may be for a past index
+    truncate_cache(Idx, State1#state{first_index = Idx + 1,
+                                     snapshot_state = SnapState}, Effects);
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -467,87 +420,58 @@ fetch_term(Idx, #state{cache = Cache, uid = UId} = State0) ->
             end
     end.
 
--spec install_snapshot(Meta :: ra_snapshot:meta(),
-                       Data :: term(),
-                       State :: ra_log()) ->
-    {ra_log(), term(), [effect()]}.
-install_snapshot({Idx, Term, _} = Meta, Data,
-                 #state{directory = Dir,
-                        snapshot_module = SnapModule} = State) ->
-    % syncronous call when follower receives a snapshot
-    {ok, File, Old} =
-        ra_log_snapshot_writer:save_snapshot_call(Dir, Meta, Data,
-                                                  SnapModule),
+-spec snapshot_state(State :: ra_log()) -> ra_snapshot:state().
+snapshot_state(State) ->
+    State#state.?FUNCTION_NAME.
 
-    {ok, _Meta, MacState} = ra_snapshot:recover(SnapModule, File),
-    {State1, Effects} =
-        handle_event({snapshot_written, {Idx, Term}, File, Old},
-                     State#state{last_index = Idx,
-                                 last_written_index_term = {Idx, Term}}),
-    {State1, MacState, Effects}.
+-spec set_snapshot_state(ra_snapshot:state(), ra_log()) -> ra_log().
+set_snapshot_state(SnapState, State) ->
+    State#state{snapshot_state = SnapState}.
 
--spec read_snapshot(State :: ra_log()) ->
-    maybe({ok, ra_snapshot:meta(), term()}).
-read_snapshot(#state{snapshot_state = undefined}) ->
-    undefined;
-read_snapshot(#state{snapshot_state = {_, _, File},
-                     snapshot_module = SnapModule}) ->
-    case ra_snapshot:read(SnapModule, File) of
-        {ok, Meta, Data} ->
-            {ok, Meta, Data};
-        {error, enoent} ->
-            undefined
-    end.
-
--spec read_snapshot_module_state(State :: ra_log()) ->
-    maybe({module(), term()}).
-read_snapshot_module_state(#state{snapshot_state = undefined}) ->
-    exit({unexpected_snapshot_state, undefined});
-read_snapshot_module_state(#state{snapshot_state = {_, _, File},
-                     snapshot_module = SnapModule}) ->
-    {SnapModule, File}.
+-spec install_snapshot(ra_snapshot:state(), ra_log()) -> ra_log().
+install_snapshot(SnapState, State0) ->
+    {Idx, _} = IdxTerm = ra_snapshot:current(SnapState),
+    State = delete_segments(Idx, State0),
+    State#state{snapshot_state = SnapState,
+                first_index = Idx + 1,
+                last_index = Idx,
+                last_written_index_term = IdxTerm}.
 
 -spec recover_snapshot(State :: ra_log()) ->
-    maybe({ok, ra_snapshot:meta(), term()}).
-recover_snapshot(#state{snapshot_state = undefined}) ->
-    undefined;
-recover_snapshot(#state{snapshot_state = {_, _, File},
-                        snapshot_module = SnapModule}) ->
-    case ra_snapshot:recover(SnapModule, File) of
-        {ok, Meta, Data} ->
-            {ok, Meta, Data};
-        {error, enoent} ->
+    maybe({ra_snapshot:meta(), term()}).
+recover_snapshot(#state{snapshot_state = SnapState}) ->
+    case ra_snapshot:recover(SnapState) of
+        {ok, Meta, MacState} ->
+            {Meta, MacState};
+        {error, no_current_snapshot} ->
             undefined
     end.
 
--spec prepare_snapshot(ra_index(), term(), ra_log()) -> term().
-prepare_snapshot(Index, MacState, #state{snapshot_module = SnapModule}) ->
-    ra_snapshot:prepare(SnapModule, Index, MacState).
-
 -spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
-snapshot_index_term(#state{snapshot_state = {Idx, Term, _}}) ->
-    {Idx, Term};
-snapshot_index_term(_State) ->
-    undefined.
+snapshot_index_term(#state{snapshot_state = SS}) ->
+    ra_snapshot:current(SS).
 
 -spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
                             Ref :: term(), State :: ra_log()) ->
-    ra_log().
-update_release_cursor(_, _, _, %% Idx, Cluster, MacState
-                      #state{snapshot_index_in_progress = SIIP} = State)
-  when is_integer(SIIP) ->
-    % if a snapshot is in progress don't even evaluate
-    % new segments will always set snapshot_index_in_progress = undefined
-    % to ensure liveliness in case a snapshot_written message is lost.
-    State;
+    {ra_log(), effects()}.
 update_release_cursor(Idx, Cluster, MacState,
+                      #state{snapshot_state = SnapState} = State) ->
+    case ra_snapshot:pending(SnapState) of
+        undefined ->
+            update_release_cursor0(Idx, Cluster, MacState, State);
+        _ ->
+            % if a snapshot is in progress don't even evaluate
+            {State, []}
+    end.
+
+update_release_cursor0(Idx, Cluster, MacState,
                       #state{segment_refs = SegRefs,
                              snapshot_state = SnapState,
                              snapshot_interval = SnapInter} = State0) ->
     ClusterServerIds = maps:keys(Cluster),
-    SnapLimit = case SnapState of
+    SnapLimit = case ra_snapshot:current(SnapState) of
                     undefined -> SnapInter;
-                    {I, _, _} -> I + SnapInter
+                    {I, _} -> I + SnapInter
                 end,
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
@@ -580,37 +504,14 @@ update_release_cursor(Idx, Cluster, MacState,
             %% up
             case fetch_term(Idx, State0) of
                 {undefined, State} ->
-                    State;
+                    {State, []};
                 {Term, State} ->
                     write_snapshot({Idx, Term, ClusterServerIds},
                                    MacState, State)
             end;
         false ->
-            State0
+            {State0, []}
     end.
-
-
--spec read_meta(Key :: ra_meta_key(),
-                State :: ra_log()) -> maybe(term()).
-read_meta(Key, #state{uid = Id}) ->
-    ra_log_meta:fetch(Id, Key).
-
--spec read_meta(Key :: ra_meta_key(), State :: ra_log(),
-                Default :: term()) -> term().
-read_meta(Key, Log, Default) ->
-    ra_lib:default(read_meta(Key, Log), Default).
-
--spec write_meta(Key :: ra_meta_key(), Value :: term(), State :: ra_log()) ->
-    ok.
-write_meta(Key, Value, Log) ->
-    write_meta(Key, Value, Log, true).
-
--spec write_meta(Key :: ra_meta_key(), Value :: term(),
-                 State :: ra_log(), Sync :: boolean()) -> ok.
-write_meta(Key, Value, #state{uid = Id}, true) ->
-    ok = ra_log_meta:store_sync(Id, Key, Value);
-write_meta(Key, Value, #state{uid = Id}, false) ->
-    ok = ra_log_meta:store(Id, Key, Value).
 
 append_sync({Idx, Term, _} = Entry, Log0) ->
     Log = ra_log:append(Entry, Log0),
@@ -638,7 +539,6 @@ exists({Idx, Term}, Log0) ->
 
 overview(#state{last_index = LastIndex,
                 last_written_index_term = LWIT,
-                snapshot_index_in_progress = SIIP,
                 segment_refs = Segs,
                 snapshot_state = SnapshotState,
                 open_segments = OpenSegs}) ->
@@ -647,10 +547,9 @@ overview(#state{last_index = LastIndex,
       last_written_index_term => LWIT,
       num_segments => length(Segs),
       open_segments => ra_flru:size(OpenSegs),
-      snapshot_index_in_progress => SIIP,
-      snapshot_index => case SnapshotState of
+      snapshot_index => case ra_snapshot:current(SnapshotState) of
                             undefined -> undefined;
-                            _ -> element(1, SnapshotState)
+                            {I, _} -> I
                         end
      }.
 
@@ -691,6 +590,34 @@ release_resources(MaxOpenSegments,
                                             fun flru_handler/1)}.
 
 %%% Local functions
+
+delete_segments(Idx, #state{uid = UId,
+                            open_segments = OpenSegs0,
+                            directory = Dir,
+                            segment_refs = SegRefs0} = State0) ->
+    case lists:partition(fun({_, To, _}) when To > Idx -> true;
+                            (_) -> false
+                         end, SegRefs0) of
+        {_, []} ->
+            State0;
+        {Active, Obsolete} ->
+            % close all relevant active segments
+            ObsoleteKeys = [element(3, O) || O <- Obsolete],
+            % close any open segments
+            OpenSegs1 = lists:foldl(fun (K, OS0) ->
+                                            case ra_flru:evict(K, OS0) of
+                                                {_, OS} -> OS;
+                                                error -> OS0
+                                            end
+                                    end, OpenSegs0, ObsoleteKeys),
+            ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
+            ok = ra_log_segment_writer:delete_segments(UId, Idx,
+                                                       ObsoleteFiles),
+            ?INFO("~s: ~b obsolete segments~n",
+                  [UId, length(ObsoleteKeys)]),
+            State0#state{open_segments = OpenSegs1,
+                         segment_refs = Active}
+    end.
 
 wal_truncate_write(#state{uid = UId, cache = Cache, wal = Wal} = State,
                    {Idx, Term, Data}) ->
@@ -977,13 +904,10 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot({Index, _, _} = Meta, MacState,
-               #state{directory = Dir,
-                      snapshot_module = SnapModule} = State) ->
-    Ref = prepare_snapshot(Index, MacState, State),
-    ok = ra_log_snapshot_writer:write_snapshot(self(), Dir, Meta,
-                                               Ref, SnapModule),
-    State#state{snapshot_index_in_progress = Index}.
+write_snapshot(Meta, MacRef,
+               #state{snapshot_state = SnapState0} = State) ->
+    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
+    {State#state{snapshot_state = SnapState}, Effects}.
 
 flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),

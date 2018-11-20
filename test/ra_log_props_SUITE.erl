@@ -537,11 +537,11 @@ read_write_meta_prop(Dir, TestCase) ->
     ?FORALL(
        Meta0, list(meta_data()),
        begin
-           Log = write_meta(Meta0,
-                            ra_log:init(#{data_dir => Dir, uid => TestCase})),
+           Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+           _ = write_meta(Meta0,TestCase),
            %% Ensure we overwrite the duplicates before checking the writes
            Meta = dict:to_list(dict:from_list(Meta0)),
-           Result = [{K, V, ra_log:read_meta(K, Log)} || {K, V} <- Meta],
+           Result = [{K, V, ra_log_meta:fetch(TestCase, K)} || {K, V} <- Meta],
            reset(Log),
            ?WHENFAIL(io:format("Got: ~p~n", [Result]),
                      lists:all(fun({_K, V, Value}) ->
@@ -550,11 +550,11 @@ read_write_meta_prop(Dir, TestCase) ->
        end).
 
 
-write_meta([], Log) ->
-    Log;
-write_meta([{Key, Value} | Rest], Log0) ->
-    ok = ra_log:write_meta(Key, Value, Log0),
-    write_meta(Rest, Log0).
+write_meta([], _) ->
+    ok;
+write_meta([{Key, Value} | Rest], UId) ->
+    ok = ra_log_meta:store(UId, Key, Value),
+    write_meta(Rest, UId).
 
 last_written_with_wal(Config) ->
     Dir = ?config(wal_dir, Config),

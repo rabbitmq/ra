@@ -12,6 +12,7 @@
          handle_candidate/2,
          handle_pre_vote/2,
          handle_follower/2,
+         handle_receive_snapshot/2,
          handle_await_condition/2,
          handle_aux/4,
          handle_state_enter/2,
@@ -31,7 +32,7 @@
          update_release_cursor/3,
          persist_last_applied/1,
          update_peer_status/3,
-         peer_snapshot_process_crashed/2,
+         handle_down/5,
          terminate/2,
          log_fold/3,
          recover/1
@@ -68,7 +69,7 @@
 -type ra_state() :: leader | follower | candidate
                     | pre_vote | await_condition | delete_and_terminate
                     | terminating_leader | terminating_follower | recover
-                    | recovered | stop.
+                    | recovered | stop | receive_snapshot.
 
 -type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.
@@ -192,16 +193,16 @@ init(#{id := Id,
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule}),
     ok = ra_log:write_config(Config, Log0),
-    CurrentTerm = ra_log:read_meta(current_term, Log0, 0),
-    LastApplied = ra_log:read_meta(last_applied, Log0, 0),
-    VotedFor = ra_log:read_meta(voted_for, Log0, undefined),
+    CurrentTerm = ra_log_meta:fetch(UId, current_term, 0),
+    LastApplied = ra_log_meta:fetch(UId, last_applied, 0),
+    VotedFor = ra_log_meta:fetch(UId, voted_for, undefined),
 
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
                 {0, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
-            {ok, {Idx, Term, ClusterNodes}, MacSt} ->
+            {{Idx, Term, ClusterNodes}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
                 {Idx, Clu, MacSt, {Idx, Term}}
@@ -808,40 +809,70 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
     {follower, State, [{reply, Reply}]};
-handle_follower(#install_snapshot_rpc{term = Term,
-                                      leader_id = LeaderId,
-                                      last_term = LastTerm,
-                                      last_index = LastIndex,
-                                      last_config = ClusterNodes,
-                                      data = Data},
+%% need to check if it's the first or last rpc
+%% TODO: must abort pending if for some reason we need to do so
+handle_follower(#install_snapshot_rpc{crc = Crc,
+                                      last_config = Cluster,
+                                      last_index = Idx,
+                                      last_term = Term,
+                                      chunk_state = {1, OutOf}} = Rpc,
                 #{id := Id, log := Log0,
                   current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?INFO("~w: installing snapshot at index ~b in term ~b~n",
-          [Id, LastIndex, LastTerm]),
-    % follower receives a snapshot to be installed
-
-    {Log, MachineState, Effects} =
-        ra_log:install_snapshot({LastIndex, LastTerm,
-                                 ClusterNodes}, Data, Log0),
-    State1 = State0#{log => Log,
-                     current_term => Term,
-                     commit_index => LastIndex,
-                     last_applied => LastIndex,
-                     cluster => make_cluster(Id, ClusterNodes),
-                     machine_state => MachineState,
-                     leader_id => LeaderId},
-    State = persist_last_applied(State1),
-
-    Reply = #install_snapshot_result{term = CurTerm,
-                                     last_term = LastTerm,
-                                     last_index = LastIndex},
-    {follower, State, [{reply, Reply} | Effects]};
+    ?INFO("~w: begin_accept snapshot at index ~b in term ~b~n",
+          [Id, Idx, Term]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, Term, Cluster},
+                                        OutOf, SnapState0),
+    Log = ra_log:set_snapshot_state(SS, Log0),
+    {receive_snapshot, State0#{log => Log}, [{next_event, Rpc}]};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
+
+handle_receive_snapshot(#install_snapshot_rpc{term = Term,
+                                              leader_id = LeaderId,
+                                              last_index = LastIndex,
+                                              last_term = LastTerm,
+                                              chunk_state = {Num, OutOf},
+                                              data = Data},
+                        #{id := Id, log := Log0,
+                          current_term := CurTerm} = State0)
+  when Term >= CurTerm ->
+    ?INFO("~w: receiving snapshot chunk: ~b / ~b~n",
+          [Id, Num, OutOf]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Data, OutOf, SnapState0),
+    Reply = #install_snapshot_result{term = CurTerm,
+                                     last_term = LastTerm,
+                                     last_index = LastIndex},
+    case Num of
+        OutOf ->
+            %% this is the last chunk
+            Log = ra_log:install_snapshot(SnapState, Log0),
+            {{_, _, ClusterNodes}, MacState} = ra_log:recover_snapshot(Log),
+            State = State0#{log => Log,
+                            current_term => Term,
+                            commit_index => LastIndex,
+                            last_applied => LastIndex,
+                            cluster => make_cluster(Id, ClusterNodes),
+                            machine_state => MacState,
+                            leader_id => LeaderId},
+            %% it was the last snapshot chunk so we can revert back to
+            %% follower status
+            {follower, persist_last_applied(State), [{reply, Reply}]};
+        _ ->
+            Log = ra_log:set_snapshot_state(SnapState, Log0),
+            State = State0#{log => Log},
+            {receive_snapshot, State, [{reply, Reply}]}
+    end;
+handle_receive_snapshot(Msg, State) ->
+    log_unhandled_msg(receive_snapshot, Msg, State),
+    %% drop all other events??
+    %% TODO: work out what else to handle
+    {receive_snapshot, State, []}.
 
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), ra_effects()}.
@@ -1012,6 +1043,10 @@ filter_follower_effects(Effects) ->
                      ({aux, _}) -> true;
                      (garbage_collection) -> true;
                      ({delete_snapshot, _}) -> true;
+                     ({monitor, process, Comp, _}) ->
+                         %% only machine monitors should not be emitted
+                         %% by followers
+                         Comp =/= machine;
                      (_) -> false
                  end, Effects).
 
@@ -1061,12 +1096,12 @@ make_rpc_effect(PeerId, Next, MaxBatchSize,
                                             PrevTerm, MaxBatchSize,
                                             State#{log => Log});
                 {LastIdx, _} ->
-                    {SnapMod, SnapRef} = ra_log:read_snapshot_module_state(Log),
+                    SnapState = ra_log:snapshot_state(Log),
                     %% don't increment the next index here as we will do
                     %% that once the snapshot is fully replicated
                     %% and we don't pipeline entries until after snapshot
                     {LastIdx,
-                     {send_snapshot, PeerId, {SnapMod, SnapRef, Id, Term}},
+                     {send_snapshot, PeerId, {SnapState, Id, Term}},
                      State#{log => Log}}
             end
     end.
@@ -1099,12 +1134,13 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
 -spec update_release_cursor(ra_index(), term(), ra_server_state()) ->
-    ra_server_state().
+    {ra_server_state(), ra_effects()}.
 update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
     % simply pass on release cursor index to log
-    Log = ra_log:update_release_cursor(Index, Cluster, MacState, Log0),
-    State#{log => Log}.
+    {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
+                                                  MacState, Log0),
+    {State#{log => Log}, Effects}.
 
 % Persist last_applied - as there is an inherent race we cannot
 % always guarantee that side effects won't be re-issued when a
@@ -1116,9 +1152,9 @@ persist_last_applied(#{persisted_last_applied := L,
                        last_applied := L} = State) ->
     % do nothing
     State;
-persist_last_applied(#{last_applied := L, log := Log0} = State) ->
-    ok = ra_log:write_meta(last_applied, L, Log0, false),
-    State#{persisted_last_applied => L}.
+persist_last_applied(#{last_applied := LastApplied, uid := UId} = State) ->
+    ok = ra_log_meta:store(UId, last_applied, LastApplied),
+    State#{persisted_last_applied => LastApplied}.
 
 
 -spec update_peer_status(ra_server_id(), ra_peer_status(),
@@ -1127,8 +1163,6 @@ update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
     Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
     State#{cluster => maps:put(PeerId, Peer, Peers)}.
 
--spec peer_snapshot_process_crashed(SnapshotPid :: pid(), ra_server_state()) ->
-    ra_server_state().
 peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =
          maps:to_list(
@@ -1143,6 +1177,28 @@ peer_snapshot_process_crashed(SnapshotPid, #{cluster := Peers} = State) ->
          _ ->
              State
      end.
+
+-spec handle_down(ra_state(), machine | snapshot_sender | snapshot_writer,
+                  pid(), term(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
+handle_down(leader, machine, Pid, Info, State) ->
+    %% commit command to be processed by state machine
+    handle_leader({command, {'$usr', #{from => undefined},
+                             {down, Pid, Info}, noreply}},
+                  State);
+handle_down(leader, snapshot_sender, Pid, Info, #{id := Id} = State) ->
+    ?WARN("~w: Snapshot sender process ~w crashed with ~w~n",
+          [Id, Pid, Info]),
+    {leader, peer_snapshot_process_crashed(Pid, State), []};
+handle_down(RaftState, snapshot_writer, Pid, Info,
+            #{id := Id, log := Log0} = State) ->
+    ?WARN("~w: Snapshot write process ~w crashed with ~w~n",
+          [Id, Pid, Info]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
+    Log = ra_log:set_snapshot_state(SnapState, Log0),
+    {RaftState, State#{log => Log}, []}.
+
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log} = _State, {shutdown, delete}) ->
@@ -1319,9 +1375,9 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_meta(Term, VotedFor, #{log := Log} = State) ->
-    ok = ra_log:write_meta(current_term, Term, Log, false),
-    ok = ra_log:write_meta(voted_for, VotedFor, Log, true),
+update_meta(Term, VotedFor, #{uid := UId} = State) ->
+    ok = ra_log_meta:store(UId, current_term, Term),
+    ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),
     State#{current_term => Term,
            voted_for => VotedFor}.
 

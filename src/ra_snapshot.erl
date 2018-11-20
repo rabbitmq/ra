@@ -10,11 +10,13 @@
          read/2,
          recover/1,
          read_meta/2,
+         delete/2,
 
          init/3,
          init_ets/0,
          current/1,
          pending/1,
+         directory/1,
          last_index_for/1,
 
          begin_snapshot/3,
@@ -27,7 +29,7 @@
 
         ]).
 
--type effect() :: {monitor, process, ?MODULE, pid()}.
+-type effect() :: {monitor, process, snapshot_writer, pid()}.
 
 -export_type([meta/0, file_err/0, effect/0]).
 
@@ -52,7 +54,7 @@
 %% getter macro
 -define(GETTER(State), State#?MODULE.?FUNCTION_NAME).
 
--define(ETSTBL, ra_snapshot_state).
+-define(ETSTBL, ra_log_snapshot_state).
 
 -opaque state() :: #?MODULE{}.
 
@@ -115,6 +117,7 @@ init(UId, Module, SnapshotsDir) ->
     State = #?MODULE{uid = UId,
                      module = Module,
                      directory = SnapshotsDir},
+    true = filelib:is_dir(SnapshotsDir),
     case lists:sort(filelib:wildcard(filename:join(SnapshotsDir, "*"))) of
         [] ->
             State;
@@ -142,8 +145,11 @@ init_ets() ->
 -spec current(state()) -> maybe(ra_idxterm()).
 current(State) -> ?GETTER(State).
 
--spec pending(state()) -> maybe(ra_idxterm()).
+-spec pending(state()) -> maybe({pid(), ra_idxterm()}).
 pending(State) -> ?GETTER(State).
+
+-spec directory(state()) -> file:filename().
+directory(State) -> ?GETTER(State).
 
 -spec last_index_for(ra_uid()) -> maybe(ra_index()).
 last_index_for(UId) ->
@@ -168,7 +174,7 @@ begin_snapshot({Idx, Term, _Cluster} = Meta, MacRef,
     Self = self(),
     Pid = spawn (fun () ->
                          ok = Mod:write(SnapDir, Meta, Ref),
-                         Self ! {ra_snapshot_event,
+                         Self ! {ra_log_event,
                                  {snapshot_written, {Idx, Term}}},
                          ok
                  end),
@@ -176,7 +182,7 @@ begin_snapshot({Idx, Term, _Cluster} = Meta, MacRef,
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
     {State#?MODULE{pending = {Pid, {Idx, Term}}},
-     [{monitor, process, ra_snapshot, Pid}]}.
+     [{monitor, process, snapshot_writer, Pid}]}.
 
 -spec complete_snapshot(ra_idxterm(), state()) ->
     state().
@@ -185,7 +191,6 @@ complete_snapshot({Idx, _} = IdxTerm,
                            module = _Mod,
                            directory = _Dir} = State) ->
     true = ets:insert(?ETSTBL, {UId, Idx}),
-    %% TODO delete old snapshots
     State#?MODULE{pending = undefined,
                   current = IdxTerm}.
 
@@ -196,7 +201,7 @@ begin_accept(Crc, {Idx, Term, _} = Meta, NumChunks,
              #?MODULE{module = Mod,
                       directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    _ = ra_lib:ensure_dir(SnapDir),
+    ok = file:make_dir(SnapDir),
     {ok, AcceptState} = Mod:begin_accept(SnapDir, Crc, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
                                            num = NumChunks,
@@ -237,11 +242,16 @@ accept_chunk(_Data, Num,
 
 
 
--spec handle_down(pid(), Reason :: term(), state()) ->
+-spec handle_down(pid(), Info :: term(), state()) ->
     state().
-handle_down(Pid, _Reason,
+handle_down(_Pid, _Info, #?MODULE{pending = undefined} = State) ->
+    State;
+handle_down(_Pid, normal, State) ->
+    State;
+handle_down(Pid, _Info,
             #?MODULE{directory = Dir,
                      pending = {Pid, IdxTerm}} = State) ->
+    %% delete the pending snapshot directory
     ok = delete(Dir, IdxTerm),
     State#?MODULE{pending = undefined}.
 
@@ -252,10 +262,8 @@ delete(Dir, {Idx, Term}) ->
     ok = ra_lib:recursive_delete(SnapDir),
     ok.
 
--spec save(Module :: module(),
-           Location :: file:filename(),
-           Meta :: meta(),
-           Data :: term()) ->
+-spec save(Module :: module(), Location :: file:filename(),
+           Meta :: meta(), Data :: term()) ->
     ok | {error, file_err() | term()}.
 save(Module, Location, Meta, Data) ->
     Module:save(Location, Meta, Data).
@@ -264,7 +272,7 @@ save(Module, Location, Meta, Data) ->
 -spec read(ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
     {ok, Crc :: non_neg_integer(), Meta :: meta(), ChunkState,
      [ChunkThunk :: fun((ChunkState) -> {binary(), ChunkState})]} |
-    {error, term()}.
+    {error, term()} when ChunkState :: term().
 read(ChunkSizeBytes, #?MODULE{module = Mod,
                               directory = Dir,
                               current = {Idx, Term}}) ->
@@ -272,7 +280,11 @@ read(ChunkSizeBytes, #?MODULE{module = Mod,
     Mod:read(ChunkSizeBytes, Location).
 
 -spec recover(state()) ->
-    {ok, Meta :: meta(), State :: term()} | {error, term()}.
+    {ok, Meta :: meta(), State :: term()} |
+    {error, no_current_snapshot} |
+    {error, term()}.
+recover(#?MODULE{current = undefined}) ->
+    {error, no_current_snapshot};
 recover(#?MODULE{module = Mod,
                  directory = Dir,
                  current = {Idx, Term}}) ->

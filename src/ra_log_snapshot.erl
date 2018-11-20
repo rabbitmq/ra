@@ -99,19 +99,21 @@ read(Size, Dir) ->
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
-            end
+            end;
+        Err ->
+            Err
     end.
 
 make_chunks(Size, Fd, Acc) ->
     {ok, Cur} = file:position(Fd, cur),
     {ok, Eof} = file:position(Fd, eof),
-    ?INFO("chunk cur ~b eof ~b", [Cur, Eof]),
+    % ?INFO("chunk cur ~b eof ~b", [Cur, Eof]),
     case min(Size, Eof - Cur) of
         Size ->
             {ok, _} = file:position(Fd, Cur + Size),
             Thunk = fun(F) ->
                             %% Position file offset
-                            ?INFO("read chunk ~b ", [Cur]),
+                            % ?INFO("read chunk ~b ", [Cur]),
                             {ok, _} = file:position(F, Cur),
                             {ok, Data} = file:read(F, Size),
                             {Data, F}
@@ -123,7 +125,7 @@ make_chunks(Size, Fd, Acc) ->
             %% this is the last thunk
             Thunk = fun(F) ->
                             %% Position file offset
-                            ?INFO("read last chunk ~b ~b ", [Cur, Rem]),
+                            % ?INFO("read last chunk ~b ~b ", [Cur, Rem]),
                             {ok, _} = file:position(F, Cur),
                             {ok, Data} = file:read(F, Rem),
                             file:close(F),

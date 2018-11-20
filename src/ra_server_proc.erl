@@ -10,9 +10,10 @@
          recover/3,
          recovered/3,
          leader/3,
-         follower/3,
          pre_vote/3,
          candidate/3,
+         follower/3,
+         receive_snapshot/3,
          await_condition/3,
          terminating_leader/3,
          terminating_follower/3
@@ -327,29 +328,15 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
        #state{monitors = Monitors0,
               server_state = ServerState0} = State0) ->
     case maps:take(Pid, Monitors0) of
-        {{machine, MRef}, Monitors} ->
-            % there is a monitor for the ref
-            {leader, ServerState, Effects} =
-                ra_server:handle_leader({command,
-                                         {'$usr', #{from => undefined},
-                                          {down, Pid, Info}, noreply}},
-                                        ServerState0),
+        {{Comp, MRef}, Monitors} ->
+            {_, ServerState, Effects} =
+                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
+                                      ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
                                 State0#state{server_state = ServerState,
                                              monitors = Monitors}),
             {keep_state, State, Actions};
-        {{snapshot_sender, MRef}, Monitors} ->
-            ?WARN("~w: Snapshot sender process ~w crashed with ~w~n",
-                  [id(State0), Pid, Info]),
-            %% the snapshot sender is down,
-            %% update the state of the peer to normal
-            %% this will most likely just trigger another snapshot send
-            ServerState =
-                ra_server:peer_snapshot_process_crashed(Pid, ServerState0),
-            State = State0#state{monitors = Monitors,
-                                 server_state = ServerState},
-            {keep_state, State, []};
         error ->
             {keep_state, State0, []}
     end;
@@ -562,6 +549,21 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(really_short, State)]}
     end;
+follower(info, {'DOWN', MRef, process, Pid, Info},
+         #state{monitors = Monitors0, server_state = ServerState0} = State0) ->
+    case maps:take(Pid, Monitors0) of
+        {{Comp, MRef}, Monitors} ->
+            {_, ServerState, Effects} =
+                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
+                                      ServerState0),
+            {State, Actions} =
+                ?HANDLE_EFFECTS(Effects, cast,
+                                State0#state{server_state = ServerState,
+                                             monitors = Monitors}),
+            {keep_state, State, Actions};
+        error ->
+            {keep_state, State0, []}
+    end;
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
@@ -599,11 +601,30 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout}
               | Actions]};
+        {receive_snapshot, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            ?INFO("~w follower -> receive_snapshot in term: ~b~n",
+                  [id(State), current_term(State)]),
+            {next_state, receive_snapshot, State, Actions};
         {delete_and_terminate, State1, Effects} ->
             ?INFO("~w follower -> terminating_follower term: ~b~n",
                   [id(State1), current_term(State1)]),
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {next_state, terminating_follower, State, Actions}
+    end.
+
+%% TODO: handle leader down abort snapshot and revert to follower
+receive_snapshot(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State, Actions};
+receive_snapshot(EventType, Msg, State0) ->
+    case handle_receive_snapshot(Msg, State0) of
+        {receive_snapshot, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {keep_state, State, Actions};
+        {follower, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {next_state, follower, State, Actions}
     end.
 
 terminating_leader(enter, _, State0) ->
@@ -755,15 +776,23 @@ handle_leader(Msg, #state{server_state = ServerState0} = State) ->
     end.
 
 handle_candidate(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_candidate(Msg, ServerState0),
+    {NextState, ServerState, Effects} =
+        ra_server:handle_candidate(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 handle_pre_vote(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_pre_vote(Msg, ServerState0),
+    {NextState, ServerState, Effects} =
+        ra_server:handle_pre_vote(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 handle_follower(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_follower(Msg, ServerState0),
+    {NextState, ServerState, Effects} =
+        ra_server:handle_follower(Msg, ServerState0),
+    {NextState, State#state{server_state = ServerState}, Effects}.
+
+handle_receive_snapshot(Msg, #state{server_state = ServerState0} = State) ->
+    {NextState, ServerState, Effects} =
+        ra_server:handle_receive_snapshot(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
@@ -839,25 +868,42 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-handle_effect(_, {send_snapshot, To, {SnapMod, SnapRef, Id, Term}}, _,
+handle_effect(_, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors} = State0, Actions) ->
     %% leader effect only
     Me = self(),
     Pid = spawn(
             fun () ->
-                    {ok, {LastIdx, LastTerm, Config}, Data} =
-                        ra_snapshot:read(SnapMod, SnapRef),
-                    Request = #install_snapshot_rpc{term = Term,
-                                                    leader_id = Id,
-                                                    last_index = LastIdx,
-                                                    last_term = LastTerm,
-                                                    last_config = Config,
-                                                    data = Data},
-                    Reply = gen_statem:call(To, Request,
-                                            {dirty_timeout,
-                                             ?INSTALL_SNAP_RPC_TIMEOUT}),
-                    ok = gen_statem:cast(Me, {To, Reply})
+                    {ok, Crc,
+                     {LastIdx, LastTerm, Config},
+                     ChunkState, Chunks} = ra_snapshot:read(1024, SnapState),
+                    NumChunks = length(Chunks),
+                    {_, Result, _} =
+                    lists:foldl(
+                      fun (ChunkFun, {Num, _, CState0}) ->
+                              {Data, CState} = ChunkFun(CState0),
+                              Conf = case Num of
+                                         1 -> Config;
+                                         _ -> undefined
+                                     end,
+                              Req = #install_snapshot_rpc{
+                                       term = Term,
+                                       leader_id = Id,
+                                       last_index = LastIdx,
+                                       last_term = LastTerm,
+                                       last_config = Conf,
+                                       crc = Crc,
+                                       chunk_state = {Num, NumChunks},
+                                       data = Data},
+
+                              Res = gen_statem:call(To, Req,
+                                                    {dirty_timeout,
+                                                     ?INSTALL_SNAP_RPC_TIMEOUT}),
+                              %% just return the last reply
+                              {Num + 1, Res, CState}
+                     end, {1, undefined, ChunkState}, Chunks),
+                    ok = gen_statem:cast(Me, {To, Result})
             end),
     MRef = erlang:monitor(process, Pid),
     %% update the peer state so that no pipelined entries are sent during
@@ -866,11 +912,10 @@ handle_effect(_, {send_snapshot, To, {SnapMod, SnapRef, Id, Term}}, _,
     {State0#state{server_state = SS,
                   monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
                   Actions};
-handle_effect(_, {delete_snapshot, SnapshotFiles}, _, State0, Actions) ->
+handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
-    %% TODO: call ra_snapshot:delete instead
     _ = spawn(fun() ->
-                      [_ = file:delete(F) || F <- SnapshotFiles]
+                      ra_snapshot:delete(Dir, SnapshotRef)
               end),
     {State0, Actions};
 handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
@@ -884,11 +929,13 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
-handle_effect(_, {release_cursor, Index, MacState}, _EvtType,
-              #state{server_state = ServerState0} = State, Actions) ->
-    ServerState = ra_server:update_release_cursor(Index, MacState,
-                                                  ServerState0),
-    {State#state{server_state = ServerState}, Actions};
+handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
+              #state{server_state = ServerState0} = State0, Actions0) ->
+    {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
+                                                             ServerState0),
+    State1 = State0#state{server_state = ServerState},
+    {State, Actions} = handle_effects(RaftState, Effects, EvtType, State1),
+    {State, Actions0 ++ Actions};
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     {State, Actions};
@@ -901,6 +948,17 @@ handle_effect(_, {monitor, process, Pid}, _,
         _ ->
             MRef = erlang:monitor(process, Pid),
             {State#state{monitors = Monitors#{Pid => {machine, MRef}}},
+             Actions}
+    end;
+handle_effect(_, {monitor, process, Component, Pid}, _,
+              #state{monitors = Monitors} = State, Actions) ->
+    case Monitors of
+        #{Pid := _} ->
+            % monitor is already in place - do nothing
+            {State, Actions};
+        _ ->
+            MRef = erlang:monitor(process, Pid),
+            {State#state{monitors = Monitors#{Pid => {Component, MRef}}},
              Actions}
     end;
 handle_effect(_, {monitor, node, Node}, _,

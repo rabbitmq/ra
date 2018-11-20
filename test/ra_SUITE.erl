@@ -415,11 +415,11 @@ snapshot_installation(Config) ->
     %% assert all contains snapshots
     TryFun = fun(Dir) ->
                      length(filelib:wildcard(
-                              filename:join(Dir, "*.snapshot"))) > 0
+                              filename:join([Dir, "snapshots", "*"]))) > 0
              end,
-    ?assert(try_n_times(fun () -> TryFun(N1Dir) end, 20)),
     ?assert(try_n_times(fun () -> TryFun(N2Dir) end, 20)),
     ?assert(try_n_times(fun () -> TryFun(N3Dir) end, 20)),
+    ?assert(try_n_times(fun () -> TryFun(N1Dir) end, 20)),
 
     % then do some more
     [begin

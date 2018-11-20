@@ -11,7 +11,8 @@
          store_sync/3,
          delete/1,
          delete_sync/1,
-         fetch/2
+         fetch/2,
+         fetch/3
         ]).
 
 -include("ra.hrl").
@@ -114,6 +115,13 @@ fetch(Id, voted_for) ->
     maybe_fetch(Id, 3);
 fetch(Id, last_applied) ->
     maybe_fetch(Id, 4).
+
+-spec fetch(ra_uid(), key(), term()) -> value().
+fetch(Id, Key, Default) ->
+    case fetch(Id, Key) of
+        undefined -> Default;
+        Value -> Value
+    end.
 
 %%% internal
 

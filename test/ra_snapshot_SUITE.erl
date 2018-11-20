@@ -68,6 +68,7 @@ init_empty(Config) ->
     undefined = ra_snapshot:current(State),
     undefined = ra_snapshot:pending(State),
     undefined = ra_snapshot:last_index_for(UId),
+    {error, no_current_snapshot} = ra_snapshot:recover(State),
     ok.
 
 take_snapshot(Config) ->
@@ -76,12 +77,12 @@ take_snapshot(Config) ->
                               ?config(snap_dir, Config)),
     Meta = {55, 2, [node()]},
     MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, ra_snapshot, Pid}]} =
+    {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
     undefined = ra_snapshot:current(State1),
     {Pid, {55, 2}} = ra_snapshot:pending(State1),
     receive
-        {ra_snapshot_event, {snapshot_written, {55, 2} = IdxTerm}} ->
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm}} ->
             State = ra_snapshot:complete_snapshot(IdxTerm, State1),
             undefined = ra_snapshot:pending(State),
             {55, 2} = ra_snapshot:current(State),
@@ -98,12 +99,12 @@ take_snapshot_crash(Config) ->
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
     Meta = {55, 2, [node()]},
     MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, ra_snapshot, Pid}]} =
+    {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
     undefined = ra_snapshot:current(State1),
     {Pid, {55, 2}} = ra_snapshot:pending(State1),
     receive
-        {ra_snapshot_event, _} ->
+        {ra_log_event, _} ->
             %% just pretend the snapshot event didn't happen
             %% and the process instead crashed
             ok
@@ -127,10 +128,10 @@ init_recover(Config) ->
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
     Meta = {55, 2, [node()]},
-    {State1, [{monitor, process, ra_snapshot, _}]} =
+    {State1, [{monitor, process, snapshot_writer, _}]} =
          ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
     receive
-        {ra_snapshot_event, {snapshot_written, IdxTerm}} ->
+        {ra_log_event, {snapshot_written, IdxTerm}} ->
             _ = ra_snapshot:complete_snapshot(IdxTerm, State1),
             ok
     after 1000 ->
@@ -159,7 +160,7 @@ read_snapshot(Config) ->
     {State1, _} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
      State = receive
-                 {ra_snapshot_event, {snapshot_written, IdxTerm}} ->
+                 {ra_log_event, {snapshot_written, IdxTerm}} ->
                      ra_snapshot:complete_snapshot(IdxTerm, State1)
              after 1000 ->
                        error(snapshot_event_timeout)
