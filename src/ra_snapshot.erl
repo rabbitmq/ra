@@ -16,6 +16,7 @@
          init_ets/0,
          current/1,
          pending/1,
+         accepting/1,
          directory/1,
          last_index_for/1,
 
@@ -24,9 +25,9 @@
 
          begin_accept/4,
          accept_chunk/3,
+         abort_accept/1,
 
          handle_down/3
-
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
@@ -175,6 +176,15 @@ current(State) -> ?GETTER(State).
 -spec pending(state()) -> maybe({pid(), ra_idxterm()}).
 pending(State) -> ?GETTER(State).
 
+-spec accepting(state()) -> maybe(ra_idxterm()).
+accepting(State) ->
+    case ?GETTER(State) of
+        undefined ->
+            undefined;
+        #accept{idxterm = IdxTerm} ->
+            IdxTerm
+    end.
+
 -spec directory(state()) -> file:filename().
 directory(State) -> ?GETTER(State).
 
@@ -267,6 +277,14 @@ accept_chunk(_Data, Num,
     %% this must be a resend - we can just ignore it
     {ok, State}.
 
+-spec abort_accept(state()) -> state().
+abort_accept(#?MODULE{accepting = undefined} = State) ->
+    State;
+abort_accept(#?MODULE{accepting = #accept{idxterm = {Idx, Term}},
+                      directory = Dir} = State) ->
+    SnapDir = make_snapshot_dir(Dir, Idx, Term),
+    _ = ra_lib:recursive_delete(SnapDir),
+    State#?MODULE{accepting = undefined}.
 
 
 -spec handle_down(pid(), Info :: term(), state()) ->

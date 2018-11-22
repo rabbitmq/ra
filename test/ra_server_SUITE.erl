@@ -38,6 +38,8 @@ all() ->
      leader_appends_cluster_change_then_steps_before_applying_it,
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
+     follower_receives_stale_snapshot,
+     receive_snapshot_timeout,
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
@@ -76,6 +78,7 @@ ra_server_init(Conf) ->
 
 setup_log() ->
     ok = meck:new(ra_log, []),
+    ok = meck:new(ra_snapshot, [passthrough]),
     meck:expect(ra_log, init, fun(C) -> ra_log_memory:init(C) end),
     meck:expect(ra_log_meta, store, fun (U, K, V) ->
                                             put({U, K}, V), ok
@@ -97,6 +100,8 @@ setup_log() ->
                 fun(_Data, _OutOf, SS) ->
                         {ok, SS}
                 end),
+    meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
+    meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
     meck:expect(ra_log, snapshot_state, fun (_) -> snap_state end),
     meck:expect(ra_log, set_snapshot_state, fun (_, Log) -> Log end),
     meck:expect(ra_log, install_snapshot, fun (_, _, Log) -> Log end),
@@ -1336,6 +1341,48 @@ follower_installs_snapshot(_Config) ->
      [{reply, #install_snapshot_result{}}]} =
         ra_server:handle_receive_snapshot(ISRpc, FState1),
 
+    ok.
+
+follower_receives_stale_snapshot(_Config) ->
+    #{n3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm}, _}}
+    = init_servers([n1, n2, n3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1, % snapshot term
+    Idx = 2,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = n1,
+                                  last_index = Idx, last_term = LastTerm,
+                                  crc = 0, chunk_state = {1, 1},
+                                  last_config = maps:keys(Config),
+                                  data = []},
+    %% this should be a rare occurence, rather than implement a special
+    %% protocol at this point the server just replies
+    {follower, _, _} =
+        ra_server:handle_follower(ISRpc, FState),
+    ok.
+
+receive_snapshot_timeout(_Config) ->
+    #{n3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm}, _}}
+    = init_servers([n1, n2, n3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1, % snapshot term
+    Idx = 6,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = n1,
+                                  last_index = Idx, last_term = LastTerm,
+                                  crc = 0, chunk_state = {1, 1},
+                                  last_config = maps:keys(Config),
+                                  data = []},
+    {receive_snapshot, FState1,
+     [{next_event, ISRpc}]} =
+        ra_server:handle_follower(ISRpc, FState),
+
+    %% revert back to follower on timeout
+    {follower, #{log := Log}, _}
+    = ra_server:handle_receive_snapshot(receive_snapshot_timeout, FState1),
+    %% snapshot should be aborted
+    SS = ra_log:snapshot_state(Log),
+    undefined = ra_snapshot:accepting(SS),
     ok.
 
 snapshotted_follower_received_append_entries(_Config) ->

@@ -188,7 +188,6 @@ init(#{id := Id,
                   {module, Mod, Args} ->
                       {machine, Mod, Args}
               end,
-    InitialMachineState = ra_machine:init(Machine, Name),
     SnapModule = ra_machine:snapshot_module(Machine),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule}),
@@ -200,6 +199,7 @@ init(#{id := Id,
     {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
+                InitialMachineState = ra_machine:init(Machine, Name),
                 {0, make_cluster(Id, InitialNodes),
                  InitialMachineState, {0, 0}};
             {{Idx, Term, ClusterNodes}, MacSt} ->
@@ -634,6 +634,9 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
         _ ->
             {pre_vote, State#{votes => NewVotes}, []}
     end;
+handle_pre_vote(#pre_vote_result{vote_granted = false}, State) ->
+    %% just handle negative results to avoid printing an unhandled message log
+    {pre_vote, State, []};
 handle_pre_vote(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(pre_vote, PreVote, State);
 handle_pre_vote(election_timeout, State) ->
@@ -818,8 +821,11 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
                                       leader_id = LeaderId,
                                       chunk_state = {1, OutOf}} = Rpc,
                 #{id := Id, log := Log0,
+                  last_applied := LastApplied,
                   current_term := CurTerm} = State0)
-  when Term >= CurTerm ->
+  when Term >= CurTerm andalso Idx > LastApplied ->
+    %% only begin snapshot procedure if Idx is higher than the last_applied
+    %% index.
     ?INFO("~w: begin_accept snapshot at index ~b in term ~b~n",
           [Id, Idx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
@@ -873,7 +879,12 @@ handle_receive_snapshot({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     % whilst the snapshot is being written
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {follower, State#{log => Log}, Effects};
+    {receive_snapshot, State#{log => Log}, Effects};
+handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log = ra_log:set_snapshot_state(SnapState, Log0),
+    {follower, State#{log => Log}, []};
 handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
     %% drop all other events??

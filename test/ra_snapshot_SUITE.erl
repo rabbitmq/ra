@@ -28,7 +28,9 @@ all_tests() ->
      init_recover_multi_corrupt,
      init_recover_corrupt,
      read_snapshot,
-     accept_snapshot
+     accept_snapshot,
+     abort_accept,
+     accept_receives_snapshot_written_with_lower_index
     ].
 
 groups() ->
@@ -321,14 +323,137 @@ accept_snapshot(Config) ->
       D:1024/binary,
       E/binary>> = MacBin,
 
+    undefined = ra_snapshot:accepting(State0),
     {ok, S1} = ra_snapshot:begin_accept(Crc, Meta, 5, State0),
+    {55, 2} = ra_snapshot:accepting(S1),
     {ok, S2} = ra_snapshot:accept_chunk(A, 1, S1),
     {ok, S3} = ra_snapshot:accept_chunk(B, 2, S2),
     {ok, S4} = ra_snapshot:accept_chunk(C, 3, S3),
     {ok, S5} = ra_snapshot:accept_chunk(D, 4, S4),
     {ok, S}  = ra_snapshot:accept_chunk(E, 5, S5),
 
+    undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
     {55, 2} = ra_snapshot:current(S),
     55 = ra_snapshot:last_index_for(UId),
+    ok.
+
+abort_accept(Config) ->
+    UId = ?config(uid, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot,
+                              ?config(snap_dir, Config)),
+    Meta = {55, 2, [node()]},
+    MacRef = crypto:strong_rand_bytes(1024 * 4),
+    MacBin = term_to_binary(MacRef),
+    NodeBin = term_to_binary(node()),
+    Crc = erlang:crc32([<<55:64/unsigned,
+                          2:64/unsigned,
+                          1:8/unsigned,
+                          (byte_size(NodeBin)):16/unsigned>>,
+                        NodeBin,
+                        MacBin]),
+    %% split into 1024 max byte chunks
+    <<A:1024/binary,
+      B:1024/binary,
+      _:1024/binary,
+      _:1024/binary,
+      _/binary>> = MacBin,
+
+    undefined = ra_snapshot:accepting(State0),
+    {ok, S1} = ra_snapshot:begin_accept(Crc, Meta, 5, State0),
+    {55, 2} = ra_snapshot:accepting(S1),
+    {ok, S2} = ra_snapshot:accept_chunk(A, 1, S1),
+    {ok, S3} = ra_snapshot:accept_chunk(B, 2, S2),
+    S = ra_snapshot:abort_accept(S3),
+    undefined = ra_snapshot:accepting(S),
+    undefined = ra_snapshot:pending(S),
+    undefined = ra_snapshot:current(S),
+    undefined = ra_snapshot:last_index_for(UId),
+    ok.
+
+accept_receives_snapshot_written_with_lower_index(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
+    MetaLocal = {55, 2, [node()]},
+    MetaRemote = {165, 2, [node()]},
+    %% begin a local snapshot
+    {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME, State0),
+    MacRef = crypto:strong_rand_bytes(1024),
+    MacBin = term_to_binary(MacRef),
+    NodeBin = term_to_binary(node()),
+    Crc = erlang:crc32([<<165:64/unsigned,
+                          2:64/unsigned,
+                          1:8/unsigned,
+                          (byte_size(NodeBin)):16/unsigned>>,
+                        NodeBin,
+                        MacBin]),
+    %% split into 1024 max byte chunks
+    <<A:1024/binary,
+      B/binary>> = MacBin,
+
+    %% then begin an accept for a higher index
+    {ok, State2} = ra_snapshot:begin_accept(Crc, MetaRemote, 2, State1),
+    {165, 2} = ra_snapshot:accepting(State2),
+    {ok, State3} = ra_snapshot:accept_chunk(A, 1, State2),
+
+    %% then the snapshot written event is received
+    receive
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm}} ->
+            State4 = ra_snapshot:complete_snapshot(IdxTerm, State3),
+            undefined = ra_snapshot:pending(State4),
+            {55, 2} = ra_snapshot:current(State4),
+            55 = ra_snapshot:last_index_for(UId),
+            %% then accept the last chunk
+            {ok, State} = ra_snapshot:accept_chunk(B, 2, State4),
+            undefined = ra_snapshot:accepting(State),
+            {165, 2} = ra_snapshot:current(State),
+            ok
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+    ok.
+
+accept_receives_snapshot_written_with_higher_index(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
+    MetaRemote = {55, 2, [node()]},
+    MetaLocal = {165, 2, [node()]},
+    %% begin a local snapshot
+    {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME, State0),
+    MacRef = crypto:strong_rand_bytes(1024),
+    MacBin = term_to_binary(MacRef),
+    NodeBin = term_to_binary(node()),
+    Crc = erlang:crc32([<<55:64/unsigned,
+                          2:64/unsigned,
+                          1:8/unsigned,
+                          (byte_size(NodeBin)):16/unsigned>>,
+                        NodeBin,
+                        MacBin]),
+    %% split into 1024 max byte chunks
+    <<A:1024/binary,
+      B/binary>> = MacBin,
+
+    %% then begin an accept for a higher index
+    {ok, State2} = ra_snapshot:begin_accept(Crc, MetaRemote, 2, State1),
+    undefined = ra_snapshot:accepting(State2),
+    {ok, State3} = ra_snapshot:accept_chunk(A, 1, State2),
+    undefined = ra_snapshot:accepting(State3),
+
+    %% then the snapshot written event is received
+    receive
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm}} ->
+            State4 = ra_snapshot:complete_snapshot(IdxTerm, State3),
+            undefined = ra_snapshot:pending(State4),
+            {55, 2} = ra_snapshot:current(State4),
+            55 = ra_snapshot:last_index_for(UId),
+            %% then accept the last chunk
+            {ok, State} = ra_snapshot:accept_chunk(B, 2, State4),
+            undefined = ra_snapshot:accepting(State),
+            {165, 2} = ra_snapshot:current(State),
+            ok
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
     ok.

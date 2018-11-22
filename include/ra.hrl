@@ -128,7 +128,7 @@
 -record(install_snapshot_result,
         {term :: ra_term(),
          % because we need to inform the leader of the snapshot that has been
-         % replicated from another process we here inlcude the index and
+         % replicated from another process we here include the index and
          % term of the snapshot in question
          last_index :: ra_index(),
          last_term :: ra_term()}).

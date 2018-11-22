@@ -52,6 +52,8 @@
 %% Utilisation average calculations are all in μs.
 -define(USE_AVG_HALF_LIFE, 1000000.0).
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
+-define(DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT, 30000).
+-define(DEFAULT_SNAPSHOT_CHUNK_SIZE, 1000000). % 1MB
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -616,12 +618,16 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
 %% TODO: handle leader down abort snapshot and revert to follower
 receive_snapshot(enter, _, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
-    {keep_state, State, Actions};
+    {keep_state, State,
+     [{state_timeout, receive_snapshot_timeout(), receive_snapshot_timeout}
+      | Actions]};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {keep_state, State, Actions};
+            {keep_state, State,
+             [{state_timeout, receive_snapshot_timeout(),
+               receive_snapshot_timeout} | Actions]};
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
@@ -872,13 +878,16 @@ handle_effect(_, {reply, Reply}, EvtType, _, _) ->
 handle_effect(_, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors} = State0, Actions) ->
+    ChunkSize = application:get_env(ra, snapshot_chunk_size,
+                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
     %% leader effect only
     Me = self(),
     Pid = spawn(
             fun () ->
                     {ok, Crc,
                      {LastIdx, LastTerm, Config},
-                     ChunkState, Chunks} = ra_snapshot:read(1024, SnapState),
+                     ChunkState, Chunks} = ra_snapshot:read(ChunkSize,
+                                                            SnapState),
                     NumChunks = length(Chunks),
                     {_, Result, _} =
                     lists:foldl(
@@ -1173,3 +1182,8 @@ maybe_add_election_timeout(election_timeout, Actions, State) ->
     [election_timeout_action(long, State) | Actions];
 maybe_add_election_timeout(_, Actions, _) ->
     Actions.
+
+receive_snapshot_timeout() ->
+    application:get_env(ra, receive_snapshot_timeout,
+                        ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
+
