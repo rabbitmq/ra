@@ -118,32 +118,39 @@ init(#{uid := UId} = Conf) ->
           end,
     MaxOpen = maps:get(max_open_segments, Conf, 5),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
-
-    ok =  ra_lib:ensure_dir(Dir),
-
-    % initialise metrics for this server
-    true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     Wal = maps:get(wal, Conf, ra_log_wal),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
+    SnapshotsDir = filename:join(Dir, "snapshots"),
 
-    % create subdir for log id
-    % TODO: safely encode UId for use a directory name
-
+    %% ensure directories are there
+    ok =  ra_lib:ensure_dir(Dir),
+    ok = ra_lib:ensure_dir(SnapshotsDir),
+    % initialise metrics for this server
+    true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
+    SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
+    {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
+                              undefined -> {-1, -1};
+                              Curr -> Curr
+                          end,
     % recover current range and any references to segments
+    % this queries the segment writer and thus blocks until any
+    % segments it is currently processed have been finished
+    % TODO: pass in snapidx
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
     % recover last snapshot file
-    SnapshotsDir = filename:join(Dir, "snapshots"),
-    ok = ra_lib:ensure_dir(SnapshotsDir),
-    SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
-    {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
-                              undefined -> {-1, -1};
-                              Curr -> Curr
-                          end,
+    %% assert there is no gap between the snapshot
+    %% and the first index in the log
+    case (FirstIdx - SnapIdx) > 1 of
+        true ->
+            exit({corrupt_log, gap_between_snapshot_and_first_index,
+                  {SnapIdx, FirstIdx}});
+        false -> ok
+    end,
     State000 = #state{directory = Dir,
                       uid = UId,
                       first_index = max(SnapIdx + 1, FirstIdx),
@@ -170,12 +177,16 @@ init(#{uid := UId} = Conf) ->
     State0 = State00#state{last_term = LastTerm,
                            last_written_index_term = {LastIdx, LastTerm}},
 
+    %% TODO: clean up segments
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_first_entry(State0),
-    ?INFO("~s: ra_log:init recovered last_index_term ~w~n",
-          [State#state.uid, last_index_term(State)]),
+    ?INFO("~s: ra_log:init recovered last_index_term ~w"
+          " first index ~b~n",
+          [State#state.uid,
+           last_index_term(State),
+           State#state.first_index]),
     State.
 
 -spec close(ra_log()) -> ok.
@@ -300,11 +311,11 @@ handle_event({written, {FromIdx, ToIdx, Term}},
     case fetch_term(ToIdx, State0) of
         {Term, State} ->
             % this case truncation shouldn't be too expensive as the cache
-            % only containes the unflushed window of entries typically less than
+            % only contains the unflushed window of entries typically less than
             % 10ms worth of entries
             truncate_cache(ToIdx,
                            State#state{last_written_index_term = {ToIdx, Term}},
-                          []);
+                           []);
         {undefined, State} when FromIdx =< element(1, MaybeCurrent ) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
@@ -364,7 +375,7 @@ handle_event({segments, Tid, NewSegs},
 handle_event({snapshot_written, {Idx, _} = Snap},
              #state{snapshot_state = SnapState0} = State0) ->
     % delete any segments outside of first_index
-    State1 = delete_segments(Idx, State0),
+    State = delete_segments(Idx, State0),
     SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
     %% delete old snapshot files
     %% This is done as an effect
@@ -374,8 +385,8 @@ handle_event({snapshot_written, {Idx, _} = Snap},
                 ra_snapshot:directory(SnapState),
                 ra_snapshot:current(SnapState0)}],
     %% do not set last index here as the snapshot may be for a past index
-    truncate_cache(Idx, State1#state{first_index = Idx + 1,
-                                     snapshot_state = SnapState}, Effects);
+    truncate_cache(Idx, State#state{first_index = Idx + 1,
+                                    snapshot_state = SnapState}, Effects);
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -600,21 +611,20 @@ delete_segments(Idx, #state{uid = UId,
         {_, []} ->
             State0;
         {Active, Obsolete} ->
-            % close all relevant active segments
             ObsoleteKeys = [element(3, O) || O <- Obsolete],
             % close any open segments
-            OpenSegs1 = lists:foldl(fun (K, OS0) ->
-                                            case ra_flru:evict(K, OS0) of
-                                                {_, OS} -> OS;
-                                                error -> OS0
-                                            end
-                                    end, OpenSegs0, ObsoleteKeys),
+            OpenSegs = lists:foldl(fun (K, OS0) ->
+                                           case ra_flru:evict(K, OS0) of
+                                               {_, OS} -> OS;
+                                               error -> OS0
+                                           end
+                                   end, OpenSegs0, ObsoleteKeys),
             ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
             ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                        ObsoleteFiles),
-            ?INFO("~s: ~b obsolete segments~n",
-                  [UId, length(ObsoleteKeys)]),
-            State0#state{open_segments = OpenSegs1,
+            ?INFO("~s: ~b obsolete segments at ~b - remaining: ~b",
+                  [UId, length(ObsoleteKeys), Idx, length(Active)]),
+            State0#state{open_segments = OpenSegs,
                          segment_refs = Active}
     end.
 
@@ -926,13 +936,12 @@ recover_range(UId) ->
     ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
     % 2. check segments
     SegFiles = ra_log_segment_writer:my_segments(UId),
-    SegRefs =
-    [begin
-         {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
-         SegRef = ra_log_segment:segref(Seg),
-         ok = ra_log_segment:close(Seg),
-         SegRef
-     end || S <- lists:reverse(SegFiles)],
+    SegRefs = [begin
+                   {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
+                   SegRef = ra_log_segment:segref(Seg),
+                   ok = ra_log_segment:close(Seg),
+                   SegRef
+               end || S <- lists:reverse(SegFiles)],
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
     Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
     {pick_range(Ranges, undefined), SegRefs}.

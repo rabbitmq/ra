@@ -265,16 +265,28 @@ start_index(ServerUId, StartIdx0) ->
 
 send_segments(ServerUId, Tid, Segments) ->
     Msg = {ra_log_event, {segments, Tid, Segments}},
-    try ra_directory:send(ServerUId, Msg) of
-        _ -> ok
-    catch
-        ErrType:Err ->
+    case ra_directory:pid_of(ServerUId) of
+        undefined ->
             ?INFO("ra_log_segment_writer: error sending "
                   "ra_log_event to: "
-                  "~s. Error:~n~w:~W~n",
-                  [ServerUId, ErrType, Err, 7]),
+                  "~s. Error: ~s",
+                  [ServerUId, "No Pid"]),
+            _ = ets:delete(Tid),
+            _ = clean_closed_mem_tables(ServerUId, Tid),
+            ok;
+        Pid ->
+            Pid ! Msg,
             ok
     end.
+
+clean_closed_mem_tables(UId, Tid) ->
+    Tables = ets:lookup(ra_log_closed_mem_tables, UId),
+    [begin
+         ?INFO("~w: cleaning closed table for '~s' range: ~b-~b~n",
+               [?MODULE, UId, From, To]),
+         %% delete the entry in the closed table lookup
+         true = ets:delete_object(ra_log_closed_mem_tables, O)
+     end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
 append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, SegConf) ->
     StartIdx = start_index(UId, StartIdx0),

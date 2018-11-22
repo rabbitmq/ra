@@ -102,6 +102,10 @@
 -callback recover(Location :: file:filename()) ->
     {ok, Meta :: meta(), State :: term()} | {error, term()}.
 
+%% validate the integrity of the snapshot
+-callback validate(Location :: file:filename()) ->
+    ok | {error, term()}.
+
 %% Only read meta data from snapshot
 -callback read_meta(Location :: file:filename()) ->
     {ok, meta()} |
@@ -118,19 +122,42 @@ init(UId, Module, SnapshotsDir) ->
                      module = Module,
                      directory = SnapshotsDir},
     true = filelib:is_dir(SnapshotsDir),
-    case lists:sort(filelib:wildcard(filename:join(SnapshotsDir, "*"))) of
-        [] ->
+    {ok, Snaps0} = file:list_dir(SnapshotsDir),
+    Snaps = lists:reverse(lists:sort(Snaps0)),
+    case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
+        undefined ->
+            ok = delete_snapshots(SnapshotsDir, Snaps),
             State;
-        [Current | Old] ->
+        Current0 ->
+            ?INFO("ra_snapshot: recovering ~s", [Current0]),
+            Current = filename:join(SnapshotsDir, Current0),
             %% TODO: validate Current snapshot integrity before accepting it as
             %% current
             {ok, {Idx, Term, _}} = Module:read_meta(Current),
             true = ets:insert(?ETSTBL, {UId, Idx}),
 
+            ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
-            lists:foreach(fun ra_lib:recursive_delete/1, Old),
             State#?MODULE{current = {Idx, Term}}
     end.
+
+delete_snapshots(Dir, Snaps) ->
+    % ?INFO("ra_snapshot: deleting ~s in ~s", [Snaps, Dir]),
+    Old = [filename:join(Dir, O) || O <- Snaps],
+    lists:foreach(fun ra_lib:recursive_delete/1, Old),
+    ok.
+
+pick_first_valid(_, _, _, []) ->
+    undefined;
+pick_first_valid(UId, Mod, Dir, [S | Rem]) ->
+    case Mod:validate(filename:join(Dir, S)) of
+        ok -> S;
+        Err ->
+            ?INFO("ra_snapshot: ~s: skipping ~s as did not validate. Err: ~w~n",
+                  [UId, S, Err]),
+            pick_first_valid(UId, Mod, Dir, Rem)
+    end.
+
 
 -spec init_ets() -> ok.
 init_ets() ->
@@ -247,6 +274,10 @@ accept_chunk(_Data, Num,
 handle_down(_Pid, _Info, #?MODULE{pending = undefined} = State) ->
     State;
 handle_down(_Pid, normal, State) ->
+    State;
+handle_down(_Pid, noproc, State) ->
+    %% this could happen if the monitor was set up after the process had
+    %% finished
     State;
 handle_down(Pid, _Info,
             #?MODULE{directory = Dir,

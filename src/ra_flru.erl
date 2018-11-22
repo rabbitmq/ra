@@ -50,8 +50,8 @@ fetch(Key, #?MODULE{items = Items0} = State0) ->
 
 -spec insert(term(), term(), state()) -> state().
 insert(Key, Value, #?MODULE{items = Items,
-                          max_size = M,
-                          handler = Handler} = State)
+                            max_size = M,
+                            handler = Handler} = State)
   when length(Items) =:= M ->
     %% cache is full, discard last item
     [Old | Rem] = lists:reverse(Items),
@@ -65,7 +65,7 @@ insert(Key, Value, #?MODULE{items = Items} = State) ->
 -spec evict(Key :: term(), state()) ->
     {Evicted :: kv_item(), state()} | error.
 evict(Key, #?MODULE{items = Items0,
-                  handler = Handler} = State) ->
+                    handler = Handler} = State) ->
     case lists:keytake(Key, 1, Items0) of
         {value, T, Items} ->
             ok = Handler(T),
@@ -77,7 +77,7 @@ evict(Key, #?MODULE{items = Items0,
 
 -spec evict_all(state()) -> state().
 evict_all(#?MODULE{items = Items,
-                 handler = Handler}) ->
+                   handler = Handler}) ->
     [Handler(T) || T <- Items],
     #?MODULE{items = []}.
 

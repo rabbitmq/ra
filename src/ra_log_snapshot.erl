@@ -11,6 +11,7 @@
          complete_accept/2,
          read/2,
          recover/1,
+         validate/1,
          read_meta/1
          ]).
 
@@ -151,6 +152,12 @@ recover(Dir) ->
             {error, invalid_format};
         {error, _} = Err ->
             Err
+    end.
+
+validate(Dir) ->
+    case recover(Dir) of
+        {ok, _, _} -> ok;
+        Err -> Err
     end.
 
 %% @doc reads the index and term from the snapshot file without reading the

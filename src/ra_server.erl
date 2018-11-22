@@ -815,6 +815,7 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
                                       last_config = Cluster,
                                       last_index = Idx,
                                       last_term = Term,
+                                      leader_id = LeaderId,
                                       chunk_state = {1, OutOf}} = Rpc,
                 #{id := Id, log := Log0,
                   current_term := CurTerm} = State0)
@@ -825,7 +826,8 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
     {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, Term, Cluster},
                                         OutOf, SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
-    {receive_snapshot, State0#{log => Log}, [{next_event, Rpc}]};
+    {receive_snapshot, State0#{log => Log,
+                               leader_id => LeaderId}, [{next_event, Rpc}]};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(Msg, State) ->
@@ -833,7 +835,6 @@ handle_follower(Msg, State) ->
     {follower, State, []}.
 
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
-                                              leader_id = LeaderId,
                                               last_index = LastIndex,
                                               last_term = LastTerm,
                                               chunk_state = {Num, OutOf},
@@ -844,13 +845,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     ?INFO("~w: receiving snapshot chunk: ~b / ~b~n",
           [Id, Num, OutOf]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, OutOf, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
     case Num of
         OutOf ->
-            %% this is the last chunk
+            %% this is the last chunk so we can "install" it
             Log = ra_log:install_snapshot({LastIndex, LastTerm},
                                           SnapState, Log0),
             {{_, _, ClusterNodes}, MacState} = ra_log:recover_snapshot(Log),
@@ -859,8 +860,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                             commit_index => LastIndex,
                             last_applied => LastIndex,
                             cluster => make_cluster(Id, ClusterNodes),
-                            machine_state => MacState,
-                            leader_id => LeaderId},
+                            machine_state => MacState},
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply}]};
@@ -869,6 +869,11 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = State0#{log => Log},
             {receive_snapshot, State, [{reply, Reply}]}
     end;
+handle_receive_snapshot({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    % whilst the snapshot is being written
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    {follower, State#{log => Log}, Effects};
 handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
     %% drop all other events??
@@ -1188,13 +1193,18 @@ handle_down(leader, machine, Pid, Info, State) ->
                              {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info, #{id := Id} = State) ->
-    ?INFO("~w: Snapshot sender process ~w exited with ~w~n",
-          [Id, Pid, Info]),
+    ?INFO("~w: Snapshot sender process ~w exited with ~W~n",
+          [Id, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{id := Id, log := Log0} = State) ->
-    ?WARN("~w: Snapshot write process ~w exited with ~w~n",
-          [Id, Pid, Info]),
+    case Info of
+        noproc -> ok;
+        normal -> ok;
+        _ ->
+            ?WARN("~w: Snapshot write process ~w exited with ~w~n",
+                  [Id, Pid, Info])
+    end,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),

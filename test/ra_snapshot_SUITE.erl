@@ -21,9 +21,12 @@ all() ->
 all_tests() ->
     [
      init_empty,
+     init_multi,
      take_snapshot,
      take_snapshot_crash,
      init_recover,
+     init_recover_multi_corrupt,
+     init_recover_corrupt,
      read_snapshot,
      accept_snapshot
     ].
@@ -149,6 +152,122 @@ init_recover(Config) ->
 
     %% recover the meta data and machine state
     {ok, Meta, ?FUNCTION_NAME} = ra_snapshot:recover(Recover),
+    ok.
+
+init_multi(Config) ->
+    UId = ?config(uid, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot,
+                              ?config(snap_dir, Config)),
+    Meta1 = {55, 2, [node()]},
+    Meta2 = {165, 2, [node()]},
+    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
+    receive
+        {ra_log_event, {snapshot_written, IdxTerm}} ->
+            State2 = ra_snapshot:complete_snapshot(IdxTerm, State1),
+            {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
+                                                     State2),
+            {_, {165, 2}} = ra_snapshot:pending(State3),
+            {55, 2} = ra_snapshot:current(State3),
+            55 = ra_snapshot:last_index_for(UId),
+            receive
+                {ra_log_event, _} ->
+                    %% don't complete snapshot
+                    ok
+            after 1000 ->
+                      error(snapshot_event_timeout)
+            end
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+
+    %% open a new snapshot state to simulate a restart
+    Recover = ra_snapshot:init(UId, ra_log_snapshot,
+                               ?config(snap_dir, Config)),
+    %% ensure last snapshot is recovered
+    %% it also needs to be validated as could have crashed mid write
+    undefined = ra_snapshot:pending(Recover),
+    {165, 2} = ra_snapshot:current(Recover),
+    165 = ra_snapshot:last_index_for(UId),
+
+    %% recover the meta data and machine state
+    {ok, Meta2, ?FUNCTION_NAME} = ra_snapshot:recover(Recover),
+    ok.
+
+init_recover_multi_corrupt(Config) ->
+    UId = ?config(uid, Config),
+    SnapsDir = ?config(snap_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir),
+    Meta1 = {55, 2, [node()]},
+    Meta2 = {165, 2, [node()]},
+    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
+    receive
+        {ra_log_event, {snapshot_written, IdxTerm}} ->
+            State2 = ra_snapshot:complete_snapshot(IdxTerm, State1),
+            {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
+                                                     State2),
+            {_, {165, 2}} = ra_snapshot:pending(State3),
+            {55, 2} = ra_snapshot:current(State3),
+            55 = ra_snapshot:last_index_for(UId),
+            receive
+                {ra_log_event, _} ->
+                    %% don't complete snapshot
+                    ok
+            after 1000 ->
+                      error(snapshot_event_timeout)
+            end
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+    %% corrupt the latest snapshot
+    Corrupt = filename:join(SnapsDir,
+                            ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(165)),
+    ok = file:delete(filename:join(Corrupt, "snapshot.dat")),
+
+    %% open a new snapshot state to simulate a restart
+    Recover = ra_snapshot:init(UId, ra_log_snapshot,
+                               ?config(snap_dir, Config)),
+    %% ensure last snapshot is recovered
+    %% it also needs to be validated as could have crashed mid write
+    undefined = ra_snapshot:pending(Recover),
+    {55, 2} = ra_snapshot:current(Recover),
+    55 = ra_snapshot:last_index_for(UId),
+    false = filelib:is_dir(Corrupt),
+
+    %% recover the meta data and machine state
+    {ok, Meta1, ?FUNCTION_NAME} = ra_snapshot:recover(Recover),
+    ok.
+
+init_recover_corrupt(Config) ->
+    %% recovery should skip corrupt snapshots,
+    %% e.g. empty snapshot directories
+    UId = ?config(uid, Config),
+    Meta = {55, 2, [node()]},
+    SnapsDir = ?config(snap_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir),
+    {State1, _} = ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
+    _ = receive
+                 {ra_log_event, {snapshot_written, IdxTerm}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm, State1)
+             after 1000 ->
+                       error(snapshot_event_timeout)
+             end,
+
+    %% delete the snapshot file but leave the current directory
+    Corrupt = filename:join(SnapsDir,
+                            ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55)),
+    ok = file:delete(filename:join(Corrupt, "snapshot.dat")),
+
+    %% clear out ets table
+    ets:delete_all_objects(ra_log_snapshot_state),
+    %% open a new snapshot state to simulate a restart
+    Recover = ra_snapshot:init(UId, ra_log_snapshot,
+                               ?config(snap_dir, Config)),
+    %% ensure the corrupt snapshot isn't recovered
+    undefined = ra_snapshot:pending(Recover),
+    undefined = ra_snapshot:current(Recover),
+    undefined = ra_snapshot:last_index_for(UId),
+    %% corrupt dir should be cleared up
+    false = filelib:is_dir(Corrupt),
     ok.
 
 read_snapshot(Config) ->

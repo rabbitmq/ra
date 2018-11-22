@@ -623,7 +623,8 @@ receive_snapshot(EventType, Msg, State0) ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            State = follower_leader_change(State0, State2),
             {next_state, follower, State, Actions}
     end.
 

@@ -372,8 +372,7 @@ recovery(Config) ->
     ra_log:close(Log4),
     application:stop(ra),
     application:ensure_all_started(ra),
-    % % TODO how to avoid sleep
-    timer:sleep(2000),
+
     Log5 = ra_log:init(#{uid => UId}),
     {20, 3} = ra_log:last_index_term(Log5),
     Log6 = validate_read(1, 5, 1, Log5),
@@ -644,18 +643,22 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
 
 transient_writer_is_handled(Config) ->
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{uid => UId}),
+    Self = self(),
     _Pid = spawn(fun () ->
                          ra_directory:register_name(<<"sub_proc">>, self(), sub_proc),
                          Log0 = ra_log:init(#{uid => <<"sub_proc">>}),
                          Log1 = append_n(1, 10, 2, Log0),
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
-                         ra_log:close(Log2)
+                         ra_log:close(Log2),
+                         Self ! done
                  end),
+    receive done -> ok
+    after 2000 -> exit(timeout)
+    end,
     application:stop(ra),
     application:start(ra),
-    timer:sleep(2000),
+    _ = ra_log:init(#{uid => UId}),
     ok.
 
 open_segments_limit(Config) ->
@@ -814,7 +817,6 @@ stop_profile(Config) ->
     ct:pal("Stopping profiling for ~p~n", [Case]),
     lg:stop(),
     % this segfaults
-    % timer:sleep(2000),
     Dir = ?config(priv_dir, Config),
     Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
     lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
