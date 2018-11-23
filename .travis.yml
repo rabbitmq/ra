@@ -14,5 +14,5 @@ otp_release:
   - "21.0"
 
 script:
-  - make xref
-  - make check
+  - gmake xref
+  - gmake check
