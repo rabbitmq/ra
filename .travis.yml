@@ -1,6 +1,7 @@
 # vim:sw=2:et:
 
 sudo: false
+
 language: erlang
 notifications:
   email:
