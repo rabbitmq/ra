@@ -1,0 +1,17 @@
+# vim:sw=2:et:
+
+sudo: false
+language: erlang
+notifications:
+  email:
+    on_success: never
+    on_failure: always
+cache:
+  apt: true
+
+otp_release:
+  - "21.0"
+
+script:
+  - make xref
+  - make check
