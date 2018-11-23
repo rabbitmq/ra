@@ -14,8 +14,8 @@ PROJECT = ra
 ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
-dep_gen_batch_server = git https://github.com/rabbitmq/gen-batch-server.git master
-dep_aten = git https://github.com/rabbitmq/aten.git master
+dep_gen_batch_server = hex 0.5.1
+dep_aten = hex 0.5.0
 DEPS = aten gen_batch_server
 
 TEST_DEPS = proper meck eunit_formatters looking_glass rabbitmq_ct_helpers
