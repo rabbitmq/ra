@@ -423,7 +423,7 @@ process_command(ServerId, Command) ->
 %% When the command is applied to the state machine the ra server will send
 %% the calling process a ra_event of the following structure:
 %%
-%% `{ra_event, {applied, [{Correlation, Reply}]}}'
+%% `{ra_event, CurrentLeader, {applied, [{Correlation, Reply}]}}'
 %%
 %% Not that ra will batch notification and thus return a list of correlation
 %% and result tuples.
@@ -432,7 +432,7 @@ process_command(ServerId, Command) ->
 %% structure will be returned informing the caller that it cannot process the
 %% message including the current leader, if known:
 %%
-%% `{ra_event, {rejected, {not_leader, Leader | undefined, Correlation}}}'
+%% `{ra_event, CurrentLeader, {rejected, {not_leader, Leader | undefined, Correlation}}}'
 %% The caller can then redirect the command for the correlation identifier to
 %% the correct ra server.
 %%
