@@ -484,7 +484,7 @@ open_mem_table(UId) ->
     Tid.
 
 start_batch(State) ->
-    State#state{batch = #batch{start_time = os:system_time(millisecond)}}.
+    State#state{batch = #batch{start_time = os:system_time(microsecond)}}.
 
 
 flush_pending(#state{wal = #wal{fd = Fd},
@@ -507,9 +507,9 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                                      start_time = ST},
                       metrics_cursor = Cursor
                       } = State00) ->
-    TS = os:system_time(millisecond),
+    TS = os:system_time(microsecond),
     State0 = flush_pending(State00),
-    SyncTS = os:system_time(millisecond),
+    SyncTS = os:system_time(microsecond),
     _ = ets:update_element(ra_log_wal_metrics, Cursor,
                            {2, {NumWrites, TS-ST, SyncTS-TS}}),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
