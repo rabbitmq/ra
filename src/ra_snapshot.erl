@@ -130,7 +130,6 @@ init(UId, Module, SnapshotsDir) ->
             ok = delete_snapshots(SnapshotsDir, Snaps),
             State;
         Current0 ->
-            ?INFO("ra_snapshot: recovering ~s", [Current0]),
             Current = filename:join(SnapshotsDir, Current0),
             %% TODO: validate Current snapshot integrity before accepting it as
             %% current
@@ -143,7 +142,6 @@ init(UId, Module, SnapshotsDir) ->
     end.
 
 delete_snapshots(Dir, Snaps) ->
-    % ?INFO("ra_snapshot: deleting ~s in ~s", [Snaps, Dir]),
     Old = [filename:join(Dir, O) || O <- Snaps],
     lists:foreach(fun ra_lib:recursive_delete/1, Old),
     ok.

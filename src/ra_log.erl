@@ -59,8 +59,7 @@
 
 -type event() :: {ra_log_event, event_body()}.
 
--type effect() :: {delete_snapshot, Dir :: file:filename(), ra_idxterm()} |
-                  {delete_segments, ra_uid(), ra_index(), [file:filename()]}.
+-type effect() :: {delete_snapshot, Dir :: file:filename(), ra_idxterm()}.
 %% logs can have effects too so that they can be coordinated with other state
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
@@ -136,7 +135,6 @@ init(#{uid := UId} = Conf) ->
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
-    % TODO: pass in snapidx
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
@@ -176,8 +174,6 @@ init(#{uid := UId} = Conf) ->
     LastTerm = ra_lib:default(LastTerm0, -1),
     State0 = State00#state{last_term = LastTerm,
                            last_written_index_term = {LastIdx, LastTerm}},
-
-    %% TODO: clean up segments
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
@@ -601,6 +597,7 @@ release_resources(MaxOpenSegments,
 
 %%% Local functions
 
+%% deletes all segments where the last index is lower than the Idx argumement
 delete_segments(Idx, #state{uid = UId,
                             open_segments = OpenSegs0,
                             directory = Dir,
