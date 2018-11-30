@@ -464,7 +464,7 @@ snapshot_installation_with_call_crash(Config) ->
     {ok, _, _} = ra:process_command(Leader, deq),
 
     meck:expect(gen_statem, call, fun (_,  #install_snapshot_rpc{}, _) ->
-                                          exit(snap);
+                                          exit(timeout);
                                       (A, B, C) ->
                                           meck:passthrough([A, B, C])
                                   end),

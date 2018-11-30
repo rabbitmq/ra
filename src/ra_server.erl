@@ -251,22 +251,19 @@ init(#{id := Id,
 recover(#{id := Id,
           commit_index := CommitIndex,
           last_applied := _LastApplied,
-          log := Log0,
           machine := Machine} = State0) ->
     ?INFO("~w: recovering state machine from ~b to ~b~n",
           [Id, _LastApplied, CommitIndex]),
-    {State, _, _} = apply_to(CommitIndex,
-                             fun(E, S) ->
-                                     %% Clear out the effects to avoid building
-                                     %% up a long list of effects than then
-                                     %% we throw away
-                                     %% on server startup (queue recovery)
-                                     setelement(4,
-                                                apply_with(Machine, E, S), [])
-                             end,
-                             State0, []),
-    % close and re-open log to ensure segments aren't unnecessarily kept
-    % open
+    {#{log := Log0} = State, _, _} =
+        apply_to(CommitIndex,
+                 fun(E, S) ->
+                         %% Clear out the effects to avoid building
+                         %% up a long list of effects than then
+                         %% we throw away
+                         %% on server startup (queue recovery)
+                         setelement(4, apply_with(Machine, E, S), [])
+                 end,
+                 State0, []),
     Log = ra_log:release_resources(1, Log0),
     State#{log => Log}.
 
@@ -641,6 +638,10 @@ handle_pre_vote(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(pre_vote, PreVote, State);
 handle_pre_vote(election_timeout, State) ->
     call_for_election(pre_vote, State);
+handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    {pre_vote, State#{log => Log}, Effects};
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
     {pre_vote, State, []}.
@@ -815,9 +816,10 @@ handle_follower(#install_snapshot_rpc{term = Term,
 %% need to check if it's the first or last rpc
 %% TODO: must abort pending if for some reason we need to do so
 handle_follower(#install_snapshot_rpc{crc = Crc,
+                                      term = Term,
                                       last_config = Cluster,
                                       last_index = Idx,
-                                      last_term = Term,
+                                      last_term = SnapTerm,
                                       leader_id = LeaderId,
                                       chunk_state = {1, OutOf}} = Rpc,
                 #{id := Id, log := Log0,
@@ -829,7 +831,7 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
     ?INFO("~w: begin_accept snapshot at index ~b in term ~b~n",
           [Id, Idx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, Term, Cluster},
+    {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, SnapTerm, Cluster},
                                         OutOf, SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
     {receive_snapshot, State0#{log => Log,
@@ -900,6 +902,10 @@ handle_await_condition(election_timeout, State) ->
 handle_await_condition(await_condition_timeout,
                        #{condition_timeout_effects := Effects} = State) ->
     {follower, State#{condition_timeout_effects => []}, Effects};
+handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    {await_condition, State#{log => Log}, Effects};
 handle_await_condition(Msg, #{condition := Cond} = State) ->
     case Cond(Msg, State) of
         true ->
@@ -1165,9 +1171,9 @@ update_release_cursor(Index, MacState,
 % takes over and this
 % This is done on a schedule
 -spec persist_last_applied(ra_server_state()) -> ra_server_state().
-persist_last_applied(#{persisted_last_applied := L,
-                       last_applied := L} = State) ->
-    % do nothing
+persist_last_applied(#{persisted_last_applied := PLA,
+                       last_applied := LA} = State) when LA =< PLA ->
+    % if last applied is less than PL for some reason do nothing
     State;
 persist_last_applied(#{last_applied := LastApplied, uid := UId} = State) ->
     ok = ra_log_meta:store(UId, last_applied, LastApplied),
@@ -1397,6 +1403,10 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
+update_meta(Term, VotedFor, #{current_term := Term,
+                              voted_for := VotedFor} = State) ->
+    %% no update needed
+   State;
 update_meta(Term, VotedFor, #{uid := UId} = State) ->
     ok = ra_log_meta:store(UId, current_term, Term),
     ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),

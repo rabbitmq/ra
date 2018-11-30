@@ -196,6 +196,8 @@ init(Config0) when is_map(Config0) ->
     _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
+    %% as most messages are sent using noconnect we explicitly attempt to
+    %% connect to all relevant nodes
     _ = spawn(fun () ->
                       _ = lists:foreach(fun ({_, Node}) ->
                                                 net_kernel:connect_node(Node);
@@ -207,11 +209,9 @@ init(Config0) when is_map(Config0) ->
     State = #state{server_state = ServerState, name = Key,
                    tick_timeout = TickTime,
                    await_condition_timeout = AwaitCondTimeout},
-    %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
-    %% does not support this. it was fixed in 20.3.2
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
-    {ok, recover, State, [{state_timeout, 0, go}]}.
+    {ok, recover, State, [{next_event, cast, go}]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -219,8 +219,8 @@ callback_mode() -> [state_functions, state_enter].
 %%%===================================================================
 %%% State functions
 %%%===================================================================
-recover(enter, _OldState, State) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+recover(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
     {keep_state, State, Actions};
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
@@ -236,8 +236,8 @@ recover(_, _, State) ->
 
 %% this is a passthrough state to allow state machines to emit node local
 %% effects post recovery
-recovered(enter, _OldState, State) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+recovered(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
     {keep_state, State, Actions};
 recovered(internal, next, #state{server_state = ServerState} = State) ->
     % New cluster starts should be coordinated and elections triggered
@@ -362,7 +362,7 @@ leader(info, {NodeEvt, Node},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    {State1, RpcEffs} = make_rpcs(maybe_persist_last_applied(State0)),
+    {State1, RpcEffs} = make_rpcs(State0),
     Effects = ra_server:tick(State1#state.server_state),
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
@@ -575,8 +575,7 @@ follower(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
-follower(_, tick_timeout, State0) ->
-    State = maybe_persist_last_applied(State0),
+follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
@@ -755,7 +754,7 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%%===================================================================
 
 handle_enter(RaftState, #state{name = Name,
-                                      server_state = ServerState0} = State) ->
+                               server_state = ServerState0} = State) ->
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
@@ -776,10 +775,15 @@ queue_take(N, Q0, Acc) ->
             {Q0, lists:reverse(Acc)}
     end.
 
-handle_leader(Msg, #state{server_state = ServerState0} = State) ->
+handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     case catch ra_server:handle_leader(Msg, ServerState0) of
         {NextState, ServerState, Effects}  ->
-            {NextState, State#state{server_state = ServerState}, Effects}
+            State = State0#state{server_state =
+                                 ra_server:persist_last_applied(ServerState)},
+            {NextState, State, Effects};
+        OtherErr ->
+            ?ERR("handle_leader err ~p~n", [OtherErr]),
+            exit(OtherErr)
     end.
 
 handle_candidate(Msg, #state{server_state = ServerState0} = State) ->
@@ -792,10 +796,12 @@ handle_pre_vote(Msg, #state{server_state = ServerState0} = State) ->
         ra_server:handle_pre_vote(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
-handle_follower(Msg, #state{server_state = ServerState0} = State) ->
+handle_follower(Msg, #state{server_state = ServerState0} = State0) ->
     {NextState, ServerState, Effects} =
         ra_server:handle_follower(Msg, ServerState0),
-    {NextState, State#state{server_state = ServerState}, Effects}.
+    State = State0#state{server_state =
+                         ra_server:persist_last_applied(ServerState)},
+    {NextState, State, Effects}.
 
 handle_receive_snapshot(Msg, #state{server_state = ServerState0} = State) ->
     {NextState, ServerState, Effects} =
@@ -875,46 +881,30 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-handle_effect(_, {send_snapshot, To, {SnapState, Id, Term}}, _,
+handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors} = State0, Actions) ->
     ChunkSize = application:get_env(ra, snapshot_chunk_size,
                                     ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
     %% leader effect only
     Me = self(),
-    Pid = spawn(
-            fun () ->
-                    {ok, Crc,
-                     {LastIdx, LastTerm, Config},
-                     ChunkState, Chunks} = ra_snapshot:read(ChunkSize,
-                                                            SnapState),
-                    NumChunks = length(Chunks),
-                    {_, Result, _} =
-                    lists:foldl(
-                      fun (ChunkFun, {Num, _, CState0}) ->
-                              {Data, CState} = ChunkFun(CState0),
-                              Conf = case Num of
-                                         1 -> Config;
-                                         _ -> undefined
-                                     end,
-                              Req = #install_snapshot_rpc{
-                                       term = Term,
-                                       leader_id = Id,
-                                       last_index = LastIdx,
-                                       last_term = LastTerm,
-                                       last_config = Conf,
-                                       crc = Crc,
-                                       chunk_state = {Num, NumChunks},
-                                       data = Data},
-
-                              Res = gen_statem:call(To, Req,
-                                                    {dirty_timeout,
-                                                     ?INSTALL_SNAP_RPC_TIMEOUT}),
-                              %% just return the last reply
-                              {Num + 1, Res, CState}
-                     end, {1, undefined, ChunkState}, Chunks),
-                    ok = gen_statem:cast(Me, {To, Result})
-            end),
+    Pid = spawn(fun () ->
+                        try send_snapshots(Me, Id, Term, To,
+                                           ChunkSize, SnapState) of
+                            _ -> ok
+                        catch
+                            C:timeout:S ->
+                                %% timeout is ok as we've already blocked
+                                %% for a while
+                                erlang:raise(C, timeout, S);
+                            C:E:S ->
+                                %% insert an arbitrary pause here as a primitive
+                                %% throttling operation as certain errors
+                                %% happen quickly
+                                ok = timer:sleep(5000),
+                                erlang:raise(C, E, S)
+                        end
+                end),
     MRef = erlang:monitor(process, Pid),
     %% update the peer state so that no pipelined entries are sent during
     %% the snapshot sending phase
@@ -1187,3 +1177,34 @@ receive_snapshot_timeout() ->
     application:get_env(ra, receive_snapshot_timeout,
                         ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
 
+send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
+    {ok, Crc,
+     {LastIdx, LastTerm, Config},
+     ChunkState, Chunks} = ra_snapshot:read(ChunkSize, SnapState),
+    NumChunks = length(Chunks),
+    {_, Result, _} =
+    lists:foldl(
+      fun (ChunkFun, {Num, _, CState0}) ->
+              {Data, CState} = ChunkFun(CState0),
+              %% optimisation:
+              %% only send the config as part of the first rpc
+              Conf = case Num of
+                         1 -> Config;
+                         _ -> undefined
+                     end,
+              ChState = {Num, NumChunks},
+              Req = #install_snapshot_rpc{term = Term,
+                                          leader_id = Id,
+                                          last_index = LastIdx,
+                                          last_term = LastTerm,
+                                          last_config = Conf,
+                                          crc = Crc,
+                                          chunk_state = ChState,
+                                          data = Data},
+              Res = gen_statem:call(To, Req,
+                                    {dirty_timeout,
+                                     ?INSTALL_SNAP_RPC_TIMEOUT}),
+              %% just return the last reply
+              {Num + 1, Res, CState}
+      end, {1, undefined, ChunkState}, Chunks),
+    ok = gen_statem:cast(Me, {To, Result}).
