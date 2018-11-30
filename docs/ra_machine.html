@@ -33,8 +33,7 @@ incoming list of effects. Ra will reverse the list of effects before
 processing.</p>
  
  <p><br>
-  <code>
-  -callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
+  <code>-callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
   </code></p>
  
   <p>Optional. Called when the ra server enters a new state. Called for all states
@@ -171,7 +170,6 @@ is a good idea.</p>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#snapshot_module-1">snapshot_module/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -242,11 +240,6 @@ is a good idea.</p>
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
 <p><pre>module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
-</div>
-
-<h3 class="function"><a name="snapshot_module-1">snapshot_module/1</a></h3>
-<div class="spec">
-<p><pre>snapshot_module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
 </div>
 <hr>
 
