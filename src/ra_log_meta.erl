@@ -24,9 +24,9 @@
 
 -define(TBL_NAME, ?MODULE).
 
--record(state, {ref :: reference()}).
+-record(?MODULE, {ref :: reference()}).
 
--opaque state() :: #state{}.
+-opaque state() :: #?MODULE{}.
 
 -export_type([state/0]).
 
@@ -42,9 +42,9 @@ init(Dir) ->
     {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile}]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
     ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
-    {ok, #state{ref = Ref}}.
+    {ok, #?MODULE{ref = Ref}}.
 
-handle_batch(Commands, #state{ref = Ref} = State) ->
+handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
     DoInsert =
         fun (Id, Key, Value, Inserts0) ->
                 case Inserts0 of
@@ -80,7 +80,7 @@ handle_batch(Commands, #state{ref = Ref} = State) ->
     ok = dets:sync(?MODULE),
     {ok, Replies, State}.
 
-terminate(_, #state{ref = Ref}) ->
+terminate(_, #?MODULE{ref = Ref}) ->
     _ = dets:close(Ref),
     ok.
 

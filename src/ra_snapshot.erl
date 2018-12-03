@@ -52,9 +52,6 @@
          accepting :: maybe(#accept{}),
          current :: maybe(ra_idxterm())}).
 
-%% getter macro
--define(GETTER(State), State#?MODULE.?FUNCTION_NAME).
-
 -define(ETSTBL, ra_log_snapshot_state).
 
 -opaque state() :: #?MODULE{}.
@@ -169,22 +166,20 @@ init_ets() ->
     ok.
 
 -spec current(state()) -> maybe(ra_idxterm()).
-current(State) -> ?GETTER(State).
+current(#?MODULE{current = Current}) -> Current.
 
 -spec pending(state()) -> maybe({pid(), ra_idxterm()}).
-pending(State) -> ?GETTER(State).
+pending(#?MODULE{pending = Pending}) ->
+    Pending.
 
 -spec accepting(state()) -> maybe(ra_idxterm()).
-accepting(State) ->
-    case ?GETTER(State) of
-        undefined ->
-            undefined;
-        #accept{idxterm = IdxTerm} ->
-            IdxTerm
-    end.
+accepting(#?MODULE{accepting = undefined}) ->
+    undefined;
+accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
+    Accepting.
 
 -spec directory(state()) -> file:filename().
-directory(State) -> ?GETTER(State).
+directory(#?MODULE{directory = Dir}) -> Dir.
 
 -spec last_index_for(ra_uid()) -> maybe(ra_index()).
 last_index_for(UId) ->

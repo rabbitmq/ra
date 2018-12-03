@@ -107,7 +107,7 @@ take_snapshot_crash(Config) ->
     {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
     undefined = ra_snapshot:current(State1),
-    {Pid, {55, 2}} = ra_snapshot:pending(State1),
+    {Pid, {55, 2}}  = ra_snapshot:pending(State1),
     receive
         {ra_log_event, _} ->
             %% just pretend the snapshot event didn't happen
