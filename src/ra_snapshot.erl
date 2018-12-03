@@ -76,7 +76,7 @@
 -callback read(ChunkSizeBytes :: non_neg_integer(),
                Location :: file:filename()) ->
     {ok, Meta :: meta(), ChunkState,
-     [ChunkThunk :: fun((ChunkState) -> {binary(), ChunkState})]} |
+     [ChunkThunk :: fun((ChunkState) -> {term(), ChunkState})]} |
     {error, term()}.
 
 %% begin a stateful snapshot acceptance process
@@ -86,12 +86,12 @@
     {ok, AcceptState :: term()} | {error, term()}.
 
 %% accept a chunk of data
--callback accept_chunk(Data :: binary(),
+-callback accept_chunk(Chunk :: term(),
                        AcceptState :: term()) ->
     {ok, AcceptState :: term()} | {error, term()}.
 
 %% accept the last chunk of data
--callback complete_accept(Data :: binary(),
+-callback complete_accept(Chunk :: term(),
                           AcceptState :: term()) ->
     ok | {error, term()}.
 
@@ -237,9 +237,9 @@ begin_accept(Crc, {Idx, Term, _} = Meta, NumChunks,
                                            num = NumChunks,
                                            state = AcceptState}}}.
 
--spec accept_chunk(binary(), non_neg_integer(), state()) ->
+-spec accept_chunk(term(), non_neg_integer(), state()) ->
     {ok, state()}.
-accept_chunk(Data, Num,
+accept_chunk(Chunk, Num,
              #?MODULE{uid = UId,
                       module = Mod,
                       directory = Dir,
@@ -248,7 +248,7 @@ accept_chunk(Data, Num,
                                           idxterm = {Idx, _} = IdxTerm,
                                           state = AccState}} = State) ->
     %% last chunk
-    ok = Mod:complete_accept(Data, AccState),
+    ok = Mod:complete_accept(Chunk, AccState),
     %% run validate here?
     %% delete the current snapshot if any
     ok = delete(Dir, Current),
@@ -256,15 +256,15 @@ accept_chunk(Data, Num,
     true = ets:insert(?ETSTBL, {UId, Idx}),
     {ok, State#?MODULE{accepting = undefined,
                        current = IdxTerm}};
-accept_chunk(Data, Num,
+accept_chunk(Chunk, Num,
              #?MODULE{module = Mod,
                       accepting =
                       #accept{state = AccState0,
                               next = Num} = Accept} = State) ->
-    {ok, AccState} = Mod:accept_chunk(Data, AccState0),
+    {ok, AccState} = Mod:accept_chunk(Chunk, AccState0),
     {ok, State#?MODULE{accepting = Accept#accept{state = AccState,
                                                  next = Num + 1}}};
-accept_chunk(_Data, Num,
+accept_chunk(_Chunk, Num,
              #?MODULE{accepting = #accept{next = Next}} = State)
   when Next > Num ->
     %% this must be a resend - we can just ignore it
