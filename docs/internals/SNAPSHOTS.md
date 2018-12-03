@@ -15,7 +15,7 @@ The `ra_snapshot` behaviour has 9 (!) callbacks:
 
 - `prepare(ra_index(), State :: term()) -> Ref :: term()`:
 
-This is called when the state machine as emitted a `release_cursor` effect
+This is called when the state machine has emitted a `release_cursor` effect
 and Ra has decided it is time to take a snapshot. This is called inside the
 Ra process and thus should not block unnecessarily. It can be used to trigger
 checkpoints or similar in disk-based state machines.
