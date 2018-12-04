@@ -1,8 +1,8 @@
-[{<<"aten">>,
-  {git,"git@github.com:rabbitmq/aten.git",
-       {ref,"e7b76746925ff0b1272b86668dd8b16fbf2ef668"}},
-  0},
- {<<"gen_batch_server">>,
-  {git,"git@github.com:rabbitmq/gen-batch-server.git",
-       {ref,"b66ed5f1eeb738e1047441499baede944ac64570"}},
-  0}].
+{"1.1.0",
+[{<<"aten">>,{pkg,<<"aten">>,<<"0.5.0">>},0},
+ {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.6.0">>},0}]}.
+[
+{pkg_hash,[
+ {<<"aten">>, <<"E3D625D763B0B077A802D642C37CF8159AB771AA5ACD915E1939195A223D96A7">>},
+ {<<"gen_batch_server">>, <<"2F7D3D4BF50A3AFF9CFF2C640593D02C07464452A744309A3AB2071ED335DF01">>}]}
+].

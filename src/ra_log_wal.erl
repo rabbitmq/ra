@@ -200,7 +200,7 @@ format_status(#state{write_strategy = Strat,
 
 %% Internal
 
-handle_op({cast, _, WalCmd}, State) ->
+handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
 recover_wal(Dir, #{max_size_bytes := MaxWalSize,
