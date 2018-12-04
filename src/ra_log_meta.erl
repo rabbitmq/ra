@@ -63,16 +63,18 @@ handle_batch(Commands, #state{ref = Ref} = State) ->
         end,
     {Inserts, Replies} =
         lists:foldl(
-          fun ({Type, From, {store, Id, Key, Value}},
+          fun ({cast, {store, Id, Key, Value}},
+               {Inserts0, Replies}) ->
+                  {DoInsert(Id, Key, Value, Inserts0), Replies};
+              ({call, From, {store, Id, Key, Value}},
                {Inserts0, Replies}) ->
                   {DoInsert(Id, Key, Value, Inserts0),
-                   add_reply(Type, Replies, From, ok)};
-              ({Type, From, {delete, Id}},
-               {Inserts0, Replies}) ->
-                  _ = dets:delete(Ref, Id),
-                  _ = ets:delete(?MODULE, Id),
-                  {maps:remove(Id, Inserts0),
-                   add_reply(Type, Replies, From, ok)}
+                   [{reply, From, ok} | Replies]};
+              ({cast, {delete, Id}}, {Inserts0, Replies}) ->
+                  {handle_delete(Id, Ref, Inserts0), Replies};
+              ({call, From, {delete, Id}},{Inserts0, Replies}) ->
+                  {handle_delete(Id, Ref, Inserts0),
+                   [{reply, From, ok} | Replies]}
           end, {#{}, []}, Commands),
     Objects = maps:values(Inserts),
     ok = dets:insert(?MODULE, Objects),
@@ -126,10 +128,10 @@ maybe_fetch(Id, Pos) ->
             undefined
     end.
 
-add_reply(cast, Replies, _, _) ->
-    Replies;
-add_reply(call, Replies, From, Reply) ->
-    [{reply, From, Reply} | Replies].
+handle_delete(Id, Ref, Inserts) ->
+  _ = dets:delete(Ref, Id),
+  _ = ets:delete(?MODULE, Id),
+  maps:remove(Id, Inserts).
 
 update_key(current_term, Value, Data) ->
     setelement(2, Data, Value);

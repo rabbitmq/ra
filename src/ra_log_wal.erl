@@ -92,7 +92,7 @@
 -type wal_command() ::
     {append | truncate, writer_id(), atom(), ra_index(), ra_term(), term()}.
 
--type wal_op() :: {cast, gen_batch_server:server_ref(), wal_command()} |
+-type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
 
 -spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
@@ -200,7 +200,7 @@ format_status(#state{write_strategy = Strat,
 
 %% Internal
 
-handle_op({cast, _, WalCmd}, State) ->
+handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
 recover_wal(Dir, #{max_size_bytes := MaxWalSize,
