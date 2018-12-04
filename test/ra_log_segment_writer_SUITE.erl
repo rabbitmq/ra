@@ -292,18 +292,21 @@ accept_mem_tables_rollover(Config) ->
     ok.
 
 accept_mem_tables_for_down_server(Config) ->
+    %% fake a closed mem table
+    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
+    FakeUId = <<"not_self">>,
+    file:make_dir(filename:join(Dir, FakeUId)),
     application:start(sasl),
     {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(<<"not_self">>, Entries),
+    Tid = make_mem_table(FakeUId, Entries),
     Tid2 = make_mem_table(UId, Entries),
-    MemTables = [{<<"not_self">>, 1, 3, Tid},
+    MemTables = [{FakeUId, 1, 3, Tid},
                  {UId, 1, 3, Tid2}],
-    % delete the ETS table to simulate down server
-    ets:delete(Tid),
+    ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
     WalFile = filename:join(Dir, "00001.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
@@ -317,6 +320,14 @@ accept_mem_tables_for_down_server(Config) ->
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
+
+    %% if the server is down at the time the segment writer send the segments
+    %% the segment writer should clear up the ETS mem tables
+    %% This is safe as the server synchronises through the segment writer
+    %% on start.
+    %% check the fake tid is removed
+    undefined = ets:info(Tid),
+    [] = ets:tab2list(ra_log_closed_mem_tables),
 
     % assert wal file has been deleted.
     false = filelib:is_file(WalFile),
@@ -334,6 +345,13 @@ fake_mem_table(UId, Dir, Entries) ->
 
 make_mem_table(UId, Entries) ->
     N = ra_directory:name_of(UId),
-    Tid = ets:new(N, []),
+    Tid = ets:new(N, [public]),
     [ets:insert(Tid, E) || E <- Entries],
     Tid.
+
+flush() ->
+    receive _ ->
+                flush()
+    after 0 -> ok
+    end.
+

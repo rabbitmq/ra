@@ -24,8 +24,9 @@ all_tests() ->
      read_missing,
      read_other_file,
      read_invalid_version,
-     read_invalid_checksum,
-     read_index_term
+     recover_invalid_checksum,
+     read_index_term,
+     recover_same_as_read
     ].
 
 groups() ->
@@ -46,8 +47,9 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TestCase, Config) ->
-    F = filename:join(?config(priv_dir, Config), TestCase),
-    [{file, F} | Config].
+    Dir = filename:join(?config(priv_dir, Config), TestCase),
+    file:make_dir(Dir),
+    [{dir, Dir} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -57,46 +59,72 @@ end_per_testcase(_TestCase, _Config) ->
 %%%===================================================================
 
 roundtrip(Config) ->
-    File = ?config(file, Config),
-    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
-                my_state},
-    ok = ra_log_snapshot:write(File, Snapshot),
-    {ok, Snapshot} = ra_log_snapshot:read(File),
+    Dir = ?config(dir, Config),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotRef = my_state,
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    {SnapshotMeta, SnapshotRef} = read(Dir),
     ok.
+
+chunks_to_snapshot(ChunkSt, Chunks) ->
+    {Data, _} = lists:foldl(fun (F, {D, S0}) ->
+                                    {B, S} = F(S0),
+                                    {[B, D], S}
+                            end, {[], ChunkSt}, Chunks),
+    binary_to_term(iolist_to_binary(lists:reverse(Data))).
+
+
+read(Dir) ->
+    case ra_log_snapshot:read(128, Dir) of
+        {ok, _Crc, Meta, ChunkSt, Chunks} ->
+            Snap = chunks_to_snapshot(ChunkSt, Chunks),
+            {Meta, Snap};
+        Err -> Err
+    end.
 
 read_missing(Config) ->
     File = ?config(file, Config),
-    {error, enoent} = ra_log_snapshot:read(File),
+    {error, enoent} = read(File),
     ok.
 
 read_other_file(Config) ->
-    File = ?config(file, Config),
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
     file:write_file(File, <<"NSAR", 1:8/unsigned>>),
-    {error, invalid_format} = ra_log_snapshot:read(File),
+    {error, invalid_format} = read(Dir),
     ok.
 
 read_invalid_version(Config) ->
-    File = ?config(file, Config),
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
     Data = term_to_binary(snapshot),
     Crc = erlang:crc32(Data),
     file:write_file(File, [<<"RASN", 99:8/unsigned, Crc:32/integer>>, Data]),
-    {error, {invalid_version, 99}} = ra_log_snapshot:read(File),
+    {error, {invalid_version, 99}} = read(Dir),
     ok.
 
-read_invalid_checksum(Config) ->
-    File = ?config(file, Config),
+recover_invalid_checksum(Config) ->
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
     file:write_file(File, [<<"RASN">>, <<1:8/unsigned, 0:32/unsigned>>,
                            term_to_binary(<<"hi">>)]),
-    {error, checksum_error} = ra_log_snapshot:read(File),
+    {error, checksum_error} = ra_log_snapshot:recover(Dir),
     ok.
 
 read_index_term(Config) ->
-    File = ?config(file, Config),
-    Snapshot = {33, 94, [{banana, node@jungle}, {banana, node@savanna}],
-                my_state},
-    ok = ra_log_snapshot:write(File, Snapshot),
-    {ok, {33, 94}} = ra_log_snapshot:read_indexterm(File),
+    Dir = ?config(dir, Config),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotRef = my_state,
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    {ok, {33, 94, _}} = ra_log_snapshot:read_meta(Dir),
     ok.
 
+recover_same_as_read(Config) ->
+    Dir = ?config(dir, Config),
+    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotData = my_state,
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData),
+    {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
+    ok.
 
 %% Utility

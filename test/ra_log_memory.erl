@@ -13,8 +13,9 @@
          fetch_term/2,
          flush/2,
          next_index/1,
-         install_snapshot/2,
+         install_snapshot/3,
          read_snapshot/1,
+         recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/4,
          read_meta/2,
@@ -32,12 +33,13 @@
 -include("ra.hrl").
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
+-type snapshot() :: {{ra_index(), ra_term(), ra_cluster_servers()}, term()}.
 
 -record(state, {last_index = 0 :: ra_index(),
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
                 entries = #{0 => {0, undefined}} :: #{ra_term() => {ra_index(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
-                snapshot :: maybe(ra_log:snapshot())}).
+                snapshot :: maybe(snapshot())}).
 
 -opaque ra_log_memory_state() :: #state{}.
 
@@ -83,8 +85,8 @@ write([{FirstIdx, _, _} | _] = Entries,
     {ok, State#state{last_index = LastInIdx,
                           entries = Log}};
 write([{FirstIdx, _, _} | _] = Entries,
-      #state{snapshot = Snapshot, entries = Log0} = State)
- when element(1, Snapshot) + 1 =:= FirstIdx ->
+      #state{snapshot = {Meta, _}, entries = Log0} = State)
+ when element(1, Meta) + 1 =:= FirstIdx ->
     {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
                                            {Acc#{Idx => {Term, Data}}, Idx}
                                    end, {Log0, FirstIdx}, Entries),
@@ -123,7 +125,7 @@ last_index_term(#state{last_index = LastIdx,
         _ ->
             % If not found fall back on snapshot if snapshot matches last term.
             case Snapshot of
-                {LastIdx, LastTerm, _, _} ->
+                {{LastIdx, LastTerm, _}, _} ->
                     {LastIdx, LastTerm};
                 _ ->
                     undefined
@@ -153,15 +155,17 @@ last_written(#state{last_written = LastWritten}) ->
     LastWritten.
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
-    ra_log_memory_state().
+    {ra_log_memory_state(), list()}.
 handle_event({written, {_From, Idx, Term}}, State0) ->
     case fetch_term(Idx, State0) of
         {Term, State} ->
-            State#state{last_written = {Idx, Term}};
+            {State#state{last_written = {Idx, Term}}, []};
         _ ->
             % if the term doesn't match we just ignore it
-            State0
-    end.
+            {State0, []}
+    end;
+handle_event(_Evt, State0) ->
+            {State0, []}.
 
 -spec next_index(ra_log_memory_state()) -> ra_index().
 next_index(#state{last_index = LastIdx}) ->
@@ -187,19 +191,28 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
--spec install_snapshot(Snapshot :: ra_log:snapshot(),
+-spec install_snapshot(SnapshotMeta :: ra_snapshot:meta(),
+                       SnapshotData :: term(),
                        State :: ra_log_memory_state()) ->
-    ra_log_memory_state().
-install_snapshot(Snapshot, #state{entries = Log0} = State) ->
-    Index  = element(1, Snapshot),
+    {ra_log_memory_state(), term(), list()}.
+install_snapshot(Meta, Data, #state{entries = Log0} = State) ->
+    Index  = element(1, Meta),
     % discard log
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
-    State#state{entries = Log, snapshot = Snapshot}.
+    {State#state{entries = Log, snapshot = {Meta, Data}}, Data, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
-    ra_log:snapshot().
-read_snapshot(#state{snapshot = Snapshot}) ->
-    Snapshot.
+    {ok, ra_snapshot:meta(), term()}.
+read_snapshot(#state{snapshot = {Meta, Data}}) ->
+    {ok, Meta, Data}.
+
+-spec recover_snapshot(State :: ra_log_memory_state()) ->
+    undefined | {ok, ra_snapshot:meta(), term()}.
+recover_snapshot(#state{snapshot = undefined}) ->
+    undefined;
+recover_snapshot(#state{snapshot = {Meta, Data}}) ->
+    {Meta, Data}.
+
 
 -spec read_meta(Key :: ra_log:ra_meta_key(), State :: ra_log_memory_state()) ->
     maybe(term()).
@@ -208,7 +221,7 @@ read_meta(Key, #state{meta = Meta}) ->
 
 -spec snapshot_index_term(State :: ra_log_memory_state()) ->
     ra_idxterm().
-snapshot_index_term(#state{snapshot = {Idx, Term, _, _}}) ->
+snapshot_index_term(#state{snapshot = {{Idx, Term, _}, _}}) ->
     {Idx, Term};
 snapshot_index_term(#state{snapshot = undefined}) ->
     undefined.

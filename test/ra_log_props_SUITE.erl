@@ -29,7 +29,6 @@ all_tests() ->
      fetch_term,
      fetch_out_of_range_term,
      next_index_term,
-     read_write_meta,
      last_written,
      last_written_with_wal,
      last_written_with_segment_writer,
@@ -524,37 +523,6 @@ next_index_term_prop(Dir, TestCase) ->
                      LastIdx + 1 == Idx)
        end).
 
-read_write_meta(Config) ->
-    Dir = ?config(wal_dir, Config),
-    TestCase = ?config(test_case, Config),
-    run_proper(fun read_write_meta_prop/2, [Dir, TestCase], 25).
-
--type meta_data() :: {current_term, non_neg_integer()} |
-                     {last_applied, non_neg_integer()} |
-                     {voted_for, {atom(), atom()}}.
-
-read_write_meta_prop(Dir, TestCase) ->
-    ?FORALL(
-       Meta0, list(meta_data()),
-       begin
-           Log = write_meta(Meta0,
-                            ra_log:init(#{data_dir => Dir, uid => TestCase})),
-           %% Ensure we overwrite the duplicates before checking the writes
-           Meta = dict:to_list(dict:from_list(Meta0)),
-           Result = [{K, V, ra_log:read_meta(K, Log)} || {K, V} <- Meta],
-           reset(Log),
-           ?WHENFAIL(io:format("Got: ~p~n", [Result]),
-                     lists:all(fun({_K, V, Value}) ->
-                                       V == Value
-                               end, Result))
-       end).
-
-
-write_meta([], Log) ->
-    Log;
-write_meta([{Key, Value} | Rest], Log0) ->
-    ok = ra_log:write_meta(Key, Value, Log0),
-    write_meta(Rest, Log0).
 
 last_written_with_wal(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -824,7 +792,7 @@ deliver_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("ra_log_evt: ~w~n", [Evt]),
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_log_events(Log, Timeout)
     after Timeout ->
             Log0
@@ -833,7 +801,7 @@ deliver_log_events(Log0, Timeout) ->
 consume_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 0 ->
             {Log0, Last}
@@ -842,7 +810,7 @@ consume_events(Log0, Last) ->
 consume_all_events(Log0, Last) ->
     receive
         {ra_log_event, {written, {_, To, Term}} = Evt} ->
-            Log = ra_log:handle_event(Evt, Log0),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 15000 ->
             {Log0, Last}

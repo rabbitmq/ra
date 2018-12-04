@@ -7,6 +7,7 @@
          unregister_name/1,
          where_is/1,
          name_of/1,
+         pid_of/1,
          uid_of/1,
          send/2,
          overview/0,
@@ -76,7 +77,14 @@ where_is(UId) when is_binary(UId) ->
 -spec name_of(ra_uid()) -> atom().
 name_of(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_UId, _Pid, Node}] -> Node;
+        [{_, _, Node}] -> Node;
+        [] -> undefined
+    end.
+
+-spec pid_of(ra_uid()) -> maybe(pid()).
+pid_of(UId) ->
+    case ets:lookup(?MODULE, UId) of
+        [{_, Pid, _}] -> Pid;
         [] -> undefined
     end.
 

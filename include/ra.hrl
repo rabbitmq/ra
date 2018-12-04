@@ -32,11 +32,16 @@
 %% name after restarts. Pids won't do.
 -type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
 
--type ra_peer_state() :: #{next_index => non_neg_integer(),
-                           match_index => non_neg_integer(),
+-type ra_peer_status() :: normal | {sending_snapshot, pid()}.
+
+-type ra_peer_state() :: #{next_index := non_neg_integer(),
+                           match_index := non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
-                           commit_index_sent => non_neg_integer()}.
+                           commit_index_sent := non_neg_integer(),
+                           %% indicates that a snapshot is being sent
+                           %% to the peer
+                           status => ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
@@ -115,14 +120,16 @@
          % the term at the point of snapshot
          last_term :: ra_term(),
          last_config :: ra_cluster_servers(),
+         crc :: integer(),
+         chunk_state :: {pos_integer(), pos_integer()},
          data :: term()
         }).
 
 -record(install_snapshot_result,
         {term :: ra_term(),
-         % because we aren't doing true rpc we may have multiple append
-         % entries in flight we need to communicate what we are replying
-         % to
+         % because we need to inform the leader of the snapshot that has been
+         % replicated from another process we here include the index and
+         % term of the snapshot in question
          last_index :: ra_index(),
          last_term :: ra_term()}).
 
@@ -153,4 +160,7 @@
 -endif.
 
 -define(DEFAULT_TIMEOUT, 5000).
+
+-define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
+
 

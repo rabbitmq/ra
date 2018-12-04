@@ -10,9 +10,10 @@
          recover/3,
          recovered/3,
          leader/3,
-         follower/3,
          pre_vote/3,
          candidate/3,
+         follower/3,
+         receive_snapshot/3,
          await_condition/3,
          terminating_leader/3,
          terminating_follower/3
@@ -50,6 +51,9 @@
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(USE_AVG_HALF_LIFE, 1000000.0).
+-define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
+-define(DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT, 30000).
+-define(DEFAULT_SNAPSHOT_CHUNK_SIZE, 1000000). % 1MB
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -96,11 +100,17 @@
               ra_event/0,
               ra_event_body/0]).
 
+-type monitors() ::
+    #{pid() | node() => {machine | snapshot_sender, maybe(reference())}}.
+%% the ra server proc keeps monitors on behalf of different components
+%% the state machine, log and server code. The tag is used to determine
+%% which component to dispatch the down to
+
 -record(state, {server_state :: ra_server:ra_server_state(),
                 name :: atom(),
                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
                 tick_timeout :: non_neg_integer(),
-                monitors = #{} :: #{pid() | node() => maybe(reference())},
+                monitors = #{} :: monitors(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
@@ -186,6 +196,8 @@ init(Config0) when is_map(Config0) ->
     _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
+    %% as most messages are sent using noconnect we explicitly attempt to
+    %% connect to all relevant nodes
     _ = spawn(fun () ->
                       _ = lists:foreach(fun ({_, Node}) ->
                                                 net_kernel:connect_node(Node);
@@ -197,11 +209,9 @@ init(Config0) when is_map(Config0) ->
     State = #state{server_state = ServerState, name = Key,
                    tick_timeout = TickTime,
                    await_condition_timeout = AwaitCondTimeout},
-    %% TODO: this should really be a {next_event, cast, go} but OTP 20.3
-    %% does not support this. it was fixed in 20.3.2
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
-    {ok, recover, State, [{state_timeout, 0, go}]}.
+    {ok, recover, State, [{next_event, cast, go}]}.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -209,8 +219,8 @@ callback_mode() -> [state_functions, state_enter].
 %%%===================================================================
 %%% State functions
 %%%===================================================================
-recover(enter, _OldState, State) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+recover(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
     {keep_state, State, Actions};
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
@@ -226,8 +236,8 @@ recover(_, _, State) ->
 
 %% this is a passthrough state to allow state machines to emit node local
 %% effects post recovery
-recovered(enter, _OldState, State) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State),
+recovered(enter, _OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
     {keep_state, State, Actions};
 recovered(internal, next, #state{server_state = ServerState} = State) ->
     % New cluster starts should be coordinated and elections triggered
@@ -320,13 +330,10 @@ leader(info, {'DOWN', MRef, process, Pid, Info},
        #state{monitors = Monitors0,
               server_state = ServerState0} = State0) ->
     case maps:take(Pid, Monitors0) of
-        {MRef, Monitors} ->
-            % there is a monitor for the ref
-            {leader, ServerState, Effects} =
-                ra_server:handle_leader({command,
-                                         {'$usr', #{from => undefined},
-                                          {down, Pid, Info}, noreply}},
-                                        ServerState0),
+        {{Comp, MRef}, Monitors} ->
+            {_, ServerState, Effects} =
+                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
+                                      ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
                                 State0#state{server_state = ServerState,
@@ -355,9 +362,9 @@ leader(info, {NodeEvt, Node},
             {keep_state, State0, []}
     end;
 leader(_, tick_timeout, State0) ->
-    State1 = maybe_persist_last_applied(send_rpcs(State0)),
+    {State1, RpcEffs} = make_rpcs(State0),
     Effects = ra_server:tick(State1#state.server_state),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
+    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({call, From}, trigger_election, State) ->
@@ -372,10 +379,11 @@ leader(EventType, Msg, State0) ->
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             % demonitor when stepping down
-            ok = lists:foreach(fun (Ref) when is_reference(Ref) ->
+            ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
                                        erlang:demonitor(Ref);
                                    (_) ->
                                        %% the monitor is a node
+                                       %% all nodes are always monitored
                                        ok
                                end, maps:values(State#state.monitors)),
             {next_state, follower, State#state{monitors = #{}},
@@ -543,6 +551,21 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
             {keep_state, State#state{leader_monitor = undefined},
              [election_timeout_action(really_short, State)]}
     end;
+follower(info, {'DOWN', MRef, process, Pid, Info},
+         #state{monitors = Monitors0, server_state = ServerState0} = State0) ->
+    case maps:take(Pid, Monitors0) of
+        {{Comp, MRef}, Monitors} ->
+            {_, ServerState, Effects} =
+                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
+                                      ServerState0),
+            {State, Actions} =
+                ?HANDLE_EFFECTS(Effects, cast,
+                                State0#state{server_state = ServerState,
+                                             monitors = Monitors}),
+            {keep_state, State, Actions};
+        error ->
+            {keep_state, State0, []}
+    end;
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
@@ -552,8 +575,7 @@ follower(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
-follower(_, tick_timeout, State0) ->
-    State = maybe_persist_last_applied(State0),
+follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
@@ -580,11 +602,35 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout}
               | Actions]};
+        {receive_snapshot, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            ?INFO("~w follower -> receive_snapshot in term: ~b~n",
+                  [id(State), current_term(State)]),
+            {next_state, receive_snapshot, State, Actions};
         {delete_and_terminate, State1, Effects} ->
             ?INFO("~w follower -> terminating_follower term: ~b~n",
                   [id(State1), current_term(State1)]),
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {next_state, terminating_follower, State, Actions}
+    end.
+
+%% TODO: handle leader down abort snapshot and revert to follower
+receive_snapshot(enter, _, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+    {keep_state, State,
+     [{state_timeout, receive_snapshot_timeout(), receive_snapshot_timeout}
+      | Actions]};
+receive_snapshot(EventType, Msg, State0) ->
+    case handle_receive_snapshot(Msg, State0) of
+        {receive_snapshot, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {keep_state, State,
+             [{state_timeout, receive_snapshot_timeout(),
+               receive_snapshot_timeout} | Actions]};
+        {follower, State1, Effects} ->
+            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            State = follower_leader_change(State0, State2),
+            {next_state, follower, State, Actions}
     end.
 
 terminating_leader(enter, _, State0) ->
@@ -708,7 +754,7 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%%===================================================================
 
 handle_enter(RaftState, #state{name = Name,
-                                      server_state = ServerState0} = State) ->
+                               server_state = ServerState0} = State) ->
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
@@ -729,22 +775,37 @@ queue_take(N, Q0, Acc) ->
             {Q0, lists:reverse(Acc)}
     end.
 
-handle_leader(Msg, #state{server_state = ServerState0} = State) ->
+handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     case catch ra_server:handle_leader(Msg, ServerState0) of
         {NextState, ServerState, Effects}  ->
-            {NextState, State#state{server_state = ServerState}, Effects}
+            State = State0#state{server_state =
+                                 ra_server:persist_last_applied(ServerState)},
+            {NextState, State, Effects};
+        OtherErr ->
+            ?ERR("handle_leader err ~p~n", [OtherErr]),
+            exit(OtherErr)
     end.
 
 handle_candidate(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_candidate(Msg, ServerState0),
+    {NextState, ServerState, Effects} =
+        ra_server:handle_candidate(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 handle_pre_vote(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_pre_vote(Msg, ServerState0),
+    {NextState, ServerState, Effects} =
+        ra_server:handle_pre_vote(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
-handle_follower(Msg, #state{server_state = ServerState0} = State) ->
-    {NextState, ServerState, Effects} = ra_server:handle_follower(Msg, ServerState0),
+handle_follower(Msg, #state{server_state = ServerState0} = State0) ->
+    {NextState, ServerState, Effects} =
+        ra_server:handle_follower(Msg, ServerState0),
+    State = State0#state{server_state =
+                         ra_server:persist_last_applied(ServerState)},
+    {NextState, State, Effects}.
+
+handle_receive_snapshot(Msg, #state{server_state = ServerState0} = State) ->
+    {NextState, ServerState, Effects} =
+        ra_server:handle_receive_snapshot(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
@@ -773,11 +834,10 @@ handle_effects(RaftState, Effects, EvtType, State0) ->
                                       State, Actions)
                 end, {State0, []}, Effects).
 
-handle_effect(_, {send_rpcs, Rpcs}, _, State0, Actions) ->
+handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
-    % TODO: review / refactor
-    [?MODULE:send_rpc(To, Rpc) || {To, Rpc} <- Rpcs],
-    % TODO: record metrics for sending times
+    % TODO: review / refactor to remove the mod call here
+    ?MODULE:send_rpc(To, Rpc),
     {State0, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
@@ -819,8 +879,45 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect(_, {reply, Reply}, _, _, _) ->
-    exit({undefined_reply, Reply});
+handle_effect(_, {reply, Reply}, EvtType, _, _) ->
+    exit({undefined_reply, Reply, EvtType});
+handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
+              #state{server_state = SS0,
+                     monitors = Monitors} = State0, Actions) ->
+    ChunkSize = application:get_env(ra, snapshot_chunk_size,
+                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+    %% leader effect only
+    Me = self(),
+    Pid = spawn(fun () ->
+                        try send_snapshots(Me, Id, Term, To,
+                                           ChunkSize, SnapState) of
+                            _ -> ok
+                        catch
+                            C:timeout:S ->
+                                %% timeout is ok as we've already blocked
+                                %% for a while
+                                erlang:raise(C, timeout, S);
+                            C:E:S ->
+                                %% insert an arbitrary pause here as a primitive
+                                %% throttling operation as certain errors
+                                %% happen quickly
+                                ok = timer:sleep(5000),
+                                erlang:raise(C, E, S)
+                        end
+                end),
+    MRef = erlang:monitor(process, Pid),
+    %% update the peer state so that no pipelined entries are sent during
+    %% the snapshot sending phase
+    SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
+    {State0#state{server_state = SS,
+                  monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
+                  Actions};
+handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
+    %% delete snapshots in separate process
+    _ = spawn(fun() ->
+                      ra_snapshot:delete(Dir, SnapshotRef)
+              end),
+    {State0, Actions};
 handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
               State, Actions) ->
     % transient election processes
@@ -832,10 +929,13 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
-handle_effect(_, {release_cursor, Index, MacState}, _EvtType,
-              #state{server_state = ServerState0} = State, Actions) ->
-    ServerState = ra_server:update_release_cursor(Index, MacState, ServerState0),
-    {State#state{server_state = ServerState}, Actions};
+handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
+              #state{server_state = ServerState0} = State0, Actions0) ->
+    {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
+                                                             ServerState0),
+    State1 = State0#state{server_state = ServerState},
+    {State, Actions} = handle_effects(RaftState, Effects, EvtType, State1),
+    {State, Actions0 ++ Actions};
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     {State, Actions};
@@ -847,7 +947,19 @@ handle_effect(_, {monitor, process, Pid}, _,
             {State, Actions};
         _ ->
             MRef = erlang:monitor(process, Pid),
-            {State#state{monitors = Monitors#{Pid => MRef}}, Actions}
+            {State#state{monitors = Monitors#{Pid => {machine, MRef}}},
+             Actions}
+    end;
+handle_effect(_, {monitor, process, Component, Pid}, _,
+              #state{monitors = Monitors} = State, Actions) ->
+    case Monitors of
+        #{Pid := _} ->
+            % monitor is already in place - do nothing
+            {State, Actions};
+        _ ->
+            MRef = erlang:monitor(process, Pid),
+            {State#state{monitors = Monitors#{Pid => {Component, MRef}}},
+             Actions}
     end;
 handle_effect(_, {monitor, node, Node}, _,
               #state{monitors = Monitors} = State, Actions) ->
@@ -863,7 +975,7 @@ handle_effect(_, {monitor, node, Node}, _,
 handle_effect(_, {demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     case maps:take(Pid, Monitors0) of
-        {MRef, Monitors} ->
+        {{_, MRef}, Monitors} ->
             true = erlang:demonitor(MRef),
             {State#state{monitors = Monitors}, Actions};
         error ->
@@ -891,7 +1003,7 @@ send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
     % TODO: review
-    [ok = ?MODULE:send_rpc(To, Rpc) || {To, Rpc} <-  Rpcs],
+    [ok = ?MODULE:send_rpc(To, Rpc) || {send_rpc, To, Rpc} <-  Rpcs],
     State.
 
 make_rpcs(State) ->
@@ -1060,3 +1172,39 @@ maybe_add_election_timeout(election_timeout, Actions, State) ->
     [election_timeout_action(long, State) | Actions];
 maybe_add_election_timeout(_, Actions, _) ->
     Actions.
+
+receive_snapshot_timeout() ->
+    application:get_env(ra, receive_snapshot_timeout,
+                        ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
+
+send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
+    {ok, Crc,
+     {LastIdx, LastTerm, Config},
+     ChunkState, Chunks} = ra_snapshot:read(ChunkSize, SnapState),
+    NumChunks = length(Chunks),
+    {_, Result, _} =
+    lists:foldl(
+      fun (ChunkFun, {Num, _, CState0}) ->
+              {Data, CState} = ChunkFun(CState0),
+              %% optimisation:
+              %% only send the config as part of the first rpc
+              Conf = case Num of
+                         1 -> Config;
+                         _ -> undefined
+                     end,
+              ChState = {Num, NumChunks},
+              Req = #install_snapshot_rpc{term = Term,
+                                          leader_id = Id,
+                                          last_index = LastIdx,
+                                          last_term = LastTerm,
+                                          last_config = Conf,
+                                          crc = Crc,
+                                          chunk_state = ChState,
+                                          data = Data},
+              Res = gen_statem:call(To, Req,
+                                    {dirty_timeout,
+                                     ?INSTALL_SNAP_RPC_TIMEOUT}),
+              %% just return the last reply
+              {Num + 1, Res, CState}
+      end, {1, undefined, ChunkState}, Chunks),
+    ok = gen_statem:cast(Me, {To, Result}).

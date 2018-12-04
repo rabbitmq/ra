@@ -23,8 +23,7 @@ all_tests() ->
      write_then_overwrite,
      append_integrity_error,
      take,
-     last,
-     meta
+     last
     ].
 
 groups() ->
@@ -32,8 +31,7 @@ groups() ->
      {tests, [], [
                   init_close_init,
                   write_recover_then_overwrite,
-                  write_overwrite_then_recover,
-                  snapshot
+                  write_overwrite_then_recover
                   | all_tests()]}
     ].
 
@@ -115,7 +113,7 @@ append_then_fetch_no_wait(Config) ->
     % results in the last written being updated
     receive
         {ra_log_event, {written, _} = Evt} ->
-            Log1 = ra_log:handle_event(Evt, Log),
+            {Log1, _} = ra_log:handle_event(Evt, Log),
             {Idx, Term} = ra_log:last_written(Log1)
     after 0 ->
               ok
@@ -236,57 +234,19 @@ last(Config) ->
     {Idx, Term} = ra_log:last_index_term(Log),
     ok.
 
-meta(Config) ->
-    Log = ?config(ra_log, Config),
-    ok = ra_log:write_meta(current_term, 87, Log),
-    87 = ra_log:read_meta(current_term, Log),
-    ok = ra_log:write_meta(last_applied, 42, Log),
-    42 = ra_log:read_meta(last_applied, Log),
-    ok = ra_log:write_meta(voted_for, cream, Log),
-    cream = ra_log:read_meta(voted_for, Log),
-    ok.
-
-snapshot(Config) ->
-    % tests installation of snapshot received from leader
-    Log0 = ?config(ra_log, Config),
-    % no snapshot yet
-    undefined = ra_log:read_snapshot(Log0),
-    Log1 = append_in(1, "entry1", Log0),
-    Log2 = append_in(1, "entry2", Log1),
-    {LastIdx, LastTerm} = ra_log:last_index_term(Log2),
-    Cluster = [server1],
-    Snapshot = {LastIdx, LastTerm, Cluster, "entry1+2"},
-    Log4 = ra_log:install_snapshot(Snapshot, Log2),
-
-    % ensure entries prior to snapshot are no longer there
-    {undefined, Log5} = ra_log:fetch(LastIdx, Log4),
-    {undefined, _} = ra_log:fetch_term(LastIdx, Log5),
-    {undefined, Log} = ra_log:fetch(LastIdx-1, Log5),
-    {undefined, _} = ra_log:fetch_term(LastIdx-1, Log5),
-    % falls back to snapshot idxterm
-    {LastIdx, LastTerm}  = ra_log:last_index_term(Log),
-    Snapshot = ra_log:read_snapshot(Log),
-    % initialise another log
-    LogB = ra_log:init(#{uid => <<"snapshot">>}),
-    {LastIdx, LastTerm}  = ra_log:last_index_term(LogB),
-    {undefined, _} = ra_log:fetch_term(LastIdx, LogB),
-    Snapshot = ra_log:read_snapshot(LogB),
-    ok.
-
-
 % persistent ra_log implementations only
 init_close_init(Config) ->
     InitFun = ?config(init_fun, Config),
     Log0 = ?config(ra_log, Config),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(2, "entry2", Log1),
-    ok = ra_log:write_meta(current_term, 2, Log2),
+    ok = ra_log_meta:store(?config(uid, Config), current_term, 2),
     ok = ra_log:close(Log2),
     LogA = InitFun(init_close_init),
     {2, 2} = ra_log:last_index_term(LogA),
     {{2, 2, "entry2"}, LogA1} = ra_log:fetch(2, LogA),
     {{1, 1, "entry1"}, LogA2} = ra_log:fetch(1, LogA1),
-    2 = ra_log:read_meta(current_term, LogA),
+    2 = ra_log_meta:fetch(?config(uid, Config), current_term),
     % ensure we can append after recovery
     LogB = append_in(2, "entry3", LogA2),
     {{1, 1, "entry1"}, LogB1} = ra_log:fetch(1, LogB),

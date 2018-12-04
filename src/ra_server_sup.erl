@@ -102,7 +102,7 @@ delete_server_rpc(RaName) ->
         ok -> ok
     catch
         _:_ = Err ->
-            ?WARN("delete_server/2 failed to delete directory ~s~n"
+            ?WARN("delete_server/1 failed to delete directory ~s~n"
                   "Error: ~p~n", [Dir, Err])
     end,
     ra_directory:unregister_name(UId),

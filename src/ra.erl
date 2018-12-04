@@ -191,15 +191,23 @@ start_or_restart_cluster(ClusterName, Machine,
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
--spec start_cluster(ra_cluster_name(), ra_server:machine_conf(), [ra_server_id()]) ->
+-spec start_cluster(ra_cluster_name(),
+                    ra_server:machine_conf(),
+                    [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterName, Machine, ServerIds) ->
     {Started, NotStarted} =
-        ra_lib:partition_parallel(fun (N) ->
-                                          ok == start_server(ClusterName, N,
-                                                             Machine, ServerIds)
-                                  end, ServerIds),
+        ra_lib:partition_parallel(
+            fun (N) ->
+                case start_server(ClusterName, N, Machine, ServerIds) of
+                    ok  -> true;
+                    Err ->
+                        ?WARN("ra: failed to start a server ~w : ~p~n",
+                              [N, Err]),
+                        false
+                end
+            end, ServerIds),
     case Started of
         [] ->
             ?WARN("ra: failed to form new cluster ~w.~n "
