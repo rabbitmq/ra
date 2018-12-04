@@ -92,7 +92,7 @@
 -type wal_command() ::
     {append | truncate, writer_id(), atom(), ra_index(), ra_term(), term()}.
 
--type wal_op() :: {cast, gen_batch_server:server_ref(), wal_command()} |
+-type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
 
 -spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
