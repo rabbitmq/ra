@@ -12,8 +12,8 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    [ets:new(Table, [named_table, public, {write_concurrency, true}])
-     || Table <- ?TABLES],
+    _ = [ets:new(Table, [named_table, public, {write_concurrency, true}])
+         || Table <- ?TABLES],
 
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     RaLogFileMetrics = #{id => ra_metrics_ets,

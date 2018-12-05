@@ -18,14 +18,14 @@ dep_gen_batch_server = hex 0.6.0
 dep_aten = hex 0.5.0
 DEPS = aten gen_batch_server
 
-TEST_DEPS = proper meck eunit_formatters looking_glass rabbitmq_ct_helpers
+TEST_DEPS = proper meck eunit_formatters looking_glass inet_tcp_proxy
 
 BUILD_DEPS = elvis_mk
 
 LOCAL_DEPS = sasl crypto
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master
 dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
-dep_rabbitmq_ct_helpers = git https://github.com/rabbitmq/rabbitmq-ct-helpers
+dep_inet_tcp_proxy = git https://github.com/rabbitmq/inet_tcp_proxy
 
 DEP_PLUGINS = elvis_mk
 

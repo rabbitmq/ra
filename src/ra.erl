@@ -169,7 +169,7 @@ start_or_restart_cluster(ClusterName, Machine,
     case ra_server_sup:restart_server(FirstServer) of
         {ok, _} ->
             %% restart the rest of the servers
-            [{ok, _} = ra_server_sup:restart_server(N) || N <- RemServers],
+            _ = [{ok, _} = ra_server_sup:restart_server(N) || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
             ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
@@ -230,7 +230,7 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                 Err ->
                     ?WARN("ra: failed to form new cluster ~w.~n "
                           "Error: ~w~n", [ClusterName, Err]),
-                    [delete_server(N) || N <- Started],
+                    _ = [delete_server(N) || N <- Started],
                     % we do not have a functioning cluster
                     {error, cluster_not_formed}
             end

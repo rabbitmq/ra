@@ -386,7 +386,7 @@ update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
         [] ->
             % open new ets table
             Tid = open_mem_table(UId),
-            true = ets:insert(OpnMemTbl, {UId, Idx, Idx, Tid}),
+            true = ets:insert_new(OpnMemTbl, {UId, Idx, Idx, Tid}),
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 

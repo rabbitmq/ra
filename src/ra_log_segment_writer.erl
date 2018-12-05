@@ -156,7 +156,7 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     {noreply, State};
 handle_cast({delete_segments, Who, Idx, [SegmentFile | SegmentFiles]},
             #state{active_segments = ActiveSegments} = State0) ->
-    [_ = file:delete(F) || F <- SegmentFiles],
+    _ = [_ = file:delete(F) || F <- SegmentFiles],
     case ActiveSegments of
         #{Who := Seg} ->
             case ra_log_segment:is_same_as(Seg, SegmentFile) of

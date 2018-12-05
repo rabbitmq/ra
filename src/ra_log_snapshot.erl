@@ -126,7 +126,7 @@ make_chunks(Size, Fd, Acc) ->
                             %% Position file offset
                             {ok, _} = file:position(F, Cur),
                             {ok, Data} = file:read(F, Rem),
-                            file:close(F),
+                            _ = file:close(F),
                             {Data, F}
                     end,
             lists:reverse([Thunk | Acc])

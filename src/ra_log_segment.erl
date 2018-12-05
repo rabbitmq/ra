@@ -269,14 +269,14 @@ dump_index(File) ->
     case file:read(Fd, IndexSize) of
         {ok, Data} ->
             D = [begin
-                     file:position(Fd, O),
+                     {ok, _} = file:position(Fd, O),
                      {ok, B} = file:read(Fd, N),
                      {I, T, binary_to_term(B)}
                  end || {I, T, O, N} <- dump_index_data(Data, [])],
-            file:close(Fd),
+            _ = file:close(Fd),
             D;
         eof ->
-            file:close(Fd),
+            _ = file:close(Fd),
             % if no entries have been written the file hasn't "stretched"
             % to where the data offset starts.
             {0, DataOffset, undefined, #{}}

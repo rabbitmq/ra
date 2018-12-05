@@ -96,7 +96,7 @@ delete_server_rpc(RaName) ->
     Dir = ra_env:server_data_dir(UId),
     ok = ra_log_segment_writer:release_segments(
            ra_log_segment_writer, UId),
-    supervisor:terminate_child(?MODULE, UId),
+    _ = supervisor:terminate_child(?MODULE, UId),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
@@ -105,14 +105,14 @@ delete_server_rpc(RaName) ->
             ?WARN("delete_server/1 failed to delete directory ~s~n"
                   "Error: ~p~n", [Dir, Err])
     end,
-    ra_directory:unregister_name(UId),
+    _ = ra_directory:unregister_name(UId),
     ok.
 
 remove_all() ->
-    [begin
-         supervisor:terminate_child(?MODULE, Pid)
-     end
-     || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],
+    _ = [begin
+             supervisor:terminate_child(?MODULE, Pid)
+         end
+         || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],
     ok.
 
 -spec start_link() ->

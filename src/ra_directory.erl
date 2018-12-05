@@ -54,7 +54,7 @@ register_name(UId, Pid, RaServerName) ->
 unregister_name(UId) ->
     case ets:take(?MODULE, UId) of
         [{_, _, ServerName}] ->
-            ets:take(?MODULE, UId),
+            _ = ets:take(?MODULE, UId),
             ok = dets:delete(?REVERSE_TBL, ServerName),
             UId;
         [] ->

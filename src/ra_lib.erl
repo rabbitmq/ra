@@ -168,6 +168,7 @@ do_delete(File, regular) ->
 do_delete(Dir, directory) ->
     file:del_dir(Dir).
 
+-spec throw_error(string(), list()) -> no_return().
 throw_error(Format, Args) ->
     throw({error, lists:flatten(io_lib:format(Format, Args))}).
 
