@@ -496,7 +496,11 @@ handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
     ?ERR("~w leader saw append_entries_rpc for same term ~b"
          " this should not happen!~n", [Id, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
-% TODO: reply to append_entries_rpcs that have lower term?
+handle_leader(#append_entries_rpc{leader_id = LeaderId},
+              #{current_term := CurTerm,
+                id := Id} = State0) ->
+    Reply = append_entries_reply(CurTerm, false, State0),
+    {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
                 id := Id} = State0) when Term > CurTerm ->

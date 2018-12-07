@@ -43,6 +43,7 @@ all() ->
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
+     leader_replies_to_append_entries_rpc_with_lower_term,
      follower_aer_1,
      follower_aer_2,
      follower_aer_3,
@@ -876,6 +877,23 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
     {leader, State, []} = ra_server:handle_leader(AEReply , State),
     IRS = #install_snapshot_result{term = 6, last_index = 0, last_term = 0},
     {leader, State, []} = ra_server:handle_leader({unknown_peer, IRS}, State),
+    ok.
+
+
+leader_replies_to_append_entries_rpc_with_lower_term(_Config) ->
+    State = #{id := Id,
+              current_term := CTerm} = base_state(3),
+    AERpc = #append_entries_rpc{term = CTerm - 1,
+                                leader_id = n3,
+                                prev_log_index = 3,
+                                prev_log_term = 5,
+                                leader_commit = 3},
+    ?assertMatch(
+       {leader, _,
+        [{cast, n3,
+          {Id, #append_entries_reply{term = CTerm, success = false}}}]},
+       ra_server:handle_leader(AERpc, State)),
+
     ok.
 
 higher_term_detected(_Config) ->
