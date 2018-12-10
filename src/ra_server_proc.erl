@@ -414,7 +414,7 @@ candidate({call, From}, {leader_call, Msg},
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 candidate(cast, {command, _Priority,
                  {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
-         State) ->
+          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 candidate({call, From}, {local_query, QueryFun},
@@ -1142,8 +1142,14 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
 
 reject_command(Pid, Corr, State) ->
     LeaderId = leader_id(State),
-    ?INFO("~w: follower received leader command - rejecting to ~w ~n",
-          [id(State), LeaderId]),
+    case LeaderId of
+        undefined ->
+            %% don't log these as they may never be resolved
+            ok;
+        _ ->
+            ?INFO("~w: follower received leader command from ~w. "
+                  "Rejecting to ~w ~n", [id(State), Pid, LeaderId])
+    end,
     send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected, State).
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->

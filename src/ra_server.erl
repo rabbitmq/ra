@@ -481,15 +481,18 @@ handle_leader(#install_snapshot_rpc{term = Term,
                   [Id, Leader]),
             {leader, State0, []};
         _ ->
-            ?INFO("~w leader saw install_snapshot_rpc for term ~b "
+            ?INFO("~w leader saw install_snapshot_rpc from ~w for term ~b "
                   "abdicates term: ~b!~n",
-                  [Id, Term, CurTerm]),
+                  [id(State0), Evt#install_snapshot_rpc.leader_id,
+                   Term, CurTerm]),
             {follower, update_term(Term, State0), [{next_event, Evt}]}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm} = State0) when Term > CurTerm ->
-    ?INFO("~w leader saw append_entries_rpc for term ~b abdicates term: ~b!~n",
-         [id(State0), Term, CurTerm]),
+    ?INFO("~w leader saw append_entries_rpc from ~w for term ~b "
+          "abdicates term: ~b!~n",
+          [id(State0), Msg#append_entries_rpc.leader_id,
+           Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
                                                   id := Id}) ->
@@ -510,8 +513,10 @@ handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
                   [Id, Cand]),
             {leader, State0, []};
         _ ->
-            ?INFO("~w leader saw request_vote_rpc for term ~b"
-                  " abdicates term: ~b!~n", [Id, Term, CurTerm]),
+            ?INFO("~w leader saw request_vote_rpc from ~w for term ~b "
+                  "abdicates term: ~b!~n",
+                  [id(State0), Msg#request_vote_rpc.candidate_id,
+                   Term, CurTerm]),
             {follower, update_term(Term, State0), [{next_event, Msg}]}
     end;
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
@@ -1312,7 +1317,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version =< ?RA_PROTO_VERSION ->
             ?INFO("~w: granting pre-vote for ~w with last indexterm ~w"
-                  "for term ~b previous term was ~b~n",
+                  " for term ~b previous term ~b~n",
                   [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             {FsmState, State#{voted_for => Cand},
              [{reply, pre_vote_result(Term, Token, true)}]};
@@ -1560,6 +1565,9 @@ apply_with(_, % Machine
     ?INFO("~w: enabling ra cluster changes in ~b~n", [id(State0), Term]),
     State = State0#{cluster_change_permitted => true},
     {Idx, State, MacSt, Effects, Notifys};
+apply_with(_, {_, _, noop}, State) ->
+    %% don't log these as unhandled
+    State;
 apply_with(Machine,
            {Idx, _, {'$ra_cluster', #{from := From}, delete, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->

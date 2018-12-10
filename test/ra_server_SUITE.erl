@@ -805,13 +805,13 @@ follower_pre_vote(_Config) ->
                                 State),
 
     % but still allow from a lower protocol version
-        %
     {follower, #{current_term := Term},
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
-        ra_server:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION - 1},
-                                State),
+    ra_server:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION - 1},
+                              State),
     % fail due to lower term
+    % return failure and immediately enter pre_vote phase as there are
     {follower, #{current_term := 5},
      [{reply, #pre_vote_result{term = 5, token = Token,
                                vote_granted = false}}]} =
@@ -823,16 +823,16 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = 6, token = Token,
                                vote_granted = false}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
-                                             term = 6},
-                            State),
+                                               term = 6},
+                              State),
 
     % grant vote when candidate last log entry has same term but is longer
     {follower, #{current_term := 5},
      [{reply, #pre_vote_result{term = 5, token = Token,
                                vote_granted = true}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_index = 4},
-                            State),
-     ok.
+                              State),
+    ok.
 
 pre_vote_receives_pre_vote(_Config) ->
     State = base_state(3),

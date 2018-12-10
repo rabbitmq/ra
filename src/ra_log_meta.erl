@@ -23,6 +23,7 @@
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.
 
 -define(TBL_NAME, ?MODULE).
+-define(TIMEOUT, 30000).
 
 -record(?MODULE, {ref :: reference()}).
 
@@ -39,9 +40,13 @@ start_link(Config) ->
 init(Dir) ->
     MetaFile = filename:join(Dir, "meta.dets"),
     ok = filelib:ensure_dir(MetaFile),
-    {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile}]),
+    {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile},
+                                           %% fsync is done explicitly
+                                           {auto_save, infinity}]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
     ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
+    ?INFO("ra: meta data store initialised. ~b recored recovered",
+          [ets:info(?TBL_NAME, size)]),
     {ok, #?MODULE{ref = Ref}}.
 
 handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
@@ -98,7 +103,7 @@ store(UId, Key, Value) ->
 %% when it returns the store request has been safely flushed to disk
 -spec store_sync(ra_uid(), key(), value()) -> ok.
 store_sync(UId, Key, Value) ->
-    gen_batch_server:call(?MODULE, {store, UId, Key, Value}).
+    gen_batch_server:call(?MODULE, {store, UId, Key, Value}, ?TIMEOUT).
 
 -spec delete(ra_uid()) -> ok.
 delete(UId) ->
@@ -106,7 +111,7 @@ delete(UId) ->
 
 -spec delete_sync(ra_uid()) -> ok.
 delete_sync(UId) ->
-    gen_batch_server:call(?MODULE, {delete, UId}).
+    gen_batch_server:call(?MODULE, {delete, UId}, ?TIMEOUT).
 
 %% READER API
 
