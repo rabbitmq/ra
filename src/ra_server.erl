@@ -401,6 +401,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
             {leader, State, Effects}
     end;
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
+    %% TODO: refactor to use wal batch API?
     {State0, Effects0} =
         lists:foldl( fun(C, {S0, E}) ->
                              {ok, I, T, S} = append_log_leader(C, S0),

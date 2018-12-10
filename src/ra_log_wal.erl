@@ -4,6 +4,7 @@
 
 -export([start_link/2,
          write/5,
+         write_batch/2,
          truncate_write/5,
          force_roll_over/1,
          init/1,
@@ -90,7 +91,7 @@
               wal_write_strategy/0]).
 
 -type wal_command() ::
-    {append | truncate, writer_id(), atom(), ra_index(), ra_term(), term()}.
+    {append | truncate, writer_id(), ra_index(), ra_term(), term()}.
 
 -type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
@@ -105,6 +106,17 @@ write(From, Wal, Idx, Term, Entry) ->
 truncate_write(From, Wal, Idx, Term, Entry) ->
    named_cast(Wal, {truncate, From, Idx, Term, Entry}).
 
+-spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
+    ok | {error, wal_down}.
+write_batch(Wal, WalCommands) when is_pid(Wal) ->
+    gen_batch_server:cast_batch(Wal, WalCommands);
+write_batch(Wal, WalCommands) when is_atom(Wal) ->
+    case whereis(Wal) of
+        undefined ->
+            {error, wal_down};
+        Pid ->
+            write_batch(Pid, WalCommands)
+    end.
 
 named_cast(To, Msg) when is_pid(To) ->
     gen_batch_server:cast(To, Msg);
