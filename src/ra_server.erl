@@ -1566,9 +1566,10 @@ apply_with(_, % Machine
     ?INFO("~w: enabling ra cluster changes in ~b~n", [id(State0), Term]),
     State = State0#{cluster_change_permitted => true},
     {Idx, State, MacSt, Effects, Notifys};
-apply_with(_, {_, _, noop}, State) ->
+apply_with(_, {Idx, _, noop},
+           {_, State, MacSt, Effects, Notifys}) ->
     %% don't log these as unhandled
-    State;
+    {Idx, State, MacSt, Effects, Notifys};
 apply_with(Machine,
            {Idx, _, {'$ra_cluster', #{from := From}, delete, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->

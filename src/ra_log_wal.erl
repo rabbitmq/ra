@@ -137,7 +137,7 @@ force_roll_over(Wal) ->
 %% ra_log_wal
 %%
 %% Writes Raft entries to shared persistent storage for multiple "writers"
-%% Fsyncs in batches, typically the write requests
+%% fsyncs in batches, typically the write requests
 %% received in the mailbox during
 %% the previous fsync operation. Notifies all writers after each fsync batch.
 %% Also have got a dynamically increasing max writes limit that grows in order
