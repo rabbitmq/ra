@@ -375,11 +375,13 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     {State, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
-    case append_log_leader(Cmd, State00) of
+    case maybe_append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
             ?WARN("~w command ~W NOT appended to log, "
                   "cluster_change_permitted ~w~n", [Id, Cmd, 5, CCP]),
             {leader, State, []};
+        {rejected, State, E} ->
+            {leader, State, E};
         {ok, Idx, Term, State0} ->
             % ?INFO("~p ~p command appended to log at ~p term ~p~n",
             %      [Id, Cmd, Idx, Term]),
@@ -403,12 +405,16 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
     {State0, Effects0} =
         lists:foldl( fun(C, {S0, E}) ->
-                             {ok, I, T, S} = append_log_leader(C, S0),
-                             case C of
-                                 {_, #{from := From}, _, after_log_append} ->
-                                     {S, [{reply, From , {I, T}} | E]};
-                                 _ ->
-                                     {S, E}
+                             case maybe_append_log_leader(C, S0) of
+                                 {ok, I, T, S} ->
+                                     case C of
+                                         {_, #{from := From}, _, after_log_append} ->
+                                             {S, [{reply, From , {I, T}} | E]};
+                                         _ ->
+                                             {S, E}
+                                     end;
+                                 {rejected, S, E0} ->
+                                     {S, E0 ++ E}
                              end
                      end, {State00, []}, Cmds),
 
@@ -1608,6 +1614,18 @@ add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
 add_reply(_, _, _, % From, Reply, Mode
           Effects, Notifys) ->
     {Effects, Notifys}.
+
+maybe_append_log_leader({'$usr', Meta, Cmd, ReplyType} = UsrCmd,
+                        #{machine := Machine,
+                          machine_state := MacState0} = State) ->
+    case ra_machine:reject(Machine, Meta, Cmd, ReplyType, MacState0) of
+        {Effects, true} ->
+            {rejected, State, Effects};
+        {[], false} ->
+            append_log_leader(UsrCmd, State)
+    end;
+maybe_append_log_leader(Cmd, State) ->
+    append_log_leader(Cmd, State).
 
 append_log_leader({CmdTag, _, _, _} = Cmd,
                   State = #{cluster_change_permitted := false,

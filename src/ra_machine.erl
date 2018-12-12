@@ -53,7 +53,8 @@
          module/1,
          init_aux/2,
          handle_aux/7,
-         snapshot_module/1
+         snapshot_module/1,
+         reject/5
         ]).
 
 -type state() :: term().
@@ -157,7 +158,8 @@
                      init_aux/1,
                      handle_aux/6,
                      overview/1,
-                     snapshot_module/0
+                     snapshot_module/0,
+                     reject/4
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -193,6 +195,9 @@
 -callback overview(state()) -> map().
 
 -callback snapshot_module() -> module().
+
+-callback reject(command_meta_data(), command(), ra_server:command_reply_mode(),
+                 state()) -> boolean().
 
 %% @doc initialise a new machine
 -spec init(machine(), atom()) -> state().
@@ -248,3 +253,8 @@ module({machine, Mod, _}) -> Mod.
 -spec snapshot_module(machine()) -> module().
 snapshot_module({machine, Mod, _}) ->
     ?OPT_CALL(Mod:snapshot_module(), ?DEFAULT_SNAPSHOT_MODULE).
+
+-spec reject(machine(), command_meta_data(), command(), ra_server:command_reply_mode(),
+             state()) -> boolean().
+reject({machine, Mod, _}, Metadata, Cmd, CmdReply, State) ->
+    ?OPT_CALL(Mod:reject(Metadata, Cmd, CmdReply, State), {[], false}).
