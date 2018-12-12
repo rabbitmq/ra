@@ -11,12 +11,12 @@
 
 data_dir() ->
     DataDir = case application:get_env(ra, data_dir) of
-        {ok, Dir} ->
-            Dir;
-        undefined ->
-            {ok, Cwd} = file:get_cwd(),
-            Cwd
-    end,
+                  {ok, Dir} ->
+                      Dir;
+                  undefined ->
+                      {ok, Cwd} = file:get_cwd(),
+                      Cwd
+              end,
     Node = ra_lib:to_list(node()),
     filename:join(DataDir, Node).
 
