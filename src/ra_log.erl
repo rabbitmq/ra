@@ -520,7 +520,7 @@ update_release_cursor0(Idx, Cluster, MacState,
     end.
 
 append_sync({Idx, Term, _} = Entry, Log0) ->
-    Log = ra_log:append(Entry, Log0),
+    Log = append(Entry, Log0),
     await_written_idx(Idx, Term, Log).
 
 write_sync(Entries, Log0) ->
@@ -639,7 +639,26 @@ wal_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
     case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Data) of
         ok ->
             State#?MODULE{last_index = Idx, last_term = Term,
-                        cache = Cache#{Idx => {Term, Data}}};
+                          cache = Cache#{Idx => {Term, Data}}};
+        {error, wal_down} ->
+            exit(wal_down)
+    end.
+
+wal_write_batch(#?MODULE{uid = UId, cache = Cache0, wal = Wal} = State,
+                Entries) ->
+    WriterId = {UId, self()},
+    {WalCommands, Cache} =
+        lists:foldl(fun ({Idx, Term, Data}, {WC, C0}) ->
+                            WalC = {append, WriterId, Idx, Term, Data},
+                            {[WalC | WC], C0#{Idx => {Term, Data}}}
+                    end, {[], Cache0}, Entries),
+
+    [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
+    case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
+        ok ->
+            State#?MODULE{last_index = LastIdx,
+                          last_term = LastTerm,
+                          cache = Cache};
         {error, wal_down} ->
             exit(wal_down)
     end.
@@ -894,14 +913,11 @@ verify_entries(Idx, Tail) ->
 write_entries([], State) ->
     {ok, State};
 write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
+    %% TODO: verify and build up wal commands in one iteration
     case verify_entries(FstIdx, Rest) of
         ok ->
             try
-                % TODO: wal should provide batch api
-                State = lists:foldl(fun (Entry, S) ->
-                                            wal_write(S, Entry)
-                                    end, State0, Entries),
-                {ok, State}
+                {ok, wal_write_batch(State0, Entries)}
             catch
                 exit:wal_down ->
                     {error, wal_down}

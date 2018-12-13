@@ -10,13 +10,15 @@
               ]).
 
 data_dir() ->
-    case application:get_env(ra, data_dir) of
-        {ok, Dir} ->
-            Node = ra_lib:to_list(node()),
-            filename:join(Dir, Node);
-        undefined ->
-            exit({ra_missing_config, data_dir})
-    end.
+    DataDir = case application:get_env(ra, data_dir) of
+                  {ok, Dir} ->
+                      Dir;
+                  undefined ->
+                      {ok, Cwd} = file:get_cwd(),
+                      Cwd
+              end,
+    Node = ra_lib:to_list(node()),
+    filename:join(DataDir, Node).
 
 server_data_dir(UId) ->
     Me = ra_lib:to_list(UId),
