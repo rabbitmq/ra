@@ -76,6 +76,10 @@ which has two major shortcomings:
 * How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 * Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
 
+### Examples
+
+A number of examples can be found in a [separate repository](https://github.com/rabbitmq/ra-examples).
+
 ## Configuration
 
 * `data_dir`:
