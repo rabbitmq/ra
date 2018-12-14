@@ -23,7 +23,7 @@ dep_inet_tcp_proxy = git https://github.com/rabbitmq/inet_tcp_proxy
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass gen_batch_server
+PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass gen_batch_server inet_tcp_proxy
 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}

@@ -41,7 +41,7 @@ prepare(_Index, State) -> State.
 -spec write(file:filename(), meta(), term()) ->
     ok | {error, file_err()}.
 write(Dir, {Idx, Term, ClusterServers}, MacState) ->
-    Bin = term_to_binary(MacState),
+    Bin = term_to_binary(MacState, [{compressed, 9}]),
     Data = [<<Idx:64/unsigned,
               Term:64/unsigned,
               (length(ClusterServers)):8/unsigned>>,
