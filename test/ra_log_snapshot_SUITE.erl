@@ -63,22 +63,23 @@ roundtrip(Config) ->
     SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
     SnapshotRef = my_state,
     ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
-    {SnapshotMeta, SnapshotRef} = read(Dir),
+    ?assertEqual({SnapshotMeta, SnapshotRef}, read(Dir)),
     ok.
 
-chunks_to_snapshot(ChunkSt, Chunks) ->
-    {Data, _} = lists:foldl(fun (F, {D, S0}) ->
-                                    {B, S} = F(S0),
-                                    {[B, D], S}
-                            end, {[], ChunkSt}, Chunks),
-    binary_to_term(iolist_to_binary(lists:reverse(Data))).
-
-
 read(Dir) ->
-    case ra_log_snapshot:read(128, Dir) of
-        {ok, _Crc, Meta, ChunkSt, Chunks} ->
-            Snap = chunks_to_snapshot(ChunkSt, Chunks),
-            {Meta, Snap};
+    case ra_log_snapshot:begin_read(128, Dir) of
+        {ok, _Crc, Meta, St} ->
+            Snap = read_all_snapshot(St, Dir, <<>>),
+            {Meta, binary_to_term(Snap)};
+        Err -> Err
+    end.
+
+read_all_snapshot(St, Dir, Acc) ->
+    case ra_log_snapshot:read_chunk(St, Dir) of
+        {ok, Data, {next, St1}} ->
+            read_all_snapshot(St1, Dir, <<Acc/binary, Data/binary>>);
+        {ok, Data, last} ->
+            <<Acc/binary, Data/binary>>;
         Err -> Err
     end.
 

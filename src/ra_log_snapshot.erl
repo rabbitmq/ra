@@ -9,7 +9,8 @@
          begin_accept/3,
          accept_chunk/2,
          complete_accept/2,
-         read/2,
+         begin_read/2,
+         read_chunk/2,
          recover/1,
          validate/1,
          read_meta/1
@@ -89,14 +90,15 @@ complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:close(Fd),
     ok.
 
-read(Size, Dir) ->
+begin_read(Size, Dir) ->
     File = filename(Dir),
     case file:open(File, [read, binary, raw]) of
         {ok, Fd} ->
             case read_meta_internal(Fd) of
                 {ok, Meta, Crc} ->
-                    %% make chunks
-                    {ok, Crc, Meta, Fd, make_chunks(Size, Fd, [])};
+                    {ok, DataStart} = file:position(Fd, cur),
+                    {ok, Eof} = file:position(Fd, eof),
+                    {ok, Crc, Meta, {DataStart, Size, Eof, Fd}};
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
@@ -105,31 +107,15 @@ read(Size, Dir) ->
             Err
     end.
 
-make_chunks(Size, Fd, Acc) ->
-    {ok, Cur} = file:position(Fd, cur),
-    {ok, Eof} = file:position(Fd, eof),
-    case min(Size, Eof - Cur) of
-        Size ->
-            {ok, _} = file:position(Fd, Cur + Size),
-            Thunk = fun(F) ->
-                            %% Position file offset
-                            {ok, _} = file:position(F, Cur),
-                            {ok, Data} = file:read(F, Size),
-                            {Data, F}
-                    end,
-            %% ensure pos is correct for next chunk
-            {ok, _} = file:position(Fd, Cur + Size),
-            make_chunks(Size, Fd, [Thunk | Acc]);
-        Rem ->
-            %% this is the last thunk
-            Thunk = fun(F) ->
-                            %% Position file offset
-                            {ok, _} = file:position(F, Cur),
-                            {ok, Data} = file:read(F, Rem),
-                            _ = file:close(F),
-                            {Data, F}
-                    end,
-            lists:reverse([Thunk | Acc])
+read_chunk({Pos, Size, Eof, Fd}, _Dir) ->
+    {ok, _} = file:position(Fd, Pos),
+    {ok, Data} = file:read(Fd, Size),
+    case Pos + Size >= Eof of
+        true ->
+            _ = file:close(Fd),
+            {ok, Data, last};
+        false ->
+            {ok, Data, {next, {Pos + Size, Size, Eof, Fd}}}
     end.
 
 -spec recover(file:filename()) ->

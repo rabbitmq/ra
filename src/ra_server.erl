@@ -830,7 +830,7 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
                                       last_index = Idx,
                                       last_term = SnapTerm,
                                       leader_id = LeaderId,
-                                      chunk_state = {1, OutOf}} = Rpc,
+                                      chunk_state = {1, _ChunkFlag}} = Rpc,
                 #{id := Id, log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
@@ -841,7 +841,7 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
           [Id, Idx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, SnapTerm, Cluster},
-                                        OutOf, SnapState0),
+                                        SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
     {receive_snapshot, State0#{log => Log,
                                leader_id => LeaderId}, [{next_event, Rpc}]};
@@ -854,20 +854,20 @@ handle_follower(Msg, State) ->
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               last_index = LastIndex,
                                               last_term = LastTerm,
-                                              chunk_state = {Num, OutOf},
+                                              chunk_state = {Num, ChunkFlag},
                                               data = Data},
                         #{id := Id, log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     ?INFO("~w: receiving snapshot chunk: ~b / ~b~n",
-          [Id, Num, OutOf]),
+          [Id, Num, ChunkFlag]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag, SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
-    case Num of
-        OutOf ->
+    case ChunkFlag of
+        last ->
             %% this is the last chunk so we can "install" it
             Log = ra_log:install_snapshot({LastIndex, LastTerm},
                                           SnapState, Log0),
@@ -881,7 +881,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply}]};
-        _ ->
+        next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
             State = State0#{log => Log},
             {receive_snapshot, State, [{reply, Reply}]}
