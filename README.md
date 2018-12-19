@@ -1,4 +1,3 @@
-# Ra: a Raft Implementation for Erlang and Elixir
 
 [![Build Status](https://travis-ci.org/rabbitmq/ra.svg?branch=master)](https://travis-ci.org/rabbitmq/ra)
 

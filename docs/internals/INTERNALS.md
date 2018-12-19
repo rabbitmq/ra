@@ -43,8 +43,8 @@ implemented:
 ```erlang
 -callback init(Conf :: machine_init_args()) -> state().
 
--callback 'apply'(command_meta_data(), command(), effects(), State) ->
-    {State, effects(), reply()}.
+-callback 'apply'(command_meta_data(), command(), State) ->
+    {State, reply(), effects() | effect()} | {State, reply()}.
 ```
 
 ### init/1
@@ -53,13 +53,14 @@ implemented:
 is created. It takes an arbitrary map of configuration parameters. The parameters
 are application-specific.
 
-### apply/4
+### apply/3
 
-`apply/4` is the primary function that is called for every command in the
+`apply/3` is the primary function that is called for every command in the
 Raft log. It takes Raft state machine metadata as a map (most importantly the Raft index and current term),
-a command, a list of effects (see below) and the current state.
+a command and the current state.
 
-It must return the new state, a list of effects and a reply. Replies will be returned to the caller
+It must return the new state, a list of effects (in execution order) and a reply.
+Replies will be returned to the caller
 only if they performed a synchronous call or they requested an asynchronous notification
 using `ra:pipeline_command/{3/4}`.
 
@@ -70,15 +71,15 @@ using `ra:pipeline_command/{3/4}`.
 -type command_meta_data() :: ra_server:command_meta() | #{index := ra_index(),
                                                          term := ra_term()}.
 
--spec apply(machine(), command_meta_data(), command(), effects(), State) ->
-    {State, effects(), reply()}.
+-spec apply(machine(), command_meta_data(), command(), State) ->
+    {State, reply(), effects() | effect()} | {State, reply()}.
 ```
 
 
 ## Effects
 
 Effects are used to separate the state machine logic from the side effects it wants
-to take inside its environment. Each call to the `apply/4` function can return
+to take inside its environment. Each call to the `apply/3` function can return
 a list of effects for the leader to realise. This includes sending messages,
 setting up server and process monitors and calling arbitrary functions.
 
