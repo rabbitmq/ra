@@ -26,14 +26,22 @@ checkpoints or similar in disk-based state machines.
 This is called in a separate process and should write the snapshot into the
 directory specificied by the Location argument.
 
-- `read(ChunkSizeBytes :: non_neg_integer(), Location :: file:filename()) ->
-    {ok, Meta :: meta(), ChunkState :: term(), [fun((ChunkState) -> {term(), ChunkState)] | {error, term()}.`
+- `begin_read(ChunkSizeBytes :: non_neg_integer(), Location :: file:filename()) ->
+    {ok, Crc :: non_neg_integer(), Meta :: meta(), ReadState :: term()}
+    | {error, term()}.`
 
 This is called in a separate process when the leader needs to send a snapshot
-to a follower. `read` returns the meta data (index, term and cluster configuration)
-as well as a list of "chunk thunks" that will be called one by one to retrieve
-the chunks to be transferred. This function can be stateful and thus threads
-a "chunk state" through as well.
+to a follower. `begin_read` returns the meta data (index, term and cluster configuration)
+as well as a continuation state that will be used to read chunks to be transferred.
+This function also returns a checksum to validate data transfer.
+
+- `read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(), Location :: file:filename()) ->
+    {ok, Chunk :: term(), {next, ReadState} | last} | {error, term()}`
+
+This function reads a chunk of data to be sent. The data is read using ReadState
+initially received from `begin_read`. As long as it returns `{next, ReadState}`
+it will be called again for the next chunk. When reading the last chunk the
+function should return `last` instead.
 
 - `begin_accept/accept_chunk/complete_accept`
 

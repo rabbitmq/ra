@@ -86,7 +86,7 @@
 -callback read_chunk(ReadState,
                      ChunkSizeBytes :: non_neg_integer(),
                      Location :: file:filename()) ->
-    {ok, term(), {next, ReadState} | last} | {error, term()}.
+    {ok, Chunk :: term(), {next, ReadState} | last} | {error, term()}.
 
 %% begin a stateful snapshot acceptance process
 -callback begin_accept(SnapDir :: file:filename(),
