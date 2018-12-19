@@ -289,13 +289,13 @@ read_snapshot(Config) ->
 
     {ok, _Crc, Meta, InitChunkState} = ra_snapshot:begin_read(1024, State),
 
-    Data = read_all_chunks(InitChunkState, State, <<>>),
+    Data = read_all_chunks(InitChunkState, State, 1024, <<>>),
     ?assertEqual(MacRef, binary_to_term(Data)),
 
     ok.
 
-read_all_chunks(ChunkState, State, Acc) ->
-    case ra_snapshot:read_chunk(ChunkState, State) of
+read_all_chunks(ChunkState, State, Size, Acc) ->
+    case ra_snapshot:read_chunk(ChunkState, Size, State) of
         {ok, Chunk, {next, ChunkState1}} ->
             read_all_chunks(ChunkState1, State, <<Acc/binary, Chunk/binary>>);
         {ok, Chunk, last} ->

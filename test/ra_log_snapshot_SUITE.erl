@@ -69,13 +69,13 @@ roundtrip(Config) ->
 read(Dir) ->
     case ra_log_snapshot:begin_read(128, Dir) of
         {ok, _Crc, Meta, St} ->
-            Snap = read_all_snapshot(St, Dir, <<>>),
+            Snap = read_all_snapshot(St, Dir, 128, <<>>),
             {Meta, binary_to_term(Snap)};
         Err -> Err
     end.
 
-read_all_snapshot(St, Dir, Acc) ->
-    case ra_log_snapshot:read_chunk(St, Dir) of
+read_all_snapshot(St, Dir, Size, Acc) ->
+    case ra_log_snapshot:read_chunk(St, Size, Dir) of
         {ok, Data, {next, St1}} ->
             read_all_snapshot(St1, Dir, <<Acc/binary, Data/binary>>);
         {ok, Data, last} ->

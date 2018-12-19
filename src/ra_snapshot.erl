@@ -11,7 +11,7 @@
          recover/1,
          read_meta/2,
          begin_read/2,
-         read_chunk/2,
+         read_chunk/3,
          delete/2,
 
          init/3,
@@ -83,7 +83,9 @@
 
 %% Read a chunk of data from the snapshot using the read state
 %% Returns a binary chunk of data and a continuation state
--callback read_chunk(ReadState, Location :: file:filename()) ->
+-callback read_chunk(ReadState,
+                     ChunkSizeBytes :: non_neg_integer(),
+                     Location :: file:filename()) ->
     {ok, term(), {next, ReadState} | last} | {error, term()}.
 
 %% begin a stateful snapshot acceptance process
@@ -325,14 +327,15 @@ begin_read(ChunkSizeBytes, #?MODULE{module = Mod,
     Mod:begin_read(ChunkSizeBytes, Location).
 
 
--spec read_chunk(ReadState, State :: state()) ->
+-spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
     {ok, Data :: term(), {next, ReadState} | last}  |
     {error, term()} when ReadState :: term().
-read_chunk(ReadState, #?MODULE{module = Mod,
+read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
                                 directory = Dir,
                                 current = {Idx, Term}}) ->
+    %% TODO: do we need to generate location for every chunk?
     Location = make_snapshot_dir(Dir, Idx, Term),
-    Mod:read_chunk(ReadState, Location).
+    Mod:read_chunk(ReadState, ChunkSizeBytes, Location).
 
 -spec recover(state()) ->
     {ok, Meta :: meta(), State :: term()} |

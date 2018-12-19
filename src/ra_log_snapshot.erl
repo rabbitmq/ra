@@ -10,7 +10,7 @@
          accept_chunk/2,
          complete_accept/2,
          begin_read/2,
-         read_chunk/2,
+         read_chunk/3,
          recover/1,
          validate/1,
          read_meta/1
@@ -90,7 +90,7 @@ complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:close(Fd),
     ok.
 
-begin_read(Size, Dir) ->
+begin_read(_Size, Dir) ->
     File = filename(Dir),
     case file:open(File, [read, binary, raw]) of
         {ok, Fd} ->
@@ -98,7 +98,7 @@ begin_read(Size, Dir) ->
                 {ok, Meta, Crc} ->
                     {ok, DataStart} = file:position(Fd, cur),
                     {ok, Eof} = file:position(Fd, eof),
-                    {ok, Crc, Meta, {DataStart, Size, Eof, Fd}};
+                    {ok, Crc, Meta, {DataStart, Eof, Fd}};
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
@@ -107,7 +107,7 @@ begin_read(Size, Dir) ->
             Err
     end.
 
-read_chunk({Pos, Size, Eof, Fd}, _Dir) ->
+read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
     {ok, _} = file:position(Fd, Pos),
     {ok, Data} = file:read(Fd, Size),
     case Pos + Size >= Eof of
@@ -115,7 +115,7 @@ read_chunk({Pos, Size, Eof, Fd}, _Dir) ->
             _ = file:close(Fd),
             {ok, Data, last};
         false ->
-            {ok, Data, {next, {Pos + Size, Size, Eof, Fd}}}
+            {ok, Data, {next, {Pos + Size, Eof, Fd}}}
     end.
 
 -spec recover(file:filename()) ->
