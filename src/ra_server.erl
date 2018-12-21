@@ -63,7 +63,8 @@
       aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
-      pre_vote_token => reference()
+      pre_vote_token => reference(),
+      filter_state => term()
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -232,7 +233,8 @@ init(#{id := Id,
                machine => Machine,
                machine_state => MacState,
                aux_state => ra_machine:init_aux(Machine, Name),
-               condition_timeout_effects => []},
+               condition_timeout_effects => [],
+               filter_state => ra_machine:init_filter(Machine, MacState)},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a server could restart without any known
     % peers and become a leader
@@ -1547,6 +1549,7 @@ apply_with(Machine,
                                                     Effects0, MacSt),
     {Effects, Notifys} = add_reply(From, Reply, ReplyType,
                                    Effects1, Notifys0),
+    rabbit_log:warning("EFFECTS ~p", [Effects]),
     {Idx, State, NextMacSt, Effects, Notifys};
 apply_with({machine, MacMod, _}, % Machine
            {Idx, _, {'$ra_query', #{from := From}, QueryFun, _}},
@@ -1619,12 +1622,14 @@ add_reply(_, _, _, % From, Reply, Mode
 
 maybe_append_log_leader({'$usr', Meta, Cmd, ReplyType} = UsrCmd,
                         #{machine := Machine,
-                          machine_state := MacState0} = State) ->
-    case ra_machine:reject(Machine, Meta, Cmd, ReplyType, MacState0) of
-        {Effects, true} ->
-            {rejected, State, Effects};
-        {[], false} ->
-            append_log_leader(UsrCmd, State)
+                          machine_state := MacState0,
+                          filter_state := FilterState0} = State) ->
+    case ra_machine:filter(Machine, Meta, Cmd, ReplyType, MacState0, FilterState0) of
+        {_NewCmd, Effects, FilterState, true} ->
+            {rejected, State#{filter_state => FilterState}, Effects};
+        {NewCmd, [], FilterState, false} ->
+            append_log_leader({'$usr', Meta, NewCmd, ReplyType},
+                              State#{filter_state => FilterState})
     end;
 maybe_append_log_leader(Cmd, State) ->
     append_log_leader(Cmd, State).

@@ -1160,7 +1160,7 @@ send(To, Msg) ->
     % a TCP connection to a potentially down node.
     case erlang:send(To, Msg, [noconnect, nosuspend]) of
         ok -> ok;
-        _ -> ok
+        _Reason -> ok
     end.
 
 
