@@ -471,7 +471,7 @@ close_open_mem_tables(OpnMemTbls, Filename, TblWriter) ->
 
     % notify segment_writer of new unflushed memtables
     ok = ra_log_segment_writer:accept_mem_tables(TblWriter, MemTables,
-                                                      Filename),
+                                                 Filename),
     ok.
 
 recovering_to_closed(Filename) ->

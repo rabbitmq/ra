@@ -338,8 +338,8 @@ handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
              #?MODULE{uid = UId,
-                    open_segments = Open0,
-                    segment_refs = SegmentRefs} = State0) ->
+                      open_segments = Open0,
+                      segment_refs = SegmentRefs} = State0) ->
     ClosedTables = closed_mem_tables(UId),
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
@@ -347,12 +347,13 @@ handle_event({segments, Tid, NewSegs},
     % at any time
     Obsolete = ClosedTables -- Active,
 
-    [begin
-         %% first delete the entry in the closed table lookup
-         true = ets:delete_object(ra_log_closed_mem_tables, ClosedTbl),
-         % then delete the actual ETS table
-         true = ets:delete(T)
-     end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
+    TidsToDelete = [begin
+                        %% first delete the entry in the closed table lookup
+                        true = ets:delete_object(ra_log_closed_mem_tables,
+                                                 ClosedTbl),
+                        T
+                    end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
+    ok = ra_log_ets:delete_tables(TidsToDelete),
 
     %% check if any of the updated segrefs refer to open segments
     %% we close these segments so that they can be re-opened with updated
@@ -367,7 +368,7 @@ handle_event({segments, Tid, NewSegs},
     % compact seg ref list so that only the latest range for a segment
     % file has an entry
     {State0#?MODULE{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
-                  open_segments = Open}, []};
+                    open_segments = Open}, []};
 handle_event({snapshot_written, {Idx, _} = Snap},
              #?MODULE{snapshot_state = SnapState0} = State0) ->
     % delete any segments outside of first_index
@@ -382,7 +383,7 @@ handle_event({snapshot_written, {Idx, _} = Snap},
                 ra_snapshot:current(SnapState0)}],
     %% do not set last index here as the snapshot may be for a past index
     truncate_cache(Idx, State#?MODULE{first_index = Idx + 1,
-                                    snapshot_state = SnapState}, Effects);
+                                      snapshot_state = SnapState}, Effects);
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -593,15 +594,15 @@ release_resources(MaxOpenSegments,
     _ = ra_flru:evict_all(OpenSegs),
     %% open a new segment with the new max open segment value
     State#?MODULE{open_segments = ra_flru:new(MaxOpenSegments,
-                                            fun flru_handler/1)}.
+                                              fun flru_handler/1)}.
 
 %%% Local functions
 
 %% deletes all segments where the last index is lower than the Idx argumement
 delete_segments(Idx, #?MODULE{uid = UId,
-                            open_segments = OpenSegs0,
-                            directory = Dir,
-                            segment_refs = SegRefs0} = State0) ->
+                              open_segments = OpenSegs0,
+                              directory = Dir,
+                              segment_refs = SegRefs0} = State0) ->
     case lists:partition(fun({_, To, _}) when To > Idx -> true;
                             (_) -> false
                          end, SegRefs0) of
@@ -622,7 +623,7 @@ delete_segments(Idx, #?MODULE{uid = UId,
             ?INFO("~s: ~b obsolete segments at ~b - remaining: ~b",
                   [UId, length(ObsoleteKeys), Idx, length(Active)]),
             State0#?MODULE{open_segments = OpenSegs,
-                         segment_refs = Active}
+                           segment_refs = Active}
     end.
 
 wal_truncate_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
@@ -632,7 +633,7 @@ wal_truncate_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
     % and that prior entries should be considered stale
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
     State#?MODULE{last_index = Idx, last_term = Term,
-                cache = Cache#{Idx => {Term, Data}}}.
+                  cache = Cache#{Idx => {Term, Data}}}.
 
 wal_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
           {Idx, Term, Data}) ->
@@ -768,8 +769,7 @@ segment_take(#?MODULE{segment_refs = SegRefs,
                           {S, Open1};
                       error ->
                           AbsFn = filename:join(Dir, Fn),
-                          case ra_log_segment:open(AbsFn,
-                                                   #{mode => read}) of
+                          case ra_log_segment:open(AbsFn, #{mode => read}) of
                               {ok, S} ->
                                   {S, ra_flru:insert(Fn, S, Open0)};
                               {error, Err} ->
@@ -794,8 +794,8 @@ segment_take(#?MODULE{segment_refs = SegRefs,
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
 segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
-                               directory = Dir,
-                               open_segments = OpenSegs} = State) ->
+                                 directory = Dir,
+                                 open_segments = OpenSegs} = State) ->
     {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Dir),
     {Result, State#?MODULE{open_segments = Open}}.
 
