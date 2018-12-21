@@ -324,21 +324,21 @@ start_cluster(ClusterName, ServerIds) ->
 init(_) ->
     queue:new().
 
-'apply'(_Meta, {enq, Msg}, Effects, State) ->
-    {queue:in(Msg, State), Effects, ok};
-'apply'(_Meta, deq, Effects, State0) ->
+'apply'(_Meta, {enq, Msg}, State) ->
+    {queue:in(Msg, State), ok};
+'apply'(_Meta, deq, State0) ->
     case queue:out(State0) of
         {{value, Item}, State} ->
-            {State, Effects, Item};
+            {State, Item};
         {empty, _} ->
-            {State0, Effects, empty}
+            {State0, empty}
     end;
-'apply'(_Meta, {deq, Pid}, Effects, State0) ->
+'apply'(_Meta, {deq, Pid}, State0) ->
     case queue:out(State0) of
         {{value, Item}, State} ->
-            {State, [{send_msg, Pid, Item, ra_event} | Effects], ok};
+            {State, ok, {send_msg, Pid, Item, ra_event}};
         {empty, _} ->
-            {State0, Effects, ok}
+            {State0, ok}
     end.
 
 state_enter(eol, State) ->

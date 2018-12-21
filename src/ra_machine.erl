@@ -10,12 +10,10 @@
 %%
 %%<br></br>
 %% <code>-callback apply(Meta :: command_meta_data(),
-%%                       {@link command()}, effects(), State) ->
-%%    {State, {@link effects()}, {@link reply()}}</code>
+%%                       {@link command()}, State) ->
+%%    {State, {@link reply()}, {@link effects()}} | {State, {@link reply()}}</code>
 %%
-%% Applies each entry to the state machine. Effects should be prepended to the
-%% incoming list of effects. Ra will reverse the list of effects before
-%% processing.
+%% Applies each entry to the state machine.
 %%
 %%<br></br>
 %% <code>
@@ -45,7 +43,7 @@
 
 
 -export([init/2,
-         apply/5,
+         apply/4,
          tick/3,
          state_enter/3,
          overview/2,
@@ -76,7 +74,7 @@
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
--type send_msg_opt() :: [ra_event | cast].
+-type send_msg_opt() :: [ra_event | cast] | ra_event | cast.
 %% ra_event: the message will be wrapped up and sent as a ra event
 %% e.g: `{ra_event, ra_server_id(), Msg}'
 %%
@@ -96,7 +94,7 @@
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
-%% Effects are data structure that can be returned by {@link apply/4} to ask
+%% Effects are data structure that can be returned by {@link apply/3} to ask
 %% ra to realise a side-effect in the real works, such as sending
 %% a message to a process.
 %%
@@ -170,8 +168,8 @@
 
 -callback init(Conf :: machine_init_args()) -> state().
 
--callback 'apply'(command_meta_data(), command(), effects(), State) ->
-    {State, effects(), reply()}.
+-callback 'apply'(command_meta_data(), command(), State) ->
+    {State, reply(), effects()} | {State, reply()} when State :: term().
 
 -callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 
@@ -199,10 +197,10 @@
 init({machine, Mod, Args}, Name) ->
     Mod:init(Args#{name => Name}).
 
--spec apply(machine(), command_meta_data(), command(), effects(), State) ->
-    {State, effects(), reply()}.
-apply({machine, Mod, _}, Metadata, Cmd, Effects, State) ->
-    Mod:apply(Metadata, Cmd, Effects, State).
+-spec apply(machine(), command_meta_data(), command(), State) ->
+    {State, reply(), effects()} | {State, reply()}.
+apply({machine, Mod, _}, Metadata, Cmd, State) ->
+    Mod:apply(Metadata, Cmd, State).
 
 -spec tick(machine(), milliseconds(), state()) -> effects().
 tick({machine, Mod, _}, TimeMs, State) ->

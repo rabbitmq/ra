@@ -25,15 +25,14 @@
  
  <p><br>
   <code>-callback apply(Meta :: command_meta_data(),
-                        <a href="#type-command"><code>command()</code></a>, effects(), State) -&gt;
-     {State, <a href="#type-effects"><code>effects()</code></a>, <a href="#type-reply"><code>reply()</code></a>}</code></p>
+                        <a href="#type-command"><code>command()</code></a>, State) -&gt;
+     {State, <a href="#type-reply"><code>reply()</code></a>, <a href="#type-effects"><code>effects()</code></a>} | {State, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
-  <p>Applies each entry to the state machine. Effects should be prepended to the  
-incoming list of effects. Ra will reverse the list of effects before  
-processing.</p>
+  <p>Applies each entry to the state machine.</p>
  
  <p><br>
-  <code>-callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
+  <code>
+  -callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
   </code></p>
  
   <p>Optional. Called when the ra server enters a new state. Called for all states
@@ -83,7 +82,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
     {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>
-<p><p>  Effects are data structure that can be returned by <a href="#apply-4"><code>apply/4</code></a> to ask  
+<p><p>  Effects are data structure that can be returned by <a href="#apply-3"><code>apply/3</code></a> to ask  
 ra to realise a side-effect in the real works, such as sending  
 a message to a process.</p>
  
@@ -142,7 +141,7 @@ is a good idea.</p>
   <a href="ra.html#process_command-3"><code>ra:process_command/3</code></a></p>
 
 <h3 class="typedecl"><a name="type-send_msg_opt">send_msg_opt()</a></h3>
-<p><pre>send_msg_opt() = [ra_event | cast]</pre></p>
+<p><pre>send_msg_opt() = [ra_event | cast] | ra_event | cast</pre></p>
 <p><p>  ra_event: the message will be wrapped up and sent as a ra event
   e.g: <code>{ra_event, ra_server_id(), Msg}</code></p>
  
@@ -162,7 +161,7 @@ is a good idea.</p>
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
-<tr><td valign="top"><a href="#apply-5">apply/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
@@ -170,6 +169,7 @@ is a good idea.</p>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#snapshot_module-1">snapshot_module/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -179,14 +179,13 @@ is a good idea.</p>
 <p><pre>init(X1 :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
 </div><p>initialise a new machine</p>
 
-<h3 class="function"><a name="apply-5">apply/5</a></h3>
+<h3 class="function"><a name="apply-4">apply/4</a></h3>
 <div class="spec">
 <p><pre>apply(X1 :: <a href="#type-machine">machine()</a>,
       Metadata :: <a href="#type-command_meta_data">command_meta_data()</a>,
       Cmd :: <a href="#type-command">command()</a>,
-      Effects :: <a href="#type-effects">effects()</a>,
       State) -&gt;
-         {State, <a href="#type-effects">effects()</a>, <a href="#type-reply">reply()</a>}</pre></p>
+         {State, <a href="#type-reply">reply()</a>, <a href="#type-effects">effects()</a>} | {State, <a href="#type-reply">reply()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>
@@ -240,6 +239,11 @@ is a good idea.</p>
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
 <p><pre>module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
+</div>
+
+<h3 class="function"><a name="snapshot_module-1">snapshot_module/1</a></h3>
+<div class="spec">
+<p><pre>snapshot_module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
 </div>
 <hr>
 

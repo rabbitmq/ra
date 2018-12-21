@@ -1,4 +1,3 @@
-%% @hidden
 -module(ra_server).
 
 -include("ra.hrl").
@@ -1071,17 +1070,31 @@ evaluate_commit_index_follower(State, Effects) ->
     {follower, State, Effects}.
 
 filter_follower_effects(Effects) ->
-    lists:filter(fun ({release_cursor, _, _}) -> true;
-                     ({incr_metrics, _, _}) -> true;
-                     ({aux, _}) -> true;
-                     (garbage_collection) -> true;
-                     ({delete_snapshot, _}) -> true;
-                     ({monitor, process, Comp, _}) ->
+    lists:reverse(lists:foldl(fun ({release_cursor, _, _} = C, Acc) ->
+                        [C | Acc];
+                     ({incr_metrics, _, _} = C, Acc) ->
+                        [C | Acc];
+                     ({aux, _} = C, Acc) ->
+                        [C | Acc];
+                     (garbage_collection = C, Acc) ->
+                        [C | Acc];
+                     ({delete_snapshot, _} = C, Acc) ->
+                        [C | Acc];
+                     ({monitor, process, Comp, _} = C, Acc)
+                       when Comp =/= machine ->
                          %% only machine monitors should not be emitted
                          %% by followers
-                         Comp =/= machine;
-                     (_) -> false
-                 end, Effects).
+                        [C | Acc];
+                     (L, Acc) when is_list(L) ->
+                         %% nested case - recurse
+                         case filter_follower_effects(L) of
+                             [] -> Acc;
+                             Filtered ->
+                                 [Filtered | Acc]
+                         end;
+                     (_, Acc) ->
+                        Acc
+                 end, [], Effects)).
 
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
@@ -1494,7 +1507,10 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 apply_to(ApplyTo, #{machine := Machine} = State, Effs) ->
-    apply_to(ApplyTo, fun(E, S) -> apply_with(Machine, E, S) end, State, Effs).
+    apply_to(ApplyTo,
+             fun(E, S) ->
+                     apply_with(Machine, E, S)
+             end, State, Effs).
 
 apply_to(ApplyTo, ApplyFun, State, Effs) ->
     apply_to(ApplyTo, ApplyFun, 0, #{}, Effs, State).
@@ -1509,8 +1525,8 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
         {[], State} ->
             %% reverse list before consing the notifications to ensure
             %% notifications are processed first
-            Effects = make_notify_effects(Notifys0, lists:reverse(Effects0)),
-            {State, Effects, NumApplied};
+            FinalEffs = make_notify_effects(Notifys0, lists:reverse(Effects0)),
+            {State, FinalEffs, NumApplied};
         %% assert first item read is from
         {[{From, _, _} | _] = Entries, State1} ->
             {AppliedTo, State, MacState, Effects, Notifys} =
@@ -1522,26 +1538,31 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
                      Notifys, Effects, State#{last_applied => AppliedTo,
                                               machine_state => MacState})
     end;
-apply_to(_, _, NumApplied, Notifys, Effects0, State) -> % ApplyTo
+apply_to(_, _, NumApplied, Notifys, Effects, State) -> % ApplyTo
     %% reverse list before consing the notifications to ensure
     %% notifications are processed first
-    Effects = make_notify_effects(Notifys, lists:reverse(Effects0)),
-    {State, Effects, NumApplied}.
+    FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
+    {State, FinalEffs, NumApplied}.
 
-make_notify_effects(Nots, Effects) ->
+make_notify_effects(Nots, Prior) ->
     maps:fold(fun (Pid, Corrs, Acc) ->
                       [{notify, Pid, lists:reverse(Corrs)} | Acc]
-              end, Effects, Nots).
+              end, Prior, Nots).
 
 apply_with(Machine,
            {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
-           {_, State, MacSt, Effects0, Notifys0}) ->
+           {_, State, MacSt, Effects, Notifys0}) ->
     Meta = Meta0#{index => Idx, term => Term},
-    {NextMacSt, Effects1, Reply} = ra_machine:apply(Machine, Meta, Cmd,
-                                                    Effects0, MacSt),
-    {Effects, Notifys} = add_reply(From, Reply, ReplyType,
-                                   Effects1, Notifys0),
-    {Idx, State, NextMacSt, Effects, Notifys};
+    case ra_machine:apply(Machine, Meta, Cmd, MacSt) of
+        {NextMacSt, Reply, AppEffs} ->
+            {ReplyEffs, Notifys} = add_reply(From, Reply, ReplyType,
+                                             Effects, Notifys0),
+            {Idx, State, NextMacSt, [AppEffs | ReplyEffs], Notifys};
+        {NextMacSt, Reply} ->
+            {ReplyEffs, Notifys} = add_reply(From, Reply, ReplyType,
+                                             Effects, Notifys0),
+            {Idx, State, NextMacSt, ReplyEffs, Notifys}
+    end;
 apply_with({machine, MacMod, _}, % Machine
            {Idx, _, {'$ra_query', #{from := From}, QueryFun, _}},
            {_, State, MacSt, Effects0, Notifys0}) ->
@@ -1575,13 +1596,13 @@ apply_with(Machine,
            {_, State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
     {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
-    Effects = make_notify_effects(Notifys, Effects1),
+    NotEffs = make_notify_effects(Notifys, []),
     %% virtual "eol" state
     EOLEffects = ra_machine:state_enter(Machine, eol, MacSt),
     % non-local return to be caught by ra_server_proc
     % need to update the state before throw
     State = State0#{last_applied => Idx, machine_state => MacSt},
-    throw({delete_and_terminate, State, EOLEffects ++ Effects});
+    throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with(_, {Idx, _, _} = Cmd, Acc) ->
     % TODO: remove to make more strics, ideally we should not need a catch all
     ?WARN("~p: apply_with: unhandled command: ~W~n",

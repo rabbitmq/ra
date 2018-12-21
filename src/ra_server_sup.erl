@@ -68,6 +68,7 @@ prepare_restart_rpc(RaName) ->
 
 -spec stop_server(RaNodeId :: ra_server_id()) -> ok | {error, term()}.
 stop_server({RaName, Node}) ->
+    %% TODO: this could timeout
     Pid = rpc:call(Node, ra_directory,
                    where_is, [RaName]),
     supervisor:terminate_child({?MODULE, Node}, Pid);

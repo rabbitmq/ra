@@ -10,19 +10,18 @@ implemented:
 ```erlang
 -callback init(Conf :: machine_init_args()) -> state().
 
--callback 'apply'(command_meta_data(), command(), effects(), State) ->
-    {State, effects(), reply()}.
+-callback 'apply'(command_meta_data(), command(), State) ->
+    {State, reply(), effects() | effect()} | {State, reply()}.
 ```
 
 `init/1` returns the initial state when a new instance of the state machine
 is created. It takes an arbitrary map of configuration parameters.
 
-`apply/4` is the primary function that is called for every command in the
+`apply/3` is the primary function that is called for every command in the
 raft log. It takes a meta data map containing the raft index and term (more on that later),
-a command, a list of effects and the
+a command and the
 current state and returns the new state, effects _and_ a reply that can be returned
 to the caller _if_ they issued a synchronous call (see: `ra:process_command/2`).
-Effects should be prepended to the incoming effects list.
 
 There are also some optional callbacks that advanced state machines may choose to
 implement.
@@ -35,12 +34,12 @@ As an example we are going to write a simple key-value store that takes
 ### Writing the Store
 
 Create a new erlang module named `ra_kv` using the `ra_machine` behaviour and
-export the `init/1` and `apply/4` functions:
+export the `init/1` and `apply/3` functions:
 
 ```erlang
 -module(ra_kv).
 -behaviour(ra_machine).
--export([init/1, apply/4]).
+-export([init/1, apply/3]).
 ```
 
 First we are going to define a type spec for the state and commands that we will
@@ -59,15 +58,15 @@ To implement `init/1` simply return an empty map as the initial state of our kv 
 init(_Config) -> #{}.
 ```
 
-To implement the `apply/4` function we need to handle each of the commands
+To implement the `apply/3` function we need to handle each of the commands
 we support.
 
 ```erlang
-apply(_Meta, {write, Key, Value}, Effects, State) ->
-    {maps:put(Key, Value, State), Effects, ok};
-apply(_Meta, {read, Key}, Effects, State) ->
+apply(_Meta, {write, Key, Value}, State) ->
+    {maps:put(Key, Value, State), ok, Effects};
+apply(_Meta, {read, Key}, State) ->
     Reply = maps:get(Key, State, undefined),
-    {State, Effects, Reply}.
+    {State, Reply, Effects}.
 ```
 
 For the `{write, Key, Value}` command we simply put the key and value into the
@@ -171,11 +170,12 @@ read(Key) ->
 ## Effects
 
 Effects are used to separate the state machine logic from the side effects it wants
-to take inside it's environment. Each call to the `apply/4` function can return
+to take inside it's environment. Each call to the `apply/3` function can return
 a list of effects for the leader to realise. This includes sending messages,
 setting up server and process monitors and calling arbitrary functions.
 
-Ra will reverse the list of effects for each batch of applied entries before processing.
+Effects should be a list sorted by execution order, i.e. the effect to be actioned
+first should be at the head of the list.
 
 Only the leader that first applies an entry will attempt the effect.
 Followers process the same set of commands but simply throw away any effects returned by
@@ -216,5 +216,5 @@ or similar.
 ### Update the release cursor (Snapshotting)
 
 To (potentially) trigger a snapshot return the `{release_cursor, RaftIndex, MachineState}`
-effect. This is why the raft index is included in the `apply/4` function. Ra will
+effect. This is why the raft index is included in the `apply/3` function. Ra will
 only create a snapshot if doing so will result in log segments being deleted.

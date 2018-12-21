@@ -391,7 +391,7 @@ withing some time window.
 When the command is applied to the state machine the ra server will send  
 the calling process a ra_event of the following structure:</p>
  
-  <p><code>{ra_event, {applied, [{Correlation, Reply}]}}</code></p>
+  <p><code>{ra_event, CurrentLeader, {applied, [{Correlation, Reply}]}}</code></p>
  
   <p>Not that ra will batch notification and thus return a list of correlation  
 and result tuples.</p>
@@ -400,7 +400,7 @@ and result tuples.</p>
 structure will be returned informing the caller that it cannot process the  
 message including the current leader, if known:</p>
  
-  <p><code>{ra_event, {rejected, {not_leader, Leader | undefined, Correlation}}}</code>  
+  <p><code>{ra_event, CurrentLeader, {rejected, {not_leader, Leader | undefined, Correlation}}}</code>  
 The caller can then redirect the command for the correlation identifier to  
 the correct ra server.</p>
  
