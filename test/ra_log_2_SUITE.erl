@@ -541,11 +541,11 @@ snapshot_installation(Config) ->
         after 1000 ->
                   exit(snapshot_timeout)
         end,
-    {ok, Crc, Meta, ChunkSt} = ra_snapshot:begin_read(1000000000, Sn2),
-    {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, Sn2),
+    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2),
+    {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, 1000000000, Sn2),
 
     SnapState0 = ra_log:snapshot_state(Log1),
-    {ok, SnapState1} = ra_snapshot:begin_accept(Crc, Meta, SnapState0),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
 
     Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),

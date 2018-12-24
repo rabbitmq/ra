@@ -28,8 +28,6 @@ PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}
 
-shell:: all
-
 all::
 
 escript-zip::

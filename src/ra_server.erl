@@ -824,8 +824,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     {follower, State, [{reply, Reply}]};
 %% need to check if it's the first or last rpc
 %% TODO: must abort pending if for some reason we need to do so
-handle_follower(#install_snapshot_rpc{crc = Crc,
-                                      term = Term,
+handle_follower(#install_snapshot_rpc{term = Term,
                                       last_config = Cluster,
                                       last_index = Idx,
                                       last_term = SnapTerm,
@@ -840,7 +839,7 @@ handle_follower(#install_snapshot_rpc{crc = Crc,
     ?INFO("~w: begin_accept snapshot at index ~b in term ~b~n",
           [Id, Idx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SS} = ra_snapshot:begin_accept(Crc, {Idx, SnapTerm, Cluster},
+    {ok, SS} = ra_snapshot:begin_accept({Idx, SnapTerm, Cluster},
                                         SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
     {receive_snapshot, State0#{log => Log,

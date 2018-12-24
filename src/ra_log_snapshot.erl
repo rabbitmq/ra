@@ -6,10 +6,10 @@
 -export([
          prepare/2,
          write/3,
-         begin_accept/3,
+         begin_accept/2,
          accept_chunk/2,
          complete_accept/2,
-         begin_read/2,
+         begin_read/1,
          read_chunk/3,
          recover/1,
          validate/1,
@@ -60,7 +60,7 @@ write(Dir, {Idx, Term, ClusterServers}, MacState) ->
                            Data]).
 
 
-begin_accept(SnapDir, Crc, {Idx, Term, Cluster}) ->
+begin_accept(SnapDir, {Idx, Term, Cluster}) ->
     File = filename(SnapDir),
     {ok, Fd} = file:open(File, [write, binary, raw]),
     Data = [<<Idx:64/unsigned,
@@ -74,23 +74,31 @@ begin_accept(SnapDir, Crc, {Idx, Term, Cluster}) ->
     PartialCrc = erlang:crc32(Data),
     ok = file:write(Fd, [<<?MAGIC,
                            ?VERSION:8/unsigned,
-                           Crc:32/integer>>,
+                           0:32/integer>>,
                          Data]),
-    {ok, {PartialCrc, Crc, Fd}}.
+    {ok, {PartialCrc, Fd}}.
 
+accept_chunk(Chunk, {PartialCrc, Fd}) ->
+    <<Crc:32/integer, Rest/binary>> = Chunk,
+    accept_chunk(Rest, {PartialCrc, Crc, Fd});
 accept_chunk(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
     PartialCrc = erlang:crc32(PartialCrc0, Chunk),
     {ok, {PartialCrc, Crc, Fd}}.
 
+complete_accept(Chunk, {PartialCrc, Fd}) ->
+    <<Crc:32/integer, Rest/binary>> = Chunk,
+    complete_accept(Rest, {PartialCrc, Crc, Fd});
 complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
+    {ok, 5} = file:position(Fd, 5),
+    ok = file:write(Fd, <<Crc:32/integer>>),
     Crc = erlang:crc32(PartialCrc0, Chunk),
     ok = file:sync(Fd),
     ok = file:close(Fd),
     ok.
 
-begin_read(_Size, Dir) ->
+begin_read(Dir) ->
     File = filename(Dir),
     case file:open(File, [read, binary, raw]) of
         {ok, Fd} ->
@@ -98,7 +106,7 @@ begin_read(_Size, Dir) ->
                 {ok, Meta, Crc} ->
                     {ok, DataStart} = file:position(Fd, cur),
                     {ok, Eof} = file:position(Fd, eof),
-                    {ok, Crc, Meta, {DataStart, Eof, Fd}};
+                    {ok, Meta, {Crc, {DataStart, Eof, Fd}}};
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
@@ -107,6 +115,13 @@ begin_read(_Size, Dir) ->
             Err
     end.
 
+read_chunk({Crc, ReadState}, Size, Dir) when is_integer(Crc) ->
+    case read_chunk(ReadState, Size - 4, Dir) of
+        {ok, Data, ReadState1} ->
+            {ok, <<Crc:32/integer, Data/binary>>, ReadState1};
+        {error, _} = Err ->
+            Err
+    end;
 read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
     {ok, _} = file:position(Fd, Pos),
     {ok, Data} = file:read(Fd, Size),

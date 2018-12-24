@@ -10,7 +10,7 @@
          save/4,
          recover/1,
          read_meta/2,
-         begin_read/2,
+         begin_read/1,
          read_chunk/3,
          delete/2,
 
@@ -25,7 +25,7 @@
          begin_snapshot/3,
          complete_snapshot/2,
 
-         begin_accept/3,
+         begin_accept/2,
          accept_chunk/4,
          abort_accept/1,
 
@@ -76,9 +76,8 @@
 
 %% Read the snapshot metadata and initialise a read state used in read_chunk/1
 %% The read state should contain all the information required to read a chunk
--callback begin_read(ChunkSizeBytes :: non_neg_integer(),
-                     Location :: file:filename()) ->
-    {ok, Crc :: non_neg_integer(), Meta :: meta(), ReadState :: term()}
+-callback begin_read(Location :: file:filename()) ->
+    {ok, Meta :: meta(), ReadState :: term()}
     | {error, term()}.
 
 %% Read a chunk of data from the snapshot using the read state
@@ -90,7 +89,6 @@
 
 %% begin a stateful snapshot acceptance process
 -callback begin_accept(SnapDir :: file:filename(),
-                       Crc :: non_neg_integer(),
                        Meta :: meta()) ->
     {ok, AcceptState :: term()} | {error, term()}.
 
@@ -233,14 +231,14 @@ complete_snapshot({Idx, _} = IdxTerm,
     State#?MODULE{pending = undefined,
                   current = IdxTerm}.
 
--spec begin_accept(Crc :: non_neg_integer(), meta(), state()) ->
+-spec begin_accept(meta(), state()) ->
     {ok, state()}.
-begin_accept(Crc, {Idx, Term, _} = Meta,
+begin_accept({Idx, Term, _} = Meta,
              #?MODULE{module = Mod,
                       directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = file:make_dir(SnapDir),
-    {ok, AcceptState} = Mod:begin_accept(SnapDir, Crc, Meta),
+    {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
                                            state = AcceptState}}}.
 
@@ -317,14 +315,14 @@ delete(Dir, {Idx, Term}) ->
 save(Module, Location, Meta, Data) ->
     Module:save(Location, Meta, Data).
 
--spec begin_read(ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
-    {ok, Crc :: non_neg_integer(), Meta :: meta(), ReadState} |
+-spec begin_read(State :: state()) ->
+    {ok, Meta :: meta(), ReadState} |
     {error, term()} when ReadState :: term().
-begin_read(ChunkSizeBytes, #?MODULE{module = Mod,
-                              directory = Dir,
-                              current = {Idx, Term}}) ->
+begin_read(#?MODULE{module = Mod,
+                    directory = Dir,
+                    current = {Idx, Term}}) ->
     Location = make_snapshot_dir(Dir, Idx, Term),
-    Mod:begin_read(ChunkSizeBytes, Location).
+    Mod:begin_read(Location).
 
 
 -spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(), State :: state()) ->

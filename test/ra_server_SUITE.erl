@@ -94,7 +94,7 @@ setup_log() ->
                                             ra_lib:default(get({U, K}), D)
                                     end),
     meck:expect(ra_snapshot, begin_accept,
-                fun(_Crc, _Meta, SS) ->
+                fun(_Meta, SS) ->
                         {ok, SS}
                 end),
     meck:expect(ra_snapshot, accept_chunk,
@@ -613,7 +613,6 @@ follower_catchup_condition(_Config) ->
 
 
     ISRpc = #install_snapshot_rpc{term = 99, leader_id = n1,
-                                  crc = 1,
                                   chunk_state = {1, last},
                                   last_index = 99, last_term = 99,
                                   last_config = [], data = []},
@@ -1289,7 +1288,7 @@ pre_vote_election_reverts(_Config) ->
     % install snapshot rpc
     ISR = #install_snapshot_rpc{term = 5, leader_id = n2,
                                 last_index = 3, last_term = 5,
-                                crc = 0, chunk_state = {1, last},
+                                chunk_state = {1, last},
                                 last_config = [], data = []},
     {follower, #{current_term := 5, votes := 0}, [{next_event, ISR}]}
         = ra_server:handle_pre_vote(ISR, State),
@@ -1322,7 +1321,7 @@ leader_receives_install_snapshot_rpc(_Config) ->
                last_applied := Idx} = (base_state(5))#{votes => 1},
     ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = n5,
                                   last_index = Idx, last_term = Term,
-                                  crc = 0, chunk_state = {1, last},
+                                  chunk_state = {1, last},
                                   last_config = [], data = []},
     {follower, #{}, [{next_event, ISRpc}]}
         = ra_server:handle_leader(ISRpc, State),
@@ -1340,7 +1339,7 @@ follower_installs_snapshot(_Config) ->
     Idx = 3,
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  crc = 0, chunk_state = {1, last},
+                                  chunk_state = {1, last},
                                   last_config = maps:keys(Config),
                                   data = []},
     {receive_snapshot, FState1,
@@ -1370,7 +1369,7 @@ follower_receives_stale_snapshot(_Config) ->
     Idx = 2,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  crc = 0, chunk_state = {1, last},
+                                  chunk_state = {1, last},
                                   last_config = maps:keys(Config),
                                   data = []},
     %% this should be a rare occurence, rather than implement a special
@@ -1388,7 +1387,7 @@ receive_snapshot_timeout(_Config) ->
     Idx = 6,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  crc = 0, chunk_state = {1, last},
+                                  chunk_state = {1, last},
                                   last_config = maps:keys(Config),
                                   data = []},
     {receive_snapshot, FState1,
@@ -1413,7 +1412,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                 fun (_) -> {{Idx, Term, maps:keys(Config)}, []} end),
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = n1,
                                   last_index = Idx, last_term = LastTerm,
-                                  crc = 0, chunk_state = {1, last},
+                                  chunk_state = {1, last},
                                   last_config = maps:keys(Config), data = []},
     {follower, FState1, _} = ra_server:handle_receive_snapshot(ISRpc, FState0),
 
