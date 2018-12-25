@@ -329,8 +329,8 @@ begin_read(#?MODULE{module = Mod,
     {ok, Data :: term(), {next, ReadState} | last}  |
     {error, term()} when ReadState :: term().
 read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
-                                directory = Dir,
-                                current = {Idx, Term}}) ->
+                                               directory = Dir,
+                                               current = {Idx, Term}}) ->
     %% TODO: do we need to generate location for every chunk?
     Location = make_snapshot_dir(Dir, Idx, Term),
     Mod:read_chunk(ReadState, ChunkSizeBytes, Location).

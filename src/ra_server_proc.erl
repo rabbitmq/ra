@@ -1209,9 +1209,9 @@ read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize, SnapState) ->
            end,
     {ok, Data, ContState} = ra_snapshot:read_chunk(ReadState0, ChunkSize, SnapState),
     ChunkFlag = case ContState of
-        {next, _} -> next;
-        last -> last
-    end,
+                    {next, _} -> next;
+                    last      -> last
+                end,
     RPC1 = RPC0#install_snapshot_rpc{last_config = Conf,
                                      chunk_state = {Num, ChunkFlag},
                                      data = Data},
