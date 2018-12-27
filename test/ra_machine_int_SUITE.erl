@@ -77,8 +77,8 @@ send_msg_without_options(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
-                                    {State, [{send_msg, Pid, Msg}], ok}
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, State) ->
+                                    {State, ok, {send_msg, Pid, Msg}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
@@ -95,8 +95,8 @@ send_msg_with_ra_event_option(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
-                                    {State, [{send_msg, Pid, Msg, ra_event}], ok}
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, State) ->
+                                    {State, ok, {send_msg, Pid, Msg, ra_event}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
@@ -114,8 +114,8 @@ send_msg_with_cast_option(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, _, State) ->
-                                    {State, [{send_msg, Pid, Msg, cast}], ok}
+    meck:expect(Mod, apply, fun (_, {echo, Pid, Msg}, State) ->
+                                    {State, ok, {send_msg, Pid, Msg, cast}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
@@ -134,8 +134,8 @@ send_msg_with_ra_event_and_cast_options(Config) ->
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
     meck:expect(Mod, apply,
-                fun (_, {echo, Pid, Msg}, _, State) ->
-                        {State, [{send_msg, Pid, Msg, [ra_event, cast]}], ok}
+                fun (_, {echo, Pid, Msg}, State) ->
+                        {State, ok, {send_msg, Pid, Msg, [ra_event, cast]}}
                 end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
@@ -152,10 +152,10 @@ machine_replies(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, c1, _, State) ->
-                                    {State, [], the_reply};
-                                (_, c2, _, State) ->
-                                    {State, [], {error, some_error_reply}}
+    meck:expect(Mod, apply, fun (_, c1, State) ->
+                                    {State, the_reply};
+                                (_, c2, State) ->
+                                    {State, {error, some_error_reply}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
@@ -173,8 +173,8 @@ leader_monitors(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
-    meck:expect(Mod, apply, fun (_, {monitor_me, Pid}, _, State) ->
-                                    {[Pid | State], [{monitor, process, Pid}], ok}
+    meck:expect(Mod, apply, fun (_, {monitor_me, Pid}, State) ->
+                                    {[Pid | State], ok,  {monitor, process, Pid}}
                             end),
     meck:expect(Mod, state_enter,
                 fun (leader, State) ->
@@ -207,12 +207,12 @@ follower_takes_over_monitor(Config) ->
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
-                fun (_, {monitor_me, Pid}, _, State) ->
-                        {[Pid | State], [{monitor, process, Pid}], ok};
-                    (_, Cmd, _, State) ->
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
                         ct:pal("handling ~p", [Cmd]),
                         %% handle all
-                        {State, [], ok}
+                        {State, ok}
                 end),
     meck:expect(Mod, state_enter,
                 fun (leader, State) ->
@@ -252,8 +252,8 @@ deleted_cluster_emits_eol_effect(Config) ->
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
-                fun (_, {monitor_me, Pid}, _, State) ->
-                        {[Pid | State], [{monitor, process, Pid}], ok}
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]}
                 end),
     meck:expect(Mod, state_enter,
                 fun (eol, State) ->
@@ -285,7 +285,7 @@ machine_state_enter_effects(Config) ->
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply,
-                fun (_, _, _, State) ->
+                fun (_, _, State) ->
                         {State, [], ok}
                 end),
     meck:expect(Mod, state_enter,

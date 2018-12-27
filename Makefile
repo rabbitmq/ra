@@ -9,7 +9,7 @@ ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
 dep_gen_batch_server = hex 0.7.0
-dep_aten = hex 0.5.1
+dep_aten = hex 0.5.2
 DEPS = aten gen_batch_server
 
 TEST_DEPS = proper meck eunit_formatters looking_glass inet_tcp_proxy
@@ -23,7 +23,7 @@ dep_inet_tcp_proxy = git https://github.com/rabbitmq/inet_tcp_proxy
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass gen_batch_server
+PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass gen_batch_server inet_tcp_proxy
 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}

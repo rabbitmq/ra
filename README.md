@@ -1,4 +1,3 @@
-# Ra: a Raft Implementation for Erlang and Elixir
 
 [![Build Status](https://travis-ci.org/rabbitmq/ra.svg?branch=master)](https://travis-ci.org/rabbitmq/ra)
 
@@ -29,7 +28,7 @@ The following Raft features are implemented:
 
 ## Supported Erlang/OTP Versions
 
-Ra requires Erlang/OTP 20.3 or later.
+Ra requires Erlang/OTP 21.x.
 
 ## Quick start
 
@@ -75,6 +74,10 @@ which has two major shortcomings:
 * API docs: https://rabbitmq.github.io/ra/
 * How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 * Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
+
+### Examples
+
+A number of examples can be found in a [separate repository](https://github.com/rabbitmq/ra-examples).
 
 ## Configuration
 
