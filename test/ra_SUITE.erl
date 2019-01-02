@@ -478,6 +478,7 @@ snapshot_installation_with_call_crash(Config) ->
               fun () ->
                       {ok, {N1Idx, _}, _} = ra:local_query({N1, node()},
                                                            fun ra_lib:id/1),
+                      ct:pal("N1 idx ~w", [N1Idx]),
                       {ok, {N2Idx, _}, _} = ra:local_query({N2, node()},
                                                            fun ra_lib:id/1),
                       {ok, {N3Idx, _}, _} = ra:local_query({N3, node()},

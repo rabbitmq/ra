@@ -266,10 +266,6 @@ recover(#{id := Id,
     Log = ra_log:release_resources(1, Log0),
     State#{log => Log}.
 
-% the peer id in the append_entries_reply message is an artifact of
-% the "fake" rpc call in ra_proxy as when using reply the unique reference
-% is joined with the msg itself. In this instance it is treated as an info
-% message.
 -spec handle_leader(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
@@ -287,9 +283,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
             {State, RpcEffects} =
-                make_pipelined_rpc_effects(State2,
-                                           [{incr_metrics, ra_metrics,
-                                             [{3, Applied}]}]),
+                make_pipelined_rpc_effects(State2, [{incr_metrics, ra_metrics,
+                                                     [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
@@ -402,15 +397,15 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
     %% TODO: refactor to use wal batch API?
     {State0, Effects0} =
-        lists:foldl( fun(C, {S0, E}) ->
-                             {ok, I, T, S} = append_log_leader(C, S0),
-                             case C of
-                                 {_, #{from := From}, _, after_log_append} ->
-                                     {S, [{reply, From , {I, T}} | E]};
-                                 _ ->
-                                     {S, E}
-                             end
-                     end, {State00, []}, Cmds),
+        lists:foldl(fun(C, {S0, E}) ->
+                            {ok, I, T, S} = append_log_leader(C, S0),
+                            case C of
+                                {_, #{from := From}, _, after_log_append} ->
+                                    {S, [{reply, From , {I, T}} | E]};
+                                _ ->
+                                    {S, E}
+                            end
+                    end, {State00, []}, Cmds),
 
     {State, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
                                                   Effects0),
@@ -1099,16 +1094,40 @@ filter_follower_effects(Effects) ->
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
 
-make_pipelined_rpc_effects(MaxBatchSize,
-                           #{commit_index := CommitIndex} = State0,
-                          Effects) ->
-    maps:fold(fun(PeerId, Peer0 = #{next_index := Next}, {S0, Effs}) ->
-                      {NextIdx, Eff, S} =
-                          make_rpc_effect(PeerId, Next, MaxBatchSize, S0),
-                      Peer = Peer0#{next_index => NextIdx,
-                                    commit_index_sent => CommitIndex},
-                      {update_peer(PeerId, Peer, S), [Eff | Effs]}
-              end, {State0, Effects}, pipelineable_peers(State0)).
+make_pipelined_rpc_effects(MaxBatchSize, #{id := Id,
+                                           commit_index := CommitIndex,
+                                           log := Log,
+                                           cluster := Cluster} = State,
+                           Effects) ->
+    NextLogIdx = ra_log:next_index(Log),
+    maps:fold(fun (I, _, Acc) when I =:= Id ->
+                      %% oneself
+                      Acc;
+                  (_, #{status := {sending_snapshot, _}}, Acc) ->
+                      %% if a peers is currently receiving a snapshot
+                      %% we should not pipeline
+                      Acc;
+                  (PeerId, #{next_index := NI,
+                             commit_index_sent := CI,
+                             match_index := MI} = Peer0, {S0, Effs} = Acc)
+                    when NI < NextLogIdx orelse CI < CommitIndex ->
+                      % there are unsent items or a new commit index
+                      % check if the match index isn't too far behind the
+                      % next index
+                      case NI - MI < ?MAX_PIPELINE_DISTANCE of
+                          true ->
+                              {NextIdx, Eff, S} =
+                                  make_rpc_effect(PeerId, NI,
+                                                  MaxBatchSize, S0),
+                              Peer = Peer0#{next_index => NextIdx,
+                                            commit_index_sent => CommitIndex},
+                              {update_peer(PeerId, Peer, S), [Eff | Effs]};
+                          false ->
+                              Acc
+                      end;
+                  (_, _, Acc) ->
+                      Acc
+              end, {State, Effects}, Cluster).
 
 make_rpcs(State) ->
     make_rpcs_for(stale_peers(State), State).
@@ -1380,25 +1399,25 @@ peers_not_sending_snapshots(State) ->
                 end, peers(State)).
 
 % returns the peers that should receive piplined entries
-pipelineable_peers(#{commit_index := CommitIndex,
-                     log := Log} = State) ->
-    NextIdx = ra_log:next_index(Log),
-    maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
-                        %% if a peers is currently receiving a snapshot
-                        %% we should not pipeline
-                        false;
-                    (_, #{next_index := NI,
-                          match_index := MI}) when NI < NextIdx ->
-                        % there are unsent items
-                        NI - MI < ?MAX_PIPELINE_DISTANCE;
-                    (_, #{commit_index_sent := CI,
-                          next_index := NI,
-                          match_index := MI}) when CI < CommitIndex ->
-                        % the commit index has been updated
-                        NI - MI < ?MAX_PIPELINE_DISTANCE;
-                    (_, _) ->
-                        false
-                end, peers(State)).
+% pipelineable_peers(#{commit_index := CommitIndex,
+%                      log := Log} = State) ->
+%     NextIdx = ra_log:next_index(Log),
+%     maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
+%                         %% if a peers is currently receiving a snapshot
+%                         %% we should not pipeline
+%                         false;
+%                     (_, #{next_index := NI,
+%                           match_index := MI}) when NI < NextIdx ->
+%                         % there are unsent items
+%                         NI - MI < ?MAX_PIPELINE_DISTANCE;
+%                     (_, #{commit_index_sent := CI,
+%                           next_index := NI,
+%                           match_index := MI}) when CI < CommitIndex ->
+%                         % the commit index has been updated
+%                         NI - MI < ?MAX_PIPELINE_DISTANCE;
+%                     (_, _) ->
+%                         false
+%                 end, peers(State)).
 
 % peers that could need an update
 stale_peers(#{commit_index := CommitIndex} = State) ->
@@ -1620,14 +1639,17 @@ add_next_cluster_change(Effects, State) ->
 add_reply(From, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
 add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
-          Effects, Notifys0) ->
+          Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
     % own bookkeeping
     CorrData = {Corr, Reply},
-    Notifys = maps:update_with(Pid, fun (T) -> [CorrData | T] end,
-                               [CorrData], Notifys0),
-    {Effects, Notifys};
+    case Notifys of
+        #{Pid := T} ->
+            {Effects, Notifys#{Pid => [CorrData | T]}};
+        _ ->
+            {Effects, Notifys#{Pid => [CorrData]}}
+    end;
 add_reply(_, _, _, % From, Reply, Mode
           Effects, Notifys) ->
     {Effects, Notifys}.
@@ -1736,6 +1758,7 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           last_term = LWTerm}.
 
 evaluate_quorum(State0, Effects) ->
+    % TODO: shortcut function if commit index was not incremented
     State = #{commit_index := CI} = increment_commit_index(State0),
     apply_to(CI, State, Effects).
 
