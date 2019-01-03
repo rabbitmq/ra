@@ -678,12 +678,13 @@ truncate_cache(FromIdx, ToIdx,
                 false ->
                     %% if there are fewer entries left than to be removed
                     %% extract the remaning entries
-                    cache_with(ToIdx, LastIdx, Cache0, #{})
+                    cache_with(ToIdx + 1, LastIdx, Cache0, #{})
             end,
     {State#?MODULE{cache = Cache}, Effects}.
 
-cache_with(Idx, Idx, Source, Cache) ->
-    Cache#{Idx => maps:get(Idx, Source)};
+cache_with(FromIdx, ToIdx, _, Cache)
+  when FromIdx > ToIdx ->
+    Cache;
 cache_with(From, To, Source, Cache) ->
     cache_with(From + 1, To, Source, Cache#{From => maps:get(From, Source)}).
 
