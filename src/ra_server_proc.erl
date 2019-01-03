@@ -272,8 +272,9 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
         ra_server:handle_leader({command, {CmdType, #{from => From},
                                            Data, ReplyMode}},
                                 ServerState0),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
-                                       State0#state{server_state = ServerState}),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
     {keep_state, State, Actions};
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
@@ -305,8 +306,9 @@ leader(EventType, flush_commands,
     {leader, ServerState, Effects} =
         ra_server:handle_leader({commands, Delayed}, ServerState0),
 
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
-                                       State0#state{server_state = ServerState}),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
     case queue:is_empty(DelQ) of
         true ->
             ok;
@@ -853,7 +855,7 @@ handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
     ok = send(To, Msg),
     {State, Actions};
 handle_effect(_, {send_msg, To, Msg, Options}, _, State, Actions) ->
-    case  parse_send_msg_options(Options) of
+    case parse_send_msg_options(Options) of
         {true, true} ->
             gen_cast(To, wrap_ra_event(id(State), machine, Msg));
         {true, false} ->
@@ -1084,7 +1086,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
         NewLeader ->
             MRef = swap_monitor(OldMRef, NewLeader),
             LeaderNode = ra_lib:ra_server_id_node(NewLeader),
-            ok = aten:register(LeaderNode),
+            ok = aten_register(LeaderNode),
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
             ok = aten:unregister(OldLeaderNode),
             % leader has either changed or just been set
@@ -1094,6 +1096,13 @@ follower_leader_change(Old, #state{pending_commands = Pending,
              || {From, _Data} <- Pending],
             New#state{pending_commands = [],
                       leader_monitor = MRef}
+    end.
+
+aten_register(Node) ->
+    case node() of
+        Node -> ok;
+        _ ->
+            aten:register(Node)
     end.
 
 swap_monitor(MRef, L) ->

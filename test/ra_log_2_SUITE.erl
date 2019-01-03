@@ -826,3 +826,12 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0}.
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.

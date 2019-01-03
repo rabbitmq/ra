@@ -306,7 +306,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
             % close and open a new segment
             Seg = open_successor_segment(Seg0, SegConf),
             %% re-evaluate snapshot state for the server in case a snapshot
-            %% has completed during segmeng flush
+            %% has completed during segment flush
             StartIdx = start_index(UId, Idx),
             % recurse
             % TODO: there is a micro-inefficiency here in that we need to

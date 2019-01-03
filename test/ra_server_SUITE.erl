@@ -817,11 +817,13 @@ follower_pre_vote(_Config) ->
                                vote_granted = false}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{term = 4}, State),
 
-     % reject when candidate last log entry has a lower term
-     % still update current term if incoming is higher
-    {follower, #{current_term := 6},
-     [{reply, #pre_vote_result{term = 6, token = Token,
-                               vote_granted = false}}]} =
+    % when candidate last log entry has a lower term
+    % the current server is a better candidate and thus
+    % immedately enters pre_vote state
+    {pre_vote, #{current_term := 6},
+     [{next_event, cast, #pre_vote_result{term = 6, token = _,
+                                          vote_granted = true}},
+      {send_vote_requests, _}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
                                                term = 6},
                               State),
