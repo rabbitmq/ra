@@ -272,8 +272,9 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
         ra_server:handle_leader({command, {CmdType, #{from => From},
                                            Data, ReplyMode}},
                                 ServerState0),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
-                                       State0#state{server_state = ServerState}),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
     {keep_state, State, Actions};
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
@@ -305,8 +306,9 @@ leader(EventType, flush_commands,
     {leader, ServerState, Effects} =
         ra_server:handle_leader({commands, Delayed}, ServerState0),
 
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType,
-                                       State0#state{server_state = ServerState}),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
     case queue:is_empty(DelQ) of
         true ->
             ok;

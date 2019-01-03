@@ -157,7 +157,8 @@ init(#{uid := UId} = Conf) ->
                         snapshot_state = SnapshotState,
                         snapshot_interval = SnapInterval,
                         wal = Wal,
-                        open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
+                        open_segments = ra_flru:new(MaxOpen,
+                                                    fun flru_handler/1),
                         resend_window_seconds = ResendWindow,
                         snapshot_module = SnapModule},
 

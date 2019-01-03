@@ -710,8 +710,6 @@ handle_follower(#append_entries_rpc{term = Term,
                                     leader_id => LeaderId},
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
-                        % Reply = append_entries_reply(Term, true, State),
-                        % {follower, State#{log => Log}, [cast_reply(Id, LeaderId, Reply)]};
                             {follower, State#{log => Log}, []};
                         {error, wal_down} ->
                             {await_condition,
