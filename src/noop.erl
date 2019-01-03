@@ -46,7 +46,7 @@ start(Nodes) ->
      Servers}.
 
 prepare() ->
-    application:ensure_all_started(ra),
+    _ = application:ensure_all_started(ra),
     % error_logger:logfile(filename:join(ra_env:data_dir(), "log.log")),
     ok.
 

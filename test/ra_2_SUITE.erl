@@ -44,7 +44,7 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
-    ra_server_sup:remove_all(),
+    ra_server_sup_sup:remove_all(),
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [

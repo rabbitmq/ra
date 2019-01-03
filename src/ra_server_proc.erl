@@ -192,7 +192,9 @@ init(Config0) when is_map(Config0) ->
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
-    yes = ra_directory:register_name(UId, self(), Key),
+    yes = ra_directory:register_name(UId, self(),
+                                     maps:get(parent, Config, undefined), Key),
+
     _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
@@ -728,12 +730,31 @@ terminate(Reason, StateName,
           [id(State), Reason, StateName]),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
+    Parent = ra_directory:where_is_parent(UId),
     case Reason of
         {shutdown, delete} ->
             catch ra_log_segment_writer:release_segments(
                     ra_log_segment_writer, UId),
             catch ra_directory:unregister_name(UId),
-            catch ra_log_meta:delete_sync(UId);
+            catch ra_log_meta:delete_sync(UId),
+            Self = self(),
+            %% we have to terminate the child spec from the supervisor as it
+            %% wont do this automatically, even for transient children
+            %% for simple_one_for_one terminate also removes
+            _ = spawn(fun () ->
+                              Ref = erlang:monitor(process, Self),
+                              receive
+                                  {'DOWN', Ref, _, _, _} ->
+                                      ok = supervisor:terminate_child(
+                                             ra_server_sup_sup,
+                                             Parent)
+                              after 5000 ->
+                                        ok
+                              end
+                      end),
+            ok;
+
+
         _ -> ok
     end,
     _ = aten:unregister(Key),

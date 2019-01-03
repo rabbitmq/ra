@@ -25,6 +25,7 @@
                         ra_server,
                         ra_server_proc,
                         ra_server_sup,
+                        ra_server_sup_sup,
                         ra_sup,
                         ra_system_sup,
                         ra_snapshot]},

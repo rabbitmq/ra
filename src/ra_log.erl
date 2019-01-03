@@ -563,8 +563,10 @@ overview(#?MODULE{last_index = LastIndex,
                         end
      }.
 
-write_config(Config, #?MODULE{directory = Dir}) ->
+write_config(Config0, #?MODULE{directory = Dir}) ->
     ConfigPath = filename:join(Dir, "config"),
+    % clean config of potentially unserialisable data
+    Config = maps:without([parent], Config0),
     ok = file:write_file(ConfigPath,
                          list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
@@ -573,7 +575,7 @@ read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
     case filelib:is_file(ConfigPath) of
         true ->
-            {ok, [C]} =  file:consult(ConfigPath),
+            {ok, [C]} = file:consult(ConfigPath),
             {ok, C};
         false ->
             not_found
