@@ -1640,7 +1640,7 @@ add_reply(_, _, _, % From, Reply, Mode
           Effects, Notifys) ->
     {Effects, Notifys}.
 
-maybe_append_log_leader({'$usr', Meta, Cmd, ReplyType} = UsrCmd,
+maybe_append_log_leader({'$usr', Meta, Cmd, ReplyType} = _UsrCmd,
                         #{machine := Machine,
                           machine_state := MacState0,
                           filter_state := FilterState0} = State) ->
