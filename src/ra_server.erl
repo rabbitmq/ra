@@ -703,6 +703,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                     leader_id => LeaderId},
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
+                        % Reply = append_entries_reply(Term, true, State),
+                        % {follower, State#{log => Log}, [cast_reply(Id, LeaderId, Reply)]};
                             {follower, State#{log => Log}, []};
                         {error, wal_down} ->
                             {await_condition,
@@ -1363,8 +1365,16 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                   " candidate last log index term was: ~w~n"
                   "Last log entry idxterm seen was: ~w~n",
                   [id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
-            {FsmState, State,
-             [{reply, pre_vote_result(Term, Token, false)}]}
+            case FsmState of
+                follower ->
+                    %% immediately enter pre_vote election as this node is more
+                    %% likely to win but could be held back by a persistent
+                    %% stale pre voter
+                    call_for_election(pre_vote, State);
+                pre_vote ->
+                    {FsmState, State,
+                     [{reply, pre_vote_result(Term, Token, false)}]}
+            end
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
