@@ -1420,27 +1420,6 @@ peers_not_sending_snapshots(State) ->
                     (_, _) -> true
                 end, peers(State)).
 
-% returns the peers that should receive piplined entries
-% pipelineable_peers(#{commit_index := CommitIndex,
-%                      log := Log} = State) ->
-%     NextIdx = ra_log:next_index(Log),
-%     maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
-%                         %% if a peers is currently receiving a snapshot
-%                         %% we should not pipeline
-%                         false;
-%                     (_, #{next_index := NI,
-%                           match_index := MI}) when NI < NextIdx ->
-%                         % there are unsent items
-%                         NI - MI < ?MAX_PIPELINE_DISTANCE;
-%                     (_, #{commit_index_sent := CI,
-%                           next_index := NI,
-%                           match_index := MI}) when CI < CommitIndex ->
-%                         % the commit index has been updated
-%                         NI - MI < ?MAX_PIPELINE_DISTANCE;
-%                     (_, _) ->
-%                         false
-%                 end, peers(State)).
-
 % peers that could need an update
 stale_peers(#{commit_index := CommitIndex} = State) ->
     maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
