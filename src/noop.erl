@@ -38,7 +38,6 @@ apply(#{index := I}, {noop, _}, State) ->
 
 
 start(Nodes) ->
-    application:ensure_all_started(ra),
     Servers = [begin
                    rpc:call(N, ?MODULE, prepare, []),
                    {noop, N}
@@ -63,8 +62,13 @@ client_loop(Leader) ->
             N = length(Applied),
             send_n(Leader, N),
             client_loop(Leader);
+        {ra_event, _, {rejected, {not_leader, NewLeader, _}}} ->
+            io:format("new leader ~w~n", [NewLeader]),
+            send_n(NewLeader, 1),
+            client_loop(NewLeader);
         {ra_event, Leader, Evt} ->
-            io:format("unexpected ra_event ~w", [Evt]),
+            io:format("unexpected ra_event ~w~n", [Evt]),
+
             client_loop(Leader)
     end.
 

@@ -282,12 +282,19 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
-            {State, RpcEffects} =
+            {State, More, RpcEffects0} =
                 make_pipelined_rpc_effects(State2, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
+                RpcEffects = case More of
+                                 true ->
+                                     [{next_event, info, pipeline_rpcs} |
+                                      RpcEffects0];
+                                 false ->
+                                     RpcEffects0
+                             end,
             Effects = Effects0 ++ RpcEffects,
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
@@ -366,7 +373,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{next_index => max(min(NI-1, LastIdx), MI)}, L}
                   end,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
-    {State, Effects} = make_pipelined_rpc_effects(State1, []),
+    {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
 handle_leader({command, Cmd}, State00 = #{id := Id}) ->
     case append_log_leader(Cmd, State00) of
@@ -375,10 +382,7 @@ handle_leader({command, Cmd}, State00 = #{id := Id}) ->
                   "cluster_change_permitted ~w~n", [Id, Cmd, 5, CCP]),
             {leader, State, []};
         {ok, Idx, Term, State0} ->
-            % ?INFO("~p ~p command appended to log at ~p term ~p~n",
-            %      [Id, Cmd, Idx, Term]),
-            % Only "pipeline" in response to a command
-            {State, Effects0} = make_pipelined_rpc_effects(State0, []),
+            {State, _, Effects0} = make_pipelined_rpc_effects(State0, []),
             Effects1 = [{incr_metrics, ra_metrics, [{2, 1}]} | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
@@ -407,7 +411,7 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
                             end
                     end, {State00, []}, Cmds),
 
-    {State, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
+    {State, _, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
                                                   Effects0),
     %% TOOD: ra_metrics
     {leader, State, Effects};
@@ -415,7 +419,7 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
-    {State, Effects} = make_pipelined_rpc_effects(State1, Effects1),
+    {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects1),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
@@ -447,12 +451,6 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                                  Peer0#{status => normal,
                                         match_index => LastIndex,
                                         commit_index_sent => LastIndex,
-                                        % leader might have pipelined
-                                        % append entries
-                                        % since snapshot was sent
-                                        % need to ensure next index is at least
-                                        % LastIndex + 1 though
-                                        % next_index => max(NI, LastIndex+1) },
                                         next_index => LastIndex + 1},
                                  State0),
 
@@ -463,9 +461,18 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                            _ -> []
                        end,
 
-            {State, Effects} = make_pipelined_rpc_effects(State1, Effects0),
+            {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects0),
             {leader, State, Effects}
     end;
+handle_leader(pipeline_rpcs, State0) ->
+    {State, More, Effects0} = make_pipelined_rpc_effects(State0, []),
+    Effects = case More of
+                  true ->
+                      [{next_event, info, pipeline_rpcs} | Effects0];
+                  false ->
+                      Effects0
+              end,
+    {leader, State, Effects};
 handle_leader(#install_snapshot_rpc{term = Term,
                                     leader_id = Leader} = Evt,
               #{current_term := CurTerm,
@@ -1102,34 +1109,41 @@ make_pipelined_rpc_effects(MaxBatchSize, #{id := Id,
                                            cluster := Cluster} = State,
                            Effects) ->
     NextLogIdx = ra_log:next_index(Log),
-    maps:fold(fun (I, _, Acc) when I =:= Id ->
-                      %% oneself
-                      Acc;
-                  (_, #{status := {sending_snapshot, _}}, Acc) ->
-                      %% if a peers is currently receiving a snapshot
-                      %% we should not pipeline
-                      Acc;
-                  (PeerId, #{next_index := NI,
-                             commit_index_sent := CI,
-                             match_index := MI} = Peer0, {S0, Effs} = Acc)
-                    when NI < NextLogIdx orelse CI < CommitIndex ->
-                      % there are unsent items or a new commit index
-                      % check if the match index isn't too far behind the
-                      % next index
-                      case NI - MI < ?MAX_PIPELINE_DISTANCE of
-                          true ->
-                              {NextIdx, Eff, S} =
-                                  make_rpc_effect(PeerId, NI,
-                                                  MaxBatchSize, S0),
-                              Peer = Peer0#{next_index => NextIdx,
-                                            commit_index_sent => CommitIndex},
-                              {update_peer(PeerId, Peer, S), [Eff | Effs]};
-                          false ->
-                              Acc
-                      end;
-                  (_, _, Acc) ->
+    maps:fold(
+      fun (I, _, Acc) when I =:= Id ->
+              %% oneself
+              Acc;
+          (_, #{status := {sending_snapshot, _}}, Acc) ->
+              %% if a peers is currently receiving a snapshot
+              %% we should not pipeline
+              Acc;
+          (PeerId, #{next_index := NI,
+                     commit_index_sent := CI,
+                     match_index := MI} = Peer0,
+           {S0, More0, Effs} = Acc)
+            when NI < NextLogIdx orelse CI < CommitIndex ->
+              % there are unsent items or a new commit index
+              % check if the match index isn't too far behind the
+              % next index
+              case NI - MI < ?MAX_PIPELINE_DISTANCE of
+                  true ->
+                      {NextIdx, Eff, S} =
+                      make_rpc_effect(PeerId, NI,
+                                      MaxBatchSize, S0),
+                      Peer = Peer0#{next_index => NextIdx,
+                                    commit_index_sent => CommitIndex},
+                      %% is there more potentially pipelining
+                      More = More0 orelse (NextIdx < NextLogIdx andalso
+                                           NextIdx - MI < ?MAX_PIPELINE_DISTANCE),
+                      {update_peer(PeerId, Peer, S),
+                       More,
+                       [Eff | Effs]};
+                  false ->
                       Acc
-              end, {State, Effects}, Cluster).
+              end;
+          (_, _, Acc) ->
+              Acc
+      end, {State, false, Effects}, Cluster).
 
 make_rpcs(State) ->
     make_rpcs_for(stale_peers(State), State).
@@ -1150,7 +1164,7 @@ make_rpc_effect(PeerId, Next, MaxBatchSize,
                   current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
-        {PrevTerm, Log} when PrevTerm =/= undefined ->
+        {PrevTerm, Log} when is_integer(PrevTerm) ->
             make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
                                     State#{log => Log});
         {undefined, Log} ->
