@@ -50,6 +50,8 @@
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
+-type chunk_flag() :: next | last.
+
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the
@@ -120,8 +122,7 @@
          % the term at the point of snapshot
          last_term :: ra_term(),
          last_config :: ra_cluster_servers(),
-         crc :: integer(),
-         chunk_state :: {pos_integer(), pos_integer()},
+         chunk_state :: {pos_integer(), chunk_flag()},
          data :: term()
         }).
 

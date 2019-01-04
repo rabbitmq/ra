@@ -5,11 +5,13 @@
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
 -type meta() :: {ra_index(), ra_term(), ra_cluster_servers()}.
 
+
 -export([
          save/4,
-         read/2,
          recover/1,
          read_meta/2,
+         begin_read/1,
+         read_chunk/3,
          delete/2,
 
          init/3,
@@ -23,8 +25,8 @@
          begin_snapshot/3,
          complete_snapshot/2,
 
-         begin_accept/4,
-         accept_chunk/3,
+         begin_accept/2,
+         accept_chunk/4,
          abort_accept/1,
 
          handle_down/3
@@ -32,10 +34,9 @@
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
 
--export_type([meta/0, file_err/0, effect/0]).
+-export_type([meta/0, file_err/0, effect/0, chunk_flag/0]).
 
--record(accept, {num :: non_neg_integer(),
-                 %% the next expected chunk
+-record(accept, {%% the next expected chunk
                  next = 1 :: non_neg_integer(),
                  state :: term(),
                  idxterm :: ra_idxterm()}).
@@ -72,16 +73,22 @@
                 Ref :: term()) ->
     ok | {error, file_err() | term()}.
 
-%% Read the snapshot from disk into serialised structure for transfer.
--callback read(ChunkSizeBytes :: non_neg_integer(),
-               Location :: file:filename()) ->
-    {ok, Meta :: meta(), ChunkState,
-     [ChunkThunk :: fun((ChunkState) -> {term(), ChunkState})]} |
-    {error, term()}.
+
+%% Read the snapshot metadata and initialise a read state used in read_chunk/1
+%% The read state should contain all the information required to read a chunk
+-callback begin_read(Location :: file:filename()) ->
+    {ok, Meta :: meta(), ReadState :: term()}
+    | {error, term()}.
+
+%% Read a chunk of data from the snapshot using the read state
+%% Returns a binary chunk of data and a continuation state
+-callback read_chunk(ReadState,
+                     ChunkSizeBytes :: non_neg_integer(),
+                     Location :: file:filename()) ->
+    {ok, Chunk :: term(), {next, ReadState} | last} | {error, term()}.
 
 %% begin a stateful snapshot acceptance process
 -callback begin_accept(SnapDir :: file:filename(),
-                       Crc :: non_neg_integer(),
                        Meta :: meta()) ->
     {ok, AcceptState :: term()} | {error, term()}.
 
@@ -224,27 +231,25 @@ complete_snapshot({Idx, _} = IdxTerm,
     State#?MODULE{pending = undefined,
                   current = IdxTerm}.
 
--spec begin_accept(Crc :: non_neg_integer(), meta(),
-                   NumChunks :: non_neg_integer(), state()) ->
+-spec begin_accept(meta(), state()) ->
     {ok, state()}.
-begin_accept(Crc, {Idx, Term, _} = Meta, NumChunks,
+begin_accept({Idx, Term, _} = Meta,
              #?MODULE{module = Mod,
                       directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = file:make_dir(SnapDir),
-    {ok, AcceptState} = Mod:begin_accept(SnapDir, Crc, Meta),
+    {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
-                                           num = NumChunks,
                                            state = AcceptState}}}.
 
--spec accept_chunk(term(), non_neg_integer(), state()) ->
+-spec accept_chunk(term(), non_neg_integer(), chunk_flag(), state()) ->
     {ok, state()}.
-accept_chunk(Chunk, Num,
+accept_chunk(Chunk, Num, last,
              #?MODULE{uid = UId,
                       module = Mod,
                       directory = Dir,
                       current = Current,
-                      accepting = #accept{num = Num,
+                      accepting = #accept{next = Num,
                                           idxterm = {Idx, _} = IdxTerm,
                                           state = AccState}} = State) ->
     %% last chunk
@@ -256,7 +261,7 @@ accept_chunk(Chunk, Num,
     true = ets:insert(?ETSTBL, {UId, Idx}),
     {ok, State#?MODULE{accepting = undefined,
                        current = IdxTerm}};
-accept_chunk(Chunk, Num,
+accept_chunk(Chunk, Num, next,
              #?MODULE{module = Mod,
                       accepting =
                       #accept{state = AccState0,
@@ -264,7 +269,7 @@ accept_chunk(Chunk, Num,
     {ok, AccState} = Mod:accept_chunk(Chunk, AccState0),
     {ok, State#?MODULE{accepting = Accept#accept{state = AccState,
                                                  next = Num + 1}}};
-accept_chunk(_Chunk, Num,
+accept_chunk(_Chunk, Num, _ChunkFlag,
              #?MODULE{accepting = #accept{next = Next}} = State)
   when Next > Num ->
     %% this must be a resend - we can just ignore it
@@ -310,16 +315,25 @@ delete(Dir, {Idx, Term}) ->
 save(Module, Location, Meta, Data) ->
     Module:save(Location, Meta, Data).
 
-
--spec read(ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
-    {ok, Crc :: non_neg_integer(), Meta :: meta(), ChunkState,
-     [ChunkThunk :: fun((ChunkState) -> {binary(), ChunkState})]} |
-    {error, term()} when ChunkState :: term().
-read(ChunkSizeBytes, #?MODULE{module = Mod,
-                              directory = Dir,
-                              current = {Idx, Term}}) ->
+-spec begin_read(State :: state()) ->
+    {ok, Meta :: meta(), ReadState} |
+    {error, term()} when ReadState :: term().
+begin_read(#?MODULE{module = Mod,
+                    directory = Dir,
+                    current = {Idx, Term}}) ->
     Location = make_snapshot_dir(Dir, Idx, Term),
-    Mod:read(ChunkSizeBytes, Location).
+    Mod:begin_read(Location).
+
+
+-spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
+    {ok, Data :: term(), {next, ReadState} | last}  |
+    {error, term()} when ReadState :: term().
+read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
+                                               directory = Dir,
+                                               current = {Idx, Term}}) ->
+    %% TODO: do we need to generate location for every chunk?
+    Location = make_snapshot_dir(Dir, Idx, Term),
+    Mod:read_chunk(ReadState, ChunkSizeBytes, Location).
 
 -spec recover(state()) ->
     {ok, Meta :: meta(), State :: term()} |

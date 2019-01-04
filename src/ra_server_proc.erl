@@ -1198,33 +1198,36 @@ receive_snapshot_timeout() ->
                         ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
 
 send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
-    {ok, Crc,
+    {ok,
      {LastIdx, LastTerm, Config},
-     ChunkState, Chunks} = ra_snapshot:read(ChunkSize, SnapState),
-    NumChunks = length(Chunks),
-    {_, Result, _} =
-    lists:foldl(
-      fun (ChunkFun, {Num, _, CState0}) ->
-              {Data, CState} = ChunkFun(CState0),
-              %% optimisation:
-              %% only send the config as part of the first rpc
-              Conf = case Num of
-                         1 -> Config;
-                         _ -> undefined
-                     end,
-              ChState = {Num, NumChunks},
-              Req = #install_snapshot_rpc{term = Term,
-                                          leader_id = Id,
-                                          last_index = LastIdx,
-                                          last_term = LastTerm,
-                                          last_config = Conf,
-                                          crc = Crc,
-                                          chunk_state = ChState,
-                                          data = Data},
-              Res = gen_statem:call(To, Req,
-                                    {dirty_timeout,
-                                     ?INSTALL_SNAP_RPC_TIMEOUT}),
-              %% just return the last reply
-              {Num + 1, Res, CState}
-      end, {1, undefined, ChunkState}, Chunks),
+     ReadState} = ra_snapshot:begin_read(SnapState),
+
+    RPC = #install_snapshot_rpc{term = Term,
+                                leader_id = Id,
+                                last_index = LastIdx,
+                                last_term = LastTerm,
+                                last_config = Config},
+
+    Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1, ChunkSize, SnapState),
     ok = gen_statem:cast(Me, {To, Result}).
+
+read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize, SnapState) ->
+    Conf = case Num of
+               1 -> RPC0#install_snapshot_rpc.last_config;
+               _ -> undefined
+           end,
+    {ok, Data, ContState} = ra_snapshot:read_chunk(ReadState0, ChunkSize, SnapState),
+    ChunkFlag = case ContState of
+                    {next, _} -> next;
+                    last      -> last
+                end,
+    RPC1 = RPC0#install_snapshot_rpc{last_config = Conf,
+                                     chunk_state = {Num, ChunkFlag},
+                                     data = Data},
+    Res1 = gen_statem:call(To, RPC1, {dirty_timeout, ?INSTALL_SNAP_RPC_TIMEOUT}),
+    case ContState of
+        {next, ReadState1} ->
+            read_chunks_and_send_rpc(RPC0, To, ReadState1, Num + 1, ChunkSize, SnapState);
+        last ->
+            Res1
+    end.
