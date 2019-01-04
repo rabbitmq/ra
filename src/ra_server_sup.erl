@@ -27,7 +27,7 @@ init([Config0]) ->
     Config = Config0#{parent => self()},
     Name = ra_lib:ra_server_id_to_local_name(Id),
     SupFlags = #{strategy => one_for_one,
-                 intensity => 5,
+                 intensity => 2,
                  period => 5},
     ChildSpec = #{id => Name,
                   type => worker,
