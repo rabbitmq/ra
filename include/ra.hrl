@@ -122,7 +122,7 @@
          % the term at the point of snapshot
          last_term :: ra_term(),
          last_config :: ra_cluster_servers(),
-         chunk_state :: {pos_integer(), chunk_flag()},
+         chunk_state :: {pos_integer(), chunk_flag()} | undefined,
          data :: term()
         }).
 

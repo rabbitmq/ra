@@ -325,7 +325,8 @@ begin_read(#?MODULE{module = Mod,
     Mod:begin_read(Location).
 
 
--spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(), State :: state()) ->
+-spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(),
+                 State :: state()) ->
     {ok, Data :: term(), {next, ReadState} | last}  |
     {error, term()} when ReadState :: term().
 read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,

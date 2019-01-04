@@ -124,21 +124,27 @@ read_chunk({Crc, ReadState}, Size, Dir) when is_integer(Crc) ->
     end;
 read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
     {ok, _} = file:position(Fd, Pos),
-    {ok, Data} = file:read(Fd, Size),
-    case Pos + Size >= Eof of
-        true ->
-            _ = file:close(Fd),
-            {ok, Data, last};
-        false ->
-            {ok, Data, {next, {Pos + Size, Eof, Fd}}}
+    case file:read(Fd, Size) of
+        {ok, Data} ->
+            case Pos + Size >= Eof of
+                true ->
+                    _ = file:close(Fd),
+                    {ok, Data, last};
+                false ->
+                    {ok, Data, {next, {Pos + Size, Eof, Fd}}}
+            end;
+        {error, _} = Err ->
+            Err;
+        eof ->
+            {error, unexpected_eof}
     end.
 
 -spec recover(file:filename()) ->
     {ok, meta(), term()} |
     {error, invalid_format |
-    {invalid_version, integer()} |
-    checksum_error |
-    file_err()}.
+     {invalid_version, integer()} |
+     checksum_error |
+     file_err()}.
 recover(Dir) ->
     File = filename(Dir),
     case file:read_file(File) of
