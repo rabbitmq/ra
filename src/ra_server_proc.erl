@@ -990,15 +990,25 @@ handle_effect(_, {monitor, process, Component, Pid}, _,
              Actions}
     end;
 handle_effect(_, {monitor, node, Node}, _,
-              #state{monitors = Monitors} = State, Actions) ->
+              #state{monitors = Monitors} = State, Actions0) ->
     case Monitors of
         #{Node := _} ->
             % monitor is already in place - do nothing
-            {State, Actions};
+            {State, Actions0};
         _ ->
             %% no need to actually monitor anything as we've always monitoring
             %% all visible nodes
-            {State#state{monitors = Monitors#{Node => undefined}}, Actions}
+            %% Fake a node event if the node is already connected so that the machine
+            %% can discover the current status
+            case lists:member(Node, nodes()) of
+                true ->
+                    %% as effects get evaluated on state enter we cannot use
+                    %% next_events
+                    self() ! {nodeup, Node};
+                false ->
+                    self() ! {nodedown, Node}
+            end,
+            {State#state{monitors = Monitors#{Node => undefined}}, Actions0}
     end;
 handle_effect(_, {demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->
