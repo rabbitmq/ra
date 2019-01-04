@@ -17,9 +17,11 @@
          spawn_client/1,
          print_metrics/1,
 
-         prepare/0,
-         profile/0,
-         stop_profile/0
+         % profile/0,
+         % stop_profile/0
+
+         prepare/0
+
         ]).
 
 
@@ -92,18 +94,18 @@ print_metrics({noop, A0, B0}) ->
     print_metrics(X).
 
 
-profile() ->
-    GzFile = atom_to_list(node()) ++ ".gz",
-    lg:trace([noop, ra_server, ra_server_proc, ra_snapshot, ra_machine,
-              ra_log, ra_flru, ra_machine, ra_log_meta, ra_log_segment],
-             lg_file_tracer,
-             GzFile, #{running => false, mode => profile}),
-    ok.
+% profile() ->
+%     GzFile = atom_to_list(node()) ++ ".gz",
+%     lg:trace([noop, ra_server, ra_server_proc, ra_snapshot, ra_machine,
+%               ra_log, ra_flru, ra_machine, ra_log_meta, ra_log_segment],
+%              lg_file_tracer,
+%              GzFile, #{running => false, mode => profile}),
+%     ok.
 
-stop_profile() ->
-    lg:stop(),
-    Base = atom_to_list(node()),
-    GzFile = Base ++ ".gz.*",
-    lg_callgrind:profile_many(GzFile, Base ++ ".out",#{}),
-    ok.
+% stop_profile() ->
+%     lg:stop(),
+%     Base = atom_to_list(node()),
+%     GzFile = Base ++ ".gz.*",
+%     lg_callgrind:profile_many(GzFile, Base ++ ".out",#{}),
+%     ok.
 
