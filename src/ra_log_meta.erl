@@ -45,7 +45,7 @@ init(Dir) ->
                                            {auto_save, infinity}]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
     ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
-    ?INFO("ra: meta data store initialised. ~b recored recovered",
+    ?INFO("ra: meta data store initialised. ~b record(s) recovered",
           [ets:info(?TBL_NAME, size)]),
     {ok, #?MODULE{ref = Ref}}.
 
