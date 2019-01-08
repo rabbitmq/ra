@@ -51,7 +51,7 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TestCase, Config) ->
-    ra_server_sup:remove_all(),
+    ra_server_sup_sup:remove_all(),
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
@@ -268,7 +268,8 @@ deleted_cluster_emits_eol_effect(Config) ->
     ok = validate_process_down(element(1, ServerId), 50),
     Dir = filename:join(PrivDir, UId),
     false = filelib:is_dir(Dir),
-    [] = supervisor:which_children(ra_server_sup),
+    timer:sleep(100),
+    [] = supervisor:which_children(ra_server_sup_sup),
     % validate an end of life is emitted
     receive
         {ra_event, _, {machine, eol}} -> ok

@@ -24,6 +24,7 @@ all_tests() ->
      server_restart_after_application_restart,
      restarted_server_does_not_reissue_side_effects,
      recover,
+     supervision_tree,
      recover_after_kill,
      start_server_uid_validation
     ].
@@ -44,7 +45,7 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
-    ra_server_sup:remove_all(),
+    ra_server_sup_sup:remove_all(),
     NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
@@ -229,6 +230,28 @@ recover(Config) ->
     msg1 = dequeue(ServerId),
 
     ok = ra:stop_server(ServerId),
+    ok.
+
+supervision_tree(Config) ->
+    ServerId = {Name, _} = ?config(server_id, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
+    % start another cluster
+    ok = start_cluster(another_cluster, [{another, node()}]),
+    %% kill server in close succession
+    %% 3 crashes in a 5s period should stop restart attempts
+    exit(whereis(Name), kill),
+    timer:sleep(1000),
+    ?assert(whereis(Name) =/= undefined),
+    exit(whereis(Name), kill),
+    timer:sleep(250),
+    ?assert(whereis(Name) =/= undefined),
+    exit(whereis(Name), kill),
+    timer:sleep(250),
+    %% assert server is permanently down
+    ?assert(whereis(Name) == undefined),
+    %% assert another is still up
+    ?assert(whereis(another) =/= undefined),
     ok.
 
 recover_after_kill(Config) ->

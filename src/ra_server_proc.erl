@@ -192,7 +192,9 @@ init(Config0) when is_map(Config0) ->
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
-    yes = ra_directory:register_name(UId, self(), Key),
+    yes = ra_directory:register_name(UId, self(),
+                                     maps:get(parent, Config, undefined), Key),
+
     _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
@@ -728,12 +730,31 @@ terminate(Reason, StateName,
           [id(State), Reason, StateName]),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
+    Parent = ra_directory:where_is_parent(UId),
     case Reason of
         {shutdown, delete} ->
             catch ra_log_segment_writer:release_segments(
                     ra_log_segment_writer, UId),
             catch ra_directory:unregister_name(UId),
-            catch ra_log_meta:delete_sync(UId);
+            catch ra_log_meta:delete_sync(UId),
+            Self = self(),
+            %% we have to terminate the child spec from the supervisor as it
+            %% wont do this automatically, even for transient children
+            %% for simple_one_for_one terminate also removes
+            _ = spawn(fun () ->
+                              Ref = erlang:monitor(process, Self),
+                              receive
+                                  {'DOWN', Ref, _, _, _} ->
+                                      ok = supervisor:terminate_child(
+                                             ra_server_sup_sup,
+                                             Parent)
+                              after 5000 ->
+                                        ok
+                              end
+                      end),
+            ok;
+
+
         _ -> ok
     end,
     _ = aten:unregister(Key),
@@ -969,15 +990,25 @@ handle_effect(_, {monitor, process, Component, Pid}, _,
              Actions}
     end;
 handle_effect(_, {monitor, node, Node}, _,
-              #state{monitors = Monitors} = State, Actions) ->
+              #state{monitors = Monitors} = State, Actions0) ->
     case Monitors of
         #{Node := _} ->
             % monitor is already in place - do nothing
-            {State, Actions};
+            {State, Actions0};
         _ ->
             %% no need to actually monitor anything as we've always monitoring
             %% all visible nodes
-            {State#state{monitors = Monitors#{Node => undefined}}, Actions}
+            %% Fake a node event if the node is already connected so that the machine
+            %% can discover the current status
+            case lists:member(Node, nodes()) of
+                true ->
+                    %% as effects get evaluated on state enter we cannot use
+                    %% next_events
+                    self() ! {nodeup, Node};
+                false ->
+                    self() ! {nodedown, Node}
+            end,
+            {State#state{monitors = Monitors#{Node => undefined}}, Actions0}
     end;
 handle_effect(_, {demonitor, process, Pid}, _,
               #state{monitors = Monitors0} = State, Actions) ->

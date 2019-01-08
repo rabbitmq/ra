@@ -25,10 +25,10 @@ init([]) ->
     RaLogSup = #{id => ra_log_sup,
                  type => supervisor,
                  start => {ra_log_sup, start_link, [DataDir]}},
-    RaServerSup = #{id => ra_server_sup,
-                    type => supervisor,
-                    start => {ra_server_sup, start_link, []}},
-    {ok, {SupFlags, [Ets, RaLogSup, RaServerSup]}}.
+    RaServerSupSup = #{id => ra_server_sup_sup,
+                       type => supervisor,
+                       start => {ra_server_sup_sup, start_link, []}},
+    {ok, {SupFlags, [Ets, RaLogSup, RaServerSupSup]}}.
 
 
 
