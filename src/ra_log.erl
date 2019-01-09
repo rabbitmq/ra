@@ -150,16 +150,17 @@ init(#{uid := UId} = Conf) ->
         false -> ok
     end,
     State000 = #?MODULE{directory = Dir,
-                      uid = UId,
-                      first_index = max(SnapIdx + 1, FirstIdx),
-                      last_index = max(SnapIdx, LastIdx0),
-                      segment_refs = SegRefs,
-                      snapshot_state = SnapshotState,
-                      snapshot_interval = SnapInterval,
-                      wal = Wal,
-                      open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
-                      resend_window_seconds = ResendWindow,
-                      snapshot_module = SnapModule},
+                        uid = UId,
+                        first_index = max(SnapIdx + 1, FirstIdx),
+                        last_index = max(SnapIdx, LastIdx0),
+                        segment_refs = SegRefs,
+                        snapshot_state = SnapshotState,
+                        snapshot_interval = SnapInterval,
+                        wal = Wal,
+                        open_segments = ra_flru:new(MaxOpen,
+                                                    fun flru_handler/1),
+                        resend_window_seconds = ResendWindow,
+                        snapshot_module = SnapModule},
 
     LastIdx = State000#?MODULE.last_index,
     % recover the last term
@@ -207,7 +208,7 @@ append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
     {error, {integrity_error, term()} | wal_down}.
 write([{FstIdx, _, _} = First | Rest] = Entries,
       #?MODULE{last_index = LastIdx,
-             snapshot_state = SnapState} = State00)
+               snapshot_state = SnapState} = State00)
   when FstIdx =< LastIdx + 1 andalso FstIdx >= 0 ->
     case ra_snapshot:current(SnapState) of
         {SnapIdx, _} when FstIdx =:= SnapIdx + 1 ->
@@ -259,12 +260,13 @@ take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
                                     MOp = {?METRICS_SEGMENT_POS, E - S + 1},
                                     ok = update_metrics(UId,
                                                         [MOp | MetricOps2]),
-                                    {Entries, State#?MODULE{open_segments = Open}}
+                                    {Entries,
+                                     State#?MODULE{open_segments = Open}}
                             end
                     end
             end
     end;
-take(_Start, _Num, State) ->
+take(_, _, State) ->
     {[], State}.
 
 -spec last_index_term(ra_log()) -> ra_idxterm().
@@ -288,16 +290,16 @@ set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
             %% this should always be found but still assert just in case
             true = LWTerm =/= undefined,
             {ok, State2#?MODULE{last_index = Idx,
-                              last_term = Term,
-                              last_written_index_term = {LWIdx, LWTerm}}}
+                                last_term = Term,
+                                last_written_index_term = {LWIdx, LWTerm}}}
     end.
 
 -spec handle_event(event_body(), ra_log()) ->
     {ra_log(), [effect()]}.
 handle_event({written, {FromIdx, ToIdx, Term}},
              #?MODULE{last_written_index_term = {LastWrittenIdx0,
-                                               LastWrittenTerm0},
-                    snapshot_state = SnapState} = State0)
+                                                 LastWrittenTerm0},
+                      snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
     MaybeCurrent = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
@@ -309,7 +311,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             % this case truncation shouldn't be too expensive as the cache
             % only contains the unflushed window of entries typically less than
             % 10ms worth of entries
-            truncate_cache(ToIdx,
+            truncate_cache(FromIdx, ToIdx,
                            State#?MODULE{last_written_index_term = {ToIdx, Term}},
                            []);
         {undefined, State} when FromIdx =< element(1, MaybeCurrent ) ->
@@ -381,9 +383,10 @@ handle_event({snapshot_written, {Idx, _} = Snap},
     Effects = [{delete_snapshot,
                 ra_snapshot:directory(SnapState),
                 ra_snapshot:current(SnapState0)}],
-    %% do not set last index here as the snapshot may be for a past index
-    truncate_cache(Idx, State#?MODULE{first_index = Idx + 1,
-                                      snapshot_state = SnapState}, Effects);
+    %% do not set last written index here as the snapshot may
+    %% be for a past index
+    {State#?MODULE{first_index = Idx + 1,
+                   snapshot_state = SnapState}, Effects};
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -440,9 +443,9 @@ set_snapshot_state(SnapState, State) ->
 install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
     State = delete_segments(Idx, State0),
     State#?MODULE{snapshot_state = SnapState,
-                first_index = Idx + 1,
-                last_index = Idx,
-                last_written_index_term = IdxTerm}.
+                  first_index = Idx + 1,
+                  last_index = Idx,
+                  last_written_index_term = IdxTerm}.
 
 -spec recover_snapshot(State :: ra_log()) ->
     maybe({ra_snapshot:meta(), term()}).
@@ -472,9 +475,9 @@ update_release_cursor(Idx, Cluster, MacState,
     end.
 
 update_release_cursor0(Idx, Cluster, MacState,
-                      #?MODULE{segment_refs = SegRefs,
-                             snapshot_state = SnapState,
-                             snapshot_interval = SnapInter} = State0) ->
+                       #?MODULE{segment_refs = SegRefs,
+                                snapshot_state = SnapState,
+                                snapshot_interval = SnapInter} = State0) ->
     ClusterServerIds = maps:keys(Cluster),
     SnapLimit = case ra_snapshot:current(SnapState) of
                     undefined -> SnapInter;
@@ -545,10 +548,10 @@ exists({Idx, Term}, Log0) ->
     end.
 
 overview(#?MODULE{last_index = LastIndex,
-                last_written_index_term = LWIT,
-                segment_refs = Segs,
-                snapshot_state = SnapshotState,
-                open_segments = OpenSegs}) ->
+                  last_written_index_term = LWIT,
+                  segment_refs = Segs,
+                  snapshot_state = SnapshotState,
+                  open_segments = OpenSegs}) ->
     #{type => ?MODULE,
       last_index => LastIndex,
       last_written_index_term => LWIT,
@@ -560,8 +563,10 @@ overview(#?MODULE{last_index = LastIndex,
                         end
      }.
 
-write_config(Config, #?MODULE{directory = Dir}) ->
+write_config(Config0, #?MODULE{directory = Dir}) ->
     ConfigPath = filename:join(Dir, "config"),
+    % clean config of potentially unserialisable data
+    Config = maps:without([parent], Config0),
     ok = file:write_file(ConfigPath,
                          list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
@@ -570,7 +575,7 @@ read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
     case filelib:is_file(ConfigPath) of
         true ->
-            {ok, [C]} =  file:consult(ConfigPath),
+            {ok, [C]} = file:consult(ConfigPath),
             {ok, C};
         false ->
             not_found
@@ -664,11 +669,33 @@ wal_write_batch(#?MODULE{uid = UId, cache = Cache0, wal = Wal} = State,
             exit(wal_down)
     end.
 
-truncate_cache(Idx, #?MODULE{cache = Cache0} = State, Effects) ->
-    Cache = maps:filter(fun (K, _) when K > Idx -> true;
-                            (_, _) -> false
-                        end, Cache0),
+truncate_cache(FromIdx, ToIdx,
+               #?MODULE{cache = Cache0,
+                        last_index = LastIdx} = State,
+               Effects) ->
+    Cache = case ToIdx - FromIdx < LastIdx - ToIdx of
+                true ->
+                    %% if the range to be deleted is smaller than the
+                    %% remaining range truncate the cache by removing entries
+                    cache_without(FromIdx, ToIdx, Cache0);
+                false ->
+                    %% if there are fewer entries left than to be removed
+                    %% extract the remaning entries
+                    cache_with(ToIdx + 1, LastIdx, Cache0, #{})
+            end,
     {State#?MODULE{cache = Cache}, Effects}.
+
+cache_with(FromIdx, ToIdx, _, Cache)
+  when FromIdx > ToIdx ->
+    Cache;
+cache_with(From, To, Source, Cache) ->
+    cache_with(From + 1, To, Source, Cache#{From => maps:get(From, Source)}).
+
+cache_without(Idx, Idx, Cache) ->
+    maps:remove(Idx, Cache);
+cache_without(FromIdx, ToIdx, Cache) ->
+    cache_without(FromIdx + 1, ToIdx, maps:remove(FromIdx, Cache)).
+
 
 update_metrics(Id, Ops) ->
     _ = ets:update_counter(ra_log_metrics, Id, Ops),
@@ -751,8 +778,8 @@ lookup_range(Tid, Start, End, Acc) when End > Start ->
 
 
 segment_take(#?MODULE{segment_refs = SegRefs,
-                    open_segments = OpenSegs,
-                    directory = Dir},
+                      open_segments = OpenSegs,
+                      directory = Dir},
              Range, Entries0) ->
     lists:foldl(
       fun(_, {_, undefined, _} = Acc) ->
@@ -877,7 +904,7 @@ resend_from0(Idx, #?MODULE{last_index = LastIdx,
                 % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
 resend_from0(Idx, #?MODULE{last_resend_time = LastResend,
-                        resend_window_seconds = ResendWindow} = State) ->
+                           resend_window_seconds = ResendWindow} = State) ->
     case erlang:system_time(seconds) > LastResend + ResendWindow of
         true ->
             % it has been more than a minute since last resend
@@ -949,12 +976,23 @@ recover_range(UId) ->
     ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
     % 2. check segments
     SegFiles = ra_log_segment_writer:my_segments(UId),
-    SegRefs = [begin
+    SegRefs = lists:foldl(
+                fun (S, Acc) ->
                    {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
-                   SegRef = ra_log_segment:segref(Seg),
-                   ok = ra_log_segment:close(Seg),
-                   SegRef
-               end || S <- lists:reverse(SegFiles)],
+                   %% if a server recovered when a segment had been opened
+                   %% but never had any entries written the segref would be
+                   %% undefined
+                   case ra_log_segment:segref(Seg) of
+                       undefined ->
+                           ok = ra_log_segment:close(Seg),
+                           %% delete the empty segment
+                           ok = file:delete(ra_log_segment:filename(Seg)),
+                           Acc;
+                       SegRef ->
+                           ok = ra_log_segment:close(Seg),
+                           [SegRef | Acc]
+                   end
+                end, [], SegFiles),
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
     Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
     {pick_range(Ranges, undefined), SegRefs}.

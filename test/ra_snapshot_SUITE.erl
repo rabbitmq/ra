@@ -287,20 +287,20 @@ read_snapshot(Config) ->
                        error(snapshot_event_timeout)
              end,
 
-    {ok, _Crc, Meta, InitChunkState, Chunks} = ra_snapshot:read(1024, State),
-    %% takes term_to_binary overhead into account
-    ?assertEqual(5, length(Chunks)),
+    {ok, Meta, InitChunkState} = ra_snapshot:begin_read(State),
 
-    {_, Data} = lists:foldl(fun (Ch, {S0, Acc}) ->
-                                    {D, S} = Ch(S0),
-                                    {S, [D | Acc]}
-                            end, {InitChunkState, []}, Chunks),
-
-    %% assert we can reconstruct the snapshot from the binary chunks
-    Bin = iolist_to_binary(lists:reverse(Data)),
-    ?assertEqual(MacRef, binary_to_term(Bin)),
+    <<_Crc:32/integer, Data/binary>> = read_all_chunks(InitChunkState, State, 1024, <<>>),
+    ?assertEqual(MacRef, binary_to_term(Data)),
 
     ok.
+
+read_all_chunks(ChunkState, State, Size, Acc) ->
+    case ra_snapshot:read_chunk(ChunkState, Size, State) of
+        {ok, Chunk, {next, ChunkState1}} ->
+            read_all_chunks(ChunkState1, State, Size, <<Acc/binary, Chunk/binary>>);
+        {ok, Chunk, last} ->
+            <<Acc/binary, Chunk/binary>>
+    end.
 
 accept_snapshot(Config) ->
     UId = ?config(uid, Config),
@@ -321,16 +321,16 @@ accept_snapshot(Config) ->
       B:1024/binary,
       C:1024/binary,
       D:1024/binary,
-      E/binary>> = MacBin,
+      E/binary>> = <<Crc:32/integer, MacBin/binary>>,
 
     undefined = ra_snapshot:accepting(State0),
-    {ok, S1} = ra_snapshot:begin_accept(Crc, Meta, 5, State0),
+    {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2} = ra_snapshot:accept_chunk(A, 1, S1),
-    {ok, S3} = ra_snapshot:accept_chunk(B, 2, S2),
-    {ok, S4} = ra_snapshot:accept_chunk(C, 3, S3),
-    {ok, S5} = ra_snapshot:accept_chunk(D, 4, S4),
-    {ok, S}  = ra_snapshot:accept_chunk(E, 5, S5),
+    {ok, S2} = ra_snapshot:accept_chunk(A, 1, next, S1),
+    {ok, S3} = ra_snapshot:accept_chunk(B, 2, next, S2),
+    {ok, S4} = ra_snapshot:accept_chunk(C, 3, next, S3),
+    {ok, S5} = ra_snapshot:accept_chunk(D, 4, next, S4),
+    {ok, S}  = ra_snapshot:accept_chunk(E, 5, last, S5),
 
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -360,10 +360,10 @@ abort_accept(Config) ->
       _/binary>> = MacBin,
 
     undefined = ra_snapshot:accepting(State0),
-    {ok, S1} = ra_snapshot:begin_accept(Crc, Meta, 5, State0),
+    {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2} = ra_snapshot:accept_chunk(A, 1, S1),
-    {ok, S3} = ra_snapshot:accept_chunk(B, 2, S2),
+    {ok, S2} = ra_snapshot:accept_chunk(A, 1, next, S1),
+    {ok, S3} = ra_snapshot:accept_chunk(B, 2, next, S2),
     S = ra_snapshot:abort_accept(S3),
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -390,12 +390,12 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
                         MacBin]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
-      B/binary>> = MacBin,
+      B/binary>> = <<Crc:32/integer, MacBin/binary>>,
 
     %% then begin an accept for a higher index
-    {ok, State2} = ra_snapshot:begin_accept(Crc, MetaRemote, 2, State1),
+    {ok, State2} = ra_snapshot:begin_accept(MetaRemote, State1),
     {165, 2} = ra_snapshot:accepting(State2),
-    {ok, State3} = ra_snapshot:accept_chunk(A, 1, State2),
+    {ok, State3} = ra_snapshot:accept_chunk(A, 1, next, State2),
 
     %% then the snapshot written event is received
     receive
@@ -405,7 +405,7 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
             {55, 2} = ra_snapshot:current(State4),
             55 = ra_snapshot:last_index_for(UId),
             %% then accept the last chunk
-            {ok, State} = ra_snapshot:accept_chunk(B, 2, State4),
+            {ok, State} = ra_snapshot:accept_chunk(B, 2, last, State4),
             undefined = ra_snapshot:accepting(State),
             {165, 2} = ra_snapshot:current(State),
             ok
@@ -436,9 +436,9 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
       B/binary>> = MacBin,
 
     %% then begin an accept for a higher index
-    {ok, State2} = ra_snapshot:begin_accept(Crc, MetaRemote, 2, State1),
+    {ok, State2} = ra_snapshot:begin_accept(MetaRemote, State1),
     undefined = ra_snapshot:accepting(State2),
-    {ok, State3} = ra_snapshot:accept_chunk(A, 1, State2),
+    {ok, State3} = ra_snapshot:accept_chunk(A, 1, next, State2),
     undefined = ra_snapshot:accepting(State3),
 
     %% then the snapshot written event is received
@@ -449,7 +449,7 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
             {55, 2} = ra_snapshot:current(State4),
             55 = ra_snapshot:last_index_for(UId),
             %% then accept the last chunk
-            {ok, State} = ra_snapshot:accept_chunk(B, 2, State4),
+            {ok, State} = ra_snapshot:accept_chunk(B, 2, last, State4),
             undefined = ra_snapshot:accepting(State),
             {165, 2} = ra_snapshot:current(State),
             ok

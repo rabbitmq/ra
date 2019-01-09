@@ -3,9 +3,11 @@
 -export([
          init/1,
          deinit/0,
+         register_name/4,
          register_name/3,
          unregister_name/1,
          where_is/1,
+         where_is_parent/1,
          name_of/1,
          pid_of/1,
          uid_of/1,
@@ -44,16 +46,21 @@ deinit() ->
     _ = dets:close(?REVERSE_TBL),
     ok.
 
--spec register_name(ra_uid(), pid(), atom()) -> yes | no.
-register_name(UId, Pid, RaServerName) ->
-    true = ets:insert(?MODULE, {UId, Pid, RaServerName}),
+-spec register_name(ra_uid(), pid(), maybe(pid()), atom()) ->
+    yes | no.
+register_name(UId, Pid, ParentPid, RaServerName) ->
+    true = ets:insert(?MODULE, {UId, Pid, ParentPid, RaServerName}),
     ok = dets:insert(?REVERSE_TBL, {RaServerName, UId}),
     yes.
+
+-spec register_name(ra_uid(), pid(), atom()) -> yes | no.
+register_name(UId, Pid, RaServerName) ->
+    register_name(UId, Pid, undefined, RaServerName).
 
 -spec unregister_name(ra_uid()) -> ra_uid().
 unregister_name(UId) ->
     case ets:take(?MODULE, UId) of
-        [{_, _, ServerName}] ->
+        [{_, _, _, ServerName}] ->
             _ = ets:take(?MODULE, UId),
             ok = dets:delete(?REVERSE_TBL, ServerName),
             UId;
@@ -70,21 +77,34 @@ where_is(ServerName) when is_atom(ServerName) ->
     end;
 where_is(UId) when is_binary(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_, Pid, _}] -> Pid;
+        [{_, Pid, _, _}] -> Pid;
+        [] -> undefined
+    end.
+
+-spec where_is_parent(ra_uid() | atom()) -> pid() | undefined.
+where_is_parent(ServerName) when is_atom(ServerName) ->
+    case dets:lookup(?REVERSE_TBL, ServerName) of
+        [] -> undefined;
+        [{_, UId}] ->
+            where_is_parent(UId)
+    end;
+where_is_parent(UId) when is_binary(UId) ->
+    case ets:lookup(?MODULE, UId) of
+        [{_, _, Pid, _}] -> Pid;
         [] -> undefined
     end.
 
 -spec name_of(ra_uid()) -> atom().
 name_of(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_, _, Node}] -> Node;
+        [{_, _, _, Node}] -> Node;
         [] -> undefined
     end.
 
 -spec pid_of(ra_uid()) -> maybe(pid()).
 pid_of(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_, Pid, _}] -> Pid;
+        [{_, Pid, _, _}] -> Pid;
         [] -> undefined
     end.
 

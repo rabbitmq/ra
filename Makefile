@@ -37,7 +37,6 @@ DIALYZER_OPTS += --src -r test
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 include erlang.mk
 
-shell: app
 
 check-rabbitmq-components.mk:
 	true

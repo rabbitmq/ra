@@ -73,7 +73,7 @@ init_per_testcase(TestCase, Config) ->
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
-    ra_server_sup:remove_all(),
+    ra_server_sup_sup:remove_all(),
     Config.
 
 single_server_processes_command(Config) ->

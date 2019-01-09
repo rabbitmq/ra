@@ -96,7 +96,7 @@ start_server(Conf) ->
     case ra_lib:validate_base64uri(maps:get(uid, Conf)) of
         true ->
             % don't match on return value in case it is already running
-            case catch ra_server_sup:start_server(Conf) of
+            case catch ra_server_sup_sup:start_server(Conf) of
                 {ok, _} -> ok;
                 {ok, _, _} -> ok;
                 {error, _} = Err -> Err;
@@ -115,7 +115,7 @@ start_server(Conf) ->
 -spec restart_server(ra_server_id()) -> ok | {error, term()}.
 restart_server(ServerId) ->
     % don't match on return value in case it is already running
-    case catch ra_server_sup:restart_server(ServerId) of
+    case catch ra_server_sup_sup:restart_server(ServerId) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
@@ -127,7 +127,7 @@ restart_server(ServerId) ->
 %% @returns `{ok | error, nodedown}'
 -spec stop_server(ra_server_id()) -> ok | {error, nodedown}.
 stop_server(ServerId) ->
-    try ra_server_sup:stop_server(ServerId) of
+    try ra_server_sup_sup:stop_server(ServerId) of
         ok -> ok;
         {error, not_found} -> ok
     catch
@@ -141,7 +141,7 @@ stop_server(ServerId) ->
 %% @returns `{ok | error, nodedown}'
 -spec delete_server(ServerId :: ra_server_id()) -> ok | {error, term()}.
 delete_server(ServerId) ->
-    ra_server_sup:delete_server(ServerId).
+    ra_server_sup_sup:delete_server(ServerId).
 
 %% @doc Starts or restarts a ra cluster.
 %%
@@ -166,10 +166,10 @@ delete_server(ServerId) ->
     {error, cluster_not_formed}.
 start_or_restart_cluster(ClusterName, Machine,
                          [FirstServer | RemServers] = ServerIds) ->
-    case ra_server_sup:restart_server(FirstServer) of
+    case ra_server_sup_sup:restart_server(FirstServer) of
         {ok, _} ->
             %% restart the rest of the servers
-            _ = [{ok, _} = ra_server_sup:restart_server(N) || N <- RemServers],
+            _ = [{ok, _} = ra_server_sup_sup:restart_server(N) || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
             ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
@@ -440,7 +440,7 @@ process_command(ServerId, Command) ->
 %% structure will be returned informing the caller that it cannot process the
 %% message including the current leader, if known:
 %%
-%% `{ra_event, CurrentLeader, {rejected, {not_leader, Leader | undefined, Correlation}}}'
+%% `{ra_event, CurrentLeader, {rejected, {not_leader, Leader, Correlation}}}'
 %% The caller can then redirect the command for the correlation identifier to
 %% the correct ra server.
 %%

@@ -534,19 +534,19 @@ snapshot_installation(Config) ->
     Meta = {15, 2, [n1]},
     MacRef = <<"9">>,
     {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
-     {ok, Crc, Meta, ChunkSt, [ChunkFun]} =
+    Sn2 =
         receive
             {ra_log_event, {snapshot_written, {15, 2} = IdxTerm}} ->
-                Sn2 = ra_snapshot:complete_snapshot(IdxTerm, Sn1),
-                ra_snapshot:read(1000000000, Sn2)
+                ra_snapshot:complete_snapshot(IdxTerm, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
         end,
-    {Chunk, _} = ChunkFun(ChunkSt),
+    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2),
+    {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, 1000000000, Sn2),
 
     SnapState0 = ra_log:snapshot_state(Log1),
-    {ok, SnapState1} = ra_snapshot:begin_accept(Crc, Meta, 1, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, SnapState1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
 
     Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),
     {Log2b, _} = ra_log:handle_event({snapshot_written, {15,2}}, Log2),
@@ -826,3 +826,12 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0}.
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.

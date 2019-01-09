@@ -6,10 +6,11 @@
 -export([
          prepare/2,
          write/3,
-         begin_accept/3,
+         begin_accept/2,
          accept_chunk/2,
          complete_accept/2,
-         read/2,
+         begin_read/1,
+         read_chunk/3,
          recover/1,
          validate/1,
          read_meta/1
@@ -59,7 +60,7 @@ write(Dir, {Idx, Term, ClusterServers}, MacState) ->
                            Data]).
 
 
-begin_accept(SnapDir, Crc, {Idx, Term, Cluster}) ->
+begin_accept(SnapDir, {Idx, Term, Cluster}) ->
     File = filename(SnapDir),
     {ok, Fd} = file:open(File, [write, binary, raw]),
     Data = [<<Idx:64/unsigned,
@@ -73,30 +74,39 @@ begin_accept(SnapDir, Crc, {Idx, Term, Cluster}) ->
     PartialCrc = erlang:crc32(Data),
     ok = file:write(Fd, [<<?MAGIC,
                            ?VERSION:8/unsigned,
-                           Crc:32/integer>>,
+                           0:32/integer>>,
                          Data]),
-    {ok, {PartialCrc, Crc, Fd}}.
+    {ok, {PartialCrc, Fd}}.
 
+accept_chunk(Chunk, {PartialCrc, Fd}) ->
+    <<Crc:32/integer, Rest/binary>> = Chunk,
+    accept_chunk(Rest, {PartialCrc, Crc, Fd});
 accept_chunk(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
     PartialCrc = erlang:crc32(PartialCrc0, Chunk),
     {ok, {PartialCrc, Crc, Fd}}.
 
+complete_accept(Chunk, {PartialCrc, Fd}) ->
+    <<Crc:32/integer, Rest/binary>> = Chunk,
+    complete_accept(Rest, {PartialCrc, Crc, Fd});
 complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
+    {ok, 5} = file:position(Fd, 5),
+    ok = file:write(Fd, <<Crc:32/integer>>),
     Crc = erlang:crc32(PartialCrc0, Chunk),
     ok = file:sync(Fd),
     ok = file:close(Fd),
     ok.
 
-read(Size, Dir) ->
+begin_read(Dir) ->
     File = filename(Dir),
     case file:open(File, [read, binary, raw]) of
         {ok, Fd} ->
             case read_meta_internal(Fd) of
                 {ok, Meta, Crc} ->
-                    %% make chunks
-                    {ok, Crc, Meta, Fd, make_chunks(Size, Fd, [])};
+                    {ok, DataStart} = file:position(Fd, cur),
+                    {ok, Eof} = file:position(Fd, eof),
+                    {ok, Meta, {Crc, {DataStart, Eof, Fd}}};
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
@@ -105,39 +115,36 @@ read(Size, Dir) ->
             Err
     end.
 
-make_chunks(Size, Fd, Acc) ->
-    {ok, Cur} = file:position(Fd, cur),
-    {ok, Eof} = file:position(Fd, eof),
-    case min(Size, Eof - Cur) of
-        Size ->
-            {ok, _} = file:position(Fd, Cur + Size),
-            Thunk = fun(F) ->
-                            %% Position file offset
-                            {ok, _} = file:position(F, Cur),
-                            {ok, Data} = file:read(F, Size),
-                            {Data, F}
-                    end,
-            %% ensure pos is correct for next chunk
-            {ok, _} = file:position(Fd, Cur + Size),
-            make_chunks(Size, Fd, [Thunk | Acc]);
-        Rem ->
-            %% this is the last thunk
-            Thunk = fun(F) ->
-                            %% Position file offset
-                            {ok, _} = file:position(F, Cur),
-                            {ok, Data} = file:read(F, Rem),
-                            _ = file:close(F),
-                            {Data, F}
-                    end,
-            lists:reverse([Thunk | Acc])
+read_chunk({Crc, ReadState}, Size, Dir) when is_integer(Crc) ->
+    case read_chunk(ReadState, Size - 4, Dir) of
+        {ok, Data, ReadState1} ->
+            {ok, <<Crc:32/integer, Data/binary>>, ReadState1};
+        {error, _} = Err ->
+            Err
+    end;
+read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
+    {ok, _} = file:position(Fd, Pos),
+    case file:read(Fd, Size) of
+        {ok, Data} ->
+            case Pos + Size >= Eof of
+                true ->
+                    _ = file:close(Fd),
+                    {ok, Data, last};
+                false ->
+                    {ok, Data, {next, {Pos + Size, Eof, Fd}}}
+            end;
+        {error, _} = Err ->
+            Err;
+        eof ->
+            {error, unexpected_eof}
     end.
 
 -spec recover(file:filename()) ->
     {ok, meta(), term()} |
     {error, invalid_format |
-    {invalid_version, integer()} |
-    checksum_error |
-    file_err()}.
+     {invalid_version, integer()} |
+     checksum_error |
+     file_err()}.
 recover(Dir) ->
     File = filename(Dir),
     case file:read_file(File) of

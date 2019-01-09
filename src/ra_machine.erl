@@ -197,7 +197,7 @@
 -callback snapshot_module() -> module().
 
 -callback filter(command_meta_data(), command(), ra_server:command_reply_mode(),
-                 state(), term()) -> boolean().
+                 state(), term()) -> {command(), effects(), term(), boolean()}.
 
 -callback init_filter(state()) -> term().
 
@@ -257,9 +257,10 @@ snapshot_module({machine, Mod, _}) ->
     ?OPT_CALL(Mod:snapshot_module(), ?DEFAULT_SNAPSHOT_MODULE).
 
 -spec filter(machine(), command_meta_data(), command(), ra_server:command_reply_mode(),
-             state(), term()) -> boolean().
+             state(), term()) -> {command(), effects(), term(), boolean()}.
 filter({machine, Mod, _}, Metadata, Cmd, CmdReply, State, FilterState) ->
-    ?OPT_CALL(Mod:filter(Metadata, Cmd, CmdReply, State, FilterState), {[], false}).
+    ?OPT_CALL(Mod:filter(Metadata, Cmd, CmdReply, State, FilterState),
+              {Cmd, [], FilterState, false}).
 
 -spec init_filter(machine(), state()) -> term().
 init_filter({machine, Mod, _}, State) ->
