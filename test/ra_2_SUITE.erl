@@ -126,7 +126,7 @@ cluster_is_deleted(Config) ->
     % timer:sleep(100),
     %% redeclaring the same cluster should fail
     {error, cluster_not_formed} = ra:start_cluster(ClusterName,
-                                                   {module, ?MODULE, Config},
+                                                   {module, ?MODULE, #{}},
                                                    Peers),
     {ok, _} = ra:delete_cluster(Peers),
     timer:sleep(100),
