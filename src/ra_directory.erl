@@ -129,10 +129,11 @@ overview() ->
     Dir = ets:tab2list(ra_directory),
     States = maps:from_list(ets:tab2list(ra_state)),
     Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
-    lists:foldl(fun ({UId, Pid, Node}, Acc) ->
+    lists:foldl(fun ({UId, Pid, Parent, Node}, Acc) ->
                         Acc#{Node =>
                              #{uid => UId,
                                pid => Pid,
+                               parent => Parent,
                                state => maps:get(Node, States, undefined),
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}

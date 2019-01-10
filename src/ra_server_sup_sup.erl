@@ -29,7 +29,6 @@ start_server(#{id := NodeId,
     Node = ra_lib:ra_server_id_node(NodeId),
     case rpc:call(Node, ?MODULE, prepare_start_rpc, [UId]) of
         ok ->
-            ?INFO("start_server here", []),
             supervisor:start_child({?MODULE, Node}, [Config]);
         Err ->
             Err

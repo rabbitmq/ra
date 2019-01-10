@@ -229,6 +229,8 @@ start_servers(Config) ->
                  _ -> {N1, node()}
              end,
     gen_statem:stop(Target, normal, 2000),
+    %% simpel check to ensure overview at least doesn't crash
+    ra:overview(),
     % issue command to confirm n3 joined the cluster successfully
     {ok, _, _} = ra:process_command({N3, node()}, 5,
                                      ?PROCESS_COMMAND_TIMEOUT),
