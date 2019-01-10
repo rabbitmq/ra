@@ -19,6 +19,7 @@ all_tests() ->
     [
      start_stopped_server,
      server_is_deleted,
+     cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
      server_restart_after_application_restart,
@@ -113,6 +114,23 @@ server_is_deleted(Config) ->
     end,
 
     ok = ra:delete_server(ServerId),
+    ok.
+
+cluster_is_deleted(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Peers = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, Peers),
+    % timer:sleep(100),
+    %% redeclaring the same cluster should fail
+    {error, cluster_not_formed} = ra:start_cluster(ClusterName,
+                                                   {module, ?MODULE, Config},
+                                                   Peers),
+    {ok, _} = ra:delete_cluster(Peers),
+    timer:sleep(100),
+    ok = start_cluster(ClusterName, Peers),
     ok.
 
 cluster_is_deleted_with_server_down(Config) ->
