@@ -52,8 +52,7 @@
          init_aux/2,
          handle_aux/7,
          snapshot_module/1,
-         init_filter/2,
-         filter/6
+         filter/5
         ]).
 
 -type state() :: term().
@@ -158,8 +157,7 @@
                      handle_aux/6,
                      overview/1,
                      snapshot_module/0,
-                     filter/5,
-                     init_filter/1
+                     filter/4
                      ]).
 
 -define(OPT_CALL(Call, Def),
@@ -197,9 +195,7 @@
 -callback snapshot_module() -> module().
 
 -callback filter(command_meta_data(), command(), ra_server:command_reply_mode(),
-                 state(), term()) -> {command(), effects(), term(), boolean()}.
-
--callback init_filter(state()) -> term().
+                 state()) -> {effects(), boolean()}.
 
 %% @doc initialise a new machine
 -spec init(machine(), atom()) -> state().
@@ -257,11 +253,6 @@ snapshot_module({machine, Mod, _}) ->
     ?OPT_CALL(Mod:snapshot_module(), ?DEFAULT_SNAPSHOT_MODULE).
 
 -spec filter(machine(), command_meta_data(), command(), ra_server:command_reply_mode(),
-             state(), term()) -> {command(), effects(), term(), boolean()}.
-filter({machine, Mod, _}, Metadata, Cmd, CmdReply, State, FilterState) ->
-    ?OPT_CALL(Mod:filter(Metadata, Cmd, CmdReply, State, FilterState),
-              {Cmd, [], FilterState, false}).
-
--spec init_filter(machine(), state()) -> term().
-init_filter({machine, Mod, _}, State) ->
-    ?OPT_CALL(Mod:init_filter(State), undefined).
+             state()) -> {command(), effects(), boolean()}.
+filter({machine, Mod, _}, Metadata, Cmd, CmdReply, State) ->
+    ?OPT_CALL(Mod:filter(Metadata, Cmd, CmdReply, State), {[], false}).

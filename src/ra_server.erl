@@ -62,8 +62,7 @@
       aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
-      pre_vote_token => reference(),
-      filter_state => term()
+      pre_vote_token => reference()
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -232,8 +231,7 @@ init(#{id := Id,
                machine => Machine,
                machine_state => MacState,
                aux_state => ra_machine:init_aux(Machine, Name),
-               condition_timeout_effects => [],
-               filter_state => ra_machine:init_filter(Machine, MacState)},
+               condition_timeout_effects => []},
     % Find last cluster change and idxterm and use as initial cluster
     % This is required as otherwise a server could restart without any known
     % peers and become a leader
@@ -1645,6 +1643,9 @@ add_next_cluster_change(Effects, State) ->
 
 add_reply(From, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
+add_reply(undefined, reject, {notify_on_consensus, Corr, Pid},
+          Effects, Notifys) ->
+    {[{send_msg, Pid, {reject_publish, Corr}, ra_event} | Effects], Notifys};
 add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
@@ -1663,14 +1664,12 @@ add_reply(_, _, _, % From, Reply, Mode
 
 maybe_append_log_leader({'$usr', Meta, Cmd, ReplyType} = _UsrCmd,
                         #{machine := Machine,
-                          machine_state := MacState0,
-                          filter_state := FilterState0} = State) ->
-    case ra_machine:filter(Machine, Meta, Cmd, ReplyType, MacState0, FilterState0) of
-        {_NewCmd, Effects, FilterState, true} ->
-            {rejected, State#{filter_state => FilterState}, Effects};
-        {NewCmd, [], FilterState, false} ->
-            append_log_leader({'$usr', Meta, NewCmd, ReplyType},
-                              State#{filter_state => FilterState})
+                          machine_state := MacState0} = State) ->
+    case ra_machine:filter(Machine, Meta, Cmd, ReplyType, MacState0) of
+        {Effects, true} ->
+            {rejected, State, Effects};
+        {[], false} ->
+            append_log_leader({'$usr', Meta, Cmd, ReplyType}, State)
     end;
 maybe_append_log_leader(Cmd, State) ->
     append_log_leader(Cmd, State).
