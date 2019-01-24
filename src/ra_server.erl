@@ -1734,9 +1734,37 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           last_index = LWIdx,
                           last_term = LWTerm}.
 
-evaluate_quorum(State0, Effects) ->
-    State = #{commit_index := CI} = increment_commit_index(State0),
+evaluate_quorum(State0, Effects0) ->
+    State1 = #{commit_index := CI} = increment_commit_index(State0),
+    {State, Effects} = maybe_delayed_read_effects(State0, State1, Effects0);
     apply_to(CI, State, Effects).
+
+maybe_delayed_read_effects(#{commit_index := CI0},
+                     #{commit_index = CI} = State,
+                     Effects)
+        when CI > CI0 ->
+    delayed_read_effects(State, Effects);
+maybe_delayed_read_effects(_, State, Effects) ->
+    {State, Effects}.
+
+delayed_read_effects(#{delayed_reads = DR} = State0, Effects0) ->
+    SystemTime = erlang:system_time(),
+    lists:foldl(fun
+        (#delayed_read{expiration = Expiration}, Effects1)
+        when Expiration < SystemTime ->
+            Effects1;
+        (#delayed_read{caller = From,
+                       result = Result},
+            Effects1) ->
+            [{reply, From, Result} | Effects1]
+    end)
+    lists:filtermap(
+        fun(#delayed_read{expiration = Expiration}) when Expiration < SystemTime -> false;
+           (#delayed_read{caller = From, result = Result}) ->
+            {reply, From, Result}
+        end,
+        DR)
+
 
 increment_commit_index(State = #{current_term := CurrentTerm}) ->
     PotentialNewCommitIndex = agreed_commit(match_indexes(State)),

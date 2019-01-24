@@ -106,6 +106,14 @@
 %% the state machine, log and server code. The tag is used to determine
 %% which component to dispatch the down to
 
+-type record(delayed_query, {caller :: pid(),
+                             function :: fun(),
+                             expiration :: non_neg_integer()}).
+
+-type record(delayed_read, {caller :: pid(),
+                            result :: term(),
+                            expiration :: non_neg_integer()}).
+
 -record(state, {server_state :: ra_server:ra_server_state(),
                 name :: atom(),
                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
@@ -115,7 +123,9 @@
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
                 delayed_commands =
-                    queue:new() :: queue:queue(ra_server:command())}).
+                    queue:new() :: queue:queue(ra_server:command()),
+                delayed_queries = queue:new() :: queue:queue(#delayed_query{}),
+                delayed_reads = [#delayed_read{}]}).
 
 %%%===================================================================
 %%% API
@@ -146,6 +156,24 @@ query(ServerRef, QueryFun, local, Timeout) ->
 query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
+
+-spec extended_query(
+        ServerId :: ra_server_id(),
+        QueryFun :: fun((MacState::term(), Log::term()) -> Result::term()),
+        Timeout :: timeout()) ->
+    {ok, Result, ra_server_id()} | {error, no_more_attempts}.
+extended_query(ServerId, QueryFun, Timeout) ->
+    do_extended_query(ServerId, QueryFun, Timeout, 1).
+
+do_extended_query(ServerId, QueryFun, Timeout, Attempt)
+    case leader_call(ServerId, {extended_query, QueryFun, Attempt}, Timeout) of
+        {ok, Result} ->
+            {ok, Result, ServerId};
+        {error, {new_leader, Leader}} ->
+            do_extended_query(Leader, QueryFun, Timeout, Attempt);
+        {error, no_more_attempts} ->
+            {error, no_more_attempts}
+    end.
 
 -spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
 log_fold(ServerRef, Fun, InitialState, Timeout) ->
@@ -322,6 +350,18 @@ leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
     Reply = do_state_query(Spec, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
+
+leader({call, From}, {extended_query, Query, Attempt, Expiration},
+       #state{delayed_queries = DQs} = State) ->
+    DQ = #delayed_query{caller = From,
+                        function = Query,
+                        attempt = Attempt,
+                        expiration = Expiration},
+    %% TODO: avoid additional add/remove
+    {State1, Effects} = process_delayed_query(DQ,
+                                              State#state{delayed_queries = [DQ, DQs]}),
+    {keep_state, State1, Effects};
+
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_event, _Node, _Evt}, State) ->
@@ -374,7 +414,8 @@ leader({call, From}, {log_fold, Fun, Term}, State) ->
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State2, DQEffects} = maybe_process_delayed_queries(State1),
+            {State, DQEffects ++ Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -1183,6 +1224,46 @@ maybe_add_election_timeout(election_timeout, Actions, State) ->
     [election_timeout_action(long, State) | Actions];
 maybe_add_election_timeout(_, Actions, _) ->
     Actions.
+
+maybe_process_delayed_queries(State = #state{delayed_queries = DQs}) ->
+    lists:foldl(fun(DQ, {State0, Effects0}) ->
+        {State1, Effects1} = process_delayed_query(DQ, State0),
+        %% TODO: opsimise?
+        {State1, Effects1 ++ Effects0}
+    end,
+    {State, Effects},
+    DQs);
+
+process_delayed_query(#delayed_query{caller = From, function = Fun,
+                                     attempt = Attempt, expiration = Expiration} = DQ,
+                      #state{server_state = ServerState,
+                             delayed_reads = DRs,
+                             delayed_queries = DQs} = State0) ->
+    State1 = State0#state{delayed_queries = DQs -- [DQ]},
+    #state{delayed_reads = DRs,
+           server_state = ServerState} = State1,
+    #{cluster := Nodes} = ServerState,
+    case maps:size(Nodes) >= Attempt of
+        true  ->
+            {State1, [{reply, From, {error, no_more_attempts}}]};
+        false ->
+            #{last_applied := LastApplied,
+              commit_index := CommitIndex,
+              machine_state := MacState,
+              log := Log} = ServerState,
+
+            case LastApplied =:= CommitIndex of
+                true ->
+                    Result = Query(MacState, Log),
+                    DR = #delayed_read{caller = From,
+                                       result = Result,
+                                       expiration = Expiration},
+                    send_heartbeat(State1),
+                    {State1#state{delayed_reads = [DR | DRs]}, []}
+                false ->
+                    {State1, []}
+            end
+    end;
 
 receive_snapshot_timeout() ->
     application:get_env(ra, receive_snapshot_timeout,

@@ -510,6 +510,22 @@ local_query(ServerRef, QueryFun) ->
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
 
+
+-spec fast_consitent_query(
+        ServerId :: ra_server_id(),
+        QueryFun :: fun((MacState::term(), Log::term()) -> Result::term())) ->
+    Result.
+fast_consitent_query(ServerId, QueryFun) ->
+    fast_consitent_query(ServerId, QueryFun).
+
+-spec fast_consitent_query(
+        ServerId :: ra_server_id(),
+        QueryFun :: fun((MacState::term(), Log::term()) -> Result::term()),
+        Timeout :: timeout()) ->
+    {ok, Result, ra_server_id()} | {error, no_more_attempts}.
+fast_consitent_query(ServerId, QueryFun, Timeout) ->
+    ra_server_proc:fast_consitent_query(ServerId, QueryFun, Timeout).
+
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query
 %% to the log and returning the result once applied. This guarantees the
