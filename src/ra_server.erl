@@ -40,6 +40,14 @@
 -type ra_await_condition_fun() ::
     fun((ra_msg(), ra_server_state()) -> boolean()).
 
+-record(static, {id := ra_server_id(),
+                 uid := ra_uid(),
+                 leader_id => maybe(ra_server_id()),
+                 cluster := ra_cluster()}).
+
+-record(cluster, {members :: ra_cluster(),
+
+
 -type ra_server_state() ::
     #{id := ra_server_id(),
       uid := ra_uid(),

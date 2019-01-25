@@ -106,14 +106,18 @@
 %% the state machine, log and server code. The tag is used to determine
 %% which component to dispatch the down to
 
--record(state, {server_state :: ra_server:ra_server_state(),
-                name :: atom(),
-                broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
-                tick_timeout :: non_neg_integer(),
+%% keep statick info in a separate record to avoid copying each unchanged field
+%% on every update
+-record(static, {name :: atom(),
+                 tick_timeout :: non_neg_integer(),
+                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
+                 await_condition_timeout :: non_neg_integer()}).
+
+-record(state, {static :: #static{},
+                server_state :: ra_server:ra_server_state(),
                 monitors = #{} :: monitors(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
-                await_condition_timeout :: non_neg_integer(),
                 delayed_commands =
                     queue:new() :: queue:queue(ra_server:command())}).
 
@@ -208,9 +212,10 @@ init(Config0) when is_map(Config0) ->
               end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
-    State = #state{server_state = ServerState, name = Key,
-                   tick_timeout = TickTime,
-                   await_condition_timeout = AwaitCondTimeout},
+    State = #state{static = #static{name = Key,
+                                    tick_timeout = TickTime,
+                                    await_condition_timeout = AwaitCondTimeout},
+                   server_state = ServerState},
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -584,8 +589,7 @@ follower(_, tick_timeout, State) ->
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
-                                leader_monitor = MRef} = State0) ->
+follower(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -603,8 +607,9 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             State = follower_leader_change(State0, State2),
             ?INFO("~w follower -> await_condition term: ~b~n",
                   [id(State), current_term(State)]),
+            Timeout = State#state.static#static.await_condition_timeout,
             {next_state, await_condition, State,
-             [{state_timeout, AwaitCondTimeout, await_condition_timeout}
+             [{state_timeout, Timeout, await_condition_timeout}
               | Actions]};
         {receive_snapshot, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -683,8 +688,9 @@ await_condition({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
-                State = #state{leader_monitor = MRef, name = Name}) ->
-    ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
+                State = #state{leader_monitor = MRef}) ->
+    ?WARN("~p: Leader monitor down. Setting election timeout.",
+          [State#state.static#static.name]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(short, State)]};
 await_condition(info, {node_event, Node, down}, State) ->
@@ -725,7 +731,8 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{name = Key, server_state = ServerState} = State) ->
+          #state{static = #static{name = Key},
+                 server_state = ServerState} = State) ->
     ?WARN("ra: ~w terminating with ~w in state ~w~n",
           [id(State), Reason, StateName]),
     UId = uid(State),
@@ -776,7 +783,7 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%% Internal functions
 %%%===================================================================
 
-handle_enter(RaftState, #state{name = Name,
+handle_enter(RaftState, #state{static = #static{name = Name},
                                server_state = ServerState0} = State) ->
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
@@ -1029,7 +1036,7 @@ handle_effect(_, {demonitor, node, Node}, _,
             {State, Actions}
     end;
 handle_effect(_, {incr_metrics, Table, Ops}, _,
-              State = #state{name = Key}, Actions) ->
+              State = #state{static = #static{name = Key}}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
@@ -1089,19 +1096,25 @@ maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
 maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(short, State) | Actions].
 
-election_timeout_action(really_short, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT),
+election_timeout_action(really_short, State) ->
+    T = rand:uniform(broadcast_time(State) * ?DEFAULT_ELECTION_MULT),
     {state_timeout, T, election_timeout};
-election_timeout_action(short, #state{broadcast_time = Timeout}) ->
+election_timeout_action(short, State) ->
+    Timeout = broadcast_time(State),
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 2),
     {state_timeout, T, election_timeout};
-election_timeout_action(long, #state{broadcast_time = Timeout}) ->
+election_timeout_action(long, State) ->
+    Timeout = broadcast_time(State),
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
+broadcast_time(#state{static = #static{broadcast_time = T}}) ->
+    T.
+
 % sets the tock timer for periodic actions such as sending stale rpcs
 % or persisting the last_applied index
-set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
+set_tick_timer(#state{static  = #static{tick_timeout = TickTimeout}},
+               Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
 
