@@ -241,7 +241,7 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
 start_server(ClusterName, ServerId, Machine, ServerIds) ->
-    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterName), 4),
+    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(ClusterName), 6),
     UId = ra_lib:make_uid(string:uppercase(Prefix)),
     Conf = #{cluster_name => ClusterName,
              id => ServerId,
