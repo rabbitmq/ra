@@ -86,9 +86,9 @@ start_stop_restart_delete_on_remote(Config) ->
     ok = ra:stop_server(NodeId),
     % idempotency
     ok = ra:stop_server(NodeId),
-    ok = ra:delete_server(NodeId),
+    ok = ra:force_delete_server(NodeId),
     % idempotency
-    {error, _} = ra:delete_server(NodeId),
+    {error, _} = ra:force_delete_server(NodeId),
     timer:sleep(500),
     slave:stop(S1),
     ok.

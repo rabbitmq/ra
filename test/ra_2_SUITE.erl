@@ -18,7 +18,7 @@ all() ->
 all_tests() ->
     [
      start_stopped_server,
-     server_is_deleted,
+     server_is_force_deleted,
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
@@ -47,17 +47,17 @@ end_per_group(_, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ra_server_sup_sup:remove_all(),
-    NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
-    NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
+    ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
+    ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {modname, TestCase},
      {cluster_name, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
      {server_id, {TestCase, node()}},
-     {uid2, atom_to_binary(NodeName2, utf8)},
-     {server_id2, {NodeName2, node()}},
-     {uid3, atom_to_binary(NodeName3, utf8)},
-     {server_id3, {NodeName3, node()}}
+     {uid2, atom_to_binary(ServerName2, utf8)},
+     {server_id2, {ServerName2, node()}},
+     {uid3, atom_to_binary(ServerName3, utf8)},
+     {server_id3, {ServerName3, node()}}
      | Config].
 
 enqueue(Server, Msg) ->
@@ -86,7 +86,7 @@ start_stopped_server(Config) ->
     ok.
 
 
-server_is_deleted(Config) ->
+server_is_force_deleted(Config) ->
     ClusterName = ?config(cluster_name, Config),
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
@@ -97,8 +97,10 @@ server_is_deleted(Config) ->
     ok = enqueue(ServerId, msg1),
     % force roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    ok = ra:delete_server(ServerId),
+    Pid = ra_directory:where_is(UId),
+    ok = ra:force_delete_server(ServerId),
 
+    validate_ets_table_deletes([UId], [Pid], [ServerId]),
     % start a node with the same nodeid but different uid
     % simulatin the case where a queue got deleted then re-declared shortly
     % afterwards
@@ -113,7 +115,7 @@ server_is_deleted(Config) ->
             exit(unexpected_dequeue_result)
     end,
 
-    ok = ra:delete_server(ServerId),
+    ok = ra:force_delete_server(ServerId),
     ok.
 
 cluster_is_deleted(Config) ->
@@ -124,13 +126,41 @@ cluster_is_deleted(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     % timer:sleep(100),
+    UIds = [ ra_directory:uid_of(Name) || {Name, _} <- Peers],
+    Pids = [ ra_directory:where_is(Name) || {Name, _} <- Peers],
     %% redeclaring the same cluster should fail
     {error, cluster_not_formed} = ra:start_cluster(ClusterName,
                                                    {module, ?MODULE, #{}},
                                                    Peers),
     {ok, _} = ra:delete_cluster(Peers),
-    timer:sleep(100),
+    %% Assert all ETS tables are deleted for each UId
+
+    validate_ets_table_deletes(UIds, Pids, Peers),
     ok = start_cluster(ClusterName, Peers),
+    ok.
+
+validate_ets_table_deletes(UIds, Pids, Peers) ->
+    timer:sleep(500),
+    UIdTables = [ra_directory,
+                 ra_log_meta,
+                 ra_state,
+                 ra_log_snapshot_state,
+                 ra_log_metrics
+                ],
+    [begin
+         ct:pal("validate_ets_table_deletes ~w in ~w", [Key, Tab]),
+         [] = ets:lookup(Tab, Key)
+     end || Key <- UIds, Tab <- UIdTables],
+
+    %% validate by registered name is also cleaned up
+    [ [] = ets:lookup(T, Name) || {Name, _} <- Peers,
+                                    T <-  [ra_metrics,
+                                           ra_state]],
+
+    %% validate open file metrics is cleaned up
+    [ [] = ets:lookup(T, Pid) || Pid <- Pids,
+                                 T <-  [ra_open_file_metrics
+                                       ]],
     ok.
 
 cluster_is_deleted_with_server_down(Config) ->
@@ -147,10 +177,10 @@ cluster_is_deleted_with_server_down(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     timer:sleep(100),
-    [ begin
-          UId = ra_directory:uid_of(Name),
-          ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
-      end || {Name, _} <- Peers],
+    [begin
+         UId = ra_directory:uid_of(Name),
+         ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+     end || {Name, _} <- Peers],
 
     % check data dirs exist for all nodes
     % Wildcard = lists:flatten(filename:join([PrivDir, "**"])),

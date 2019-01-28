@@ -653,7 +653,7 @@ terminating_leader(EvtType, Msg, State0) ->
         false ->
             ?INFO("~w: is not fully replicated after ~W~n", [id(State),
                                                              Msg, 7]),
-            {keep_state, State, Actions}
+            {keep_state, send_rpcs(State), Actions}
     end.
 
 terminating_follower(enter, _OldState, State0) ->
@@ -737,6 +737,7 @@ terminate(Reason, StateName,
                     ra_log_segment_writer, UId),
             catch ra_directory:unregister_name(UId),
             catch ra_log_meta:delete_sync(UId),
+            catch ets:delete(ra_state, UId),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% wont do this automatically, even for transient children

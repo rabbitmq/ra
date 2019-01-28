@@ -184,13 +184,19 @@ init(#{uid := UId} = Conf) ->
           [State#?MODULE.uid,
            last_index_term(State),
            State#?MODULE.first_index]),
-    State.
+    delete_segments(SnapIdx, State).
 
 -spec close(ra_log()) -> ok.
-close(#?MODULE{open_segments = OpenSegs}) ->
+close(#?MODULE{uid = UId,
+               open_segments = OpenSegs}) ->
     % deliberately ignoring return value
     % close all open segments
     _ = ra_flru:evict_all(OpenSegs),
+    %% delete ra_log_metrics record
+    catch ets:delete(ra_log_metrics, UId),
+    %% inserted in ra_snapshot but it doesn't havea terminate callback so
+    %% deleting ets table here
+    catch ets:delete(ra_log_snapshot_state, UId),
     ok.
 
 -spec append(Entry :: log_entry(), State :: ra_log()) ->
