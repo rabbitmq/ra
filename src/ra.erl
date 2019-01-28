@@ -31,7 +31,7 @@
          start_server/4,
          restart_server/1,
          stop_server/1,
-         delete_server/1,
+         force_delete_server/1,
          trigger_election/1,
          trigger_election/2,
          %% membership
@@ -139,8 +139,8 @@ stop_server(ServerId) ->
 %% The server is forcefully deleted.
 %% @param ServerId the ra_server_id() of the server
 %% @returns `{ok | error, nodedown}'
--spec delete_server(ServerId :: ra_server_id()) -> ok | {error, term()}.
-delete_server(ServerId) ->
+-spec force_delete_server(ServerId :: ra_server_id()) -> ok | {error, term()}.
+force_delete_server(ServerId) ->
     ra_server_sup_sup:delete_server(ServerId).
 
 %% @doc Starts or restarts a ra cluster.
@@ -230,7 +230,7 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                 Err ->
                     ?WARN("ra: failed to form new cluster ~w.~n "
                           "Error: ~w~n", [ClusterName, Err]),
-                    _ = [delete_server(N) || N <- Started],
+                    _ = [force_delete_server(N) || N <- Started],
                     % we do not have a functioning cluster
                     {error, cluster_not_formed}
             end
@@ -376,7 +376,7 @@ leave_and_delete_server(ServerRef, ServerId, Timeout) ->
             Err;
         {ok, _, _} ->
             ?ERR("~p has left the building. terminating", [ServerId]),
-            delete_server(ServerId)
+            force_delete_server(ServerId)
     end.
 
 

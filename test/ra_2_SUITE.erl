@@ -18,7 +18,7 @@ all() ->
 all_tests() ->
     [
      start_stopped_server,
-     server_is_deleted,
+     server_is_force_deleted,
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
@@ -86,7 +86,7 @@ start_stopped_server(Config) ->
     ok.
 
 
-server_is_deleted(Config) ->
+server_is_force_deleted(Config) ->
     ClusterName = ?config(cluster_name, Config),
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
@@ -98,7 +98,7 @@ server_is_deleted(Config) ->
     % force roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     Pid = ra_directory:where_is(UId),
-    ok = ra:delete_server(ServerId),
+    ok = ra:force_delete_server(ServerId),
 
     validate_ets_table_deletes([UId], [Pid], [ServerId]),
     % start a node with the same nodeid but different uid
@@ -115,7 +115,7 @@ server_is_deleted(Config) ->
             exit(unexpected_dequeue_result)
     end,
 
-    ok = ra:delete_server(ServerId),
+    ok = ra:force_delete_server(ServerId),
     ok.
 
 cluster_is_deleted(Config) ->
