@@ -184,7 +184,7 @@ init(#{uid := UId} = Conf) ->
           [State#?MODULE.uid,
            last_index_term(State),
            State#?MODULE.first_index]),
-    State.
+    delete_segments(SnapIdx, State).
 
 -spec close(ra_log()) -> ok.
 close(#?MODULE{open_segments = OpenSegs}) ->
