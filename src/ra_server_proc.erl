@@ -737,6 +737,8 @@ terminate(Reason, StateName,
                     ra_log_segment_writer, UId),
             catch ra_directory:unregister_name(UId),
             catch ra_log_meta:delete_sync(UId),
+            catch ets:delete(ra_state, UId),
+            catch ets:delete(ra_state, UId),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% wont do this automatically, even for transient children

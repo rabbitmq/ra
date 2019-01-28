@@ -47,17 +47,17 @@ end_per_group(_, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ra_server_sup_sup:remove_all(),
-    NodeName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
-    NodeName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
+    ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
+    ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
      {modname, TestCase},
      {cluster_name, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
      {server_id, {TestCase, node()}},
-     {uid2, atom_to_binary(NodeName2, utf8)},
-     {server_id2, {NodeName2, node()}},
-     {uid3, atom_to_binary(NodeName3, utf8)},
-     {server_id3, {NodeName3, node()}}
+     {uid2, atom_to_binary(ServerName2, utf8)},
+     {server_id2, {ServerName2, node()}},
+     {uid3, atom_to_binary(ServerName3, utf8)},
+     {server_id3, {ServerName3, node()}}
      | Config].
 
 enqueue(Server, Msg) ->
@@ -124,12 +124,37 @@ cluster_is_deleted(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     % timer:sleep(100),
+    UIds = [ ra_directory:uid_of(Name) || {Name, _} <- Peers],
+    Pids = [ ra_directory:where_is(Name) || {Name, _} <- Peers],
     %% redeclaring the same cluster should fail
     {error, cluster_not_formed} = ra:start_cluster(ClusterName,
                                                    {module, ?MODULE, #{}},
                                                    Peers),
     {ok, _} = ra:delete_cluster(Peers),
-    timer:sleep(100),
+    %% TODO: replace with waiting for monitors for all pids
+    timer:sleep(500),
+    %% Assert all ETS tables are deleted for each UId
+
+    Tables = [
+              ra_directory,
+              ra_log_meta,
+              ra_state,
+              ra_log_snapshot_state,
+              ra_log_metrics
+             ],
+    [begin
+         [] = ets:lookup(Tab, Key)
+     end || Key <- UIds, Tab <- Tables],
+
+    %% validate by registered name is also cleaned up
+    [ [] = ets:lookup(T, Name) || {Name, _} <- Peers,
+                                    T <-  [ra_metrics,
+                                           ra_state]],
+
+    %% validate open file metrics is cleaned up
+    [ [] = ets:lookup(T, Pid) || Pid <- Pids,
+                                 T <-  [ra_open_file_metrics
+                                       ]],
     ok = start_cluster(ClusterName, Peers),
     ok.
 
@@ -147,10 +172,10 @@ cluster_is_deleted_with_server_down(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     timer:sleep(100),
-    [ begin
-          UId = ra_directory:uid_of(Name),
-          ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
-      end || {Name, _} <- Peers],
+    [begin
+         UId = ra_directory:uid_of(Name),
+         ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+     end || {Name, _} <- Peers],
 
     % check data dirs exist for all nodes
     % Wildcard = lists:flatten(filename:join([PrivDir, "**"])),
