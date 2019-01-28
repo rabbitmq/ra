@@ -107,19 +107,28 @@ delete_server(NodeId) ->
 delete_server_rpc(RaName) ->
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
+    Pid = ra_directory:where_is(RaName),
+    ra_log_meta:delete(UId),
     Dir = ra_env:server_data_dir(UId),
     ok = ra_log_segment_writer:release_segments(
            ra_log_segment_writer, UId),
     _ = supervisor:terminate_child(?MODULE, UId),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of
-        ok -> ok
+        ok ->
+            _ = ra_directory:unregister_name(UId),
+            %% forcefully clean up ETS tables
+            catch ets:delete(ra_log_metrics, UId),
+            catch ets:delete(ra_log_snapshot_state, UId),
+            catch ets:delete(ra_metrics, RaName),
+            catch ets:delete(ra_state, RaName),
+            catch ets:delete(ra_open_file_metrics, Pid),
+            ok
     catch
         _:_ = Err ->
             ?WARN("delete_server/1 failed to delete directory ~s~n"
                   "Error: ~p~n", [Dir, Err])
     end,
-    _ = ra_directory:unregister_name(UId),
     ok.
 
 remove_all() ->

@@ -97,8 +97,10 @@ server_is_deleted(Config) ->
     ok = enqueue(ServerId, msg1),
     % force roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Pid = ra_directory:where_is(UId),
     ok = ra:delete_server(ServerId),
 
+    validate_ets_table_deletes([UId], [Pid], [ServerId]),
     % start a node with the same nodeid but different uid
     % simulatin the case where a queue got deleted then re-declared shortly
     % afterwards
@@ -131,20 +133,24 @@ cluster_is_deleted(Config) ->
                                                    {module, ?MODULE, #{}},
                                                    Peers),
     {ok, _} = ra:delete_cluster(Peers),
-    %% TODO: replace with waiting for monitors for all pids
-    timer:sleep(500),
     %% Assert all ETS tables are deleted for each UId
 
-    Tables = [
-              ra_directory,
-              ra_log_meta,
-              ra_state,
-              ra_log_snapshot_state,
-              ra_log_metrics
-             ],
+    validate_ets_table_deletes(UIds, Pids, Peers),
+    ok = start_cluster(ClusterName, Peers),
+    ok.
+
+validate_ets_table_deletes(UIds, Pids, Peers) ->
+    timer:sleep(500),
+    UIdTables = [ra_directory,
+                 ra_log_meta,
+                 ra_state,
+                 ra_log_snapshot_state,
+                 ra_log_metrics
+                ],
     [begin
+         ct:pal("validate_ets_table_deletes ~w in ~w", [Key, Tab]),
          [] = ets:lookup(Tab, Key)
-     end || Key <- UIds, Tab <- Tables],
+     end || Key <- UIds, Tab <- UIdTables],
 
     %% validate by registered name is also cleaned up
     [ [] = ets:lookup(T, Name) || {Name, _} <- Peers,
@@ -155,7 +161,6 @@ cluster_is_deleted(Config) ->
     [ [] = ets:lookup(T, Pid) || Pid <- Pids,
                                  T <-  [ra_open_file_metrics
                                        ]],
-    ok = start_cluster(ClusterName, Peers),
     ok.
 
 cluster_is_deleted_with_server_down(Config) ->
