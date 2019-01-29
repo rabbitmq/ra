@@ -208,7 +208,8 @@ init(Config0) when is_map(Config0) ->
               end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
-    State = #state{server_state = ServerState, name = Key,
+    State = #state{server_state = ServerState,
+                   name = Key,
                    tick_timeout = TickTime,
                    await_condition_timeout = AwaitCondTimeout},
     %% monitor nodes so that we can handle both nodeup and nodedown events
@@ -758,7 +759,6 @@ terminate(Reason, StateName,
 
         _ -> ok
     end,
-    _ = aten:unregister(Key),
     _ = ets:delete(ra_metrics, Key),
     _ = ets:delete(ra_state, Key),
     ok.
@@ -782,9 +782,8 @@ handle_enter(RaftState, #state{name = Name,
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
-    % ?INFO("state change effects ~w", [Effects]),
     handle_effects(RaftState, Effects, cast,
-                   State#state{server_state  = ServerState}).
+                   State#state{server_state = ServerState}).
 
 queue_take(N, Q) ->
     queue_take(N, Q, []).

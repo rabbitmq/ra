@@ -169,7 +169,7 @@ start_link(Config, Options) ->
 init(#{dir := Dir} = Conf0) ->
     Conf = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
-    % test that off_heap is actuall beneficial
+    % TODO: test that off_heap is actuall beneficial
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
     % writers
