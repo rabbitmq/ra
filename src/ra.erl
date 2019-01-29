@@ -172,7 +172,7 @@ start_or_restart_cluster(ClusterName, Machine,
             _ = [{ok, _} = ra_server_sup_sup:restart_server(N) || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
-            ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
+            ?DEBUG("start_or_restart_cluster: got error ~p~n", [Err]),
             start_cluster(ClusterName, Machine, ServerIds)
     end.
 

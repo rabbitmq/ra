@@ -133,15 +133,28 @@ do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
     Remaining =:= [] andalso NumMessages =:= MaxReceived.
 
 validate_machine_state(Servers) ->
-    % give the cluster a bit of time to settle first
-    timer:sleep(1000),
+    validate_machine_state(Servers, 10).
+
+validate_machine_state(Servers, 0) ->
     MacStates = [begin
                      {ok, S, _} = ra:local_query(N, fun ra_lib:id/1),
                      S
                  end || N <- Servers],
+    exit({validate_machine_state_failed, MacStates});
+validate_machine_state(Servers, Num) ->
+    % give the cluster a bit of time to settle first
+    timer:sleep(500),
+    MacStates = [begin
+                     {ok, {IT, _} = S, _} = ra:local_query(N, fun ra_lib:id/1),
+                     ct:pal("validating ~w at ~w", [N, IT]),
+                     S
+                 end || N <- Servers],
     H = hd(MacStates),
-    lists:foreach(fun (S) -> ?assertEqual(H, S) end, MacStates),
-    ok.
+    case lists:all(fun (S) -> H =:= S end, MacStates) of
+        true -> ok;
+        false ->
+            validate_machine_state(Servers, Num-1)
+    end.
 
 select_some(Servers) ->
     N = trunc(length(Servers) / 2),
@@ -224,12 +237,15 @@ setup_ra_cluster(Config, Machine) ->
 node_setup(DataDir) ->
     LogFile = filename:join([DataDir, atom_to_list(node()), "ra.log"]),
     SaslFile = filename:join([DataDir, atom_to_list(node()), "ra_sasl.log"]),
+    logger:set_primary_config(level, debug),
+    Config = #{config => #{type => {file, LogFile}}, level => debug},
+    logger:add_handler(ra_handler, logger_std_h, Config),
     application:load(sasl),
     application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     application:stop(sasl),
     application:start(sasl),
     filelib:ensure_dir(LogFile),
-    _ = error_logger:logfile({open, LogFile}),
+    % _ = error_logger:logfile({open, LogFile}),
     _ = error_logger:tty(false),
     ok.
 
@@ -244,7 +260,8 @@ make_server_config(Name, Nodes, Node, Machine) ->
       initial_members => [{Name, N} || N <- Nodes],
       log_init_args =>
       #{uid => atom_to_binary(Name, utf8)},
-      machine =>  Machine
+      machine =>  Machine,
+      await_condition_timeout => 5
      }.
 
 run_proper(Fun, Args, NumTests) ->

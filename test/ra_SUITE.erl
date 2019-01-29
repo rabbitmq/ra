@@ -49,6 +49,8 @@ groups() ->
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
+
+    % ok = logger:set_primary_config(level, debug),
     Config.
 
 end_per_suite(Config) ->
@@ -64,6 +66,7 @@ init_per_group(_G, Config) ->
     PrivDir = ?config(priv_dir, Config),
     DataDir = filename:join([PrivDir, "data"]),
     ok = restart_ra(DataDir),
+    ok = logger:set_application_level(ra, all),
     Config.
 
 end_per_group(_, Config) ->

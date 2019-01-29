@@ -179,11 +179,11 @@ init(#{uid := UId} = Conf) ->
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_first_entry(State0),
-    ?INFO("~s: ra_log:init recovered last_index_term ~w"
-          " first index ~b~n",
-          [State#?MODULE.uid,
-           last_index_term(State),
-           State#?MODULE.first_index]),
+    ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
+           " first index ~b~n",
+           [State#?MODULE.uid,
+            last_index_term(State),
+            State#?MODULE.first_index]),
     delete_segments(SnapIdx, State).
 
 -spec close(ra_log()) -> ok.
@@ -330,9 +330,9 @@ handle_event({written, {FromIdx, ToIdx, Term}},
                                   max(LastWrittenTerm0, Term)},
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
         {_X, State} ->
-            ?INFO("~s: written event did not find term ~b for index ~b "
-                  "found ~w",
-                  [State#?MODULE.uid, Term, ToIdx, _X]),
+            ?DEBUG("~s: written event did not find term ~b for index ~b "
+                   "found ~w",
+                   [State#?MODULE.uid, Term, ToIdx, _X]),
             {State, []}
     end;
 handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
@@ -631,8 +631,8 @@ delete_segments(Idx, #?MODULE{uid = UId,
             ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
             ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                        ObsoleteFiles),
-            ?INFO("~s: ~b obsolete segments at ~b - remaining: ~b",
-                  [UId, length(ObsoleteKeys), Idx, length(Active)]),
+            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
+                   [UId, length(ObsoleteKeys), Idx, length(Active)]),
             State0#?MODULE{open_segments = OpenSegs,
                            segment_refs = Active}
     end.
@@ -900,8 +900,8 @@ resend_from(Idx, #?MODULE{uid = UId} = State0) ->
 resend_from0(Idx, #?MODULE{last_index = LastIdx,
                          last_resend_time = undefined,
                          cache = Cache} = State) ->
-    ?INFO("~s: ra_log: resending from ~b to ~b",
-          [State#?MODULE.uid, Idx, LastIdx]),
+    ?DEBUG("~s: ra_log: resending from ~b to ~b",
+           [State#?MODULE.uid, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))

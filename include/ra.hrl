@@ -137,28 +137,12 @@
 %% WAL defaults
 -define(WAL_MAX_SIZE_BYTES, 1024 * 1024 * 1024).
 
-% primitive logging abstraction
--define(error, true).
--define(warn, true).
--define(info, true).
 
--ifdef(info).
--define(INFO(Fmt, Args), error_logger:info_msg(Fmt, Args)).
--else.
--define(INFO(_F, _A), ok).
--endif.
-
--ifdef(warn).
--define(WARN(Fmt, Args), error_logger:warning_msg(Fmt, Args)).
--else.
--define(WARN(_, _), ok).
--endif.
-
--ifdef(error).
--define(ERR(Fmt, Args), error_logger:error_msg(Fmt, Args)).
--else.
--define(ERR(_, _), ok).
--endif.
+-define(DEBUG(Fmt, Args), logger:debug(Fmt, Args)).
+-define(INFO(Fmt, Args), logger:info(Fmt, Args)).
+-define(NOTICE(Fmt, Args), logger:notice(Fmt, Args)).
+-define(WARN(Fmt, Args), logger:warning(Fmt, Args)).
+-define(ERR(Fmt, Args), logger:error(Fmt, Args)).
 
 -define(DEFAULT_TIMEOUT, 5000).
 
