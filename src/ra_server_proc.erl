@@ -250,8 +250,8 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
                   true ->
                       [];
                   false ->
-                      ?INFO("~w: is not new, setting election timeout.~n",
-                            [id(State)]),
+                      ?DEBUG("~w: is not new, setting election timeout.~n",
+                             [id(State)]),
                       [election_timeout_action(short, State)]
               end,
     {next_state, follower, State, set_tick_timer(State, Actions)}.
@@ -405,8 +405,6 @@ leader(EventType, Msg, State0) ->
                 true ->
                     {stop, {shutdown, delete}, State};
                 false ->
-                    ?INFO("~w leader -> terminating_leader term: ~b~n",
-                          [id(State), current_term(State)]),
                     {next_state, terminating_leader, State, Actions}
             end
     end.
@@ -443,8 +441,6 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w candidate -> follower term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger
@@ -457,8 +453,6 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            ?INFO("~w candidate -> leader term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, leader, State, Actions ++ NextEvents}
     end.
 
@@ -633,15 +627,15 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->
-    ?INFO("terminating leader got ~w~n", [Msg]),
+    ?DEBUG("terminating leader received ~w~n", [Msg]),
     {keep_state, State, Actions} = leader(EvtType, Msg, State0),
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?INFO("~w: is not fully replicated after ~W~n", [id(State),
-                                                             Msg, 7]),
+            ?DEBUG("~w: is not fully replicated after ~W~n", [id(State),
+                                                              Msg, 7]),
             {keep_state, send_rpcs(State), Actions}
     end.
 
@@ -655,8 +649,8 @@ terminating_follower(EvtType, Msg, State0) ->
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?INFO("~w: is not fully persisted after ~W~n", [id(State),
-                                                            Msg, 7]),
+            ?DEBUG("~w: is not fully persisted after ~W~n", [id(State),
+                                                             Msg, 7]),
             {keep_state, State, Actions}
     end.
 
@@ -767,9 +761,18 @@ handle_enter(RaftState, OldRaftState,
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
-    ?INFO("~w ~s -> ~s in term: ~b~n",
-          [id(State), OldRaftState, RaftState,
-           current_term(State)]),
+    case RaftState == leader orelse OldRaftState == leader of
+        true ->
+            %% ensure transitions from and to leader are logged at a higher
+            %% level
+            ?NOTICE("~w ~s -> ~s in term: ~b~n",
+                    [id(State), OldRaftState, RaftState,
+                     current_term(State)]);
+        false ->
+            ?DEBUG("~w ~s -> ~s in term: ~b~n",
+                   [id(State), OldRaftState, RaftState,
+                    current_term(State)])
+    end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
 

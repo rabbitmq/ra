@@ -1355,7 +1355,7 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
 call_for_election(candidate, #{id := Id,
                                current_term := CurrentTerm} = State0) ->
     NewTerm = CurrentTerm + 1,
-    ?INFO("~w: election called for in term ~b~n", [Id, NewTerm]),
+    ?DEBUG("~w: election called for in term ~b~n", [Id, NewTerm]),
     PeerIds = peer_ids(State0),
     % increment current term
     {LastIdx, LastTerm} = last_idx_term(State0),
