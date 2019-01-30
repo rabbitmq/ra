@@ -992,9 +992,11 @@ handle_effect(_, {monitor, node, Node}, _,
                 true ->
                     %% as effects get evaluated on state enter we cannot use
                     %% next_events
-                    self() ! {nodeup, Node};
+                    self() ! {nodeup, Node},
+                    ok;
                 false ->
-                    self() ! {nodedown, Node}
+                    self() ! {nodedown, Node},
+                    ok
             end,
             {State#state{monitors = Monitors#{Node => undefined}}, Actions0}
     end;

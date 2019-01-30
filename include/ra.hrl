@@ -137,12 +137,22 @@
 %% WAL defaults
 -define(WAL_MAX_SIZE_BYTES, 1024 * 1024 * 1024).
 
+%% logging shim
+-define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
+-define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
+-define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).
+-define(WARN(Fmt, Args), ?DISPATCH_LOG(warning, Fmt, Args)).
+-define(ERR(Fmt, Args), ?DISPATCH_LOG(error, Fmt, Args)).
 
--define(DEBUG(Fmt, Args), logger:debug(Fmt, Args)).
--define(INFO(Fmt, Args), logger:info(Fmt, Args)).
--define(NOTICE(Fmt, Args), logger:notice(Fmt, Args)).
--define(WARN(Fmt, Args), logger:warning(Fmt, Args)).
--define(ERR(Fmt, Args), logger:error(Fmt, Args)).
+-define(DISPATCH_LOG(Level, Fmt, Args),
+        %% same as OTP logger does when using the macro
+        catch (persistent_term:get('$ra_logger')):log(Level, Fmt, Args,
+                                                      #{mfa => {?MODULE,
+                                                                ?FUNCTION_NAME,
+                                                                ?FUNCTION_ARITY},
+                                                        file => ?FILE,
+                                                        line => ?LINE}),
+       ok).
 
 -define(DEFAULT_TIMEOUT, 5000).
 
