@@ -236,9 +236,17 @@ handle_aux({machine, Mod, _}, RaftState, Type, Cmd, Aux, Log, MacState) ->
 -spec query(module(), fun((state()) -> Result), state()) ->
     Result when Result :: term().
 query(Mod, Fun, State) when Mod =/= ra_machine_simple ->
-    Fun(State);
+    apply_fun(Fun, State);
 query(ra_machine_simple, Fun, {simple, _, State}) ->
-    Fun(State).
+    apply_fun(Fun, State).
+
+apply_fun(Fun, State) ->
+    case Fun of
+        F when is_function(F, 1) ->
+            Fun(State);
+        {M, F, A} ->
+            erlang:apply(M, F, A ++ [State])
+    end.
 
 -spec module(machine()) -> module().
 module({machine, Mod, _}) -> Mod.

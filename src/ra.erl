@@ -19,6 +19,8 @@
          members/2,
          local_query/2,
          local_query/3,
+         leader_query/2,
+         leader_query/3,
          consistent_query/2,
          consistent_query/3,
          % cluster operations
@@ -509,6 +511,19 @@ local_query(ServerRef, QueryFun) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
+
+-spec leader_query(ServerId :: ra_server_id(),
+                   QueryFun :: fun((term()) -> term())) ->
+    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+leader_query(ServerRef, QueryFun) ->
+    leader_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
+
+-spec leader_query(ServerId :: ra_server_id(),
+                   QueryFun :: fun((term()) -> term()),
+                   Timeout :: timeout()) ->
+    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+leader_query(ServerRef, QueryFun, Timeout) ->
+    ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
 
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query
