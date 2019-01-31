@@ -142,7 +142,9 @@
 -define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
 -define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).
 -define(WARN(Fmt, Args), ?DISPATCH_LOG(warning, Fmt, Args)).
+-define(WARNING(Fmt, Args), ?DISPATCH_LOG(warning, Fmt, Args)).
 -define(ERR(Fmt, Args), ?DISPATCH_LOG(error, Fmt, Args)).
+-define(ERROR(Fmt, Args), ?DISPATCH_LOG(error, Fmt, Args)).
 
 -define(DISPATCH_LOG(Level, Fmt, Args),
         %% same as OTP logger does when using the macro
@@ -157,5 +159,3 @@
 -define(DEFAULT_TIMEOUT, 5000).
 
 -define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
-
-
