@@ -38,6 +38,8 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
+    %% as we're not starting the ra application and we want the logs
+    ra_env:configure_logger(logger),
     Config.
 
 end_per_suite(_Config) ->

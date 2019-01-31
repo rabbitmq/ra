@@ -141,7 +141,7 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     % TODO: test scenario when server crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
-    ?INFO("segment_writer: deleting wal file: ~s~n",
+    ?DEBUG("segment_writer: deleting wal file: ~s~n",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
     %% TODO: this shoudl be a debug option config?
@@ -250,8 +250,8 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                                 ActiveSegments#{ServerUId => Segment}}
             end;
         false ->
-            ?INFO("segment_writer: skipping segment as directory ~s does "
-                  "not exist~n", [Dir]),
+            ?DEBUG("segment_writer: skipping segment as directory ~s does "
+                   "not exist~n", [Dir]),
             State
     end.
 
@@ -267,10 +267,10 @@ send_segments(ServerUId, Tid, Segments) ->
     Msg = {ra_log_event, {segments, Tid, Segments}},
     case ra_directory:pid_of(ServerUId) of
         undefined ->
-            ?INFO("ra_log_segment_writer: error sending "
-                  "ra_log_event to: "
-                  "~s. Error: ~s",
-                  [ServerUId, "No Pid"]),
+            ?DEBUG("ra_log_segment_writer: error sending "
+                   "ra_log_event to: "
+                   "~s. Error: ~s",
+                   [ServerUId, "No Pid"]),
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(ServerUId, Tid),
             ok;
@@ -282,8 +282,8 @@ send_segments(ServerUId, Tid, Segments) ->
 clean_closed_mem_tables(UId, Tid) ->
     Tables = ets:lookup(ra_log_closed_mem_tables, UId),
     [begin
-         ?INFO("~w: cleaning closed table for '~s' range: ~b-~b~n",
-               [?MODULE, UId, From, To]),
+         ?DEBUG("~w: cleaning closed table for '~s' range: ~b-~b~n",
+                [?MODULE, UId, From, To]),
          %% delete the entry in the closed table lookup
          true = ets:delete_object(ra_log_closed_mem_tables, O)
      end || {_, _, From, To, T} = O <- Tables, T == Tid].

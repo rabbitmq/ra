@@ -18,6 +18,10 @@ init([]) ->
     _ = [ets:new(Table, [named_table, public, {write_concurrency, true}])
          || Table <- ?TABLES],
 
+    %% configure the logger module from the application config
+    Logger = application:get_env(ra, logger_module, logger),
+    ok = ra_env:configure_logger(Logger),
+
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     RaLogFileMetrics = #{id => ra_metrics_ets,
                          start => {ra_metrics_ets, start_link, []}},

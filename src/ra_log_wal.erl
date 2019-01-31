@@ -351,9 +351,9 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?WARN("WAL: requesting resend from `~p`, "
-                  "last idx ~b idx received ~b",
-                  [UId, PrevIdx, Idx]),
+            ?DEBUG("WAL: requesting resend from `~p`, "
+                   "last idx ~b idx received ~b",
+                   [UId, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
@@ -411,7 +411,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?INFO("wal: opening new file ~p~n", [Fn]),
+    ?DEBUG("wal: opening new file ~p~n", [Fn]),
     case Wal0 of
         undefined ->
             ok;
@@ -587,7 +587,7 @@ try_recover_records(Data, Cache) ->
     try recover_records(Data, Cache) of
         ok -> ok
     catch _:_ = Err ->
-              ?INFO("wal: encountered error during recovery: ~w~n"
+              ?WARN("wal: encountered error during recovery: ~w~n"
                     "Continuing.~n", [Err]),
               ok
     end.

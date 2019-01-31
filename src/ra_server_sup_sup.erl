@@ -99,12 +99,12 @@ delete_server(NodeId) ->
     Name = ra_lib:ra_server_id_to_local_name(NodeId),
     case stop_server(NodeId) of
         ok ->
-            ?INFO("Deleting node ~w and all it's data.~n", [NodeId]),
             rpc:call(Node, ?MODULE, delete_server_rpc, [Name]);
         {error, _} = Err -> Err
     end.
 
 delete_server_rpc(RaName) ->
+    ?INFO("Deleting server ~w and all it's data.~n", [RaName]),
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
     Pid = ra_directory:where_is(RaName),

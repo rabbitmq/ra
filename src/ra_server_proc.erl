@@ -222,8 +222,8 @@ callback_mode() -> [state_functions, state_enter].
 %%%===================================================================
 %%% State functions
 %%%===================================================================
-recover(enter, _OldState, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+recover(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
@@ -239,8 +239,8 @@ recover(_, _, State) ->
 
 %% this is a passthrough state to allow state machines to emit node local
 %% effects post recovery
-recovered(enter, _OldState, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+recovered(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 recovered(internal, next, #state{server_state = ServerState} = State) ->
     % New cluster starts should be coordinated and elections triggered
@@ -250,14 +250,14 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
                   true ->
                       [];
                   false ->
-                      ?INFO("~w: is not new, setting election timeout.~n",
-                            [id(State)]),
+                      ?DEBUG("~w: is not new, setting election timeout.~n",
+                             [id(State)]),
                       [election_timeout_action(short, State)]
               end,
     {next_state, follower, State, set_tick_timer(State, Actions)}.
 
-leader(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+leader(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
@@ -405,14 +405,12 @@ leader(EventType, Msg, State0) ->
                 true ->
                     {stop, {shutdown, delete}, State};
                 false ->
-                    ?INFO("~w leader -> terminating_leader term: ~b~n",
-                          [id(State), current_term(State)]),
                     {next_state, terminating_leader, State, Actions}
             end
     end.
 
-candidate(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+candidate(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
@@ -443,8 +441,6 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w candidate -> follower term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger
@@ -457,14 +453,12 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            ?INFO("~w candidate -> leader term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, leader, State, Actions ++ NextEvents}
     end.
 
 
-pre_vote(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+pre_vote(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
@@ -495,8 +489,6 @@ pre_vote(EventType, Msg, State0) ->
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w pre_vote -> follower term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, follower, State,
              % always set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger
@@ -504,14 +496,12 @@ pre_vote(EventType, Msg, State0) ->
              [election_timeout_action(long, State) | Actions]};
         {candidate, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w pre_vote -> candidate term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, candidate, State,
              [election_timeout_action(long, State) | Actions]}
     end.
 
-follower(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+follower(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
@@ -539,14 +529,14 @@ follower({call, From}, {local_query, QueryFun},
     Reply = perform_local_query(QueryFun, follower, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 follower({call, From}, trigger_election, State) ->
-    ?INFO("~w: election triggered by ~w", [id(State), element(1, From)]),
+    ?DEBUG("~w: election triggered by ~w", [id(State), element(1, From)]),
     {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
 follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
          #state{leader_monitor = MRef} = State) ->
-    ?WARN("~w: Leader monitor down with ~W, setting election timeout~n",
+    ?INFO("~w: Leader monitor down with ~W, setting election timeout~n",
           [id(State), Info, 8]),
     case Info of
         noconnection ->
@@ -594,34 +584,26 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {keep_state, State, maybe_set_election_timeout(State, Actions)};
         {pre_vote, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w follower -> pre_vote in term: ~b~n",
-                  [id(State), current_term(State)]),
             _ = stop_monitor(MRef),
             {next_state, pre_vote, State#state{leader_monitor = undefined},
              [election_timeout_action(long, State) | Actions]};
         {await_condition, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
-            ?INFO("~w follower -> await_condition term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, await_condition, State,
              [{state_timeout, AwaitCondTimeout, await_condition_timeout}
               | Actions]};
         {receive_snapshot, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w follower -> receive_snapshot in term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, receive_snapshot, State, Actions};
         {delete_and_terminate, State1, Effects} ->
-            ?INFO("~w follower -> terminating_follower term: ~b~n",
-                  [id(State1), current_term(State1)]),
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {next_state, terminating_follower, State, Actions}
     end.
 
 %% TODO: handle leader down abort snapshot and revert to follower
-receive_snapshot(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+receive_snapshot(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State,
      [{state_timeout, receive_snapshot_timeout(), receive_snapshot_timeout}
       | Actions]};
@@ -638,27 +620,27 @@ receive_snapshot(EventType, Msg, State0) ->
             {next_state, follower, State, Actions}
     end.
 
-terminating_leader(enter, _, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+terminating_leader(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->
-    ?INFO("terminating leader got ~w~n", [Msg]),
+    ?DEBUG("terminating leader received ~w~n", [Msg]),
     {keep_state, State, Actions} = leader(EvtType, Msg, State0),
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?INFO("~w: is not fully replicated after ~W~n", [id(State),
-                                                             Msg, 7]),
+            ?DEBUG("~w: is not fully replicated after ~W~n", [id(State),
+                                                              Msg, 7]),
             {keep_state, send_rpcs(State), Actions}
     end.
 
-terminating_follower(enter, _OldState, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+terminating_follower(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
@@ -667,8 +649,8 @@ terminating_follower(EvtType, Msg, State0) ->
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?INFO("~w: is not fully persisted after ~W~n", [id(State),
-                                                            Msg, 7]),
+            ?DEBUG("~w: is not fully persisted after ~W~n", [id(State),
+                                                             Msg, 7]),
             {keep_state, State, Actions}
     end.
 
@@ -697,23 +679,19 @@ await_condition(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
-await_condition(enter, _OldState, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, State0),
+await_condition(enter, OldState, State0) ->
+    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             NewState = follower_leader_change(State0, State),
-            ?INFO("~w await_condition -> follower in term: ~b~n",
-                  [id(State), current_term(State)]),
             {next_state, follower, NewState,
              [{state_timeout, infinity, await_condition_timeout} |
               maybe_set_election_timeout(State, Actions)]};
         {pre_vote, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            ?INFO("~w await_condition -> pre_vote in term: ~b~n",
-                  [id(State), current_term(State1)]),
             _ = stop_monitor(MRef),
             {next_state, pre_vote, State#state{leader_monitor = undefined},
              [election_timeout_action(long, State) | Actions]};
@@ -722,12 +700,12 @@ await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     end.
 
 handle_event(_EventType, EventContent, StateName, State) ->
-    ?WARN("~p: handle_event unknown ~p~n", [id(State), EventContent]),
+    ?WARN("~w: handle_event unknown ~P~n", [id(State), EventContent, 10]),
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
           #state{name = Key, server_state = ServerState} = State) ->
-    ?WARN("ra: ~w terminating with ~w in state ~w~n",
+    ?INFO("ra: ~w terminating with ~w in state ~w~n",
           [id(State), Reason, StateName]),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
@@ -777,11 +755,24 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%% Internal functions
 %%%===================================================================
 
-handle_enter(RaftState, #state{name = Name,
-                               server_state = ServerState0} = State) ->
+handle_enter(RaftState, OldRaftState,
+             #state{name = Name,
+                    server_state = ServerState0} = State) ->
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
+    case RaftState == leader orelse OldRaftState == leader of
+        true ->
+            %% ensure transitions from and to leader are logged at a higher
+            %% level
+            ?NOTICE("~w ~s -> ~s in term: ~b~n",
+                    [id(State), OldRaftState, RaftState,
+                     current_term(State)]);
+        false ->
+            ?DEBUG("~w ~s -> ~s in term: ~b~n",
+                   [id(State), OldRaftState, RaftState,
+                    current_term(State)])
+    end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
 
@@ -1004,9 +995,11 @@ handle_effect(_, {monitor, node, Node}, _,
                 true ->
                     %% as effects get evaluated on state enter we cannot use
                     %% next_events
-                    self() ! {nodeup, Node};
+                    self() ! {nodeup, Node},
+                    ok;
                 false ->
-                    self() ! {nodedown, Node}
+                    self() ! {nodedown, Node},
+                    ok
             end,
             {State#state{monitors = Monitors#{Node => undefined}}, Actions0}
     end;
@@ -1077,10 +1070,8 @@ uid(#state{server_state = ServerState}) ->
 leader_id(#state{server_state = ServerState}) ->
     ra_server:leader_id(ServerState).
 
--ifdef(info).
 current_term(#state{server_state = ServerState}) ->
     ra_server:current_term(ServerState).
--endif.
 
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
@@ -1176,7 +1167,7 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
     Leader = leader_id(State),
     case LeaderMon of
         undefined ->
-            ?WARN("~w leader call - leader not known. "
+            ?INFO("~w leader call - leader not known. "
                   "Command will be forwarded once leader is known.~n",
                   [id(State)]),
             {keep_state,

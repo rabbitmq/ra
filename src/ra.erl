@@ -172,7 +172,7 @@ start_or_restart_cluster(ClusterName, Machine,
             _ = [{ok, _} = ra_server_sup_sup:restart_server(N) || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
-            ?INFO("start_or_restart_cluster: got error ~p~n", [Err]),
+            ?ERR("start_or_restart_cluster: got an error: ~p~n", [Err]),
             start_cluster(ClusterName, Machine, ServerIds)
     end.
 
@@ -203,14 +203,14 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                 case start_server(ClusterName, N, Machine, ServerIds) of
                     ok  -> true;
                     Err ->
-                        ?WARN("ra: failed to start a server ~w : ~p~n",
+                        ?ERR("ra: failed to start a server ~w, error: ~p~n",
                               [N, Err]),
                         false
                 end
             end, ServerIds),
     case Started of
         [] ->
-            ?WARN("ra: failed to form new cluster ~w.~n "
+            ?ERR("ra: failed to form a new cluster ~w.~n "
                   "No servers were succesfully started.~n", [ClusterName]),
             {error, cluster_not_formed};
         _ ->
@@ -346,12 +346,12 @@ leave_and_terminate(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
-            ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
+            ?ERR("Failed to leave the cluster: request to ~p timed out", [Who]),
             timeout;
         {error, no_proc} = Err ->
             Err;
         {ok, _, _} ->
-            ?ERR("~p has left the building. terminating", [ServerId]),
+            ?INFO("We (Ra node ~p) have successfully left the cluster. Terminating.", [ServerId]),
             stop_server(ServerId)
     end.
 
@@ -370,12 +370,12 @@ leave_and_delete_server(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
-            ?ERR("request to ~p timed out trying to leave the cluster", [Who]),
+            ?ERR("Failed to leave the cluster: request to ~p timed out", [Who]),
             timeout;
         {error, no_proc} = Err ->
             Err;
         {ok, _, _} ->
-            ?ERR("~p has left the building. terminating", [ServerId]),
+            ?INFO("We (Ra node ~p) have succesfully left the cluster. Terminating.", [ServerId]),
             force_delete_server(ServerId)
     end.
 
@@ -549,4 +549,3 @@ sort_by_local([{_, N} = X | Rem], Acc) when N =:= node() ->
     [X | Acc] ++ Rem;
 sort_by_local([X | Rem], Acc) ->
     sort_by_local(Rem, [X | Acc]).
-

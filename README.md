@@ -28,7 +28,7 @@ The following Raft features are implemented:
 
 ## Supported Erlang/OTP Versions
 
-Ra requires Erlang/OTP 21.x.
+Ra requires Erlang/OTP 21.2+.
 
 ## Quick start
 
@@ -108,8 +108,12 @@ Indicate whether the wal should compute and validate checksums. Default: true
     flag this mode falls back to `default`
 
 
+* `logger_module`:
 
-Example:
+Allows the configuration of a custom logger module. The default is `logger`.
+The module must implement a function of the same signature
+as [logger:log/4](http://erlang.org/doc/man/logger.html#log-4) (the variant
+that takes a format not the variant that takes a fun).
 
 ```
 [{data_dir, "/tmp/ra-data"},
