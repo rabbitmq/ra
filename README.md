@@ -1,6 +1,3 @@
-
-[![Build Status](https://travis-ci.org/rabbitmq/ra.svg?branch=master)](https://travis-ci.org/rabbitmq/ra)
-
 ## What is This
 
 Ra is a [Raft](https://ramcloud.stanford.edu/~ongaro/thesis.pdf) implementation
@@ -25,6 +22,10 @@ The following Raft features are implemented:
  * Cluster membership changes: one server (member) at a time
  * Log compaction (with limitations and RabbitMQ-specific extensions)
  * Snapshot installation
+
+### Build Status
+
+[![Build Status](https://travis-ci.org/rabbitmq/ra.svg?branch=master)](https://travis-ci.org/rabbitmq/ra)
 
 ## Supported Erlang/OTP Versions
 
@@ -125,7 +126,7 @@ that takes a format not the variant that takes a fun).
 
 ## Copyright and License
 
-(c) 2017-2018, Pivotal Software Inc.
+(c) 2017-2019, Pivotal Software Inc.
 
 Double licensed under the ASL2 and MPL1.1.
 See [LICENSE](./LICENSE) for details.
