@@ -11,7 +11,7 @@ cache:
   apt: true
 
 otp_release:
-  - "21.0"
+  - "21.2"
 
 script:
   - make xref
