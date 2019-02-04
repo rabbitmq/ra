@@ -517,6 +517,13 @@ local_query(ServerRef, QueryFun) ->
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
 
+
+%% @doc Query the current leader state
+%% This function works like local_query, but redirects to the current
+%% leader node.
+%% The leader state may be more up-to-date compared to local.
+%% This function may still return stale results as it reads the current state
+%% and does not wait for commands to be applied.
 -spec leader_query(ServerId :: ra_server_id(),
                    QueryFun :: query_fun()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
