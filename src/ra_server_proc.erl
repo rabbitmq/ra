@@ -106,6 +106,7 @@
 %% which component to dispatch the down to
 
 -record(state, {server_state :: ra_server:ra_server_state(),
+                log_id :: unicode:chardata(),
                 name :: atom(),
                 broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
                 tick_timeout :: non_neg_integer(),
@@ -191,10 +192,11 @@ leader_call(ServerRef, Msg, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init(Config0) when is_map(Config0) ->
+init(Config0 = #{id := Id}) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    #{id := Id, uid := UId,
+    #{uid := UId,
+      log_id := LogId,
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
@@ -215,6 +217,7 @@ init(Config0) when is_map(Config0) ->
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     State = #state{server_state = ServerState,
+                   log_id = LogId,
                    name = Key,
                    tick_timeout = TickTime,
                    await_condition_timeout = AwaitCondTimeout},
@@ -256,8 +259,8 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
                   true ->
                       [];
                   false ->
-                      ?DEBUG("~w: is not new, setting election timeout.~n",
-                             [id(State)]),
+                      ?DEBUG("~s: is not new, setting election timeout.~n",
+                             [log_id(State)]),
                       [election_timeout_action(short, State)]
               end,
     {next_state, follower, State, set_tick_timer(State, Actions)}.
@@ -516,12 +519,12 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
     % forward to leader
     case leader_id(State) of
         undefined ->
-            ?WARN("~w leader cast - leader not known. "
-                  "Command is dropped.~n", [id(State)]),
+            ?WARN("~s: leader cast - leader not known. "
+                  "Command is dropped.~n", [log_id(State)]),
             {keep_state, State, []};
         LeaderId ->
-            ?INFO("~w follower leader cast - redirecting to ~w ~n",
-                  [id(State), LeaderId]),
+            ?INFO("~s: follower leader cast - redirecting to ~w ~n",
+                  [log_id(State), LeaderId]),
             ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
             {keep_state, State, []}
     end;
@@ -535,15 +538,15 @@ follower({call, From}, {local_query, QueryFun},
     Reply = perform_local_query(QueryFun, follower, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 follower({call, From}, trigger_election, State) ->
-    ?DEBUG("~w: election triggered by ~w", [id(State), element(1, From)]),
+    ?DEBUG("~s: election triggered by ~w", [log_id(State), element(1, From)]),
     {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
 follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
          #state{leader_monitor = MRef} = State) ->
-    ?INFO("~w: Leader monitor down with ~W, setting election timeout~n",
-          [id(State), Info, 8]),
+    ?INFO("~s: Leader monitor down with ~W, setting election timeout~n",
+          [log_id(State), Info, 8]),
     case Info of
         noconnection ->
             {keep_state, State#state{leader_monitor = undefined},
@@ -570,8 +573,8 @@ follower(info, {'DOWN', MRef, process, Pid, Info},
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~w: Leader node ~w may be down, setting election timeout",
-                  [id(State), Node]),
+            ?WARN("~s: Leader node ~w may be down, setting election timeout",
+                  [log_id(State), Node]),
             {keep_state, State, [election_timeout_action(long, State)]};
         _ ->
             {keep_state, State}
@@ -633,15 +636,16 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->
-    ?DEBUG("terminating leader received ~w~n", [Msg]),
+    LogName = log_id(State0),
+    ?DEBUG("~s: terminating leader received ~W~n", [LogName, Msg, 10]),
     {keep_state, State, Actions} = leader(EvtType, Msg, State0),
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?DEBUG("~w: is not fully replicated after ~W~n", [id(State),
-                                                              Msg, 7]),
+            ?DEBUG("~s: is not fully replicated after ~W~n",
+                   [LogName, Msg, 7]),
             {keep_state, send_rpcs(State), Actions}
     end.
 
@@ -655,7 +659,7 @@ terminating_follower(EvtType, Msg, State0) ->
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?DEBUG("~w: is not fully persisted after ~W~n", [id(State),
+            ?DEBUG("~s: is not fully persisted after ~W~n", [log_id(State),
                                                              Msg, 7]),
             {keep_state, State, Actions}
     end.
@@ -672,15 +676,16 @@ await_condition({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
-                State = #state{leader_monitor = MRef, name = Name}) ->
-    ?WARN("~p: Leader monitor down. Setting election timeout.", [Name]),
+                State = #state{leader_monitor = MRef}) ->
+    ?WARN("~s: Leader monitor down. Setting election timeout.",
+          [log_id(State)]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(short, State)]};
 await_condition(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~p: Node ~p might be down. Setting election timeout.",
-                  [id(State), Node]),
+            ?WARN("~s: Node ~w might be down. Setting election timeout.",
+                  [log_id(State), Node]),
             {keep_state, State, [election_timeout_action(long, State)]};
         _ ->
             {keep_state, State}
@@ -706,13 +711,13 @@ await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     end.
 
 handle_event(_EventType, EventContent, StateName, State) ->
-    ?WARN("~w: handle_event unknown ~P~n", [id(State), EventContent, 10]),
+    ?WARN("~s: handle_event unknown ~P~n", [log_id(State), EventContent, 10]),
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
           #state{name = Key, server_state = ServerState} = State) ->
-    ?INFO("ra: ~w terminating with ~w in state ~w~n",
-          [id(State), Reason, StateName]),
+    ?INFO("~s: terminating with ~w in state ~w~n",
+          [log_id(State), Reason, StateName]),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
     Parent = ra_directory:where_is_parent(UId),
@@ -771,12 +776,12 @@ handle_enter(RaftState, OldRaftState,
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~w ~s -> ~s in term: ~b~n",
-                    [id(State), OldRaftState, RaftState,
+            ?NOTICE("~s ~s -> ~s in term: ~b~n",
+                    [log_id(State), OldRaftState, RaftState,
                      current_term(State)]);
         false ->
-            ?DEBUG("~w ~s -> ~s in term: ~b~n",
-                   [id(State), OldRaftState, RaftState,
+            ?DEBUG("~s ~s -> ~s in term: ~b~n",
+                   [log_id(State), OldRaftState, RaftState,
                     current_term(State)])
     end,
     handle_effects(RaftState, Effects, cast,
@@ -1070,6 +1075,9 @@ parse_send_msg_options(Options) when is_list(Options) ->
 id(#state{server_state = ServerState}) ->
     ra_server:id(ServerState).
 
+log_id(#state{log_id = N}) ->
+    N.
+
 uid(#state{server_state = ServerState}) ->
     ra_server:uid(ServerState).
 
@@ -1118,8 +1126,8 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
             ok = aten:unregister(OldLeaderNode),
             % leader has either changed or just been set
-            ?INFO("~w detected a new leader ~w in term ~b~n",
-                  [id(New), NewLeader, current_term(New)]),
+            ?INFO("~s: detected a new leader ~w in term ~b~n",
+                  [log_id(New), NewLeader, current_term(New)]),
             [ok = gen_statem:reply(From, {redirect, NewLeader})
              || {From, _Data} <- Pending],
             New#state{pending_commands = [],
@@ -1173,9 +1181,9 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
     Leader = leader_id(State),
     case LeaderMon of
         undefined ->
-            ?INFO("~w leader call - leader not known. "
+            ?INFO("~s: leader call - leader not known. "
                   "Command will be forwarded once leader is known.~n",
-                  [id(State)]),
+                  [log_id(State)]),
             {keep_state,
              State#state{pending_commands = [{From, Msg} | Pending]}};
         _ when Leader =/= undefined ->
@@ -1189,8 +1197,8 @@ reject_command(Pid, Corr, State) ->
             %% don't log these as they may never be resolved
             ok;
         _ ->
-            ?INFO("~w: follower received leader command from ~w. "
-                  "Rejecting to ~w ~n", [id(State), Pid, LeaderId])
+            ?INFO("~s: follower received leader command from ~w. "
+                  "Rejecting to ~w ~n", [log_id(State), Pid, LeaderId])
     end,
     send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected, State).
 

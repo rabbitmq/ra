@@ -1175,7 +1175,8 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
     ok.
 
 is_new(_Config) ->
-    Args = #{cluster_name => some_id,
+    Id = some_id,
+    Args = #{cluster_name => Id,
              id => {ra, node()},
              uid => <<"ra">>,
              initial_members => [],
@@ -1462,6 +1463,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 current_term => Term,
                 id => n1,
                 uid => <<"n1">>,
+                log_id => <<"n1">>,
                 last_applied => 4,
                 log => Log,
                 machine => {machine, ra_machine_simple,
@@ -1502,6 +1504,7 @@ leader_receives_install_snapshot_result(_Config) ->
                current_term => Term,
                id => n1,
                uid => <<"n1">>,
+               log_id => <<"n1">>,
                last_applied => 4,
                log => Log0,
                machine => {machine, ra_machine_simple,
@@ -1571,6 +1574,7 @@ base_state(NumServers) ->
     MacFun = fun (E, _) -> E end,
     #{id => n1,
       uid => <<"n1">>,
+      log_id => <<"n1">>,
       leader_id => n1,
       cluster => Servers,
       cluster_index_term => {0, 0},
