@@ -341,8 +341,8 @@ handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
     Expected = LastWrittenIdx + 1,
-    ?INFO("~s: ra_log: written gap detected at ~b expected ~b!",
-          [UId, FromIdx, Expected]),
+    ?DEBUG("~s: ra_log: written gap detected at ~b expected ~b!",
+           [UId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
              #?MODULE{uid = UId,
