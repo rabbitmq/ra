@@ -19,6 +19,8 @@
          members/2,
          local_query/2,
          local_query/3,
+         leader_query/2,
+         leader_query/3,
          consistent_query/2,
          consistent_query/3,
          % cluster operations
@@ -58,6 +60,11 @@
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()} |
     {wal_write_strategy, default | o_sync}.
+
+-type query_fun() :: fun((term()) -> term()) |
+                     {M :: module(), F :: atom(), A :: list()}.
+
+-export_type([query_fun/0]).
 
 %% @doc Starts the ra application
 -spec start() -> ok.
@@ -498,30 +505,50 @@ pipeline_command(ServerId, Command) ->
 %% return the result. Any ra server can be addressed.
 %% This can return infinitely stale results.
 -spec local_query(ServerId :: ra_server_id(),
-                      QueryFun :: fun((term()) -> term())) ->
+                  QueryFun :: query_fun()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 local_query(ServerRef, QueryFun) ->
     local_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec local_query(ServerId :: ra_server_id(),
-                      QueryFun :: fun((term()) -> term()),
-                      Timeout :: timeout()) ->
+                  QueryFun :: query_fun(),
+                  Timeout :: timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
+
+
+%% @doc Query the current leader state
+%% This function works like local_query, but redirects to the current
+%% leader node.
+%% The leader state may be more up-to-date compared to local.
+%% This function may still return stale results as it reads the current state
+%% and does not wait for commands to be applied.
+-spec leader_query(ServerId :: ra_server_id(),
+                   QueryFun :: query_fun()) ->
+    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+leader_query(ServerRef, QueryFun) ->
+    leader_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
+
+-spec leader_query(ServerId :: ra_server_id(),
+                   QueryFun :: query_fun(),
+                   Timeout :: timeout()) ->
+    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+leader_query(ServerRef, QueryFun, Timeout) ->
+    ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
 
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query
 %% to the log and returning the result once applied. This guarantees the
 %% result is consistent.
 -spec consistent_query(Server::ra_server_id(),
-                       QueryFun::fun((term()) -> term())) ->
+                       QueryFun :: query_fun()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun) ->
     consistent_query(Server, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec consistent_query(Server::ra_server_id(),
-                       QueryFun::fun((term()) -> term()),
+                       QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun, Timeout) ->

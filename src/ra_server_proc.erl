@@ -58,8 +58,7 @@
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
-
--type query_fun() :: fun((term()) -> term()).
+-type query_fun() :: ra:query_fun().
 
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
@@ -139,10 +138,17 @@ cast_command(ServerRef, Cmd) ->
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
--spec query(ra_server_id(), query_fun(), local | consistent, timeout()) ->
+-spec query(ra_server_id(), query_fun(), local | consistent | leader, timeout()) ->
     {ok, term(), ra_server_id()}.
 query(ServerRef, QueryFun, local, Timeout) ->
     gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
+query(ServerRef, QueryFun, leader, Timeout) ->
+    %% TODO: handle errors
+    case leader_call(ServerRef, {local_query, QueryFun}, Timeout) of
+        {ok, Reply, _ServerRef} -> Reply;
+        {error, E} -> error({failed_leader_query, QueryFun, ServerRef, E});
+        {timeout, Leader} -> error({leader_query_timeout, QueryFun, Timeout, ServerRef, Leader})
+    end;
 query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
