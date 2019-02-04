@@ -61,6 +61,11 @@
     {wal_compute_checksums, boolean()} |
     {wal_write_strategy, default | o_sync}.
 
+-type query_fun() :: fun((term()) -> term()) |
+                     {M :: module(), F :: atom(), A :: list()}.
+
+-export_type([query_fun/0]).
+
 %% @doc Starts the ra application
 -spec start() -> ok.
 start() ->
@@ -500,26 +505,26 @@ pipeline_command(ServerId, Command) ->
 %% return the result. Any ra server can be addressed.
 %% This can return infinitely stale results.
 -spec local_query(ServerId :: ra_server_id(),
-                      QueryFun :: fun((term()) -> term())) ->
+                  QueryFun :: query_fun()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 local_query(ServerRef, QueryFun) ->
     local_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec local_query(ServerId :: ra_server_id(),
-                      QueryFun :: fun((term()) -> term()),
-                      Timeout :: timeout()) ->
+                  QueryFun :: query_fun(),
+                  Timeout :: timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
 
 -spec leader_query(ServerId :: ra_server_id(),
-                   QueryFun :: fun((term()) -> term())) ->
+                   QueryFun :: query_fun()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 leader_query(ServerRef, QueryFun) ->
     leader_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec leader_query(ServerId :: ra_server_id(),
-                   QueryFun :: fun((term()) -> term()),
+                   QueryFun :: query_fun(),
                    Timeout :: timeout()) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 leader_query(ServerRef, QueryFun, Timeout) ->
@@ -530,13 +535,13 @@ leader_query(ServerRef, QueryFun, Timeout) ->
 %% to the log and returning the result once applied. This guarantees the
 %% result is consistent.
 -spec consistent_query(Server::ra_server_id(),
-                       QueryFun::fun((term()) -> term())) ->
+                       QueryFun :: query_fun()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun) ->
     consistent_query(Server, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec consistent_query(Server::ra_server_id(),
-                       QueryFun::fun((term()) -> term()),
+                       QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.
 consistent_query(Server, QueryFun, Timeout) ->

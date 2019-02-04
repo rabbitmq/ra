@@ -58,8 +58,7 @@
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
-
--type query_fun() :: fun((term()) -> term()).
+-type query_fun() :: ra:query_fun().
 
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
@@ -139,7 +138,7 @@ cast_command(ServerRef, Cmd) ->
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
--spec query(ra_server_id(), query_fun(), local | consistent, timeout()) ->
+-spec query(ra_server_id(), query_fun(), local | consistent | leader, timeout()) ->
     {ok, term(), ra_server_id()}.
 query(ServerRef, QueryFun, local, Timeout) ->
     gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
