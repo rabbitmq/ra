@@ -142,11 +142,11 @@
                               %% a friendly name to refer to a particular
                               %% server - will default to the id formatted
                               %% with `~w'
-                              friendly_name => unicode:chardata(),
                               cluster_name := ra_cluster_name(),
                               log_init_args := ra_log:ra_log_init_args(),
                               initial_members := [ra_server_id()],
                               machine := machine_conf(),
+                              friendly_name => unicode:chardata(),
                               % TODO: review - only really used for
                               % setting election timeouts
                               broadcast_time => non_neg_integer(), % ms

@@ -88,8 +88,8 @@
 
 -type ra_log() :: #?MODULE{}.
 
--type ra_log_init_args() :: #{data_dir => string(),
-                              uid := ra_uid(),
+-type ra_log_init_args() :: #{uid := ra_uid(),
+                              data_dir => string(),
                               wal => atom(),
                               snapshot_interval => non_neg_integer(),
                               resend_window => integer(),
