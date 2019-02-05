@@ -68,28 +68,31 @@
 
 -record(?MODULE,
         {uid :: ra_uid(),
+         log_id :: unicode:chardata(),
+         directory :: file:filename(),
+         snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+         snapshot_module :: module(),
+         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
+         wal :: atom(), % registered name
+         %% mutable data below
          first_index = -1 :: ra_index(),
          last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          segment_refs = [] :: [segment_ref()],
          open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
-         directory :: file:filename(),
          snapshot_state :: ra_snapshot:state(),
-         snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
-         snapshot_module :: module(),
          % if this is set a snapshot write is in progress for the
          % index specified
          cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
-         wal :: atom(), % registered name
-         last_resend_time :: maybe(integer()),
-         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer()
+         last_resend_time :: maybe(integer())
         }).
 
 -type ra_log() :: #?MODULE{}.
 
--type ra_log_init_args() :: #{data_dir => string(),
-                              uid := ra_uid(),
+-type ra_log_init_args() :: #{uid := ra_uid(),
+                              log_id => unicode:chardata(),
+                              data_dir => string(),
                               wal => atom(),
                               snapshot_interval => non_neg_integer(),
                               resend_window => integer(),
@@ -118,6 +121,8 @@ init(#{uid := UId} = Conf) ->
     MaxOpen = maps:get(max_open_segments, Conf, 5),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     Wal = maps:get(wal, Conf, ra_log_wal),
+    %% this has to be patched by ra_server
+    LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
     SnapshotsDir = filename:join(Dir, "snapshots"),
@@ -151,6 +156,7 @@ init(#{uid := UId} = Conf) ->
     end,
     State000 = #?MODULE{directory = Dir,
                         uid = UId,
+                        log_id = LogId,
                         first_index = max(SnapIdx + 1, FirstIdx),
                         last_index = max(SnapIdx, LastIdx0),
                         segment_refs = SegRefs,
@@ -181,7 +187,7 @@ init(#{uid := UId} = Conf) ->
     State = maybe_append_first_entry(State0),
     ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
            " first index ~b~n",
-           [State#?MODULE.uid,
+           [State#?MODULE.log_id,
             last_index_term(State),
             State#?MODULE.first_index]),
     delete_segments(SnapIdx, State).
@@ -332,17 +338,17 @@ handle_event({written, {FromIdx, ToIdx, Term}},
         {_X, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
-                   [State#?MODULE.uid, Term, ToIdx, _X]),
+                   [State#?MODULE.log_id, Term, ToIdx, _X]),
             {State, []}
     end;
 handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
-             #?MODULE{uid = UId,
-                    last_written_index_term = {LastWrittenIdx, _}} = State0)
+             #?MODULE{log_id = LogId,
+                      last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
     Expected = LastWrittenIdx + 1,
     ?DEBUG("~s: ra_log: written gap detected at ~b expected ~b!",
-           [UId, FromIdx, Expected]),
+           [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
              #?MODULE{uid = UId,
@@ -610,7 +616,8 @@ release_resources(MaxOpenSegments,
 %%% Local functions
 
 %% deletes all segments where the last index is lower than the Idx argumement
-delete_segments(Idx, #?MODULE{uid = UId,
+delete_segments(Idx, #?MODULE{log_id = LogId,
+                              uid = UId,
                               open_segments = OpenSegs0,
                               directory = Dir,
                               segment_refs = SegRefs0} = State0) ->
@@ -632,7 +639,7 @@ delete_segments(Idx, #?MODULE{uid = UId,
             ok = ra_log_segment_writer:delete_segments(UId, Idx,
                                                        ObsoleteFiles),
             ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
-                   [UId, length(ObsoleteKeys), Idx, length(Active)]),
+                   [LogId, length(ObsoleteKeys), Idx, length(Active)]),
             State0#?MODULE{open_segments = OpenSegs,
                            segment_refs = Active}
     end.
@@ -901,7 +908,7 @@ resend_from0(Idx, #?MODULE{last_index = LastIdx,
                          last_resend_time = undefined,
                          cache = Cache} = State) ->
     ?DEBUG("~s: ra_log: resending from ~b to ~b",
-           [State#?MODULE.uid, Idx, LastIdx]),
+           [State#?MODULE.log_id, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->
                         X = maps:get(I, Cache),
                         wal_write(Acc, erlang:insert_element(1, X, I))

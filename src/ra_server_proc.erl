@@ -776,11 +776,11 @@ handle_enter(RaftState, OldRaftState,
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~s ~s -> ~s in term: ~b~n",
+            ?NOTICE("~s: ~s -> ~s in term: ~b~n",
                     [log_id(State), OldRaftState, RaftState,
                      current_term(State)]);
         false ->
-            ?DEBUG("~s ~s -> ~s in term: ~b~n",
+            ?DEBUG("~s: ~s -> ~s in term: ~b~n",
                    [log_id(State), OldRaftState, RaftState,
                     current_term(State)])
     end,
