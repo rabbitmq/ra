@@ -104,7 +104,8 @@ delete_server(NodeId) ->
     end.
 
 delete_server_rpc(RaName) ->
-    ?INFO("Deleting server ~w and all it's data.~n", [RaName]),
+    ?INFO("Deleting server ~w and it's data directory.~n",
+          [RaName]),
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
     Pid = ra_directory:where_is(RaName),

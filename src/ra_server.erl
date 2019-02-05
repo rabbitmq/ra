@@ -1347,10 +1347,11 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log,
             log_id := LogId} = _State, {shutdown, delete}) ->
-    ?NOTICE("~s: terminating and deleting all local data~n", [LogId]),
+    ?NOTICE("~s: terminating with reason 'delete'~n", [LogId]),
     catch ra_log:delete_everything(Log),
     ok;
-terminate(State, _Reason) ->
+terminate(#{log_id := LogId} = State, Reason) ->
+    ?DEBUG("~s: terminating with reason '~w'~n", [LogId, Reason]),
     #{log := Log} = persist_last_applied(State),
     catch ra_log:close(Log),
     ok.
