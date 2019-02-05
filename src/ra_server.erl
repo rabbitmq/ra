@@ -184,7 +184,8 @@ init(#{id := Id,
        initial_members := InitialNodes,
        log_init_args := LogInitArgs,
        machine := MachineConf} = Config) ->
-    LogId = maps:get(log_id, Config, lists:flatten(io_lib:format("~w", [Id]))),
+    LogId = maps:get(friendly_name, Config,
+                     lists:flatten(io_lib:format("~w", [Id]))),
     Name = ra_lib:ra_server_id_to_local_name(Id),
     Machine = case MachineConf of
                   {simple, Fun, S} ->
@@ -195,7 +196,9 @@ init(#{id := Id,
               end,
     SnapModule = ra_machine:snapshot_module(Machine),
 
-    Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule}),
+    Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
+                                    uid => UId,
+                                    log_id => LogId}),
     ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log_meta:fetch(UId, current_term, 0),
     LastApplied = ra_log_meta:fetch(UId, last_applied, 0),
@@ -1044,6 +1047,8 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
 -spec id(ra_server_state()) -> ra_server_id().
 id(#{id := Id}) -> Id.
 
+log_id(#{log_id := Id}) -> Id.
+
 -spec uid(ra_server_state()) -> ra_uid().
 uid(#{uid := UId}) -> UId.
 
@@ -1320,9 +1325,9 @@ handle_down(leader, machine, Pid, Info, State) ->
     handle_leader({command, {'$usr', #{from => undefined},
                              {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info, #{id := Id} = State) ->
-    ?DEBUG("~w: Snapshot sender process ~w exited with ~W~n",
-          [Id, Pid, Info, 10]),
+handle_down(leader, snapshot_sender, Pid, Info, #{log_id := LogId} = State) ->
+    ?DEBUG("~s: Snapshot sender process ~w exited with ~W~n",
+          [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{log_id := LogId, log := Log0} = State) ->
@@ -1372,9 +1377,10 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
 %%%===================================================================
 
 call_for_election(candidate, #{id := Id,
+                               log_id := LogId,
                                current_term := CurrentTerm} = State0) ->
     NewTerm = CurrentTerm + 1,
-    ?DEBUG("~w: election called for in term ~b~n", [Id, NewTerm]),
+    ?DEBUG("~s: election called for in term ~b~n", [LogId, NewTerm]),
     PeerIds = peer_ids(State0),
     % increment current term
     {LastIdx, LastTerm} = last_idx_term(State0),
@@ -1389,8 +1395,9 @@ call_for_election(candidate, #{id := Id,
     {candidate, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
 call_for_election(pre_vote, #{id := Id,
+                              log_id := LogId,
                               current_term := Term} = State0) ->
-    ?DEBUG("~w: pre_vote election called for in term ~b~n", [Id, Term]),
+    ?DEBUG("~s: pre_vote election called for in term ~b~n", [LogId, Term]),
     Token = make_ref(),
     PeerIds = peer_ids(State0),
     {LastIdx, LastTerm} = last_idx_term(State0),
@@ -1419,20 +1426,20 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
     LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version =< ?RA_PROTO_VERSION ->
-            ?DEBUG("~w: granting pre-vote for ~w with last indexterm ~w"
+            ?DEBUG("~s: granting pre-vote for ~w with last indexterm ~w"
                    " for term ~b previous term ~b~n",
-                   [id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
+                   [log_id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             {FsmState, State#{voted_for => Cand},
              [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
-            ?DEBUG("~w: declining pre-vote for ~w for protocol version ~b~n",
-                   [id(State0), Cand, Version]),
+            ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b~n",
+                   [log_id(State0), Cand, Version]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
         false ->
-            ?DEBUG("~w: declining pre-vote for ~w for term ~b,"
+            ?DEBUG("~s: declining pre-vote for ~w for term ~b,"
                    " candidate last log index term was: ~w~n"
                    "Last log entry idxterm seen was: ~w~n",
-                   [id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
+                   [log_id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
             case FsmState of
                 follower ->
                     %% immediately enter pre_vote election as this node is more
@@ -1449,8 +1456,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          candidate_id = _Cand},
                 #{current_term := CurTerm} = State)
   when Term < CurTerm ->
-    ?DEBUG("~w declining pre-vote to ~w for term ~b, current term ~b~n",
-           [id(State), _Cand, Term, CurTerm]),
+    ?DEBUG("~s declining pre-vote to ~w for term ~b, current term ~b~n",
+           [log_id(State), _Cand, Term, CurTerm]),
     {FsmState, State,
      [{reply, pre_vote_result(CurTerm, Token, false)}]}.
 
@@ -1647,10 +1654,10 @@ apply_with({machine, MacMod, _}, % Machine
     {Idx, State, MacSt, Effects, Notifys0};
 apply_with(_Machine,
            {Idx, _, {'$ra_cluster_change', #{from := From}, _New,
-                        ReplyType}},
+                     ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
-    ?DEBUG("~w: applying ra cluster change to ~w~n",
-           [id(State0), maps:keys(_New)]),
+    ?DEBUG("~s: applying ra cluster change to ~w~n",
+           [log_id(State0), maps:keys(_New)]),
     {Effects, Notifys} = add_reply(From, ok, ReplyType,
                                    Effects0, Notifys0),
     State = State0#{cluster_change_permitted => true},
@@ -1659,8 +1666,9 @@ apply_with(_Machine,
     {Idx, State1, MacSt, Effects1, Notifys};
 apply_with(_, % Machine
            {Idx, Term, noop}, % Idx
-           {_, State0 = #{current_term := Term}, MacSt, Effects, Notifys}) ->
-    ?DEBUG("~w: enabling ra cluster changes in ~b~n", [id(State0), Term]),
+           {_, State0 = #{current_term := Term,
+                          log_id := LogId}, MacSt, Effects, Notifys}) ->
+    ?DEBUG("~s: enabling ra cluster changes in ~b~n", [LogId, Term]),
     State = State0#{cluster_change_permitted => true},
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(_, {Idx, _, noop},
@@ -1681,8 +1689,8 @@ apply_with(Machine,
     throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with(_, {Idx, _, _} = Cmd, Acc) ->
     % TODO: remove to make more strics, ideally we should not need a catch all
-    ?WARN("~w: apply_with: unhandled command: ~W~n",
-          [id(element(2, Acc)), Cmd, 10]),
+    ?WARN("~s: apply_with: unhandled command: ~W~n",
+          [log_id(element(2, Acc)), Cmd, 10]),
     setelement(1, Acc, Idx).
 
 add_next_cluster_change(Effects,
