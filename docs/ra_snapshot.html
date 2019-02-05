@@ -41,13 +41,14 @@
 <tr><td valign="top"><a href="#last_index_for-1">last_index_for/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#begin_snapshot-3">begin_snapshot/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#complete_snapshot-2">complete_snapshot/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#begin_accept-4">begin_accept/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#accept_chunk-3">accept_chunk/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#begin_accept-2">begin_accept/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#accept_chunk-4">accept_chunk/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#abort_accept-1">abort_accept/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_down-3">handle_down/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete-2">delete/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#save-4">save/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read-2">read/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#begin_read-1">begin_read/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read_chunk-3">read_chunk/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#recover-1">recover/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_meta-2">read_meta/2</a></td><td></td></tr>
 </table>
@@ -106,19 +107,16 @@
                      <a href="#type-state">state()</a></pre></p>
 </div>
 
-<h3 class="function"><a name="begin_accept-4">begin_accept/4</a></h3>
+<h3 class="function"><a name="begin_accept-2">begin_accept/2</a></h3>
 <div class="spec">
-<p><pre>begin_accept(Crc :: non_neg_integer(),
-             Meta :: <a href="#type-meta">meta()</a>,
-             NumChunks :: non_neg_integer(),
-             State :: <a href="#type-state">state()</a>) -&gt;
-                {ok, <a href="#type-state">state()</a>}</pre></p>
+<p><pre>begin_accept(Meta :: <a href="#type-meta">meta()</a>, State :: <a href="#type-state">state()</a>) -&gt; {ok, <a href="#type-state">state()</a>}</pre></p>
 </div>
 
-<h3 class="function"><a name="accept_chunk-3">accept_chunk/3</a></h3>
+<h3 class="function"><a name="accept_chunk-4">accept_chunk/4</a></h3>
 <div class="spec">
 <p><pre>accept_chunk(Chunk :: term(),
              Num :: non_neg_integer(),
+             ChunkFlag :: <a href="#type-chunk_flag">chunk_flag()</a>,
              State :: <a href="#type-state">state()</a>) -&gt;
                 {ok, <a href="#type-state">state()</a>}</pre></p>
 </div>
@@ -148,17 +146,21 @@
         ok | {error, <a href="#type-file_err">file_err()</a> | term()}</pre></p>
 </div>
 
-<h3 class="function"><a name="read-2">read/2</a></h3>
+<h3 class="function"><a name="begin_read-1">begin_read/1</a></h3>
 <div class="spec">
-<p><pre>read(ChunkSizeBytes :: non_neg_integer(), State :: <a href="#type-state">state()</a>) -&gt;
-        {ok,
-         Crc :: non_neg_integer(),
-         Meta :: <a href="#type-meta">meta()</a>,
-         ChunkState,
-         [ChunkThunk ::
-              fun((ChunkState) -&gt; {binary(), ChunkState})]} |
-        {error, term()}</pre>
-<ul class="definitions"><li><pre>ChunkState = term()</pre></li></ul></p>
+<p><pre>begin_read(State :: <a href="#type-state">state()</a>) -&gt;
+              {ok, Meta :: <a href="#type-meta">meta()</a>, ReadState} | {error, term()}</pre>
+<ul class="definitions"><li><pre>ReadState = term()</pre></li></ul></p>
+</div>
+
+<h3 class="function"><a name="read_chunk-3">read_chunk/3</a></h3>
+<div class="spec">
+<p><pre>read_chunk(ReadState,
+           ChunkSizeBytes :: non_neg_integer(),
+           State :: <a href="#type-state">state()</a>) -&gt;
+              {ok, Data :: term(), {next, ReadState} | last} |
+              {error, term()}</pre>
+<ul class="definitions"><li><pre>ReadState = term()</pre></li></ul></p>
 </div>
 
 <h3 class="function"><a name="recover-1">recover/1</a></h3>

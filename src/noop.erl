@@ -1,3 +1,4 @@
+%% @hidden
 -module(noop).
 
 -behaviour(ra_machine).

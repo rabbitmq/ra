@@ -1596,7 +1596,8 @@ usr(Data) ->
     {'$usr', meta(), Data, after_log_append}.
 
 meta() ->
-    #{from => {self(), make_ref()}}.
+    #{from => {self(), make_ref()},
+      ts => os:system_time(millisecond)}.
 
 dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),

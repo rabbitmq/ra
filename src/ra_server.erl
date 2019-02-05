@@ -74,7 +74,8 @@
 -type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.
 
--type command_meta() :: #{from := maybe(from())}.
+-type command_meta() :: #{from := maybe(from()),
+                          ts := integer()}.
 
 -type command_correlation() :: integer() | reference().
 
@@ -1322,7 +1323,8 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_down(leader, machine, Pid, Info, State) ->
     %% commit command to be processed by state machine
-    handle_leader({command, {'$usr', #{from => undefined},
+    handle_leader({command,  {'$usr', #{from => undefined,
+                                        ts => os:system_time(millisecond)},
                              {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info, #{log_id := LogId} = State) ->
@@ -1636,6 +1638,7 @@ make_notify_effects(Nots, Prior) ->
 apply_with(Machine,
            {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
            {_, State, MacSt, Effects, Notifys0}) ->
+    %% augment the meta data structure with index and term
     Meta = Meta0#{index => Idx, term => Term},
     case ra_machine:apply(Machine, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
