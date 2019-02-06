@@ -63,8 +63,9 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="typedecl"><a name="type-command_meta_data">command_meta_data()</a></h3>
 <p><pre>command_meta_data() = 
-    <a href="ra_server.html#type-command_meta">ra_server:command_meta()</a> |
-    #{index := <a href="#type-ra_index">ra_index()</a>, term := <a href="#type-ra_term">ra_term()</a>}</pre></p>
+    #{system_time := integer(),
+      index := <a href="#type-ra_index">ra_index()</a>,
+      term := <a href="#type-ra_term">ra_term()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>

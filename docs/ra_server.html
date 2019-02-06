@@ -29,14 +29,14 @@
 
 
 <h3 class="typedecl"><a name="type-command_meta">command_meta()</a></h3>
-<p><pre>command_meta() = #{from := <a href="#type-maybe">maybe</a>(<a href="#type-from">from()</a>), ts := integer()}</pre></p>
+<p><pre>command_meta() = #{from =&gt; <a href="#type-from">from()</a>, ts := integer()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
 <p><pre>command_reply_mode() = 
     after_log_append |
     await_consensus |
-    {notify_on_consensus, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
+    {notify, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
     noreply</pre></p>
 
 
