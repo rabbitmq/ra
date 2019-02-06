@@ -514,7 +514,7 @@ process_command(ServerId, Command) ->
     ok.
 pipeline_command(ServerId, Command, Correlation, Priority)
   when Correlation /= no_correlation ->
-    Cmd = usr(Command, {notify_on_consensus, Correlation, self()}),
+    Cmd = usr(Command, {notify, Correlation, self()}),
     ra_server_proc:cast_command(ServerId, Priority, Cmd);
 pipeline_command(ServerId, Command, no_correlation, Priority) ->
     Cmd = usr(Command, noreply),

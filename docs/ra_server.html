@@ -29,14 +29,14 @@
 
 
 <h3 class="typedecl"><a name="type-command_meta">command_meta()</a></h3>
-<p><pre>command_meta() = #{from := <a href="#type-maybe">maybe</a>(<a href="#type-from">from()</a>)}</pre></p>
+<p><pre>command_meta() = #{from =&gt; <a href="#type-from">from()</a>, ts := integer()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
 <p><pre>command_reply_mode() = 
     after_log_append |
     await_consensus |
-    {notify_on_consensus, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
+    {notify, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
     noreply</pre></p>
 
 
@@ -126,6 +126,7 @@
       log_init_args := <a href="ra_log.html#type-ra_log_init_args">ra_log:ra_log_init_args()</a>,
       initial_members := [<a href="#type-ra_server_id">ra_server_id()</a>],
       machine := <a href="#type-machine_conf">machine_conf()</a>,
+      friendly_name =&gt; <a href="unicode.html#type-chardata">unicode:chardata()</a>,
       broadcast_time =&gt; non_neg_integer(),
       tick_timeout =&gt; non_neg_integer(),
       await_condition_timeout =&gt; non_neg_integer()}</pre></p>
@@ -135,6 +136,7 @@
 <p><pre>ra_server_state() = 
     #{id := <a href="#type-ra_server_id">ra_server_id()</a>,
       uid := <a href="#type-ra_uid">ra_uid()</a>,
+      log_id := <a href="unicode.html#type-chardata">unicode:chardata()</a>,
       leader_id =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_server_id">ra_server_id()</a>),
       cluster := <a href="#type-ra_cluster">ra_cluster()</a>,
       cluster_change_permitted := boolean(),

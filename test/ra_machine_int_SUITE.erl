@@ -28,7 +28,8 @@ all_tests() ->
      leader_monitors,
      follower_takes_over_monitor,
      deleted_cluster_emits_eol_effect,
-     machine_state_enter_effects
+     machine_state_enter_effects,
+     meta_data
     ].
 
 groups() ->
@@ -148,6 +149,7 @@ send_msg_with_ra_event_and_cast_options(Config) ->
               exit(receive_msg_timeout)
     end,
     ok.
+
 machine_replies(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
@@ -297,6 +299,27 @@ machine_state_enter_effects(Config) ->
     ra:delete_cluster([ServerId]),
     validate_state_enters([recover, recovered, follower,
                            candidate, leader, eol]),
+    ok.
+
+meta_data(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (#{index := Idx,
+                                   term := Term,
+                                   system_time := Ts}, _, State) ->
+                                    {State, {metadata, Idx, Term, Ts}}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    T = os:system_time(millisecond),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    {ok, {metadata, Idx, Term, Ts}, ServerId} =
+        ra:process_command(ServerId, any_command),
+
+    ?assert(Ts > T),
+    ?assert(Idx > 0),
+    ?assert(Term > 0),
     ok.
 
 %% Utility

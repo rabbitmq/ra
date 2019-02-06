@@ -74,13 +74,14 @@
 -type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.
 
--type command_meta() :: #{from := maybe(from())}.
+-type command_meta() :: #{from => from(),
+                          ts := integer()}.
 
 -type command_correlation() :: integer() | reference().
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
-                              {notify_on_consensus,
+                              {notify,
                                command_correlation(), pid()} |
                               noreply.
 
@@ -403,8 +404,6 @@ handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
-                              Effects1;
-                          {_, #{from := undefined}, _, _} ->
                               Effects1;
                           {_, #{from := From}, _, _} ->
                               [{reply, From, {Idx, Term}} | Effects1];
@@ -1322,7 +1321,7 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_down(leader, machine, Pid, Info, State) ->
     %% commit command to be processed by state machine
-    handle_leader({command, {'$usr', #{from => undefined},
+    handle_leader({command,  {'$usr', #{ts => os:system_time(millisecond)},
                              {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info, #{log_id := LogId} = State) ->
@@ -1634,32 +1633,37 @@ make_notify_effects(Nots, Prior) ->
               end, Prior, Nots).
 
 apply_with(Machine,
-           {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
+           {Idx, Term, {'$usr', #{ts := Ts} = CmdMeta, Cmd, ReplyType}},
            {_, State, MacSt, Effects, Notifys0}) ->
-    Meta = Meta0#{index => Idx, term => Term},
+    %% augment the meta data structure with index and term
+    Meta = #{index => Idx,
+             term => Term,
+             system_time => Ts},
     case ra_machine:apply(Machine, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
-            {ReplyEffs, Notifys} = add_reply(From, Reply, ReplyType,
+            {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
                                              Effects, Notifys0),
             {Idx, State, NextMacSt, [AppEffs | ReplyEffs], Notifys};
         {NextMacSt, Reply} ->
-            {ReplyEffs, Notifys} = add_reply(From, Reply, ReplyType,
+            {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
                                              Effects, Notifys0),
             {Idx, State, NextMacSt, ReplyEffs, Notifys}
     end;
 apply_with({machine, MacMod, _}, % Machine
-           {Idx, _, {'$ra_query', #{from := From}, QueryFun, _}},
+           {Idx, _, {'$ra_query', CmdMeta, QueryFun, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
+    %% TODO: are all queries calls?
     Result = ra_machine:query(MacMod, QueryFun, MacSt),
-    Effects = [{reply, From, {machine_reply, Result}} | Effects0],
-    {Idx, State, MacSt, Effects, Notifys0};
+    {Effects, Notifys} = add_reply(CmdMeta, Result, ReplyType,
+                                   Effects0, Notifys0),
+    {Idx, State, MacSt, Effects, Notifys};
 apply_with(_Machine,
-           {Idx, _, {'$ra_cluster_change', #{from := From}, _New,
+           {Idx, _, {'$ra_cluster_change', CmdMeta, _New,
                      ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     ?DEBUG("~s: applying ra cluster change to ~w~n",
            [log_id(State0), maps:keys(_New)]),
-    {Effects, Notifys} = add_reply(From, ok, ReplyType,
+    {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
                                    Effects0, Notifys0),
     State = State0#{cluster_change_permitted => true},
     % add pending cluster change as next event
@@ -1677,10 +1681,10 @@ apply_with(_, {Idx, _, noop},
     %% don't log these as unhandled
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(Machine,
-           {Idx, _, {'$ra_cluster', #{from := From}, delete, ReplyType}},
+           {Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     % cluster deletion
-    {Effects1, Notifys} = add_reply(From, ok, ReplyType, Effects0, Notifys0),
+    {Effects1, Notifys} = add_reply(CmdMeta, ok, ReplyType, Effects0, Notifys0),
     NotEffs = make_notify_effects(Notifys, []),
     %% virtual "eol" state
     EOLEffects = ra_machine:state_enter(Machine, eol, MacSt),
@@ -1702,9 +1706,9 @@ add_next_cluster_change(Effects,
 add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
-add_reply(From, Reply, await_consensus, Effects, Notifys) ->
+add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
-add_reply(undefined, Reply, {notify_on_consensus, Corr, Pid},
+add_reply(_, Reply, {notify, Corr, Pid},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their

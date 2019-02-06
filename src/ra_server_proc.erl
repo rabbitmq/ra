@@ -139,7 +139,8 @@ cast_command(ServerRef, Cmd) ->
 cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
--spec query(ra_server_id(), query_fun(), local | consistent | leader, timeout()) ->
+-spec query(ra_server_id(), query_fun(),
+            local | consistent | leader, timeout()) ->
     {ok, term(), ra_server_id()}.
 query(ServerRef, QueryFun, local, Timeout) ->
     gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
@@ -148,7 +149,8 @@ query(ServerRef, QueryFun, leader, Timeout) ->
     case leader_call(ServerRef, {local_query, QueryFun}, Timeout) of
         {ok, Reply, _ServerRef} -> Reply;
         {error, E} -> error({failed_leader_query, QueryFun, ServerRef, E});
-        {timeout, Leader} -> error({leader_query_timeout, QueryFun, Timeout, ServerRef, Leader})
+        {timeout, Leader} ->
+            error({leader_query_timeout, QueryFun, Timeout, ServerRef, Leader})
     end;
 query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
@@ -276,14 +278,9 @@ leader(EventType, {leader_cast, Msg}, State) ->
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
        #state{server_state = ServerState0} = State0) ->
     %% normal priority commands are written immediately
-    From = case EventType of
-               cast -> undefined;
-               {call, F} -> F
-           end,
+    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
     {leader, ServerState, Effects} =
-        ra_server:handle_leader({command, {CmdType, #{from => From},
-                                           Data, ReplyMode}},
-                                ServerState0),
+        ra_server:handle_leader({command, Cmd}, ServerState0),
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
@@ -291,11 +288,8 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
     %% cache the low priority command until the flush_commands message arrives
-    From = case EventType of
-               cast -> undefined;
-               {call, F} -> F
-           end,
-    Cmd = {CmdType, #{from => From}, Data, ReplyMode},
+
+    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
     %% if there are no prior delayed commands
     %% (and thus no action queued to do so)
     %% queue a state timeout to flush them
@@ -363,11 +357,10 @@ leader(info, {NodeEvt, Node},
     case Monitors0 of
         #{Node := _} ->
             % there is a monitor for the node
+            Cmd = make_command('$usr', cast,
+                               {NodeEvt, Node}, noreply),
             {leader, ServerState, Effects} =
-                ra_server:handle_leader({command,
-                                         {'$usr', #{from => undefined},
-                                          {NodeEvt, Node}, noreply}},
-                                        ServerState0),
+                ra_server:handle_leader({command, Cmd}, ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, cast,
                                 State0#state{server_state = ServerState}),
@@ -425,7 +418,7 @@ candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 candidate(cast, {command, _Priority,
-                 {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                 {_CmdType, _Data, {notify, Corr, Pid}}},
           State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -473,7 +466,7 @@ pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 pre_vote(cast, {command, _Priority,
-                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -529,7 +522,7 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
             {keep_state, State, []}
     end;
 follower(cast, {command, _Priority,
-                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -1271,3 +1264,10 @@ read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize, SnapState) ->
         last ->
             Res1
     end.
+
+make_command(Type, {call, From}, Data, Mode) ->
+    Ts = os:system_time(millisecond),
+    {Type, #{from => From, ts => Ts}, Data, Mode};
+make_command(Type, _, Data, Mode) ->
+    Ts = os:system_time(millisecond),
+    {Type, #{ts => Ts}, Data, Mode}.
