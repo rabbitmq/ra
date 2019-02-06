@@ -70,7 +70,8 @@
 -type milliseconds() :: non_neg_integer().
 
 -type builtin_command() :: {down, pid(), term()} |
-                           {nodeup | nodedown, node()}.
+                           {nodeup | nodedown, node()} |
+                           timeout.
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
@@ -91,6 +92,8 @@
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
+    {timer, non_neg_integer() | infinity} |
+    {log, ra_index(), fun((term()) -> maybe(effect()))} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.

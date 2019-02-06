@@ -374,6 +374,16 @@ leader(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
+leader(_, machine_timeout,
+       #state{server_state = ServerState0} = State0) ->
+    % the machine timer timed out, add a timeout message
+    Cmd = make_command('$usr', cast, timeout, noreply),
+    {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
+                                                             ServerState0),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
+                                       State0#state{server_state =
+                                                    ServerState}),
+    {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {log_fold, Fun, Term}, State) ->
@@ -1029,6 +1039,19 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
+handle_effect(_, {timer, T}, _, State, Actions) ->
+    {State, [{state_timeout, T, machine_timeout} | Actions]};
+handle_effect(X, {log, Idx, Fun}, Y,
+              State = #state{server_state = SS0}, Actions) ->
+    {ok, Data, SS} = ra_server:read_at(Idx, SS0),
+    case Fun(Data) of
+        undefined ->
+            {State#state{server_state = SS}, Actions};
+        Effect ->
+            %% recurse with the new effect
+            handle_effect(X, Effect, Y,
+                          State#state{server_state = SS}, Actions)
+    end;
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
