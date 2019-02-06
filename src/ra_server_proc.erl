@@ -418,7 +418,7 @@ candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 candidate(cast, {command, _Priority,
-                 {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                 {_CmdType, _Data, {notify, Corr, Pid}}},
           State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -466,7 +466,7 @@ pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
 pre_vote(cast, {command, _Priority,
-                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -522,7 +522,7 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
             {keep_state, State, []}
     end;
 follower(cast, {command, _Priority,
-                {_CmdType, _Data, {notify_on_consensus, Corr, Pid}}},
+                {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
     ok = reject_command(Pid, Corr, State),
     {keep_state, State, []};

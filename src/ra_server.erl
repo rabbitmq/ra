@@ -87,7 +87,7 @@
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
-                              {notify_on_consensus,
+                              {notify,
                                command_correlation(), pid()} |
                               noreply.
 
@@ -1714,7 +1714,7 @@ add_next_cluster_change(Effects, State) ->
 
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
-add_reply(_, Reply, {notify_on_consensus, Corr, Pid},
+add_reply(_, Reply, {notify, Corr, Pid},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
