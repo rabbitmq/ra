@@ -1463,7 +1463,8 @@ purge_with_checkout_test() ->
     ok.
 
 meta(Idx) ->
-    #{index => Idx, term => 1}.
+    #{index => Idx, term => 1,
+      system_time => os:system_time(millisecond)}.
 
 enq(Idx, MsgSeq, Msg, State) ->
     apply(meta(Idx), {enqueue, self(), MsgSeq, Msg}, State).

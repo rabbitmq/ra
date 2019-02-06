@@ -1636,10 +1636,13 @@ make_notify_effects(Nots, Prior) ->
               end, Prior, Nots).
 
 apply_with(Machine,
-           {Idx, Term, {'$usr', #{from := From} = Meta0, Cmd, ReplyType}},
+           {Idx, Term, {'$usr', #{from := From,
+                                  ts := Ts}, Cmd, ReplyType}},
            {_, State, MacSt, Effects, Notifys0}) ->
     %% augment the meta data structure with index and term
-    Meta = Meta0#{index => Idx, term => Term},
+    Meta = #{index => Idx,
+             term => Term,
+             system_time => Ts},
     case ra_machine:apply(Machine, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
             {ReplyEffs, Notifys} = add_reply(From, Reply, ReplyType,

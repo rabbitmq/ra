@@ -307,7 +307,7 @@ meta_data(Config) ->
     meck:expect(Mod, init, fun (_) -> the_state end),
     meck:expect(Mod, apply, fun (#{index := Idx,
                                    term := Term,
-                                   ts := Ts}, _, State) ->
+                                   system_time := Ts}, _, State) ->
                                     {State, {metadata, Idx, Term, Ts}}
                             end),
     ClusterName = ?config(cluster_name, Config),
