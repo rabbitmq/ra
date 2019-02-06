@@ -79,12 +79,6 @@
 
 -type command_correlation() :: integer() | reference().
 
--define(AFTER_LOG_APPEND, ala).
--define(AWAIT_CONSENSUS, ac).
--define(NOTIFY_ON_CONSENSUS, noc).
--define(NOREPLY, nr).
--define(NIL, '').
-
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
                               {notify,
