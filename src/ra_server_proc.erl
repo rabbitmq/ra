@@ -278,11 +278,7 @@ leader(EventType, {leader_cast, Msg}, State) ->
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
        #state{server_state = ServerState0} = State0) ->
     %% normal priority commands are written immediately
-    From = case EventType of
-               cast -> undefined;
-               {call, F} -> F
-           end,
-    Cmd = make_command(CmdType, From, Data, ReplyMode),
+    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
     {leader, ServerState, Effects} =
         ra_server:handle_leader({command, Cmd}, ServerState0),
     {State, Actions} =
@@ -292,12 +288,8 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
     %% cache the low priority command until the flush_commands message arrives
-    From = case EventType of
-               cast -> undefined;
-               {call, F} -> F
-           end,
 
-    Cmd = make_command(CmdType, From, Data, ReplyMode),
+    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
     %% if there are no prior delayed commands
     %% (and thus no action queued to do so)
     %% queue a state timeout to flush them
@@ -365,7 +357,7 @@ leader(info, {NodeEvt, Node},
     case Monitors0 of
         #{Node := _} ->
             % there is a monitor for the node
-            Cmd = make_command('$usr', undefined,
+            Cmd = make_command('$usr', cast,
                                {NodeEvt, Node}, noreply),
             {leader, ServerState, Effects} =
                 ra_server:handle_leader({command, Cmd}, ServerState0),
@@ -1273,6 +1265,9 @@ read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize, SnapState) ->
             Res1
     end.
 
-make_command(Type, From, Data, Mode) ->
+make_command(Type, {call, From}, Data, Mode) ->
     Ts = os:system_time(millisecond),
-    {Type, #{from => From, ts => Ts}, Data, Mode}.
+    {Type, #{from => From, ts => Ts}, Data, Mode};
+make_command(Type, _, Data, Mode) ->
+    Ts = os:system_time(millisecond),
+    {Type, #{ts => Ts}, Data, Mode}.
