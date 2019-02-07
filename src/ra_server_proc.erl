@@ -1041,7 +1041,7 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
     {State, Actions};
 handle_effect(_, {timer, T}, _, State, Actions) ->
     {State, [{state_timeout, T, machine_timeout} | Actions]};
-handle_effect(X, {log, Idx, Fun}, Y,
+handle_effect(RaftState, {log, Idx, Fun}, EvtType,
               State = #state{server_state = SS0}, Actions) ->
     case ra_server:read_at(Idx, SS0) of
         {ok, Data, SS} ->
@@ -1050,7 +1050,7 @@ handle_effect(X, {log, Idx, Fun}, Y,
                     {State#state{server_state = SS}, Actions};
                 Effect ->
                     %% recurse with the new effect
-                    handle_effect(X, Effect, Y,
+                    handle_effect(RaftState, Effect, EvtType,
                                   State#state{server_state = SS}, Actions)
             end;
         {error, SS} ->
