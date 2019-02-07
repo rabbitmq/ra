@@ -24,8 +24,10 @@
 %% in the ra_server_proc gen_statem implementation not just for the standard
 %% Raft states (follower, candidate, leader). If implemented it is sensible
 %% to include a catch all clause as new states may be implemented in the future.
+%%
 %%<br></br>
 %% <code>-callback tick(TimeMs :: milliseconds(), state()) -> effects().</code>
+%%
 %%
 %% Optional. Called periodically.
 %% Suitable for issuing periodic side effects such as updating metrics systems.
