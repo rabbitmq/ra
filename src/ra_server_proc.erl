@@ -1043,14 +1043,18 @@ handle_effect(_, {timer, T}, _, State, Actions) ->
     {State, [{state_timeout, T, machine_timeout} | Actions]};
 handle_effect(X, {log, Idx, Fun}, Y,
               State = #state{server_state = SS0}, Actions) ->
-    {ok, Data, SS} = ra_server:read_at(Idx, SS0),
-    case Fun(Data) of
-        undefined ->
-            {State#state{server_state = SS}, Actions};
-        Effect ->
-            %% recurse with the new effect
-            handle_effect(X, Effect, Y,
-                          State#state{server_state = SS}, Actions)
+    case ra_server:read_at(Idx, SS0) of
+        {ok, Data, SS} ->
+            case Fun(Data) of
+                undefined ->
+                    {State#state{server_state = SS}, Actions};
+                Effect ->
+                    %% recurse with the new effect
+                    handle_effect(X, Effect, Y,
+                                  State#state{server_state = SS}, Actions)
+            end;
+        {error, SS} ->
+            {State#state{server_state = SS}, Actions}
     end;
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->

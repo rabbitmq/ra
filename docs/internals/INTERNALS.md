@@ -141,6 +141,29 @@ It is recommended that expensive operations are done in another process.
 The `mod_call` effect is useful for e.g. updating an ETS table of committed entries
 or similar.
 
+### Setting a timer
+
+The `{timer, Time :: non_neg_integer() | infinity}}` effects asks the Ra leader
+to maintain a timer on behalf of the state machine and commit a `timeout` command
+when the timer triggers.
+
+The timer is relative and setting another timer before the current timer runs
+out results in the current timer being reset. 
+
+### Reading a log
+
+Use `{log, Index :: ra_index(), fun((term()) -> effect() | undefined}` to read a
+command from the log at the specified index and optionally return an effect.
+
+Effectively this effect transforms a log entry to an effect.
+
+Potential use cases could be when a command contains large binary data and you
+don't want to keep this in memory but load it on demand when needed for a side-effect.
+
+This is an advanced feature and will only work as long as the command is still
+in the log. If a release_cursor has been emitted with an index higher than this
+the command may not longer be in the log and the function will not be called.
+
 ### Updating the Release Cursor (Snapshotting)
 
 The `{release_cursor, RaftIndex, MachineState}`
