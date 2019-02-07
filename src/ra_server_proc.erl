@@ -460,8 +460,11 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              % TODO: only set this is leader was not detected
              [election_timeout_action(long, State) | Actions]};
         {leader, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = State2#state{pending_commands = []},
+            %% reset the tick timer to avoid it triggering early after a leader
+            %% change
+            Actions = set_tick_timer(State2, Actions0),
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
@@ -1124,8 +1127,8 @@ election_timeout_action(long, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
-% sets the tock timer for periodic actions such as sending stale rpcs
-% or persisting the last_applied index
+% sets the tick timer for periodic actions such as sending rpcs to servers
+% that are stale to ensure liveness
 set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
