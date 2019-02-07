@@ -132,6 +132,10 @@ it will commit a `{nodeup | nodedown, node()}` command to the log.
 Use `{demonitor, process | node, pid() | node()}` to stop monitoring a process
 or a node.
 
+All monitors are invalidated when the leader changes. State machines should
+re-issue monitor effects when becoming leader using the `state_enter/2`
+callback.
+
 ### Calling a function
 
 The `{mod_call, module(), function(), Args :: [term()]}` to call an arbitrary
@@ -149,6 +153,10 @@ when the timer triggers.
 
 The timer is relative and setting another timer before the current timer runs
 out results in the current timer being reset. 
+
+All timers are invalidated when the leader changes. State machines should
+re-issue timer effects when becoming leader using the `state_enter/2`
+callback.
 
 ### Reading a log
 
