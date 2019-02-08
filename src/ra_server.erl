@@ -39,7 +39,7 @@
         ]).
 
 -type ra_await_condition_fun() ::
-    fun((ra_msg(), ra_server_state()) -> boolean()).
+    fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
 
 -type ra_server_state() ::
     #{id := ra_server_id(),
@@ -714,12 +714,12 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries0},
-                State000 = #{log_id := LogId, log := Log0,
-                             id := Id, current_term := CurTerm})
+                State00 = #{log_id := LogId, log := Log00,
+                            id := Id, current_term := CurTerm})
   when Term >= CurTerm ->
-    State00 = update_term(Term, State000),
-    case has_log_entry_or_snapshot(PLIdx, PLTerm, State00) of
-        {entry_ok, State0} ->
+    State0 = update_term(Term, State00),
+    case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
+        {entry_ok, Log0} ->
             % filter entries already seen
             {Log1, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
@@ -767,7 +767,7 @@ handle_follower(#append_entries_rpc{term = Term,
                             exit(Err)
                     end
             end;
-        {missing, State0} ->
+        {missing, Log0} ->
             Reply = append_entries_reply(Term, false, State0),
             ?INFO("~s: follower did not have entry at ~b in ~b."
                   " Requesting from ~b~n",
@@ -775,10 +775,11 @@ handle_follower(#append_entries_rpc{term = Term,
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
              State0#{leader_id => LeaderId,
+                     log => Log0,
                      condition => fun follower_catchup_cond/2,
                      % repeat reply effect on condition timeout
                      condition_timeout_effects => Effects}, Effects};
-        {term_mismatch, OtherTerm, State0} ->
+        {term_mismatch, OtherTerm, Log0} ->
             CommitIndex = maps:get(commit_index, State0),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
@@ -798,6 +799,7 @@ handle_follower(#append_entries_rpc{term = Term,
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
              State#{leader_id => LeaderId,
+                    log => Log0,
                     condition => fun follower_catchup_cond/2,
                     % repeat reply effect on condition timeout
                     condition_timeout_effects => Effects}, Effects}
@@ -975,11 +977,11 @@ handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {await_condition, State#{log => Log}, Effects};
-handle_await_condition(Msg, #{condition := Cond} = State) ->
-    case Cond(Msg, State) of
-        true ->
+handle_await_condition(Msg, #{condition := Cond} = State0) ->
+    case Cond(Msg, State0) of
+        {true, State} ->
             {follower, State, [{next_event, Msg}]};
-        false ->
+        {false, State} ->
             % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
@@ -1079,27 +1081,31 @@ become(_RaftState, State) ->
 follower_catchup_cond(#append_entries_rpc{term = Term,
                                           prev_log_index = PLIdx,
                                           prev_log_term = PLTerm},
-                      State0 = #{current_term := CurTerm})
+                      State0 = #{current_term := CurTerm,
+                                 log := Log0})
   when Term >= CurTerm ->
-    case has_log_entry_or_snapshot(PLIdx, PLTerm, State0) of
-        {entry_ok, _State} ->
-            true;
-        _ ->
-            false
+    %% TODO: this could lead filehandles
+    case has_log_entry_or_snapshot(PLIdx, PLTerm, Log0) of
+        {entry_ok, Log} ->
+            {true, State0#{log => Log}};
+        {term_mismatch, _, Log} ->
+            {false, State0#{log => Log}};
+        {missing, Log} ->
+            {false, State0#{log => Log}}
     end;
 follower_catchup_cond(#install_snapshot_rpc{term = Term,
                                             last_index = PLIdx},
                       #{current_term := CurTerm,
-                        log := Log})
+                        log := Log} = State)
   when Term >= CurTerm ->
     % term is ok - check if the snapshot index is greater than the last
     % index seen
-    PLIdx >= ra_log:next_index(Log);
-follower_catchup_cond(_Msg, _State) ->
-    false.
+    {PLIdx >= ra_log:next_index(Log), State};
+follower_catchup_cond(_Msg, State) ->
+    {false, State}.
 
-wal_down_condition(_Msg, #{log := Log}) ->
-    ra_log:can_write(Log).
+wal_down_condition(_Msg, #{log := Log} = State) ->
+    {ra_log:can_write(Log), State}.
 
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := Id, leader_id := LeaderId,
@@ -1555,21 +1561,21 @@ is_candidate_log_up_to_date(Idx, Term, {LastIdx, Term})
 is_candidate_log_up_to_date(_, _, {_, _}) ->
     false.
 
-has_log_entry_or_snapshot(Idx, Term, #{log := Log0} = State) ->
+has_log_entry_or_snapshot(Idx, Term, Log0) ->
     case ra_log:fetch_term(Idx, Log0) of
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
                 {Idx, Term} ->
-                    {entry_ok, State#{log => Log}};
+                    {entry_ok, Log};
                 {Idx, OtherTerm} ->
-                    {term_mismatch, OtherTerm, State#{log => Log}};
+                    {term_mismatch, OtherTerm, Log};
                 _ ->
-                    {missing, State#{log => Log}}
+                    {missing, Log}
             end;
         {Term, Log} ->
-            {entry_ok, State#{log => Log}};
+            {entry_ok, Log};
         {OtherTerm, Log} ->
-            {term_mismatch, OtherTerm, State#{log => Log}}
+            {term_mismatch, OtherTerm, Log}
     end.
 
 fetch_term(Idx, #{log := Log}) ->

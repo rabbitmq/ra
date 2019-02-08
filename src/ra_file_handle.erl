@@ -1,6 +1,7 @@
 %% @hidden
 -module(ra_file_handle).
 
+-include("ra.hrl").
 -behaviour(gen_server).
 
 -export([start_link/0]).
