@@ -374,6 +374,16 @@ leader(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
+leader(_, machine_timeout,
+       #state{server_state = ServerState0} = State0) ->
+    % the machine timer timed out, add a timeout message
+    Cmd = make_command('$usr', cast, timeout, noreply),
+    {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
+                                                             ServerState0),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
+                                       State0#state{server_state =
+                                                    ServerState}),
+    {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {log_fold, Fun, Term}, State) ->
@@ -450,8 +460,11 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              % TODO: only set this is leader was not detected
              [election_timeout_action(long, State) | Actions]};
         {leader, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = State2#state{pending_commands = []},
+            %% reset the tick timer to avoid it triggering early after a leader
+            %% change
+            Actions = set_tick_timer(State2, Actions0),
             % inject a bunch of command events to be processed when node
             % becomes leader
             NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
@@ -1029,6 +1042,23 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
+handle_effect(_, {timer, T}, _, State, Actions) ->
+    {State, [{state_timeout, T, machine_timeout} | Actions]};
+handle_effect(RaftState, {log, Idx, Fun}, EvtType,
+              State = #state{server_state = SS0}, Actions) ->
+    case ra_server:read_at(Idx, SS0) of
+        {ok, Data, SS} ->
+            case Fun(Data) of
+                undefined ->
+                    {State#state{server_state = SS}, Actions};
+                Effect ->
+                    %% recurse with the new effect
+                    handle_effect(RaftState, Effect, EvtType,
+                                  State#state{server_state = SS}, Actions)
+            end;
+        {error, SS} ->
+            {State#state{server_state = SS}, Actions}
+    end;
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
@@ -1097,8 +1127,8 @@ election_timeout_action(long, #state{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
     {state_timeout, T, election_timeout}.
 
-% sets the tock timer for periodic actions such as sending stale rpcs
-% or persisting the last_applied index
+% sets the tick timer for periodic actions such as sending rpcs to servers
+% that are stale to ensure liveness
 set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 

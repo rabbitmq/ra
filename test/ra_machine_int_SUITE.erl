@@ -29,7 +29,9 @@ all_tests() ->
      follower_takes_over_monitor,
      deleted_cluster_emits_eol_effect,
      machine_state_enter_effects,
-     meta_data
+     meta_data,
+     timer_effect,
+     log_effect
     ].
 
 groups() ->
@@ -322,6 +324,63 @@ meta_data(Config) ->
     ?assert(Term > 0),
     ok.
 
+timer_effect(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, cmd, State) ->
+                                    %% timer for 1s
+                                    {State, ok, {timer, 1000}};
+                                (_, timeout, State) ->
+                                    {State, ok, {send_msg, Self, got_timeout}}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    T0 = os:system_time(millisecond),
+    {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    receive
+        got_timeout ->
+            T = os:system_time(millisecond),
+            %% ensure the timer waited
+            ?assert(T-T0 >= 1000),
+            ok
+    after 5000 ->
+              exit(timeout_timeout)
+    end,
+    ok.
+
+log_effect(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> undefined end),
+    meck:expect(Mod, apply, fun (#{index := Idx}, {cmd, _Data}, _) ->
+                                    %% dropping data store the index
+                                    {Idx, ok};
+                                (_, get_data, State) ->
+                                    %% now we need to refresh the data from
+                                    %% the log and turn it into a send_msg
+                                    %% effect
+                                    {State, ok,
+                                     {log, State,
+                                      fun ({cmd, Data}) ->
+                                              {send_msg, Self, {data, Data}}
+                                      end}}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi">>}),
+    {ok, _, ServerId} = ra:process_command(ServerId, get_data),
+    receive
+        {data, <<"hi">>} ->
+            ok
+    after 5000 ->
+              exit(data_timeout)
+    end,
+    ok.
 %% Utility
 
 validate_state_enters(States) ->

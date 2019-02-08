@@ -34,6 +34,7 @@
          handle_down/5,
          terminate/2,
          log_fold/3,
+         read_at/2,
          recover/1
         ]).
 
@@ -1372,6 +1373,16 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
             {error, Reason, RaState#{log => Log1}}
     end.
 
+-spec read_at(ra_index(), ra_server_state()) ->
+    {ok, term(), ra_server_state()} |
+    {error, ra_server_state()}.
+read_at(Idx, #{log := Log0} = RaState) ->
+    case ra_log:fetch(Idx, Log0) of
+        {{Idx, _, {'$usr', _, Data, _}}, Log} ->
+            {ok, Data, RaState#{log => Log}};
+        {undefined, Log} ->
+            {error, RaState#{log => Log}}
+    end.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================

@@ -35,11 +35,12 @@
   -callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
   </code></p>
  
-  <p>Optional. Called when the ra server enters a new state. Called for all states
-  in the ra_server_proc gen_statem implementation not just for the standard
-  Raft states (follower, candidate, leader). If implemented it is sensible
-  to include a catch all clause as new states may be implemented in the future.
- <br>
+  <p>Optional. Called when the ra server enters a new state. Called for all states  
+in the ra_server_proc gen_statem implementation not just for the standard  
+Raft states (follower, candidate, leader). If implemented it is sensible  
+to include a catch all clause as new states may be implemented in the future.</p>
+ 
+ <p><br>
   <code>-callback tick(TimeMs :: milliseconds(), state()) -&gt; effects().</code></p>
  
   <p>Optional. Called periodically.  
@@ -53,7 +54,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
 <p><pre>builtin_command() = 
-    {down, pid(), term()} | {nodeup | nodedown, node()}</pre></p>
+    {down, pid(), term()} | {nodeup | nodedown, node()} | timeout</pre></p>
 <p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
   to monitor effects</p>
 
@@ -80,6 +81,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
+    {timer, non_neg_integer() | infinity} |
+    {log, <a href="#type-ra_index">ra_index()</a>, fun((term()) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-effect">effect()</a>))} |
     {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>

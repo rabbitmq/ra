@@ -24,8 +24,10 @@
 %% in the ra_server_proc gen_statem implementation not just for the standard
 %% Raft states (follower, candidate, leader). If implemented it is sensible
 %% to include a catch all clause as new states may be implemented in the future.
+%%
 %%<br></br>
 %% <code>-callback tick(TimeMs :: milliseconds(), state()) -> effects().</code>
+%%
 %%
 %% Optional. Called periodically.
 %% Suitable for issuing periodic side effects such as updating metrics systems.
@@ -70,7 +72,8 @@
 -type milliseconds() :: non_neg_integer().
 
 -type builtin_command() :: {down, pid(), term()} |
-                           {nodeup | nodedown, node()}.
+                           {nodeup | nodedown, node()} |
+                           timeout.
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
@@ -91,6 +94,8 @@
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
+    {timer, non_neg_integer() | infinity} |
+    {log, ra_index(), fun((term()) -> maybe(effect()))} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
