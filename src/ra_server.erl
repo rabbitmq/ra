@@ -1084,7 +1084,6 @@ follower_catchup_cond(#append_entries_rpc{term = Term,
                       State0 = #{current_term := CurTerm,
                                  log := Log0})
   when Term >= CurTerm ->
-    %% TODO: this could lead filehandles
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log0) of
         {entry_ok, Log} ->
             {true, State0#{log => Log}};
