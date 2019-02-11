@@ -421,7 +421,7 @@ fetch(Idx, State0) ->
 -spec fetch_term(ra_index(), ra_log()) ->
     {maybe(ra_term()), ra_log()}.
 fetch_term(Idx, #?MODULE{last_index = LastIdx,
-                       first_index = FirstIdx} = State0)
+                         first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
 fetch_term(Idx, #?MODULE{cache = Cache, uid = UId} = State0) ->
