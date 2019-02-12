@@ -143,7 +143,12 @@ cast_command(ServerRef, Priority, Cmd) ->
             local | consistent | leader, timeout()) ->
     {ok, term(), ra_server_id()}.
 query(ServerRef, QueryFun, local, Timeout) ->
-    gen_statem:call(ServerRef, {local_query, QueryFun}, Timeout);
+    case local_call(ServerRef, {local_query, QueryFun}, Timeout) of
+        {ok, _, _} = Reply -> Reply;
+        {error, E} -> error({failed_query, QueryFun, ServerRef, E});
+        {timeout, Server} ->
+            error({query_timeout, QueryFun, Timeout, ServerRef, Server})
+    end;
 query(ServerRef, QueryFun, leader, Timeout) ->
     %% TODO: handle errors
     case leader_call(ServerRef, {local_query, QueryFun}, Timeout) of
@@ -173,6 +178,19 @@ trigger_election(ServerRef, Timeout) ->
 -spec ping(ra_server_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerRef, Timeout) ->
     gen_statem_safe_call(ServerRef, ping, Timeout).
+
+local_call(ServerRef, Msg, Timeout) ->
+    case gen_statem_safe_call(ServerRef, Msg, Timeout) of
+        {machine_reply, Reply} ->
+            {ok, Reply, ServerRef};
+        {error, _} = E ->
+            E;
+        timeout ->
+            % TODO: formatted error message
+            {timeout, ServerRef};
+        Reply ->
+            Reply
+    end.
 
 leader_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, {leader_call, Msg},
