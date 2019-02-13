@@ -545,14 +545,14 @@ pipeline_command(ServerId, Command) ->
 %% This can return infinitely stale results.
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret([{ra_idxterm(), term()}]).
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
 local_query(ServerRef, QueryFun) ->
     local_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun(),
                   Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret([{ra_idxterm(), term()}]).
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
 local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
 
