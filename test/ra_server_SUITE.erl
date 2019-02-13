@@ -954,7 +954,7 @@ consistent_query(_Config) ->
                                          last_index = 4, last_term = 5}},
     {leader, _State2, Effects} = ra_server:handle_leader(AEReply, State1),
     % ct:pal("Effects ~p", [Effects]),
-    ?assert(lists:any(fun({reply, _, {machine_reply, <<"hi3">>}}) ->
+    ?assert(lists:any(fun({reply, _, {wrap_reply, <<"hi3">>}}) ->
                               true;
                          (_) -> false
                       end, Effects)),
@@ -1202,7 +1202,7 @@ command(_Config) ->
                              leader_commit = 3
                             },
     From = maps:get(from, Meta),
-    {leader, _, [{reply, From, {4, 5}},
+    {leader, _, [{reply, From, {wrap_reply, {4, 5}}},
                  _,  % metrics
                  {send_rpc, n3, AE}, {send_rpc, n2, AE} |
                  _]} =

@@ -141,22 +141,11 @@ cast_command(ServerRef, Priority, Cmd) ->
 
 -spec query(ra_server_id(), query_fun(),
             local | consistent | leader, timeout()) ->
-    {ok, term(), ra_server_id()}.
+    ra_server_proc:ra_leader_call_ret(term()).
 query(ServerRef, QueryFun, local, Timeout) ->
-    case local_call(ServerRef, {local_query, QueryFun}, Timeout) of
-        {ok, _, _} = Reply -> Reply;
-        {error, E} -> error({failed_query, QueryFun, ServerRef, E});
-        {timeout, Server} ->
-            error({query_timeout, QueryFun, Timeout, ServerRef, Server})
-    end;
+    statem_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, leader, Timeout) ->
-    %% TODO: handle errors
-    case leader_call(ServerRef, {local_query, QueryFun}, Timeout) of
-        {ok, Reply, _ServerRef} -> Reply;
-        {error, E} -> error({failed_leader_query, QueryFun, ServerRef, E});
-        {timeout, Leader} ->
-            error({leader_query_timeout, QueryFun, Timeout, ServerRef, Leader})
-    end;
+    leader_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
@@ -179,33 +168,21 @@ trigger_election(ServerRef, Timeout) ->
 ping(ServerRef, Timeout) ->
     gen_statem_safe_call(ServerRef, ping, Timeout).
 
-local_call(ServerRef, Msg, Timeout) ->
+leader_call(ServerRef, Msg, Timeout) ->
+    statem_call(ServerRef, {leader_call, Msg}, Timeout).
+
+statem_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, Msg, Timeout) of
-        {machine_reply, Reply} ->
+        {redirect, Leader} ->
+            statem_call(Leader, Msg, Timeout);
+        {wrap_reply, Reply} ->
             {ok, Reply, ServerRef};
         {error, _} = E ->
             E;
         timeout ->
-            % TODO: formatted error message
             {timeout, ServerRef};
         Reply ->
             Reply
-    end.
-
-leader_call(ServerRef, Msg, Timeout) ->
-    case gen_statem_safe_call(ServerRef, {leader_call, Msg},
-                              Timeout) of
-        {redirect, Leader} ->
-            leader_call(Leader, Msg, Timeout);
-        {machine_reply, Reply} ->
-            {ok, Reply, ServerRef};
-        {error, _} = E ->
-            E;
-        timeout ->
-            % TODO: formatted error message
-            {timeout, ServerRef};
-        Reply ->
-            {ok, Reply, ServerRef}
     end.
 
 %%%===================================================================
@@ -342,11 +319,11 @@ leader(EventType, flush_commands,
     {keep_state, State#state{delayed_commands = DelQ}, Actions};
 leader({call, From}, {local_query, QueryFun},
        #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, leader, ServerState),
+    Reply = perform_local_query(QueryFun, id(State), ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
-    Reply = do_state_query(Spec, ServerState),
+    Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
@@ -452,7 +429,7 @@ candidate(cast, {command, _Priority,
     {keep_state, State, []};
 candidate({call, From}, {local_query, QueryFun},
           #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, candidate, ServerState),
+    Reply = perform_local_query(QueryFun, not_known, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
@@ -503,7 +480,7 @@ pre_vote(cast, {command, _Priority,
     {keep_state, State, []};
 pre_vote({call, From}, {local_query, QueryFun},
           #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, pre_vote, ServerState),
+    Reply = perform_local_query(QueryFun, not_known, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
@@ -559,7 +536,11 @@ follower(cast, {command, _Priority,
     {keep_state, State, []};
 follower({call, From}, {local_query, QueryFun},
          #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, follower, ServerState),
+    Leader = case ra_server:leader_id(ServerState) of
+                 undefined -> not_known;
+                 L -> L
+             end,
+    Reply = perform_local_query(QueryFun, Leader, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
 follower({call, From}, trigger_election, State) ->
     ?DEBUG("~s: election triggered by ~w", [log_id(State), element(1, From)]),
@@ -862,18 +843,17 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
         ra_server:handle_await_condition(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
-perform_local_query(QueryFun, leader, #{machine := {machine, MacMod, _},
+perform_local_query(QueryFun, Leader, #{machine := {machine, MacMod, _},
                                         machine_state := MacState,
                                         last_applied := Last,
-                                        id := Leader,
                                         current_term := Term}) ->
-    {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader};
-perform_local_query(QueryFun, _, #{machine := {machine, MacMod, _},
-                                   machine_state := MacState,
-                                   last_applied := Last,
-                                   current_term := Term} = ServerState) ->
-    Leader = maps:get(leader_id, ServerState, not_known),
-    {ok, {{Last, Term}, ra_machine:query(MacMod, QueryFun, MacState)}, Leader}.
+    try ra_machine:query(MacMod, QueryFun, MacState) of
+        Result ->
+            {ok, {{Last, Term}, Result}, Leader}
+    catch
+        _:_ = Err ->
+            {error, Err}
+    end.
 
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.

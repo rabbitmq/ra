@@ -51,7 +51,7 @@ suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
 
-    % ok = logger:set_primary_config(level, debug),
+    ok = logger:set_primary_config(level, all),
     Config.
 
 end_per_suite(Config) ->
@@ -331,9 +331,10 @@ local_query(Config) ->
 local_query_boom(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                {simple, fun erlang:'+'/2, 9}),
-    ?assertExit({boom, _}, ra:local_query(B, fun(_) -> exit(boom) end)),
+    {error, _} = ra:local_query(B, fun(_) -> exit(boom) end),
     {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
     {ok, {_, 14}, _} = ra:local_query(Leader, fun(S) -> S end),
+    {timeout, Leader} = ra:local_query(Leader, fun(_) -> timer:sleep(200) end, 100),
     terminate_cluster(Cluster).
 
 members(Config) ->
