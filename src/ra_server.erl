@@ -407,7 +407,8 @@ handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
                           {_, _, _, await_consensus} ->
                               Effects1;
                           {_, #{from := From}, _, _} ->
-                              [{reply, From, {Idx, Term}} | Effects1];
+                              [{reply, From,
+                                {wrap_reply, {Idx, Term}}} | Effects1];
                           _ ->
                               Effects1
                       end,
@@ -420,7 +421,8 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
                             {ok, I, T, S} = append_log_leader(C, S0),
                             case C of
                                 {_, #{from := From}, _, after_log_append} ->
-                                    {S, [{reply, From , {I, T}} | E]};
+                                    {S, [{reply, From,
+                                          {wrap_reply, {I, T}}} | E]};
                                 _ ->
                                     {S, E}
                             end
@@ -1723,7 +1725,7 @@ add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
-    {[{reply, From, {machine_reply, Reply}} | Effects], Notifys};
+    {[{reply, From, {wrap_reply, Reply}} | Effects], Notifys};
 add_reply(_, Reply, {notify, Corr, Pid},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
