@@ -191,6 +191,11 @@ ramp_up_and_ramp_down(Config) ->
     ok = stop_server(N2),
     _ = issue_op(N1, 5),
     validate(N1, 25),
+    %% stop and restart cluster to ensure membership changes can be recovered
+    ok = stop_server(N1),
+    ok = ra:restart_server({N1, node()}),
+    _ = issue_op(N1, 5),
+    validate(N1, 30),
     terminate_cluster([N1]).
 
 minority(Config) ->
@@ -744,7 +749,7 @@ issue_op(Name, Op) ->
 
 validate(Name, Expected) ->
     {ok, Expected, _} = ra:consistent_query({Name, node()},
-                                                 fun(X) -> X end).
+                                            fun(X) -> X end).
 
 dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),
@@ -754,7 +759,12 @@ nn(Config, N) when is_integer(N) ->
     ra_server:name(?config(test_name, Config), erlang:integer_to_list(N)).
 
 add_machine() ->
-    {simple, fun erlang:'+'/2, 0}.
+    {module, ?MODULE, #{}}.
+
+%% machine impl
+init(_) -> 0.
+apply(_Meta, Num, State) ->
+    {Num + State, Num + State}.
 
 gather_applied([], Timeout) ->
     %% have a longer timeout first

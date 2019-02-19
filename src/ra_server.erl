@@ -220,51 +220,34 @@ init(#{id := Id,
 
     CommitIndex = max(LastApplied, FirstIndex),
 
-    State0 = #{id => Id,
-               uid => UId,
-               log_id => LogId,
-               cluster => Cluster0,
-               % There may be scenarios when a single server
-               % starts up but hasn't
-               % yet re-applied its noop command that we may receive other join
-               % commands that can't be applied.
-               % TODO: what if we have snapshotted and
-               % there is no `noop` command
-               % to be applied in the current term?
-               cluster_change_permitted => false,
-               cluster_index_term => {0, 0},
-               pending_cluster_changes => [],
-               current_term => CurrentTerm,
-               voted_for => VotedFor,
-               commit_index => CommitIndex,
-               last_applied => FirstIndex,
-               persisted_last_applied => LastApplied,
-               log => Log0,
-               machine => Machine,
-               machine_state => MacState,
-               aux_state => ra_machine:init_aux(Machine, Name),
-               condition_timeout_effects => []},
-    % Find last cluster change and idxterm and use as initial cluster
-    % This is required as otherwise a server could restart without any known
-    % peers and become a leader
-    {ok, {{ClusterIndexTerm, Cluster}, Log}} =
-    fold_log_from(CommitIndex,
-                  fun({Idx, Term, {'$ra_cluster_change', _, Cluster, _}}, _) ->
-                          {{Idx, Term}, Cluster};
-                     (_, Acc) ->
-                          Acc
-                  end, {{SnapshotIndexTerm, Cluster0}, Log0}),
-    % TODO: do we need to set previous cluster here?
-    State0#{log => Log,
-            cluster => Cluster,
-            cluster_index_term => ClusterIndexTerm}.
+    #{id => Id,
+      uid => UId,
+      log_id => LogId,
+      cluster => Cluster0,
+      % There may be scenarios when a single server
+      % starts up but hasn't
+      % yet re-applied its noop command that we may receive other join
+      % commands that can't be applied.
+      cluster_change_permitted => false,
+      cluster_index_term => SnapshotIndexTerm,
+      pending_cluster_changes => [],
+      current_term => CurrentTerm,
+      voted_for => VotedFor,
+      commit_index => CommitIndex,
+      last_applied => FirstIndex,
+      persisted_last_applied => LastApplied,
+      log => Log0,
+      machine => Machine,
+      machine_state => MacState,
+      aux_state => ra_machine:init_aux(Machine, Name),
+      condition_timeout_effects => []}.
 
 recover(#{log_id := LogId,
           commit_index := CommitIndex,
-          last_applied := _LastApplied,
+          last_applied := LastApplied,
           machine := Machine} = State0) ->
     ?DEBUG("~s: recovering state machine from ~b to ~b~n",
-           [LogId, _LastApplied, CommitIndex]),
+           [LogId, LastApplied, CommitIndex]),
     {#{log := Log0} = State, _, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
@@ -1139,31 +1122,32 @@ evaluate_commit_index_follower(State, Effects) ->
     {follower, State, Effects}.
 
 filter_follower_effects(Effects) ->
-    lists:reverse(lists:foldl(fun ({release_cursor, _, _} = C, Acc) ->
-                        [C | Acc];
-                     ({incr_metrics, _, _} = C, Acc) ->
-                        [C | Acc];
-                     ({aux, _} = C, Acc) ->
-                        [C | Acc];
-                     (garbage_collection = C, Acc) ->
-                        [C | Acc];
-                     ({delete_snapshot, _} = C, Acc) ->
-                        [C | Acc];
-                     ({monitor, process, Comp, _} = C, Acc)
-                       when Comp =/= machine ->
-                         %% only machine monitors should not be emitted
-                         %% by followers
-                        [C | Acc];
-                     (L, Acc) when is_list(L) ->
-                         %% nested case - recurse
-                         case filter_follower_effects(L) of
-                             [] -> Acc;
-                             Filtered ->
-                                 [Filtered | Acc]
-                         end;
-                     (_, Acc) ->
-                        Acc
-                 end, [], Effects)).
+    lists:reverse(lists:foldl(
+                    fun ({release_cursor, _, _} = C, Acc) ->
+                            [C | Acc];
+                        ({incr_metrics, _, _} = C, Acc) ->
+                            [C | Acc];
+                        ({aux, _} = C, Acc) ->
+                            [C | Acc];
+                        (garbage_collection = C, Acc) ->
+                            [C | Acc];
+                        ({delete_snapshot, _} = C, Acc) ->
+                            [C | Acc];
+                        ({monitor, process, Comp, _} = C, Acc)
+                          when Comp =/= machine ->
+                            %% only machine monitors should not be emitted
+                            %% by followers
+                            [C | Acc];
+                        (L, Acc) when is_list(L) ->
+                            %% nested case - recurse
+                            case filter_follower_effects(L) of
+                                [] -> Acc;
+                                Filtered ->
+                                    [Filtered | Acc]
+                            end;
+                        (_, Acc) ->
+                            Acc
+                    end, [], Effects)).
 
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
@@ -1676,14 +1660,26 @@ apply_with({machine, MacMod, _}, % Machine
                                    Effects0, Notifys0),
     {Idx, State, MacSt, Effects, Notifys};
 apply_with(_Machine,
-           {Idx, _, {'$ra_cluster_change', CmdMeta, _New,
-                     ReplyType}},
+           {Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
-    ?DEBUG("~s: applying ra cluster change to ~w~n",
-           [log_id(State0), maps:keys(_New)]),
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
                                    Effects0, Notifys0),
-    State = State0#{cluster_change_permitted => true},
+    State = case State0 of
+                #{cluster_index_term := {CI, CT}}
+                  when Idx > CI andalso Term >= CT ->
+                    ?DEBUG("~s: applying ra cluster change to ~w~n",
+                           [log_id(State0), maps:keys(NewCluster)]),
+                    %% we are recovering and should apply the cluster change
+                    State0#{cluster => NewCluster,
+                            cluster_change_permitted => true,
+                            cluster_index_term => {Idx, Term}};
+                _  ->
+                    ?DEBUG("~s: committing ra cluster change to ~w~n",
+                           [log_id(State0), maps:keys(NewCluster)]),
+                    %% else just enable further cluster changes again
+                    State0#{cluster_change_permitted => true}
+            end,
+
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
     {Idx, State1, MacSt, Effects1, Notifys};

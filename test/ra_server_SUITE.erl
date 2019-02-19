@@ -9,7 +9,7 @@
 all() ->
     [
      init,
-     init_restores_cluster_changes,
+     recover_restores_cluster_changes,
      election_timeout,
      follower_aer_term_mismatch,
      follower_handles_append_entries_rpc,
@@ -170,7 +170,7 @@ init(_Config) ->
     ?assertEqual(maps:keys(Cluster), maps:keys(ClusterOut)),
     ok.
 
-init_restores_cluster_changes(_Config) ->
+recover_restores_cluster_changes(_Config) ->
     InitConf = #{cluster_name => ?FUNCTION_NAME,
                  id => n1,
                  uid => <<"n1">>,
@@ -198,6 +198,11 @@ init_restores_cluster_changes(_Config) ->
     % intercept ra_log:init call to simulate persisted log data
     % ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
+    meck:expect(ra_log_meta, fetch, fun (_, last_applied, 0) ->
+                                            element(1, ra_log:last_index_term(Log0));
+                                        (_, _, Def) ->
+                                            Def
+                                    end),
 
     #{cluster := #{n1 := _, n2 := _}} = ra_server_init(InitConf),
     ok.
