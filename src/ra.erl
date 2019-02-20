@@ -415,7 +415,7 @@ leave_and_delete_server(ServerRef, ServerId, Timeout) ->
         {error, no_proc} = Err ->
             Err;
         {ok, _, _} ->
-            ?INFO("We (Ra node ~p) have succesfully left the cluster. Terminating.", [ServerId]),
+            ?INFO("We (Ra node ~w) have succesfully left the cluster. Terminating.", [ServerId]),
             force_delete_server(ServerId)
     end.
 
