@@ -25,7 +25,7 @@ all_tests() ->
      read_other_file,
      read_invalid_version,
      recover_invalid_checksum,
-     read_index_term,
+     read_meta_data,
      recover_same_as_read
     ].
 
@@ -60,7 +60,7 @@ end_per_testcase(_TestCase, _Config) ->
 
 roundtrip(Config) ->
     Dir = ?config(dir, Config),
-    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = my_state,
     ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
     ?assertEqual({SnapshotMeta, SnapshotRef}, read(Dir)),
@@ -69,7 +69,7 @@ roundtrip(Config) ->
 read(Dir) ->
     case ra_log_snapshot:begin_read(Dir) of
         {ok, Meta, St} ->
-            <<Crc:32/integer, Snap/binary>> = read_all_snapshot(St, Dir, 128, <<>>),
+            <<_Crc:32/integer, Snap/binary>> = read_all_snapshot(St, Dir, 128, <<>>),
             {Meta, binary_to_term(Snap)};
         Err -> Err
     end.
@@ -112,20 +112,26 @@ recover_invalid_checksum(Config) ->
     {error, checksum_error} = ra_log_snapshot:recover(Dir),
     ok.
 
-read_index_term(Config) ->
+read_meta_data(Config) ->
     Dir = ?config(dir, Config),
-    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = my_state,
     ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
-    {ok, {33, 94, _}} = ra_log_snapshot:read_meta(Dir),
+    {ok, SnapshotMeta} = ra_log_snapshot:read_meta(Dir),
     ok.
 
 recover_same_as_read(Config) ->
     Dir = ?config(dir, Config),
-    SnapshotMeta = {33, 94, [{banana, node@jungle}, {banana, node@savanna}]},
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotData = my_state,
     ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData),
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
     ok.
 
 %% Utility
+
+meta(Idx, Term, Cluster) ->
+    #{index => Idx,
+      term => Term,
+      cluster => Cluster,
+      machine_version => 1}.

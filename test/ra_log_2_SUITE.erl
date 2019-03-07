@@ -37,6 +37,7 @@ all_tests() ->
      % snapshot_recovery,
      snapshot_installation,
      update_release_cursor,
+     update_release_cursor_with_machine_version,
      missed_closed_tables_are_deleted_at_next_opportunity,
      transient_writer_is_handled,
      read_opt,
@@ -251,7 +252,8 @@ written_event_after_snapshot(Config) ->
                          snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log2, _} = ra_log:update_release_cursor(2, #{}, <<"one+two">>, Log1b),
+    {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
+                                             <<"one+two">>, Log1b),
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {2, 1}} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
@@ -263,7 +265,8 @@ written_event_after_snapshot(Config) ->
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     Log6b = deliver_all_log_events(Log6, 100),
-    {Log7, _} = ra_log:update_release_cursor(4, #{}, <<"one+two+three+four">>,
+    {Log7, _} = ra_log:update_release_cursor(4, #{}, 1,
+                                             <<"one+two+three+four">>,
                                              Log6b),
     _ = receive
             {ra_log_event, {snapshot_written, {4, 1}} = E} ->
@@ -531,7 +534,7 @@ snapshot_installation(Config) ->
     file:make_dir(OthDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir),
-    Meta = {15, 2, [n1]},
+    Meta = meta(15, 2, [n1]),
     MacRef = <<"9">>,
     {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
     Sn2 =
@@ -571,7 +574,7 @@ update_release_cursor(Config) ->
     % update release cursor to the last entry of the first segment
     {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
                                                     n2 => new_peer()},
-                                             initial_state, Log1),
+                                             1, initial_state, Log1),
 
     Log3 = deliver_all_log_events(Log2, 500),
     %% now the snapshot_written should have been delivered and the
@@ -583,7 +586,7 @@ update_release_cursor(Config) ->
     % update the release cursor all the way
     {Log4, _} = ra_log:update_release_cursor(149, #{n1 => new_peer(),
                                                     n2 => new_peer()},
-                                             initial_state, Log3b),
+                                             1, initial_state, Log3b),
     Log5 = deliver_all_log_events(Log4, 500),
 
     [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
@@ -599,6 +602,28 @@ update_release_cursor(Config) ->
     % snapshot has been confirmed.
     [_] = find_segments(Config),
 
+    ok.
+
+update_release_cursor_with_machine_version(Config) ->
+    % ra_log should initiate shapshot if segments can be released
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{uid => UId}),
+    % beyond 128 limit - should create two segments
+    Log1 = append_and_roll(1, 150, 2, Log0),
+    % assert there are two segments at this point
+    [_, _] = find_segments(Config),
+    % update release cursor to the last entry of the first segment
+    MacVer = 2,
+    {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
+                                                    n2 => new_peer()},
+                                             MacVer,
+                                             initial_state, Log1),
+    Log = deliver_all_log_events(Log2, 500),
+    SnapState = ra_log:snapshot_state(Log),
+    %% assert the version is in the snapshot state meta data
+    CurrentDir = ra_snapshot:current_snapshot_dir(SnapState),
+    {ok, Meta} = ra_snapshot:read_meta(ra_log_snapshot, CurrentDir),
+    ?assertMatch(#{index := 127, machine_version := MacVer}, Meta),
     ok.
 
 missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
@@ -635,7 +660,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % then update the release cursor
     {Log6, _} = ra_log:update_release_cursor(154, #{n1 => new_peer(),
                                                     n2 => new_peer()},
-                                             initial_state, Log5),
+                                             1, initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
     [] = find_segments(Config),
@@ -835,3 +860,9 @@ flush() ->
     after 0 ->
               ok
     end.
+
+meta(Idx, Term, Cluster) ->
+    #{index => Idx,
+      term => Term,
+      cluster => Cluster,
+      machine_version => 1}.

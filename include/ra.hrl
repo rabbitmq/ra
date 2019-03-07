@@ -103,6 +103,8 @@
 %% pre-vote extension
 -record(pre_vote_rpc,
         {version = ?RA_PROTO_VERSION :: non_neg_integer(),
+         %% servers will only vote for servers with a matching machine_version
+         machine_version :: non_neg_integer(),
          term :: ra_term(),
          token :: reference(),
          candidate_id :: ra_server_id(),
@@ -114,14 +116,15 @@
          token :: reference(),
          vote_granted :: boolean()}).
 
+-type snapshot_meta() :: #{index := ra_index(),
+                           term := ra_term(),
+                           cluster := ra_cluster_servers(),
+                           machine_version := ra_machine:version()}.
+
 -record(install_snapshot_rpc,
         {term :: ra_term(), % the leader's term
          leader_id :: ra_server_id(),
-         % the snapshot replaces all previous entries incl this
-         last_index :: ra_index(),
-         % the term at the point of snapshot
-         last_term :: ra_term(),
-         last_config :: ra_cluster_servers(),
+         meta :: snapshot_meta(),
          chunk_state :: {pos_integer(), chunk_flag()} | undefined,
          data :: term()
         }).

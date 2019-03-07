@@ -89,7 +89,7 @@ write_then_fetch(Config) ->
     Idx = ra_log:next_index(Log0),
     LastIdx = Idx + 1,
     Entries = [{Idx, Term, "entry"}, {Idx+1, Term, "entry2"}],
-    Log1 = ra_log:write_sync(Entries, Log0),
+    {ok, Log1} = ra_log:write_sync(Entries, Log0),
     {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
     {{LastIdx, Term, "entry2"}, Log} = ra_log:fetch(Idx+1, Log2),
     {LastIdx, Term} = ra_log:last_written(Log),
@@ -128,7 +128,7 @@ write_then_overwrite(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log2 = ra_log:write_sync([Entry2], Log1),
+    {ok, Log2} = ra_log:write_sync([Entry2], Log1),
     {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log2),
     ExpectedNextIndex = Idx + 1,
     % ensure last index is updated after overwrite
@@ -145,7 +145,7 @@ write_recover_then_overwrite(Config) ->
     Log2 = InitFun(?FUNCTION_NAME),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log3 = ra_log:write_sync([Entry2], Log2),
+    {ok, Log3} = ra_log:write_sync([Entry2], Log2),
     {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log3),
     ExpectedNextIndex = Idx+1,
     % ensure last index is updated after overwrite
@@ -162,7 +162,7 @@ write_overwrite_then_recover(Config) ->
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
     Entry2 = {Idx, Term, "entry0_2"},
-    Log2 = ra_log:write_sync([Entry2], Log1),
+    {ok, Log2} = ra_log:write_sync([Entry2], Log1),
     % close log
     ok = ra_log:close(Log2),
     % recover
@@ -185,7 +185,8 @@ append_two(Idx, Term, Log0) ->
 write_two(Idx, Term, Log0) ->
     Entry0 = {Idx, Term, "entry0"},
     Entry1 = {Idx+1, Term, "entry1"},
-    ra_log:write_sync([Entry0, Entry1], Log0).
+    {ok, Log} = ra_log:write_sync([Entry0, Entry1], Log0),
+    Log.
 
 append_integrity_error(Config) ->
     % allow "missing entries" but do not allow overwrites
@@ -198,7 +199,7 @@ append_integrity_error(Config) ->
     % going backwards should fail with integrity error
     Entry = {Next-1, Term, "NextIndex-1"},
     ?assertExit({integrity_error, _}, ra_log:append(Entry, Log1)),
-    _Log = ra_log:write_sync([Entry], Log1),
+    {ok, _Log} = ra_log:write_sync([Entry], Log1),
     ok.
 
 -define(IDX(T), {T, _, _}).

@@ -22,7 +22,7 @@
          install_snapshot/3,
          recover_snapshot/1,
          snapshot_index_term/1,
-         update_release_cursor/4,
+         update_release_cursor/5,
 
          can_write/1,
          exists/2,
@@ -88,7 +88,7 @@
          last_resend_time :: maybe(integer())
         }).
 
--type ra_log() :: #?MODULE{}.
+-opaque state() :: #?MODULE{}.
 
 -type ra_log_init_args() :: #{uid := ra_uid(),
                               log_id => unicode:chardata(),
@@ -99,8 +99,8 @@
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module()}.
 
--export_type([ra_log_init_args/0,
-              ra_log/0,
+-export_type([state/0,
+              ra_log_init_args/0,
               ra_meta_key/0,
               segment_ref/0,
               event/0,
@@ -108,7 +108,7 @@
               effect/0
              ]).
 
--spec init(ra_log_init_args()) -> ra_log().
+-spec init(ra_log_init_args()) -> state().
 init(#{uid := UId} = Conf) ->
     %% overriding the data_dir is only here for test compatibility
     %% as it needs to match what the segment writer has it makes no real
@@ -192,7 +192,7 @@ init(#{uid := UId} = Conf) ->
             State#?MODULE.first_index]),
     delete_segments(SnapIdx, State).
 
--spec close(ra_log()) -> ok.
+-spec close(state()) -> ok.
 close(#?MODULE{uid = UId,
                open_segments = OpenSegs}) ->
     % deliberately ignoring return value
@@ -205,8 +205,8 @@ close(#?MODULE{uid = UId,
     catch ets:delete(ra_log_snapshot_state, UId),
     ok.
 
--spec append(Entry :: log_entry(), State :: ra_log()) ->
-    ra_log() | no_return().
+-spec append(Entry :: log_entry(), State :: state()) ->
+    state() | no_return().
 append(Entry, #?MODULE{last_index = LastIdx} = State0)
       when element(1, Entry) =:= LastIdx + 1 ->
     wal_write(State0, Entry);
@@ -215,8 +215,8 @@ append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
                                       [Idx, LastIdx+1])),
     exit({integrity_error, Msg}).
 
--spec write(Entries :: [log_entry()], State :: ra_log()) ->
-    {ok, ra_log()} |
+-spec write(Entries :: [log_entry()], State :: state()) ->
+    {ok, state()} |
     {error, {integrity_error, term()} | wal_down}.
 write([{FstIdx, _, _} = First | Rest] = Entries,
       #?MODULE{last_index = LastIdx,
@@ -242,8 +242,8 @@ write([{Idx, _, _} | _], #?MODULE{uid = UId, last_index = LastIdx}) ->
                                       [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
--spec take(ra_index(), non_neg_integer(), ra_log()) ->
-    {[log_entry()], ra_log()}.
+-spec take(ra_index(), non_neg_integer(), state()) ->
+    {[log_entry()], state()}.
 take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
                           last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx ->
@@ -281,17 +281,17 @@ take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
 take(_, _, State) ->
     {[], State}.
 
--spec last_index_term(ra_log()) -> ra_idxterm().
+-spec last_index_term(state()) -> ra_idxterm().
 last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
     {LastIdx, LastTerm}.
 
--spec last_written(ra_log()) -> ra_idxterm().
+-spec last_written(state()) -> ra_idxterm().
 last_written(#?MODULE{last_written_index_term = LWTI}) ->
     LWTI.
 
 %% forces the last index and last written index back to a prior index
--spec set_last_index(ra_index(), ra_log()) ->
-    {ok, ra_log()} | {not_found, ra_log()}.
+-spec set_last_index(ra_index(), state()) ->
+    {ok, state()} | {not_found, state()}.
 set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
@@ -306,8 +306,8 @@ set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
                                 last_written_index_term = {LWIdx, LWTerm}}}
     end.
 
--spec handle_event(event_body(), ra_log()) ->
-    {ra_log(), [effect()]}.
+-spec handle_event(event_body(), state()) ->
+    {state(), [effect()]}.
 handle_event({written, {FromIdx, ToIdx, Term}},
              #?MODULE{last_written_index_term = {LastWrittenIdx0,
                                                  LastWrittenTerm0},
@@ -404,12 +404,12 @@ handle_event({resend_write, Idx}, State) ->
     % The assumption is they are available in the cache
     {resend_from(Idx, State), []}.
 
--spec next_index(ra_log()) -> ra_index().
+-spec next_index(state()) -> ra_index().
 next_index(#?MODULE{last_index = LastIdx}) ->
     LastIdx + 1.
 
--spec fetch(ra_index(), ra_log()) ->
-    {maybe(log_entry()), ra_log()}.
+-spec fetch(ra_index(), state()) ->
+    {maybe(log_entry()), state()}.
 fetch(Idx, State0) ->
     case take(Idx, 1, State0) of
         {[], State} ->
@@ -418,8 +418,8 @@ fetch(Idx, State0) ->
             {Entry, State}
     end.
 
--spec fetch_term(ra_index(), ra_log()) ->
-    {maybe(ra_term()), ra_log()}.
+-spec fetch_term(ra_index(), state()) ->
+    {maybe(ra_term()), state()}.
 fetch_term(Idx, #?MODULE{last_index = LastIdx,
                          first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
@@ -443,15 +443,15 @@ fetch_term(Idx, #?MODULE{cache = Cache, uid = UId} = State0) ->
             end
     end.
 
--spec snapshot_state(State :: ra_log()) -> ra_snapshot:state().
+-spec snapshot_state(State :: state()) -> ra_snapshot:state().
 snapshot_state(State) ->
     State#?MODULE.?FUNCTION_NAME.
 
--spec set_snapshot_state(ra_snapshot:state(), ra_log()) -> ra_log().
+-spec set_snapshot_state(ra_snapshot:state(), state()) -> state().
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_idxterm(), ra_snapshot:state(), ra_log()) -> ra_log().
+-spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) -> state().
 install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
     State = delete_segments(Idx, State0),
     State#?MODULE{snapshot_state = SnapState,
@@ -459,7 +459,7 @@ install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
                   last_index = Idx,
                   last_written_index_term = IdxTerm}.
 
--spec recover_snapshot(State :: ra_log()) ->
+-spec recover_snapshot(State :: state()) ->
     maybe({ra_snapshot:meta(), term()}).
 recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
     case ra_snapshot:recover(SnapState) of
@@ -469,24 +469,25 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
             undefined
     end.
 
--spec snapshot_index_term(State :: ra_log()) -> maybe(ra_idxterm()).
+-spec snapshot_index_term(State :: state()) -> maybe(ra_idxterm()).
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 
 -spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
-                            Ref :: term(), State :: ra_log()) ->
-    {ra_log(), effects()}.
-update_release_cursor(Idx, Cluster, MacState,
+                            MacVersion :: ra_machine:version(),
+                            MacState :: term(), State :: state()) ->
+    {state(), effects()}.
+update_release_cursor(Idx, Cluster, MacVersion, MacState,
                       #?MODULE{snapshot_state = SnapState} = State) ->
     case ra_snapshot:pending(SnapState) of
         undefined ->
-            update_release_cursor0(Idx, Cluster, MacState, State);
+            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
         _ ->
             % if a snapshot is in progress don't even evaluate
             {State, []}
     end.
 
-update_release_cursor0(Idx, Cluster, MacState,
+update_release_cursor0(Idx, Cluster, MacVersion, MacState,
                        #?MODULE{segment_refs = SegRefs,
                                 snapshot_state = SnapState,
                                 snapshot_interval = SnapInter} = State0) ->
@@ -495,6 +496,9 @@ update_release_cursor0(Idx, Cluster, MacState,
                     undefined -> SnapInter;
                     {I, _} -> I + SnapInter
                 end,
+    Meta = #{index => Idx,
+             cluster => ClusterServerIds,
+             machine_version => MacVersion},
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
     % Check here if any segments can be release.
@@ -518,8 +522,7 @@ update_release_cursor0(Idx, Cluster, MacState,
                 {undefined, _} ->
                     exit({term_not_found_for_index, Idx});
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterServerIds},
-                                   MacState, State)
+                    write_snapshot(Meta#{term => Term}, MacState, State)
             end;
         false when Idx > SnapLimit ->
             %% periodically take snapshots event if segments cannot be cleared
@@ -528,37 +531,43 @@ update_release_cursor0(Idx, Cluster, MacState,
                 {undefined, State} ->
                     {State, []};
                 {Term, State} ->
-                    write_snapshot({Idx, Term, ClusterServerIds},
-                                   MacState, State)
+                    write_snapshot(Meta#{term => Term}, MacState, State)
             end;
         false ->
             {State0, []}
     end.
 
+-spec append_sync(Entry :: log_entry(), State :: state()) ->
+    state() | no_return().
 append_sync({Idx, Term, _} = Entry, Log0) ->
     Log = append(Entry, Log0),
     await_written_idx(Idx, Term, Log).
 
+-spec write_sync(Entries :: [log_entry()], State :: state()) ->
+    {ok, state()} |
+    {error, {integrity_error, term()} | wal_down}.
 write_sync(Entries, Log0) ->
     {Idx, Term, _} = lists:last(Entries),
     case ra_log:write(Entries, Log0) of
         {ok, Log} ->
-            await_written_idx(Idx, Term, Log);
+            {ok, await_written_idx(Idx, Term, Log)};
         {error, _} = Err ->
             Err
     end.
 
+-spec can_write(state()) -> boolean().
 can_write(#?MODULE{wal = Wal}) ->
     undefined =/= whereis(Wal).
 
--spec exists(ra_idxterm(), ra_log()) ->
-    {boolean(), ra_log()}.
+-spec exists(ra_idxterm(), state()) ->
+    {boolean(), state()}.
 exists({Idx, Term}, Log0) ->
     case fetch_term(Idx, Log0) of
         {Term, Log} -> {true, Log};
         {_, Log} -> {false, Log}
     end.
 
+-spec overview(state()) -> map().
 overview(#?MODULE{last_index = LastIndex,
                   last_written_index_term = LWIT,
                   segment_refs = Segs,
@@ -575,6 +584,7 @@ overview(#?MODULE{last_index = LastIndex,
                         end
      }.
 
+-spec write_config(ra_server:config(), state()) -> ok.
 write_config(Config0, #?MODULE{directory = Dir}) ->
     ConfigPath = filename:join(Dir, "config"),
     % clean config of potentially unserialisable data
@@ -593,6 +603,7 @@ read_config(Dir) ->
             not_found
     end.
 
+-spec delete_everything(state()) -> ok.
 delete_everything(#?MODULE{directory = Dir} = Log) ->
     _ = close(Log),
     try ra_lib:recursive_delete(Dir) of
@@ -604,6 +615,7 @@ delete_everything(#?MODULE{directory = Dir} = Log) ->
     end,
     ok.
 
+-spec release_resources(non_neg_integer(), state()) -> state().
 release_resources(MaxOpenSegments,
                   #?MODULE{open_segments = OpenSegs} = State) ->
     % close all open segments

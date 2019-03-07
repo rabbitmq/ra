@@ -32,26 +32,20 @@ prepare(_Index, State) -> State.
 %% "RASN"
 %% Version (byte)
 %% Checksum (unsigned 32)
-%% Index (unsigned 64)
-%% Term (unsigned 64)
-%% Num cluster servers (byte)
-%% [DataLen (byte), Data (binary)]
+%% MetaData Len (unsigned 32)
+%% MetaData (binary)
 %% Snapshot Data (binary)
 %% @end
 
 -spec write(file:filename(), meta(), term()) ->
     ok | {error, file_err()}.
-write(Dir, {Idx, Term, ClusterServers}, MacState) ->
+write(Dir, Meta, MacState) ->
+    %% no compression on meta data to make sure reading it is as fast
+    %% as possible
+    MetaBin = term_to_binary(Meta),
+    %% the data can however be compressed
     Bin = term_to_binary(MacState, [{compressed, 9}]),
-    Data = [<<Idx:64/unsigned,
-              Term:64/unsigned,
-              (length(ClusterServers)):8/unsigned>>,
-            [begin
-                 B = term_to_binary(N),
-                 <<(byte_size(B)):16/unsigned,
-                   B/binary>>
-             end || N <- ClusterServers],
-           Bin],
+    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin, Bin],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
     file:write_file(File, [<<?MAGIC,
@@ -59,18 +53,11 @@ write(Dir, {Idx, Term, ClusterServers}, MacState) ->
                              Checksum:32/integer>>,
                            Data]).
 
-
-begin_accept(SnapDir, {Idx, Term, Cluster}) ->
+begin_accept(SnapDir, Meta) ->
     File = filename(SnapDir),
     {ok, Fd} = file:open(File, [write, binary, raw]),
-    Data = [<<Idx:64/unsigned,
-              Term:64/unsigned,
-              (length(Cluster)):8/unsigned>>,
-            [begin
-                 B = term_to_binary(N),
-                 <<(byte_size(B)):16/unsigned,
-                   B/binary>>
-             end || N <- Cluster]],
+    MetaBin = term_to_binary(Meta),
+    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin],
     PartialCrc = erlang:crc32(Data),
     ok = file:write(Fd, [<<?MAGIC,
                            ?VERSION:8/unsigned,
@@ -187,15 +174,13 @@ read_meta(Dir) ->
 %% Internal
 
 read_meta_internal(Fd) ->
-    HeaderSize = 9 + 16 + 1,
+    HeaderSize = 9 + 4,
     case file:read(Fd, HeaderSize) of
         {ok, <<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer,
-               Idx:64/unsigned,
-               Term:64/unsigned,
-               NumServers:8/unsigned>>} ->
-            case read_servers(NumServers, [], Fd, HeaderSize) of
-                {ok, Servers} ->
-                    {ok, {Idx, Term, Servers}, Crc};
+               MetaSize:32/unsigned>>} ->
+            case file:read(Fd, MetaSize) of
+                {ok, MetaBin} ->
+                    {ok, binary_to_term(MetaBin), Crc};
                 Err ->
                     Err
             end;
@@ -217,40 +202,10 @@ validate(Crc, Data) ->
             {error, checksum_error}
     end.
 
-parse_snapshot(<<Idx:64/unsigned, Term:64/unsigned,
-                 NumServers:8/unsigned, Rest0/binary>>) ->
-    {Servers, Rest} = parse_servers(NumServers, [], Rest0),
-    {ok, {Idx, Term, Servers}, binary_to_term(Rest)}.
-
-read_servers(0, Servers, Fd, Offset) ->
-    %% leave the position in the right place
-    {ok, _} = file:position(Fd, Offset),
-    {ok, lists:reverse(Servers)};
-read_servers(Num, Servers, Fd, Offset) ->
-    case file:pread(Fd, Offset, 2) of
-        {ok, <<Len:16/unsigned>>} ->
-            case file:pread(Fd, Offset+2, Len) of
-                {ok, <<ServerData:Len/binary>>} ->
-                    read_servers(Num - 1,
-                                 [binary_to_term(ServerData) | Servers],
-                                 Fd,
-                                 Offset + 2 + Len);
-                eof ->
-                    {error, unexpected_eof_when_parsing_servers};
-                Err ->
-                    Err
-            end;
-        eof ->
-            {error, unexpected_eof_when_parsing_servers};
-        Err ->
-            Err
-    end.
-
-parse_servers(0, Servers, Data) ->
-    {lists:reverse(Servers), Data};
-parse_servers(Num, Servers,
-              <<Len:16/unsigned, ServerData:Len/binary, Rem/binary>>) ->
-    parse_servers(Num - 1, [binary_to_term(ServerData) | Servers], Rem).
+parse_snapshot(<<MetaSize:32/unsigned, MetaBin:MetaSize/binary,
+                 Rest/binary>>) ->
+    Meta = binary_to_term(MetaBin),
+    {ok, Meta, binary_to_term(Rest)}.
 
 filename(Dir) ->
     filename:join(Dir, "snapshot.dat").
