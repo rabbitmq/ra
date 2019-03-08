@@ -23,6 +23,8 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         read_only_query/2,
+         read_only_query/3,
          % cluster operations
          start_cluster/1,
          start_cluster/2,
@@ -633,6 +635,19 @@ leader_query(ServerRef, QueryFun) ->
     {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
 leader_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
+
+
+-spec read_only_query(ServerId :: ra_server_id(), QueryFun :: query_fun()) ->
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
+read_only_query(ServerRef, QueryFun) ->
+    read_only_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
+
+-spec read_only_query(ServerId :: ra_server_id(),
+                      QueryFun :: query_fun(),
+                      Timeout :: timeout()) ->
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
+read_only_query(ServerRef, QueryFun, Timeout) ->
+    ra_server_proc:query(ServerRef, QueryFun, read_only, Timeout).
 
 %% @doc Query the state machine
 %% This allows a caller to query the state machine by appending the query
