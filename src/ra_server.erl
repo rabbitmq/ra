@@ -575,7 +575,7 @@ handle_leader({PeerId, #read_only_heartbeat_reply{success = true, ref = Ref, ter
               #{current_term := CurTerm} = State) when CurTerm >= Term  ->
     case read_only_heartbeat_quorum(Ref, PeerId, State) of
         {true, State1, Effects} ->
-            {State2, Effects1} = apply_or_schedule_read_only_query(Ref, State1),
+            {State2, Effects1} = apply_or_schedule_read_only_query(Ref, State1, Effects),
             {leader, State2, Effects1};
         {false, State1, Effects} ->
             {leader, State1, Effects}
@@ -2110,7 +2110,7 @@ make_read_only_heartbeat_effects(Ref, #{waiting_ro_heartbeats := WH0} = State) -
     PeerIds = peer_ids(State),
     case PeerIds of
         [] ->
-            apply_or_schedule_read_only_query(Ref, State);
+            apply_or_schedule_read_only_query(Ref, State, []);
         _ ->
             Effects = read_only_heartbeat_effects(PeerIds, Ref, State),
             WaitingPeers = maps:from_list([{PeerId, false} || PeerId <- PeerIds]),
@@ -2158,13 +2158,15 @@ apply_or_schedule_read_only_query({From, QueryFun, ReadIndex} = Ref,
                       #{last_applied := ApplyIndex,
                         machine_state := MacState,
                         machine := {machine, MacMod, _},
-                        waiting_apply_index := Waiting} = State) ->
+                        waiting_apply_index := Waiting} = State,
+                      Effects) ->
     case ApplyIndex >= ReadIndex of
         true ->
             Result = ra_machine:query(MacMod, QueryFun, MacState),
-            {State, [{reply, From, Result}]};
+            Reply = read_only_query_reply(Result, State),
+            {State, [{reply, From, Reply} | Effects]};
         false ->
-            {State#{waiting_apply_index => Waiting#{Ref => ReadIndex}}, []}
+            {State#{waiting_apply_index => Waiting#{Ref => ReadIndex}}, Effects}
     end.
 
 maybe_apply_read_only_queries(#{last_applied := ApplyIndex,
@@ -2176,13 +2178,20 @@ maybe_apply_read_only_queries(#{last_applied := ApplyIndex,
     {Waiting1, Effects1} = maps:fold(
         fun({From, QueryFun, ReadIndex} = Ref, ReadIndex, {Waiting, Effects})
         when ReadIndex =< ApplyIndex ->
+            Result = ra_machine:query(MacMod, QueryFun, MacState),
+            Reply = read_only_query_reply(Result, State),
             {maps:remove(Ref, Waiting),
-             [{reply, From, ra_machine:query(MacMod, QueryFun, MacState)} | Effects]};
+             [{reply, From, Reply} | Effects]};
            (_, _, {Waiting, Effects}) -> {Waiting, Effects}
         end,
         {Waiting0, Effects0},
         Waiting0),
     {State#{waiting_apply_index => Waiting1}, Effects1}.
+
+read_only_query_reply(Result, #{last_applied := Last,
+                                current_term := Term,
+                                id := Id}) ->
+    {ok, {{Last, Term}, Result}, Id}.
 
 %%% ===================
 %%% Internal unit tests
