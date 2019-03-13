@@ -105,7 +105,7 @@
 %%
 %% Although both leaders and followers will process the same commands effects
 %% are typically only applied on the leader. The only exceptions to this are
-%% the `relaase_cursor' effect that is realised on all effects as it is part
+%% the `release_cursor' effect that is realised on all effects as it is part
 %% of the ra implementation log truncation mechanism and the `garbage_collect'
 %% effects that is used to explicitly triggering a garbage collection in the
 %% ra servers's process.
