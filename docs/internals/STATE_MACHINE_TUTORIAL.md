@@ -73,7 +73,7 @@ For the `{write, Key, Value}` command we simply put the key and value into the
 map and return the new state, pass through the list of effects and an `ok`
 return value.
 
-For `{read, Key}` we additional return the value of the key or `undefined` if
+For `{read, Key}` we additionally return the value of the key or `undefined` if
 it does not exist so that a waiting caller can obtain the value.
 
 An that is it! The state machine is finished.
