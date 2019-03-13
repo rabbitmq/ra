@@ -230,7 +230,7 @@
 
 -callback snapshot_module() -> module().
 
--callback version() -> version().
+-callback version() -> pos_integer().
 
 -callback which_module(version()) -> module().
 

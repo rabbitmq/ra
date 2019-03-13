@@ -929,7 +929,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                         #{id := Id, log_id := LogId, log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~s: receiving snapshot chunk: ~b / ~b~n",
+    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w~n",
            [LogId, Num, ChunkFlag]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
@@ -1639,9 +1639,6 @@ apply_to(ApplyTo, ApplyFun, State, Effs) ->
 
 apply_to(ApplyTo, ApplyFun, NumApplied0, Notifys0, Effects0,
          #{last_applied := LastApplied,
-           %% also local_machine_version >= current_machine_version
-           %% machine_state could become {module(), MacState} to capture the
-           %% current active module
            machine_version := MacVer,
            effective_machine_version := EffMacVer,
            machine_state := MacState0} = State0)
