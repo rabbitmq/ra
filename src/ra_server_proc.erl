@@ -141,7 +141,8 @@ cast_command(ServerRef, Priority, Cmd) ->
 
 -spec query(ra_server_id(), query_fun(),
             local | consistent | leader, timeout()) ->
-    ra_server_proc:ra_leader_call_ret(term()).
+    ra_server_proc:ra_leader_call_ret(term())
+    | {ok, Reply :: term(), ra_server_id() | not_known}.
 query(ServerRef, QueryFun, local, Timeout) ->
     statem_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, leader, Timeout) ->

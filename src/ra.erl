@@ -645,7 +645,7 @@ read_only_query(ServerRef, QueryFun) ->
 -spec read_only_query(ServerId :: ra_server_id(),
                       QueryFun :: query_fun(),
                       Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
+    {ok, Reply :: term(), ra_server_id() | not_known}.
 read_only_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, read_only, Timeout).
 
