@@ -1744,7 +1744,9 @@ base_state(NumServers, MacMod) ->
       machine_versions => [{0, 0}],
       effective_machine_version => 0,
       effective_machine_module => MacMod,
-      log => Log}.
+      log => Log,
+      waiting_apply_index => #{},
+      waiting_ro_heartbeats => #{}}.
 
 mock_machine(Mod) ->
     meck:new(Mod, [non_strict]),
@@ -1752,8 +1754,6 @@ mock_machine(Mod) ->
     %% just keep the latest command as the state
     meck:expect(Mod, apply, fun (_, Cmd, _) -> {Cmd, ok} end),
     ok.
-
-
 
 usr_cmd(Data) ->
     {command, usr(Data)}.
