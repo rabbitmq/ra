@@ -256,7 +256,7 @@ state transformations.
 
 #### Limitations
 
-Ra does not support the erlang code change mechanism.
+Ra does not support the Erlang hot code swapping mechanism.
 
 
 ## Identity
