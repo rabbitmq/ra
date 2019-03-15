@@ -241,13 +241,15 @@ data passed to `apply/3`.
 New versions are enabled whenever a there is a quorum of members with a higher version and
 one of them is elected leader. The leader will commit the new version to the
 log and each follower will move to the new version when this log entry is applied.
-Followers that do not yet have the new version available will not apply entries
-until they do (but they will participate in replication).
+Followers that do not yet have the new version available will receive log entries from the leader
+and update their logs but will not apply log entries. When they are upgraded and have
+the new version, all outstanding log entries will be applied. In practical terms this means
+that Ra nodes can be upgraded one by one.
 
-The state machine implementation will need to handle the version bump in the form
-of a command that is passed to the `apply/3` callback:
+In order to be upgradeable, the state machine implementation will need to handle the version
+bump in the form of a command that is passed to the `apply/3` callback:
 `{machine_version, OldVersion, NewVersion}`. This provides an
-opportunity to transform the state data into a new form, if needed. NB: the version
+opportunity to transform the state data into a new form, if needed. Note that the version
 bump may be for several versions so it may be necessary to handle multiple
 state transformations.
 
