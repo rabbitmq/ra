@@ -236,7 +236,7 @@ lower_version_does_not_apply_until_upgraded(Config) ->
     Cluster = ?config(cluster, Config),
     ClusterName = ?config(cluster_name, Config),
     %% 3 node cluster, upgrade the first two to the later version
-    %% leaving on efolower on a lower version
+    %% leaving the follower on a lower version
     Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     Followers = lists:delete(Leader, Cluster),
     meck:expect(Mod, version, fun () ->

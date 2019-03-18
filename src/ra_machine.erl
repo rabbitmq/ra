@@ -236,7 +236,7 @@
 
 %% @doc initialise a new machine
 %% This is only called on startup only if there isn't yet a snapshot to recover
-%% from. Once a snapshot has been taking this is never called again.
+%% from. Once a snapshot has been taken this is never called again.
 -spec init(machine(), atom()) -> state().
 init({machine, Mod, Args}, Name) ->
     Mod:init(Args#{name => Name}).
