@@ -192,7 +192,7 @@ should be considered breaking.
 As Ra state machines need to be deterministic any changes to the logic inside the `apply/3` function
  _needs to be enabled at the same index on all members of a Ra cluster_.
 
-#### Versioning API
+#### Versioning API
 
 Ra considers all state machines versioned starting with version 0. State machines
 that need to be updated with breaking changes need to implement the optional
@@ -236,7 +236,7 @@ For smaller (but still breaking) changes that can be handled in the original
 module it is also possible to switch based on the `machine_version` key included in the meta
 data passed to `apply/3`.
 
-#### Runtime Behaviour
+#### Runtime Behaviour
 
 New versions are enabled whenever a there is a quorum of members with a higher version and
 one of them is elected leader. The leader will commit the new version to the
@@ -254,7 +254,7 @@ bump may be for several versions so it may be necessary to handle multiple
 state transformations.
 
 
-#### Limitations
+#### Limitations
 
 Ra does not support the Erlang hot code swapping mechanism.
 
