@@ -233,11 +233,7 @@ server_applies_with_new_module(Config) ->
     % applied. The wal fsync could take a few ms causing the race
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
-    {ok, {_, init_state}, _} = ra:leader_query(ServerId,
-                                             fun (S) ->
-                                                    ct:pal("leader_query ~w", [S]),
-                                                   S
-                                             end),
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun (S) -> S end),
 
     ok = ra:stop_server(ServerId),
     %% simulate module upgrade
@@ -262,11 +258,11 @@ server_applies_with_new_module(Config) ->
     ok = ra:restart_server(ServerId),
     %% increment version
     {ok, ok, _} = ra:process_command(ServerId, dummy2),
-    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
     ok = ra:stop_server(ServerId),
     ok = ra:restart_server(ServerId),
     _ = ra:members(ServerId),
-    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
     ok.
 
 lower_version_does_not_apply_until_upgraded(Config) ->
