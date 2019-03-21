@@ -80,7 +80,7 @@ take_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     MacRef = ?FUNCTION_NAME,
     {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
@@ -102,7 +102,7 @@ take_snapshot_crash(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     MacRef = ?FUNCTION_NAME,
     {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
@@ -132,7 +132,7 @@ init_recover(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     {State1, [{monitor, process, snapshot_writer, _}]} =
          ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
     receive
@@ -160,8 +160,8 @@ init_multi(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta1 = {55, 2, [node()]},
-    Meta2 = {165, 2, [node()]},
+    Meta1 = meta(55, 2, [node()]),
+    Meta2 = meta(165, 2, [node()]),
     {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
     receive
         {ra_log_event, {snapshot_written, IdxTerm}} ->
@@ -199,8 +199,8 @@ init_recover_multi_corrupt(Config) ->
     UId = ?config(uid, Config),
     SnapsDir = ?config(snap_dir, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir),
-    Meta1 = {55, 2, [node()]},
-    Meta2 = {165, 2, [node()]},
+    Meta1 = meta(55, 2, [node()]),
+    Meta2 = meta(165, 2, [node()]),
     {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
     receive
         {ra_log_event, {snapshot_written, IdxTerm}} ->
@@ -243,7 +243,7 @@ init_recover_corrupt(Config) ->
     %% recovery should skip corrupt snapshots,
     %% e.g. empty snapshot directories
     UId = ?config(uid, Config),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     SnapsDir = ?config(snap_dir, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir),
     {State1, _} = ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
@@ -276,7 +276,7 @@ read_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     {State1, _} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
@@ -306,15 +306,12 @@ accept_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
+    MetaBin = term_to_binary(Meta),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     MacBin = term_to_binary(MacRef),
-    NodeBin = term_to_binary(node()),
-    Crc = erlang:crc32([<<55:64/unsigned,
-                          2:64/unsigned,
-                          1:8/unsigned,
-                          (byte_size(NodeBin)):16/unsigned>>,
-                        NodeBin,
+    Crc = erlang:crc32([<<(size(MetaBin)):32/unsigned>>,
+                        MetaBin,
                         MacBin]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
@@ -342,16 +339,9 @@ abort_accept(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config)),
-    Meta = {55, 2, [node()]},
+    Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     MacBin = term_to_binary(MacRef),
-    NodeBin = term_to_binary(node()),
-    Crc = erlang:crc32([<<55:64/unsigned,
-                          2:64/unsigned,
-                          1:8/unsigned,
-                          (byte_size(NodeBin)):16/unsigned>>,
-                        NodeBin,
-                        MacBin]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
       B:1024/binary,
@@ -375,18 +365,15 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
-    MetaLocal = {55, 2, [node()]},
-    MetaRemote = {165, 2, [node()]},
+    MetaLocal = meta(55, 2, [node()]),
+    MetaRemote = meta(165, 2, [node()]),
+    MetaRemoteBin = term_to_binary(MetaRemote),
     %% begin a local snapshot
     {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME, State0),
     MacRef = crypto:strong_rand_bytes(1024),
     MacBin = term_to_binary(MacRef),
-    NodeBin = term_to_binary(node()),
-    Crc = erlang:crc32([<<165:64/unsigned,
-                          2:64/unsigned,
-                          1:8/unsigned,
-                          (byte_size(NodeBin)):16/unsigned>>,
-                        NodeBin,
+    Crc = erlang:crc32([<<(size(MetaRemoteBin)):32/unsigned>>,
+                        MetaRemoteBin,
                         MacBin]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
@@ -418,19 +405,12 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir),
-    MetaRemote = {55, 2, [node()]},
-    MetaLocal = {165, 2, [node()]},
+    MetaRemote = meta(55, 2, [node()]),
+    MetaLocal = meta(165, 2, [node()]),
     %% begin a local snapshot
     {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME, State0),
     MacRef = crypto:strong_rand_bytes(1024),
     MacBin = term_to_binary(MacRef),
-    NodeBin = term_to_binary(node()),
-    Crc = erlang:crc32([<<55:64/unsigned,
-                          2:64/unsigned,
-                          1:8/unsigned,
-                          (byte_size(NodeBin)):16/unsigned>>,
-                        NodeBin,
-                        MacBin]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
       B/binary>> = MacBin,
@@ -457,3 +437,9 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
               error(snapshot_event_timeout)
     end,
     ok.
+
+meta(Idx, Term, Cluster) ->
+    #{index => Idx,
+      term => Term,
+      cluster => Cluster,
+      machine_version => 1}.

@@ -3,11 +3,11 @@
 -include("ra.hrl").
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
--type meta() :: {ra_index(), ra_term(), ra_cluster_servers()}.
 
+%% alias
+-type meta() :: snapshot_meta().
 
 -export([
-         save/4,
          recover/1,
          read_meta/2,
          begin_read/1,
@@ -29,7 +29,8 @@
          accept_chunk/4,
          abort_accept/1,
 
-         handle_down/3
+         handle_down/3,
+         current_snapshot_dir/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
@@ -129,6 +130,7 @@ init(UId, Module, SnapshotsDir) ->
     true = filelib:is_dir(SnapshotsDir),
     {ok, Snaps0} = file:list_dir(SnapshotsDir),
     Snaps = lists:reverse(lists:sort(Snaps0)),
+   %% /snapshots/term_index/
     case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
         undefined ->
             ok = delete_snapshots(SnapshotsDir, Snaps),
@@ -137,7 +139,7 @@ init(UId, Module, SnapshotsDir) ->
             Current = filename:join(SnapshotsDir, Current0),
             %% TODO: validate Current snapshot integrity before accepting it as
             %% current
-            {ok, {Idx, Term, _}} = Module:read_meta(Current),
+            {ok, #{index := Idx, term := Term}} = Module:read_meta(Current),
             true = ets:insert(?ETSTBL, {UId, Idx}),
 
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
@@ -197,7 +199,7 @@ last_index_for(UId) ->
 
 -spec begin_snapshot(meta(), ReleaseCursorRef :: term(), state()) ->
     {state(), [effect()]}.
-begin_snapshot({Idx, Term, _Cluster} = Meta, MacRef,
+begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                #?MODULE{module = Mod,
                         directory = Dir} = State) ->
     %% create directory for this snapshot
@@ -209,12 +211,12 @@ begin_snapshot({Idx, Term, _Cluster} = Meta, MacRef,
     Ref = Mod:prepare(Meta, MacRef),
     %% write the snapshot in a separate process
     Self = self(),
-    Pid = spawn (fun () ->
-                         ok = Mod:write(SnapDir, Meta, Ref),
-                         Self ! {ra_log_event,
-                                 {snapshot_written, {Idx, Term}}},
-                         ok
-                 end),
+    Pid = spawn(fun () ->
+                        ok = Mod:write(SnapDir, Meta, Ref),
+                        Self ! {ra_log_event,
+                                {snapshot_written, {Idx, Term}}},
+                        ok
+                end),
 
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
@@ -233,7 +235,7 @@ complete_snapshot({Idx, _} = IdxTerm,
 
 -spec begin_accept(meta(), state()) ->
     {ok, state()}.
-begin_accept({Idx, Term, _} = Meta,
+begin_accept(#{index := Idx, term := Term} = Meta,
              #?MODULE{module = Mod,
                       directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
@@ -309,12 +311,6 @@ delete(Dir, {Idx, Term}) ->
     ok = ra_lib:recursive_delete(SnapDir),
     ok.
 
--spec save(Module :: module(), Location :: file:filename(),
-           Meta :: meta(), Data :: term()) ->
-    ok | {error, file_err() | term()}.
-save(Module, Location, Meta, Data) ->
-    Module:save(Location, Meta, Data).
-
 -spec begin_read(State :: state()) ->
     {ok, Meta :: meta(), ReadState} |
     {error, term()} when ReadState :: term().
@@ -357,6 +353,16 @@ recover(#?MODULE{module = Mod,
             term()}.
 read_meta(Module, Location) ->
     Module:read_meta(Location).
+
+-spec current_snapshot_dir(state()) ->
+    maybe(file:filename()).
+current_snapshot_dir(#?MODULE{directory = Dir,
+                              current = {Idx, Term}}) ->
+    make_snapshot_dir(Dir, Idx, Term);
+current_snapshot_dir(_) ->
+    undefined.
+
+%% Utility
 
 make_snapshot_dir(Dir, Index, Term) ->
     I = ra_lib:zpad_hex(Index),

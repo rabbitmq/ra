@@ -152,7 +152,7 @@ to maintain a timer on behalf of the state machine and commit a `timeout` comman
 when the timer triggers.
 
 The timer is relative and setting another timer before the current timer runs
-out results in the current timer being reset. 
+out results in the current timer being reset.
 
 All timers are invalidated when the leader changes. State machines should
 re-issue timer effects when becoming leader using the `state_enter/2`
@@ -182,6 +182,81 @@ It is not guaranteed that a snapshot will be taken. A decision to take
 a snapshot or delay it is taken using a number of internal Ra state factors.
 The goal is to minimise disk I/O activity when possible.
 
+### State Machine Versioning
+
+It is eventually necessary to make changes to the state machine
+code. Any changes to a state machine that would result in a different end state when
+the state is re-calculated from the log of entries (as is done when restarting a ra server)
+should be considered breaking.
+
+As Ra state machines need to be deterministic any changes to the logic inside the `apply/3` function
+ _needs to be enabled at the same index on all members of a Ra cluster_.
+
+#### Versioning API
+
+Ra considers all state machines versioned starting with version 0. State machines
+that need to be updated with breaking changes need to implement the optional
+versioning parts of the `ra_machine` behaviour:
+
+``` erlang
+-type version() :: non_neg_integer().
+
+-callback version() -> pos_integer().
+
+-callback which_module(version()) -> module().
+
+```
+
+`version/0` returns the current version which is an integer that is
+higher than any previously used version number. Whenever a breaking change is
+made this should be incremented.
+
+`which_module/1` maps a version to the module implementing it. This allows
+developers to optionally keep entire modules for old versions instead of trying
+to handle multiple versions in the same module.
+
+E.g. when moving from version 0 of `my_machine` to version 1:
+
+1. Copy and rename the `my_machine` module to `my_machine_v0`
+
+2. Implement the breaking changes in the original module and bump the version.
+
+``` erlang
+version() -> 1.
+
+which_module(1) -> my_machine;
+which_module(0) -> my_machine_v0.
+
+```
+
+This would ensure that any entries added to the log are applied against the active machine version
+at the time they were added, leading to a deterministic outcome.
+
+For smaller (but still breaking) changes that can be handled in the original
+module it is also possible to switch based on the `machine_version` key included in the meta
+data passed to `apply/3`.
+
+#### Runtime Behaviour
+
+New versions are enabled whenever a there is a quorum of members with a higher version and
+one of them is elected leader. The leader will commit the new version to the
+log and each follower will move to the new version when this log entry is applied.
+Followers that do not yet have the new version available will receive log entries from the leader
+and update their logs but will not apply log entries. When they are upgraded and have
+the new version, all outstanding log entries will be applied. In practical terms this means
+that Ra nodes can be upgraded one by one.
+
+In order to be upgradeable, the state machine implementation will need to handle the version
+bump in the form of a command that is passed to the `apply/3` callback:
+`{machine_version, OldVersion, NewVersion}`. This provides an
+opportunity to transform the state data into a new form, if needed. Note that the version
+bump may be for several versions so it may be necessary to handle multiple
+state transformations.
+
+
+#### Limitations
+
+Ra does not support the Erlang hot code swapping mechanism.
 
 
 ## Identity

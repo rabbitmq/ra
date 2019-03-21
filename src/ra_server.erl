@@ -24,7 +24,6 @@
          id/1,
          uid/1,
          leader_id/1,
-         machine/1,
          current_term/1,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -61,6 +60,10 @@
       stop_after => ra_index(),
       machine := ra_machine:machine(),
       machine_state := term(),
+      machine_version := ra_machine:version(),
+      machine_versions := [{ra_index(), ra_machine:version()}, ...],
+      effective_machine_version := ra_machine:version(),
+      effective_machine_module := module(),
       aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
@@ -87,7 +90,9 @@
                               noreply.
 
 -type command() :: {command_type(), command_meta(),
-                    UserCommand :: term(), command_reply_mode()} | noop.
+                    UserCommand :: term(), command_reply_mode()} |
+                   {noop, command_meta(),
+                    CurrentMachineVersion :: ra_machine:version()}.
 
 -type ra_msg() :: #append_entries_rpc{} |
                   {ra_server_id(), #append_entries_reply{}} |
@@ -157,7 +162,10 @@
                               tick_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer()}.
 
--export_type([ra_server_state/0,
+-type config() :: ra_server_config().
+
+-export_type([config/0,
+              ra_server_state/0,
               ra_state/0,
               ra_server_config/0,
               ra_msg/0,
@@ -196,6 +204,7 @@ init(#{id := Id,
                   {module, Mod, Args} ->
                       {machine, Mod, Args}
               end,
+
     SnapModule = ra_machine:snapshot_module(Machine),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
@@ -206,17 +215,24 @@ init(#{id := Id,
     LastApplied = ra_log_meta:fetch(UId, last_applied, 0),
     VotedFor = ra_log_meta:fetch(UId, voted_for, undefined),
 
-    {FirstIndex, Cluster0, MacState, SnapshotIndexTerm} =
+    LatestMacVer = ra_machine:version(Machine),
+
+    {FirstIndex, Cluster0, MacVer, MacState,
+     {SnapshotIdx, _} = SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
                 InitialMachineState = ra_machine:init(Machine, Name),
                 {0, make_cluster(Id, InitialNodes),
-                 InitialMachineState, {0, 0}};
-            {{Idx, Term, ClusterNodes}, MacSt} ->
+                 0, InitialMachineState, {0, 0}};
+            {#{index := Idx,
+               term := Term,
+               cluster := ClusterNodes,
+               machine_version := MacVersion}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
-                {Idx, Clu, MacSt, {Idx, Term}}
+                {Idx, Clu, MacVersion, MacSt, {Idx, Term}}
         end,
+    MacMod = ra_machine:which_module(Machine, MacVer),
 
     CommitIndex = max(LastApplied, FirstIndex),
 
@@ -239,15 +255,22 @@ init(#{id := Id,
       log => Log0,
       machine => Machine,
       machine_state => MacState,
-      aux_state => ra_machine:init_aux(Machine, Name),
+      machine_version => LatestMacVer,
+      machine_versions => [{SnapshotIdx, MacVer}],
+      effective_machine_version => MacVer,
+      effective_machine_module => MacMod,
+      %% aux state is transient and needs to be initialized every time
+      aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => []}.
 
 recover(#{log_id := LogId,
           commit_index := CommitIndex,
-          last_applied := LastApplied,
-          machine := Machine} = State0) ->
-    ?DEBUG("~s: recovering state machine from ~b to ~b~n",
-           [LogId, LastApplied, CommitIndex]),
+          machine_version := MacVer,
+          effective_machine_version := EffMacVer,
+          effective_machine_module := MacMod,
+          last_applied := LastApplied} = State0) ->
+    ?DEBUG("~s: recovering state machine version ~b:~b from index ~b to ~b~n",
+           [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex]),
     {#{log := Log0} = State, _, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
@@ -255,7 +278,7 @@ recover(#{log_id := LogId,
                          %% up a long list of effects than then
                          %% we throw away
                          %% on server startup (queue recovery)
-                         setelement(4, apply_with(Machine, E, S), [])
+                         setelement(4, apply_with(MacMod, E, S), [])
                  end,
                  State0, []),
     Log = ra_log:release_resources(1, Log0),
@@ -558,15 +581,18 @@ handle_leader(Msg, State) ->
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
-                 #{current_term := Term, votes := Votes,
+                 #{current_term := Term,
+                   votes := Votes,
+                   machine := Mac,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State, Effects} = make_all_rpcs(initialise_peers(State0)),
-            % Effects = ra_machine:leader_effects(Machine, MacState),
+            Noop = {noop, #{ts => os:system_time(millisecond)},
+                    ra_machine:version(Mac)},
             {leader, maps:without([votes, leader_id], State),
-             [{next_event, cast, {command, noop}} | Effects]};
+             [{next_event, cast, {command, Noop}} | Effects]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
@@ -853,8 +879,8 @@ handle_follower({_PeerId, #append_entries_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      last_index = LastIndex,
-                                      last_term = LastTerm},
+                                      meta = #{index := LastIndex,
+                                               term := LastTerm}},
                 State = #{log_id := LogId, current_term := CurTerm})
   when Term < CurTerm ->
     ?DEBUG("~s: install_snapshot old term ~b in ~b~n",
@@ -867,22 +893,19 @@ handle_follower(#install_snapshot_rpc{term = Term,
 %% need to check if it's the first or last rpc
 %% TODO: must abort pending if for some reason we need to do so
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      last_config = Cluster,
-                                      last_index = Idx,
-                                      last_term = SnapTerm,
+                                      meta = #{index := SnapIdx} = Meta,
                                       leader_id = LeaderId,
                                       chunk_state = {1, _ChunkFlag}} = Rpc,
                 #{log_id := LogId, log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
-  when Term >= CurTerm andalso Idx > LastApplied ->
+  when Term >= CurTerm andalso SnapIdx > LastApplied ->
     %% only begin snapshot procedure if Idx is higher than the last_applied
     %% index.
     ?DEBUG("~s: begin_accept snapshot at index ~b in term ~b~n",
-           [LogId, Idx, Term]),
+           [LogId, SnapIdx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SS} = ra_snapshot:begin_accept({Idx, SnapTerm, Cluster},
-                                        SnapState0),
+    {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
     {receive_snapshot, State0#{log => Log,
                                leader_id => LeaderId}, [{next_event, Rpc}]};
@@ -899,17 +922,18 @@ handle_follower(Msg, State) ->
     {follower, State, []}.
 
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
-                                              last_index = LastIndex,
-                                              last_term = LastTerm,
+                                              meta = #{index := LastIndex,
+                                                       term := LastTerm},
                                               chunk_state = {Num, ChunkFlag},
                                               data = Data},
                         #{id := Id, log_id := LogId, log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~s: receiving snapshot chunk: ~b / ~b~n",
+    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w~n",
            [LogId, Num, ChunkFlag]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
+                                               SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = LastTerm,
                                      last_index = LastIndex},
@@ -918,12 +942,12 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% this is the last chunk so we can "install" it
             Log = ra_log:install_snapshot({LastIndex, LastTerm},
                                           SnapState, Log0),
-            {{_, _, ClusterNodes}, MacState} = ra_log:recover_snapshot(Log),
+            {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
             State = State0#{log => Log,
                             current_term => Term,
                             commit_index => LastIndex,
                             last_applied => LastIndex,
-                            cluster => make_cluster(Id, ClusterNodes),
+                            cluster => make_cluster(Id, ClusterIds),
                             machine_state => MacState},
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
@@ -972,25 +996,27 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
     end.
 
 -spec tick(ra_server_state()) -> ra_effects().
-tick(#{machine := Machine, machine_state := MacState}) ->
+tick(#{effective_machine_module := MacMod,
+       machine_state := MacState}) ->
     Now = os:system_time(millisecond),
-    ra_machine:tick(Machine, Now, MacState).
+    ra_machine:tick(MacMod, Now, MacState).
 
 -spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
     {ra_server_state() | eol, ra_effects()}.
-handle_state_enter(RaftState, #{machine := Machine,
+handle_state_enter(RaftState, #{effective_machine_module := MacMod,
                                 machine_state := MacState} = State) ->
     {become(RaftState, State),
-     ra_machine:state_enter(Machine, RaftState, MacState)}.
+     ra_machine:state_enter(MacMod, RaftState, MacState)}.
 
 
 -spec overview(ra_server_state()) -> map().
-overview(#{log := Log, machine := Machine,
+overview(#{log := Log, effective_machine_module := MacMod,
            machine_state := MacState} = State) ->
     O = maps:with([uid, current_term, commit_index, last_applied,
-                   cluster, leader_id, voted_for], State),
+                   cluster, leader_id, voted_for,
+                   machine_version, effective_machine_version], State),
     LogOverview = ra_log:overview(Log),
-    MacOverview = ra_machine:overview(Machine, MacState),
+    MacOverview = ra_machine:overview(MacMod, MacState),
     O#{log => LogOverview,
        machine => MacOverview}.
 
@@ -1014,9 +1040,9 @@ is_fully_replicated(#{commit_index := CI} = State) ->
     end.
 
 handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
-                                   machine := Machine,
+                                   effective_machine_module := MacMod,
                                    machine_state := MacState0} = State0) ->
-    case ra_machine:handle_aux(Machine, RaftState, Type, Cmd, Aux0,
+    case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
                                Log0, MacState0) of
         {reply, Reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux},
@@ -1038,10 +1064,6 @@ log_id(#{log_id := Id}) -> Id.
 
 -spec uid(ra_server_state()) -> ra_uid().
 uid(#{uid := UId}) -> UId.
-
--spec machine(ra_server_state()) -> module().
-machine(#{machine := Machine}) ->
-    ra_machine:module(Machine).
 
 -spec leader_id(ra_server_state()) -> maybe(ra_server_id()).
 leader_id(State) ->
@@ -1078,7 +1100,7 @@ follower_catchup_cond(#append_entries_rpc{term = Term,
             {false, State0#{log => Log}}
     end;
 follower_catchup_cond(#install_snapshot_rpc{term = Term,
-                                            last_index = PLIdx},
+                                            meta = #{index := PLIdx}},
                       #{current_term := CurTerm,
                         log := Log} = State)
   when Term >= CurTerm ->
@@ -1263,12 +1285,15 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(), term(), ra_server_state()) ->
+-spec update_release_cursor(ra_index(),
+                            term(), ra_server_state()) ->
     {ra_server_state(), ra_effects()}.
 update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
+    MacVersion = index_machine_version(Index, State),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
+                                                  MacVersion,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
@@ -1398,6 +1423,7 @@ call_for_election(candidate, #{id := Id,
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
 call_for_election(pre_vote, #{id := Id,
                               log_id := LogId,
+                              machine_version := MacVer,
                               current_term := Term} = State0) ->
     ?DEBUG("~s: pre_vote election called for in term ~b~n", [LogId, Term]),
     Token = make_ref(),
@@ -1405,6 +1431,7 @@ call_for_election(pre_vote, #{id := Id,
     {LastIdx, LastTerm} = last_idx_term(State0),
     Reqs = [{PeerId, #pre_vote_rpc{term = Term,
                                    token = Token,
+                                   machine_version = MacVer,
                                    candidate_id = Id,
                                    last_log_index = LastIdx,
                                    last_log_term = LastTerm}}
@@ -1419,24 +1446,34 @@ call_for_election(pre_vote, #{id := Id,
 
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                          version = Version,
+                                         machine_version = TheirMacVer,
                                          token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
-                 #{current_term := CurTerm}= State0)
+                 #{current_term := CurTerm,
+                   machine_version := OurMacVer}= State0)
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
-        true when Version =< ?RA_PROTO_VERSION ->
-            ?DEBUG("~s: granting pre-vote for ~w with last indexterm ~w"
-                   " for term ~b previous term ~b~n",
-                   [log_id(State0), Cand, {LLIdx, LLTerm}, Term, CurTerm]),
-            {FsmState, State#{voted_for => Cand},
-             [{reply, pre_vote_result(Term, Token, true)}]};
-        true ->
+        true when Version > ?RA_PROTO_VERSION->
             ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b~n",
                    [log_id(State0), Cand, Version]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
+        true when OurMacVer =/= TheirMacVer->
+            ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
+                   " ours is ~b~n",
+                   [log_id(State0), Cand, TheirMacVer, OurMacVer]),
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
+        true ->
+            ?DEBUG("~s: granting pre-vote for ~w"
+                   " machine version (their:ours) ~b:~b"
+                   " with last indexterm ~w"
+                   " for term ~b previous term ~b~n",
+                   [log_id(State0), Cand, TheirMacVer, OurMacVer,
+                    {LLIdx, LLTerm}, Term, CurTerm]),
+            {FsmState, State#{voted_for => Cand},
+             [{reply, pre_vote_result(Term, Token, true)}]};
         false ->
             ?DEBUG("~s: declining pre-vote for ~w for term ~b,"
                    " candidate last log index term was: ~w~n"
@@ -1591,19 +1628,21 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 
-apply_to(ApplyTo, #{machine := Machine} = State, Effs) ->
+apply_to(ApplyTo, #{effective_machine_module := MachineMod} = State, Effs) ->
     apply_to(ApplyTo,
              fun(E, S) ->
-                     apply_with(Machine, E, S)
+                     apply_with(MachineMod, E, S)
              end, State, Effs).
 
 apply_to(ApplyTo, ApplyFun, State, Effs) ->
     apply_to(ApplyTo, ApplyFun, 0, #{}, Effs, State).
 
-apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
+apply_to(ApplyTo, ApplyFun, NumApplied0, Notifys0, Effects0,
          #{last_applied := LastApplied,
+           machine_version := MacVer,
+           effective_machine_version := EffMacVer,
            machine_state := MacState0} = State0)
-  when ApplyTo > LastApplied ->
+  when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
     From = LastApplied + 1,
     To = min(From + 1024, ApplyTo),
     case fetch_entries(From, To, State0) of
@@ -1611,15 +1650,15 @@ apply_to(ApplyTo, ApplyFun, NumApplied, Notifys0, Effects0,
             %% reverse list before consing the notifications to ensure
             %% notifications are processed first
             FinalEffs = make_notify_effects(Notifys0, lists:reverse(Effects0)),
-            {State, FinalEffs, NumApplied};
+            {State, FinalEffs, NumApplied0};
         %% assert first item read is from
         {[{From, _, _} | _] = Entries, State1} ->
             {AppliedTo, State, MacState, Effects, Notifys} =
                 lists:foldl(ApplyFun, {LastApplied, State1, MacState0,
                                        Effects0, Notifys0}, Entries),
-            % {AppliedTo,_, _} = lists:last(Entries),
-            % ?INFO("applied: ~p ~nAfter: ~p", [Entries, MacState]),
-            apply_to(ApplyTo, ApplyFun, NumApplied + length(Entries),
+            %% due to machine versioning all entries may not have been applied
+            NumApplied = NumApplied0 + (AppliedTo - LastApplied),
+            apply_to(ApplyTo, ApplyFun, NumApplied,
                      Notifys, Effects, State#{last_applied => AppliedTo,
                                               machine_state => MacState})
     end;
@@ -1634,14 +1673,22 @@ make_notify_effects(Nots, Prior) ->
                       [{notify, Pid, lists:reverse(Corrs)} | Acc]
               end, Prior, Nots).
 
-apply_with(Machine,
-           {Idx, Term, {'$usr', #{ts := Ts} = CmdMeta, Cmd, ReplyType}},
-           {_, State, MacSt, Effects, Notifys0}) ->
-    %% augment the meta data structure with index and term
-    Meta = #{index => Idx,
-             term => Term,
-             system_time => Ts},
-    case ra_machine:apply(Machine, Meta, Cmd, MacSt) of
+apply_with(_MacMod, _Cmd,
+           {LastAppliedIdx,
+            State = #{machine_version := MacVer,
+                      effective_machine_version := Effective},
+            MacSt, Effects, Notifys})
+      when MacVer < Effective ->
+    %% we cannot apply any further entries
+    {LastAppliedIdx, State, MacSt, Effects, Notifys};
+apply_with(Module,
+           {Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
+           {_,
+            State = #{effective_machine_version := MacVer},
+            MacSt, Effects, Notifys0}) ->
+    %% augment the meta data structure
+    Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+    case ra_machine:apply(Module, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
             {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
                                              Effects, Notifys0),
@@ -1651,7 +1698,7 @@ apply_with(Machine,
                                              Effects, Notifys0),
             {Idx, State, NextMacSt, ReplyEffs, Notifys}
     end;
-apply_with({machine, MacMod, _}, % Machine
+apply_with(MacMod,
            {Idx, _, {'$ra_query', CmdMeta, QueryFun, ReplyType}},
            {_, State, MacSt, Effects0, Notifys0}) ->
     %% TODO: are all queries calls?
@@ -1659,7 +1706,7 @@ apply_with({machine, MacMod, _}, % Machine
     {Effects, Notifys} = add_reply(CmdMeta, Result, ReplyType,
                                    Effects0, Notifys0),
     {Idx, State, MacSt, Effects, Notifys};
-apply_with(_Machine,
+apply_with(_,
            {Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
@@ -1679,21 +1726,59 @@ apply_with(_Machine,
                     %% else just enable further cluster changes again
                     State0#{cluster_change_permitted => true}
             end,
-
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
     {Idx, State1, MacSt, Effects1, Notifys};
-apply_with(_, % Machine
-           {Idx, Term, noop}, % Idx
-           {_, State0 = #{current_term := Term,
-                          log_id := LogId}, MacSt, Effects, Notifys}) ->
-    ?DEBUG("~s: enabling ra cluster changes in ~b~n", [LogId, Term]),
-    State = State0#{cluster_change_permitted => true},
-    {Idx, State, MacSt, Effects, Notifys};
-apply_with(_, {Idx, _, noop},
-           {_, State, MacSt, Effects, Notifys}) ->
-    %% don't log these as unhandled
-    {Idx, State, MacSt, Effects, Notifys};
+apply_with(_MacMod,
+           {Idx, Term, {noop, CmdMeta, NextMacVer}},
+           {LastAppliedIdx,
+            State0 = #{current_term := CurrentTerm,
+                       machine := Machine,
+                       machine_version := MacVer,
+                       %% active machine versions and their index (from last snapshot)
+                       machine_versions := MacVersions,
+                       cluster_change_permitted := ClusterChangePerm0,
+                       effective_machine_version := OldMacVer,
+                       log_id := LogId}, MacSt, Effects, Notifys}) ->
+    ClusterChangePerm = case CurrentTerm of
+                            Term ->
+                                ?DEBUG("~s: enabling ra cluster changes in"
+                                       " ~b~n", [LogId, Term]),
+                                true;
+                            _ -> ClusterChangePerm0
+                        end,
+    %% can we understand the next machine version
+    IsOk = MacVer >= NextMacVer,
+    case NextMacVer > OldMacVer of
+        true when IsOk ->
+            %% discover the next module to use
+            Module = ra_machine:which_module(Machine, NextMacVer),
+            %% enable cluster change if the noop command is for the current term
+            State = State0#{cluster_change_permitted => ClusterChangePerm,
+                            effective_machine_version => NextMacVer,
+                            %% record this machine version "term"
+                            machine_versions => [{Idx, MacVer} | MacVersions],
+                            effective_machine_module => Module},
+            Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+            apply_with(Module, {Idx, Term,
+                                {'$usr', Meta,
+                                 {machine_version, OldMacVer, NextMacVer}, none}},
+                       {LastAppliedIdx, State, MacSt, Effects, Notifys});
+        true ->
+            %% we cannot make progress as we don't understand the new
+            %% machine version so we
+            %% update the effective machine version to stop any further entries
+            %% being applied. This is ok as a restart will be needed to
+            %% learn the new machine version which will reset it
+            ?DEBUG("~s: unknown machine version ~b current ~b"
+                   " cannot apply any further entries~n",
+                   [LogId, NextMacVer, MacVer]),
+            State = State0#{effective_machine_version => NextMacVer},
+            {LastAppliedIdx, State, MacSt, Effects, Notifys};
+        false ->
+            State = State0#{cluster_change_permitted => ClusterChangePerm},
+            {Idx, State, MacSt, Effects, Notifys}
+    end;
 apply_with(Machine,
            {Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
            {_, State0, MacSt, Effects0, Notifys0}) ->
@@ -1711,6 +1796,17 @@ apply_with(_, {Idx, _, _} = Cmd, Acc) ->
     ?WARN("~s: apply_with: unhandled command: ~W~n",
           [log_id(element(2, Acc)), Cmd, 10]),
     setelement(1, Acc, Idx).
+
+augment_command_meta(Idx, Term, MacVer, CmdMeta) ->
+    maps:fold(fun (ts, V, Acc) ->
+                      %% rename from compact key name
+                      Acc#{system_time => V};
+                  (K, V, Acc) ->
+                      Acc#{K => V}
+              end, #{index => Idx,
+                     machine_version => MacVer,
+                     term => Term},
+              CmdMeta).
 
 add_next_cluster_change(Effects,
                         #{pending_cluster_changes := [C | Rest]} = State) ->
@@ -1901,12 +1997,40 @@ drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
 cast_reply(From, To, Msg) ->
     {cast, To, {From, Msg}}.
 
+index_machine_version(Idx, #{machine_versions := Versions}) ->
+    %% scan for versions
+    index_machine_version0(Idx, Versions).
+
+index_machine_version0(Idx, []) ->
+    %% this _should_ never happen as you should never get a release cursor
+    %% for an index that is lower than the last snapshot index
+    exit({machine_version_for_index_not_known, {index, Idx}});
+index_machine_version0(Idx, [{MIdx, V} | _])
+  when Idx >= MIdx -> V;
+index_machine_version0(Idx, [_ | Rem]) ->
+    index_machine_version0(Idx, Rem).
+
 %%% ===================
 %%% Internal unit tests
 %%% ===================
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+index_machine_version_test() ->
+    S0 = #{machine_versions => [{0, 0}]},
+    ?assertEqual(0, index_machine_version(0, S0)),
+    ?assertEqual(0, index_machine_version(1123456, S0)),
+
+    S1 = #{machine_versions => [{100, 4}, {50, 3}, {25, 2}]},
+    ?assertEqual(4, index_machine_version(101, S1)),
+    ?assertEqual(4, index_machine_version(100, S1)),
+    ?assertEqual(3, index_machine_version(99, S1)),
+    ?assertEqual(2, index_machine_version(49, S1)),
+    ?assertEqual(2, index_machine_version(25, S1)),
+    ?assertExit({machine_version_for_index_not_known, _},
+                index_machine_version(24, S1)),
+    ok.
 
 agreed_commit_test() ->
     % one server
