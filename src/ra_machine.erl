@@ -238,7 +238,9 @@
 %% This is only called on startup only if there isn't yet a snapshot to recover
 %% from. Once a snapshot has been taken this is never called again.
 -spec init(machine(), atom()) -> state().
-init({machine, Mod, Args}, Name) ->
+init({machine, _, Args} = Machine, Name) ->
+    %% init always dispatches to the first version
+    Mod = which_module(Machine, 0),
     Mod:init(Args#{name => Name}).
 
 -spec apply(module(), command_meta_data(), command(), State) ->

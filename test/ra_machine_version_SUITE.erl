@@ -24,7 +24,8 @@ all_tests() ->
      unversioned_machine_never_sees_machine_version_command,
      unversioned_can_change_to_versioned,
      server_upgrades_machine_state_on_noop_command,
-     lower_version_does_not_apply_until_upgraded
+     lower_version_does_not_apply_until_upgraded,
+     server_applies_with_new_module
      % snapshot_persists_machine_version
     ].
 
@@ -216,6 +217,56 @@ server_upgrades_machine_state_on_noop_command(Config) ->
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
     {ok, {_, state_v2}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    ok.
+
+server_applies_with_new_module(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, apply, fun (_, dummy, init_state) ->
+                                    {init_state, ok}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    _ = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    % need to execute a command here to ensure the noop command has been fully
+    % applied. The wal fsync could take a few ms causing the race
+    {ok, ok, _} = ra:process_command(ServerId, dummy),
+    %% assert state_v1
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId,
+                                             fun (S) ->
+                                                    ct:pal("leader_query ~w", [S]),
+                                                   S
+                                             end),
+
+    ok = ra:stop_server(ServerId),
+    %% simulate module upgrade
+    Mod0 = mod_v0,
+    meck:new(Mod0, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> exit(unexpected) end),
+    meck:expect(Mod0, init, fun (_) -> init_state end),
+    meck:expect(Mod0, apply, fun (_, dummy, init_state) ->
+                                    {init_state, ok}
+                             end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (0) -> Mod0;
+                                       (1) -> Mod
+                                    end),
+    meck:expect(Mod, apply, fun (_, dummy, state_v1) ->
+                                    {state_v1, ok};
+                                (_, dummy2, state_v1) ->
+                                    {state_v1, ok};
+                                (_, {machine_version, 0, 1}, init_state) ->
+                                    {state_v1, ok}
+                            end),
+    ok = ra:restart_server(ServerId),
+    %% increment version
+    {ok, ok, _} = ra:process_command(ServerId, dummy2),
+    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    ok = ra:stop_server(ServerId),
+    ok = ra:restart_server(ServerId),
+    _ = ra:members(ServerId),
+    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
     ok.
 
 lower_version_does_not_apply_until_upgraded(Config) ->
