@@ -265,6 +265,7 @@ server_applies_with_new_module(Config) ->
     {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
     ok = ra:stop_server(ServerId),
     ok = ra:restart_server(ServerId),
+    _ = ra:members(ServerId),
     {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
     ok.
 
