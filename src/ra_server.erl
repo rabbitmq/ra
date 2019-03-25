@@ -199,7 +199,6 @@
         term
     }).
 
-
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
 name(ClusterName, UniqueSuffix) ->
     list_to_atom("ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix).
@@ -318,7 +317,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
-            {State3, Effects1} = maybe_apply_read_only_queries(State2, Effects0),
+            {State3, Effects1} = apply_waiting_read_only_queries(State2, Effects0),
             {State, More, RpcEffects0} =
                 make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
@@ -2154,41 +2153,54 @@ read_only_heartbeat_quorum(Ref, PeerId, #{waiting_ro_heartbeats := WH0,
             end
     end.
 
+-spec apply_or_schedule_read_only_query(read_only_query_ref(),
+                                        ra_server_state(),
+                                        ra_effects()) ->
+    {ra_server_state(), ra_effects()}.
 apply_or_schedule_read_only_query({From, QueryFun, ReadIndex} = Ref,
-                      #{id := Id,
-                        last_applied := ApplyIndex,
-                        machine_state := MacState,
-                        machine := {machine, MacMod, _},
-                        waiting_apply_index := Waiting} = State,
-                      Effects) ->
+                                  #{id := Id,
+                                    last_applied := ApplyIndex,
+                                    machine_state := MacState,
+                                    machine := {machine, MacMod, _},
+                                    waiting_apply_index := Waiting} = State,
+                                  Effects) ->
     case ApplyIndex >= ReadIndex of
         true ->
-            Result = ra_machine:query(MacMod, QueryFun, MacState),
-            Reply = {ok, Result, Id},
-            {State, [{reply, From, Reply} | Effects]};
+            {State, [read_only_query_reply(Ref, State) | Effects]};
         false ->
             {State#{waiting_apply_index => Waiting#{Ref => ReadIndex}}, Effects}
     end.
 
-maybe_apply_read_only_queries(#{id := Id,
-                                last_applied := ApplyIndex,
-                                waiting_apply_index := Waiting0,
-                                machine_state := MacState,
-                                machine := {machine, MacMod, _}} = State,
-                              Effects0) ->
-    %% TODO: optimise waiting_apply_index data structure
-    {Waiting1, Effects1} = maps:fold(
-        fun({From, QueryFun, ReadIndex} = Ref, ReadIndex, {Waiting, Effects})
-        when ReadIndex =< ApplyIndex ->
-            Result = ra_machine:query(MacMod, QueryFun, MacState),
-            Reply = {ok, Result, Id},
-            {maps:remove(Ref, Waiting),
-             [{reply, From, Reply} | Effects]};
-           (_, _, {Waiting, Effects}) -> {Waiting, Effects}
-        end,
-        {Waiting0, Effects0},
-        Waiting0),
+-spec apply_waiting_read_only_queries(ra_server_state(), ra_effects()) ->
+    {ra_server_state(), ra_effects()}.
+apply_waiting_read_only_queries(#{last_applied := ApplyIndex,
+                                  waiting_apply_index := Waiting0} = State,
+                                Effects0) ->
+    ToReply = maps:filter(fun(_, ReadIndex) ->
+                              ReadIndex =< ApplyIndex
+                          end,
+                          Waiting0),
+    Keys = maps:keys(ToReply),
+
+    Waiting1 = maps:without(maps:keys(ToReply), Waiting0),
+    Effects1 =
+        lists:map(fun(Ref) ->
+                      read_only_query_reply(Ref, State)
+                  end,
+                  Keys)
+        ++
+        Effects0,
+
     {State#{waiting_apply_index => Waiting1}, Effects1}.
+
+-spec read_only_query_reply(read_only_query_ref(), ra_server_state()) -> ra_effect().
+read_only_query_reply({From, QueryFun, _ReadIndex},
+                      #{id := Id,
+                        machine_state := MacState,
+                        machine := {machine, MacMod, _}}) ->
+    Result = ra_machine:query(MacMod, QueryFun, MacState),
+    {reply, From, {ok, Result, Id}}.
+
 %%% ===================
 %%% Internal unit tests
 %%% ===================
