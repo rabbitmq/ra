@@ -2157,11 +2157,8 @@ read_only_heartbeat_quorum(Ref, PeerId, #{waiting_ro_heartbeats := WH0,
                                         ra_server_state(),
                                         ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_or_schedule_read_only_query({From, QueryFun, ReadIndex} = Ref,
-                                  #{id := Id,
-                                    last_applied := ApplyIndex,
-                                    machine_state := MacState,
-                                    machine := {machine, MacMod, _},
+apply_or_schedule_read_only_query({_, _, ReadIndex} = Ref,
+                                  #{last_applied := ApplyIndex,
                                     waiting_apply_index := Waiting} = State,
                                   Effects) ->
     case ApplyIndex >= ReadIndex of
