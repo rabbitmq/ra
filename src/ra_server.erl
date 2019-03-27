@@ -40,7 +40,7 @@
 -type ra_await_condition_fun() ::
     fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
 
--type read_only_query_ref() :: {term(), ra:query_fun(), ra_index()}.
+-type consistent_query_ref() :: {term(), ra:query_fun(), ra_index()}.
 
 -type ra_server_state() ::
     #{id := ra_server_id(),
@@ -70,8 +70,8 @@
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
-      waiting_apply_index => #{read_only_query_ref() => ra_index()},
-      waiting_ro_heartbeats => #{read_only_query_ref() => #{ra_server_id() => boolean()}}
+      waiting_apply_index => #{consistent_query_ref() => ra_index()},
+      waiting_heartbeats => #{consistent_query_ref() => #{ra_server_id() => boolean()}}
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -187,13 +187,13 @@
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
 
--record(read_only_heartbeat, {
+-record(heartbeat_rpc, {
         ref,
         term,
         leader_id
     }).
 
--record(read_only_heartbeat_reply, {
+-record(heartbeat_reply, {
         success,
         ref,
         term
@@ -279,7 +279,7 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
       waiting_apply_index => #{},
-      waiting_ro_heartbeats => #{}}.
+      waiting_heartbeats => #{}}.
 
 recover(#{log_id := LogId,
           commit_index := CommitIndex,
@@ -317,7 +317,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
-            {State3, Effects1} = apply_waiting_read_only_queries(State2, Effects0),
+            {State3, Effects1} = apply_waiting_consistent_queries(State2, Effects0),
             {State, More, RpcEffects0} =
                 make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
@@ -548,40 +548,40 @@ handle_leader(#append_entries_rpc{leader_id = LeaderId},
                 id := Id} = State0) ->
     Reply = append_entries_reply(CurTerm, false, State0),
     {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
-handle_leader({read_only_query, From, QueryFun},
+handle_leader({consistent_query, From, QueryFun},
               #{commit_index := CommitIndex} = State0) ->
     Ref = {From, QueryFun, CommitIndex},
-    {State1, Effects} = make_read_only_heartbeat_effects(Ref, State0),
+    {State1, Effects} = make_heartbeat_rpc_effects(Ref, State0),
     {leader, State1, Effects};
 %% Lihtweight version of append_entries_rpc
-handle_leader(#read_only_heartbeat{term = Term} = Msg,
+handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm, log_id := LogId} = State0) when CurTerm < Term ->
-    ?INFO("~s: leader saw read_only_heartbeat from ~w for term ~b "
+    ?INFO("~s: leader saw heartbeat_rpc from ~w for term ~b "
           "abdicates term: ~b!~n",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
-handle_leader(#read_only_heartbeat{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_leader(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
               #{current_term := CurTerm, id := Id} = State) when CurTerm > Term ->
-    Reply = read_only_heartbeat_reply(CurTerm, Ref, false),
+    Reply = heartbeat_reply(CurTerm, Ref, false),
     {leader, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_leader(#read_only_heartbeat{term = Term},
+handle_leader(#heartbeat_rpc{term = Term},
               #{current_term := CurTerm, log_id := LogId}) when CurTerm == Term ->
-    ?ERR("~s: leader saw read_only_heartbeat for same term ~b"
+    ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
-handle_leader({PeerId, #read_only_heartbeat_reply{success = true, ref = Ref, term = Term}},
+handle_leader({PeerId, #heartbeat_reply{success = true, ref = Ref, term = Term}},
               #{current_term := CurTerm} = State) when CurTerm >= Term  ->
-    case read_only_heartbeat_quorum(Ref, PeerId, State) of
+    case heartbeat_rpc_quorum(Ref, PeerId, State) of
         {true, State1, Effects} ->
-            {State2, Effects1} = apply_or_schedule_read_only_query(Ref, State1, Effects),
+            {State2, Effects1} = apply_or_schedule_consistent_query(Ref, State1, Effects),
             {leader, State2, Effects1};
         {false, State1, Effects} ->
             {leader, State1, Effects}
     end;
-handle_leader({_PeerId, #read_only_heartbeat_reply{success = false, term = Term}},
+handle_leader({_PeerId, #heartbeat_reply{success = false, term = Term}},
               #{current_term := CurTerm, log_id := LogId} = State0) when Term > CurTerm ->
-    ?NOTICE("~s leader saw read_only_heartbeat_reply for term ~b "
+    ?NOTICE("~s leader saw heartbeat_reply for term ~b "
                     "abdicates term: ~b!~n",
                     [LogId, Term, CurTerm]),
     {follower, update_term(Term, State0), []};
@@ -670,18 +670,18 @@ handle_candidate(#append_entries_rpc{leader_id = LeaderId},
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
-handle_candidate(#read_only_heartbeat{ term = Term } = Msg,
+handle_candidate(#heartbeat_rpc{ term = Term } = Msg,
                  #{current_term := CurTerm} = State0) when Term >= CurTerm ->
     State = update_meta(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
-handle_candidate(#read_only_heartbeat{ ref = Ref, leader_id = LeaderId},
+handle_candidate(#heartbeat_rpc{ ref = Ref, leader_id = LeaderId},
                  #{current_term := CurTerm} = State) ->
     % term must be older return success=false
-    Reply = read_only_heartbeat_reply(CurTerm, Ref, false),
+    Reply = heartbeat_reply(CurTerm, Ref, false),
     {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
-handle_candidate({_PeerId, #read_only_heartbeat_reply{success = false, term = Term}},
+handle_candidate({_PeerId, #heartbeat_reply{success = false, term = Term}},
                  #{log_id := LogId, current_term := CurTerm} = State0) when Term > CurTerm ->
-    ?INFO("~s: candidate read_only_heartbeat_reply with higher"
+    ?INFO("~s: candidate heartbeat_reply with higher"
           " term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
     State = update_meta(Term, undefined, State0),
@@ -738,7 +738,7 @@ handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
 
-handle_pre_vote(#read_only_heartbeat{ term = Term } = Msg,
+handle_pre_vote(#heartbeat_rpc{ term = Term } = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
@@ -903,15 +903,15 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
            " ~b but current term is: ~b~n",
           [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#read_only_heartbeat{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_follower(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
                 #{current_term := CurTerm, id := Id} = State0) when Term >= CurTerm ->
     State1 = update_term(Term, State0),
     State2 = State1#{leader_id => LeaderId},
-    Reply = read_only_heartbeat_reply(Term, Ref, true),
+    Reply = heartbeat_reply(Term, Ref, true),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#read_only_heartbeat{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_follower(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
                 #{id := Id} = State)->
-    Reply = read_only_heartbeat_reply(Term, Ref, false),
+    Reply = heartbeat_reply(Term, Ref, false),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0}) ->
@@ -968,7 +968,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
 handle_follower({_PeerId, #append_entries_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
-handle_follower({_PeerId, #read_only_heartbeat_reply{ term = Term }},
+handle_follower({_PeerId, #heartbeat_reply{ term = Term }},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
@@ -2089,6 +2089,7 @@ drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
 cast_reply(From, To, Msg) ->
     {cast, To, {From, Msg}}.
 
+
 index_machine_version(Idx, #{machine_versions := Versions}) ->
     %% scan for versions
     index_machine_version0(Idx, Versions).
@@ -2105,28 +2106,32 @@ index_machine_version0(Idx, [_ | Rem]) ->
 read_only_heartbeat_reply(Term, Ref, Success) ->
     #read_only_heartbeat_reply{term = Term, ref = Ref, success = Success}.
 
-make_read_only_heartbeat_effects(Ref, #{waiting_ro_heartbeats := WH0} = State) ->
+heartbeat_reply(Term, Ref, Success) ->
+    #heartbeat_reply{term = Term, ref = Ref, success = Success}.
+
+
+make_heartbeat_rpc_effects(Ref, #{waiting_heartbeats := WH0} = State) ->
     PeerIds = peer_ids(State),
     case PeerIds of
         [] ->
-            apply_or_schedule_read_only_query(Ref, State, []);
+            apply_or_schedule_consistent_query(Ref, State, []);
         _ ->
-            Effects = read_only_heartbeat_effects(PeerIds, Ref, State),
+            Effects = heartbeat_rpc_effects(PeerIds, Ref, State),
             WaitingPeers = maps:from_list([{PeerId, false} || PeerId <- PeerIds]),
             WH1 = WH0#{ Ref => WaitingPeers},
-            {State#{waiting_ro_heartbeats => WH1}, Effects}
+            {State#{waiting_heartbeats => WH1}, Effects}
     end.
 
-read_only_heartbeat_effects(PeerIds, Ref, #{current_term := Term, id := Id}) ->
+heartbeat_rpc_effects(PeerIds, Ref, #{current_term := Term, id := Id}) ->
     lists:map(fun(PeerId) ->
-        {send_rpc, PeerId, #read_only_heartbeat{ref = Ref,
+        {send_rpc, PeerId, #heartbeat_rpc{ref = Ref,
                                                 term = Term,
                                                 leader_id = Id}}
     end,
     PeerIds).
 
-read_only_heartbeat_quorum(Ref, PeerId, #{waiting_ro_heartbeats := WH0,
-                                          cluster := Cluster} = State) ->
+heartbeat_rpc_quorum(Ref, PeerId, #{waiting_heartbeats := WH0,
+                                    cluster := Cluster} = State) ->
     case {maps:get(Ref, WH0, none), maps:get(PeerId, Cluster, none)} of
         %% Old message. Do nothing
         {none, _} -> {false, State, []};
@@ -2146,31 +2151,31 @@ read_only_heartbeat_quorum(Ref, PeerId, #{waiting_ro_heartbeats := WH0,
             Confirmed = maps:filter(fun(_, Success) -> Success end, WaitingPeers1),
             case Confirmed >= Quorum of
                 true ->
-                    {true, State#{waiting_ro_heartbeats => maps:remove(Ref, WH0)}, []};
+                    {true, State#{waiting_heartbeats => maps:remove(Ref, WH0)}, []};
                 false ->
-                    Effects = read_only_heartbeat_effects(MissingPeerIds, Ref, State),
-                    {false, State#{waiting_ro_heartbeats => WH0#{Ref => WaitingPeers1}}, Effects}
+                    Effects = heartbeat_rpc_effects(MissingPeerIds, Ref, State),
+                    {false, State#{waiting_heartbeats => WH0#{Ref => WaitingPeers1}}, Effects}
             end
     end.
 
--spec apply_or_schedule_read_only_query(read_only_query_ref(),
+-spec apply_or_schedule_consistent_query(consistent_query_ref(),
                                         ra_server_state(),
                                         ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_or_schedule_read_only_query({_, _, ReadIndex} = Ref,
+apply_or_schedule_consistent_query({_, _, ReadIndex} = Ref,
                                   #{last_applied := ApplyIndex,
                                     waiting_apply_index := Waiting} = State,
                                   Effects) ->
     case ApplyIndex >= ReadIndex of
         true ->
-            {State, [read_only_query_reply(Ref, State) | Effects]};
+            {State, [consistent_query_reply(Ref, State) | Effects]};
         false ->
             {State#{waiting_apply_index => Waiting#{Ref => ReadIndex}}, Effects}
     end.
 
--spec apply_waiting_read_only_queries(ra_server_state(), ra_effects()) ->
+-spec apply_waiting_consistent_queries(ra_server_state(), ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_waiting_read_only_queries(#{last_applied := ApplyIndex,
+apply_waiting_consistent_queries(#{last_applied := ApplyIndex,
                                   waiting_apply_index := Waiting0} = State,
                                 Effects0) ->
     ToReply = maps:filter(fun(_, ReadIndex) ->
@@ -2182,7 +2187,7 @@ apply_waiting_read_only_queries(#{last_applied := ApplyIndex,
     Waiting1 = maps:without(maps:keys(ToReply), Waiting0),
     Effects1 =
         lists:map(fun(Ref) ->
-                      read_only_query_reply(Ref, State)
+                      consistent_query_reply(Ref, State)
                   end,
                   Keys)
         ++
@@ -2190,8 +2195,8 @@ apply_waiting_read_only_queries(#{last_applied := ApplyIndex,
 
     {State#{waiting_apply_index => Waiting1}, Effects1}.
 
--spec read_only_query_reply(read_only_query_ref(), ra_server_state()) -> ra_effect().
-read_only_query_reply({From, QueryFun, _ReadIndex},
+-spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
+consistent_query_reply({From, QueryFun, _ReadIndex},
                       #{id := Id,
                         machine_state := MacState,
                         machine := {machine, MacMod, _}}) ->

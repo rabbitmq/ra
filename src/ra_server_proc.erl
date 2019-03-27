@@ -140,16 +140,16 @@ cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_server_id(), query_fun(),
-            local | consistent | leader, timeout()) ->
+            local | consistent | leader | command, timeout()) ->
     ra_server_proc:ra_leader_call_ret(term())
     | {ok, Reply :: term(), ra_server_id() | not_known}.
 query(ServerRef, QueryFun, local, Timeout) ->
     statem_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, leader, Timeout) ->
     leader_call(ServerRef, {local_query, QueryFun}, Timeout);
-query(ServerRef, QueryFun, read_only, Timeout) ->
-    leader_call(ServerRef, {read_only_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
+    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout);
+query(ServerRef, QueryFun, command, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
 
@@ -328,11 +328,11 @@ leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
-leader({call, From}, {read_only_query, QueryFun},
+leader({call, From}, {consistent_query, QueryFun},
        #state{server_state = ServerState0} = State0) ->
     %% TODO: make sure there is a command in the current term
     {leader, ServerState1, Effects} =
-        ra_server:handle_leader({read_only_query, From, QueryFun},
+        ra_server:handle_leader({consistent_query, From, QueryFun},
                                 ServerState0),
     {State1, Actions} =
         ?HANDLE_EFFECTS(Effects, {call, From},
@@ -1229,6 +1229,7 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
             {keep_state,
              State#state{pending_commands = [{From, Msg} | Pending]}};
         _ when Leader =/= undefined ->
+            % rabbit_log:error("Redirect to ~p from ~p", [Leader, node()]),
             {keep_state, State, {reply, From, {redirect, Leader}}}
     end.
 

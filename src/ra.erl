@@ -23,8 +23,6 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
-         read_only_query/2,
-         read_only_query/3,
          % cluster operations
          start_cluster/1,
          start_cluster/2,
@@ -636,23 +634,12 @@ leader_query(ServerRef, QueryFun) ->
 leader_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
 
-
--spec read_only_query(ServerId :: ra_server_id(), QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
-read_only_query(ServerRef, QueryFun) ->
-    read_only_query(ServerRef, QueryFun, ?DEFAULT_TIMEOUT).
-
--spec read_only_query(ServerId :: ra_server_id(),
-                      QueryFun :: query_fun(),
-                      Timeout :: timeout()) ->
-    {ok, Reply :: term(), ra_server_id() | not_known}.
-read_only_query(ServerRef, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerRef, QueryFun, read_only, Timeout).
-
 %% @doc Query the state machine
-%% This allows a caller to query the state machine by appending the query
-%% to the log and returning the result once applied. This guarantees the
-%% result is consistent.
+%% This allows a caller to query the state machine on the leader node with
+%% an additional heartbeat to check that the node is still the leader.
+%% Consistency guarantee is that the query will return result containing
+%% at least all changes, committed before this query is issued.
+%% This may include changes which were committed while the query is running.
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun :: query_fun()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.
