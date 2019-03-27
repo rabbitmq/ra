@@ -31,7 +31,7 @@ all_tests() ->
      members,
      consistent_query,
      consistent_query_stale,
-     read_only_query_stale,
+     command_query_stale,
      server_catches_up,
      snapshot_installation,
      snapshot_installation_with_call_crash,
@@ -368,6 +368,34 @@ local_query_stale(Config) ->
     ?assertNotMatch(LeaderV, NonLeaderV),
     terminate_cluster(Cluster).
 
+command_query_stale(Config) ->
+    [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                               add_machine()),
+    {ok, 0, _} = ra_server_proc:query(B, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
+    {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+    {ok, 5, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
+
+    NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
+    ra:stop_server(NonLeader),
+
+    Correlation = make_ref(),
+    [ra:pipeline_command(Leader, 1, Correlation) || _ <- lists:seq(1, 5000)],
+
+    wait_for_applied({Correlation, 5005}),
+
+    ra:restart_server(NonLeader),
+
+    {ok, NonLeaderV, _} = ra_server_proc:query(NonLeader, fun(S) -> S end, command, 100000),
+    {ok, LeaderV, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
+    ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
+    ?assertMatch(LeaderV, NonLeaderV),
+    {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
+    {ok, V, _} = ra_server_proc:query(NonLeader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
+    {ok, V, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
+    {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
+    ?assertNotMatch(Index, IndexAfter),
+    terminate_cluster(Cluster).
+
 consistent_query_stale(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                add_machine()),
@@ -385,41 +413,13 @@ consistent_query_stale(Config) ->
 
     ra:restart_server(NonLeader),
 
-    {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, fun(S) -> S end, 100000),
+    {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
     {ok, LeaderV, _} = ra:consistent_query(Leader, fun(S) -> S end),
     ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
     ?assertMatch(LeaderV, NonLeaderV),
     {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
     {ok, V, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
     {ok, V, _} = ra:consistent_query(Leader, fun(S) -> S end),
-    {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
-    ?assertNotMatch(Index, IndexAfter),
-    terminate_cluster(Cluster).
-
-read_only_query_stale(Config) ->
-    [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
-                                               add_machine()),
-    {ok, 0, _} = ra:read_only_query(B, fun(S) -> S end),
-    {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
-    {ok, 5, _} = ra:read_only_query(Leader, fun(S) -> S end),
-
-    NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
-    ra:stop_server(NonLeader),
-
-    Correlation = make_ref(),
-    [ra:pipeline_command(Leader, 1, Correlation) || _ <- lists:seq(1, 5000)],
-
-    wait_for_applied({Correlation, 5005}),
-
-    ra:restart_server(NonLeader),
-
-    {ok, NonLeaderV, _} = ra:read_only_query(NonLeader, fun(S) -> S end),
-    {ok, LeaderV, _} = ra:read_only_query(Leader, fun(S) -> S end),
-    ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
-    ?assertMatch(LeaderV, NonLeaderV),
-    {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
-    {ok, V, _} = ra:read_only_query(NonLeader, fun(S) -> S end),
-    {ok, V, _} = ra:read_only_query(Leader, fun(S) -> S end),
     {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
     ?assertMatch(Index, IndexAfter),
     terminate_cluster(Cluster).
