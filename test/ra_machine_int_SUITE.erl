@@ -329,24 +329,35 @@ timer_effect(Config) ->
     Self = self(),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, cmd, State) ->
+    meck:expect(Mod, apply, fun (_, {cmd, Name}, State) ->
                                     %% timer for 1s
-                                    {State, ok, {timer, 1000}};
-                                (_, timeout, State) ->
-                                    {State, ok, {send_msg, Self, got_timeout}}
+                                    {State, ok, {timer, Name, 1000}};
+                                (_, {timeout, Name}, State) ->
+                                    {State, ok, {send_msg, Self, {got_timeout, Name}}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     T0 = os:system_time(millisecond),
-    {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, one}),
+    timer:sleep(500),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, two}),
     receive
-        got_timeout ->
+        {got_timeout, one} ->
             T = os:system_time(millisecond),
             %% ensure the timer waited
             ?assert(T-T0 >= 1000),
-            ok
+            receive
+                {got_timeout, two} ->
+                    T1 = os:system_time(millisecond),
+                    ?assert(T1-T0 >= 1500),
+                    ok
+            after 2000 ->
+                      flush(),
+                      exit(timeout_timeout_two)
+            end
     after 5000 ->
+              flush(),
               exit(timeout_timeout)
     end,
     ok.

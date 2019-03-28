@@ -117,8 +117,8 @@
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
-    {timer, non_neg_integer() | infinity} |
-    {log, ra_index(), fun((term()) -> maybe(effect()))} |
+    {timer, term(), non_neg_integer() | infinity} |
+    {log, ra_index(), fun((user_command()) -> maybe(effect()))} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.

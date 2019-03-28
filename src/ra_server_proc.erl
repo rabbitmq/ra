@@ -369,10 +369,10 @@ leader(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
-leader(_, machine_timeout,
+leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->
     % the machine timer timed out, add a timeout message
-    Cmd = make_command('$usr', cast, timeout, noreply),
+    Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
     {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
                                                              ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
@@ -1041,8 +1041,8 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
               State = #state{name = Key}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
-handle_effect(_, {timer, T}, _, State, Actions) ->
-    {State, [{state_timeout, T, machine_timeout} | Actions]};
+handle_effect(_, {timer, Name, T}, _, State, Actions) ->
+    {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
 handle_effect(RaftState, {log, Idx, Fun}, EvtType,
               State = #state{server_state = SS0}, Actions) ->
     case ra_server:read_at(Idx, SS0) of
