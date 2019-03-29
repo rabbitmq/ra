@@ -6,7 +6,7 @@
 <link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
 </head>
 <body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="https://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <hr>
 
 <h1>Module ra_machine</h1>
@@ -43,13 +43,31 @@ to include a catch all clause as new states may be implemented in the future.</p
  <p><br>
   <code>-callback tick(TimeMs :: milliseconds(), state()) -&gt; effects().</code></p>
  
+ 
   <p>Optional. Called periodically.  
 Suitable for issuing periodic side effects such as updating metrics systems.</p>
  
  <p><br>
   <code>-callback overview(state()) -&gt; map(). </code></p>
  
-  Optional. A map of overview information. Needs to be efficient.
+  <p>Optional. A map of overview information. Needs to be efficient.</p>
+ 
+ 
+ <p><br>
+  <code>
+  -callback version() -&gt; version().
+  </code></p>
+ 
+  <p>Optional: Returns the latest machine version. If not implemented this is
+  defaulted to 0.
+ <br></p>
+ 
+  <p><code>
+  -callback which_module(version()) -&gt; module().
+  </code></p>
+ 
+  Optional: implements a lookup from version to the module implementing the
+  machine logic for that version.
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
@@ -66,7 +84,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p><pre>command_meta_data() = 
     #{system_time := integer(),
       index := <a href="#type-ra_index">ra_index()</a>,
-      term := <a href="#type-ra_term">ra_term()</a>}</pre></p>
+      term := <a href="#type-ra_term">ra_term()</a>,
+      machine_version =&gt; <a href="#type-version">version()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
@@ -81,44 +100,12 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
-    {timer, non_neg_integer() | infinity} |
-    {log, <a href="#type-ra_index">ra_index()</a>, fun((term()) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-effect">effect()</a>))} |
+    {timer, term(), non_neg_integer() | infinity} |
+    {log, [<a href="#type-ra_index">ra_index()</a>], fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>)} |
     {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>
-<p><p>  Effects are data structure that can be returned by <a href="#apply-3"><code>apply/3</code></a> to ask  
-ra to realise a side-effect in the real works, such as sending  
-a message to a process.</p>
- 
-  <p>Although both leaders and followers will process the same commands effects
-  are typically only applied on the leader. The only exceptions to this are
-  of the ra implementation log truncation mechanism and the <code>garbage_collect</code>  
-effects that is used to explicitly triggering a garbage collection in the  
-  the <code>release_cursor</code> effect that is realised on all effects as it is part
-ra servers's process.</p>
- 
-  <p>When leaders change and when clusters are restarted there is a small chance  
-that effects are issued multiple times so designing effects to be idempotent  
-is a good idea.</p>
- 
- 
-  <dl>
-  <dt><b>send_msg</b></dt>
-  <dd> send a message to a pid or registered process
-  NB: this is sent using <code>noconnect</code> and <code>nosuspend</code> in order to avoid
-  blocking the ra process during failures. It can optionally be wrapped up as
-  a <code>ra_event</code> and/or as a gen cast message (<code>{'$cast', Msg}</code>)
-  </dd>
-  <dt><b>mod_call</b></dt>
-  <dd> Call an arbitrary Module:Function with the supplied arguments </dd>
-  <dt><b>monitor</b></dt>
-  <dd> monitor a process or erlang node </dd>
-  <dt><b>demonitor</b></dt>
-  <dd> demonitor a process or erlang node </dd>
-  <dt><b>release_cursor</b></dt>
-  <dd> indicate to Ra that none of the preceeding entries contribute to the
-  current machine state </dd>
-  </dl></p>
+
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
 <p><pre>effects() = [<a href="#type-effect">effect()</a>]</pre></p>
@@ -163,12 +150,22 @@ is a good idea.</p>
 <p><pre>user_command() = term()</pre></p>
 <p>  the command type for a given machine implementation</p>
 
+<h3 class="typedecl"><a name="type-version">version()</a></h3>
+<p><pre>version() = non_neg_integer()</pre></p>
+
+
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine.</td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-2">init/2</a></td><td>initialise a new machine
+  This is only called on startup only if there isn't yet a snapshot to recover
+  from.</td></tr>
 <tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#version-1">version/1</a></td><td>used to discover the latest machine version supported by the current
+  code.</td></tr>
+<tr><td valign="top"><a href="#is_versioned-1">is_versioned/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#which_module-2">which_module/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
@@ -180,12 +177,14 @@ is a good idea.</p>
 
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
-<p><pre>init(X1 :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
-</div><p>initialise a new machine</p>
+<p><pre>init(Machine :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
+</div><p>initialise a new machine
+  This is only called on startup only if there isn't yet a snapshot to recover
+  from. Once a snapshot has been taken this is never called again.</p>
 
 <h3 class="function"><a name="apply-4">apply/4</a></h3>
 <div class="spec">
-<p><pre>apply(X1 :: <a href="#type-machine">machine()</a>,
+<p><pre>apply(Mod :: module(),
       Metadata :: <a href="#type-command_meta_data">command_meta_data()</a>,
       Cmd :: <a href="#type-command">command()</a>,
       State) -&gt;
@@ -194,13 +193,13 @@ is a good idea.</p>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>
 <div class="spec">
-<p><pre>tick(X1 :: <a href="#type-machine">machine()</a>, TimeMs :: <a href="#type-milliseconds">milliseconds()</a>, State :: <a href="#type-state">state()</a>) -&gt;
+<p><pre>tick(Mod :: module(), TimeMs :: <a href="#type-milliseconds">milliseconds()</a>, State :: <a href="#type-state">state()</a>) -&gt;
         <a href="#type-effects">effects()</a></pre></p>
 </div>
 
 <h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
 <div class="spec">
-<p><pre>state_enter(X1 :: <a href="#type-machine">machine()</a>,
+<p><pre>state_enter(Mod :: module(),
             RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol,
             State :: <a href="#type-state">state()</a>) -&gt;
                <a href="#type-effects">effects()</a></pre></p>
@@ -208,17 +207,33 @@ is a good idea.</p>
 
 <h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
-<p><pre>overview(X1 :: <a href="#type-machine">machine()</a>, State :: <a href="#type-state">state()</a>) -&gt; map()</pre></p>
+<p><pre>overview(Mod :: module(), State :: <a href="#type-state">state()</a>) -&gt; map()</pre></p>
+</div>
+
+<h3 class="function"><a name="version-1">version/1</a></h3>
+<div class="spec">
+<p><pre>version(X1 :: <a href="#type-machine">machine()</a>) -&gt; <a href="#type-version">version()</a></pre></p>
+</div><p>used to discover the latest machine version supported by the current
+  code</p>
+
+<h3 class="function"><a name="is_versioned-1">is_versioned/1</a></h3>
+<div class="spec">
+<p><pre>is_versioned(Machine :: <a href="#type-machine">machine()</a>) -&gt; boolean()</pre></p>
+</div>
+
+<h3 class="function"><a name="which_module-2">which_module/2</a></h3>
+<div class="spec">
+<p><pre>which_module(X1 :: <a href="#type-machine">machine()</a>, Version :: <a href="#type-version">version()</a>) -&gt; module()</pre></p>
 </div>
 
 <h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>
 <div class="spec">
-<p><pre>init_aux(X1 :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; term()</pre></p>
+<p><pre>init_aux(Mod :: module(), Name :: atom()) -&gt; term()</pre></p>
 </div>
 
 <h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
 <div class="spec">
-<p><pre>handle_aux(X1 :: <a href="#type-machine">machine()</a>,
+<p><pre>handle_aux(Mod :: module(),
            RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>,
            Type :: {call, From :: <a href="#type-from">from()</a>} | cast,
            Command :: term(),
@@ -251,7 +266,7 @@ is a good idea.</p>
 </div>
 <hr>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="https://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <p><i>Generated by EDoc</i></p>
 </body>
 </html>

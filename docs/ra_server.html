@@ -6,7 +6,7 @@
 <link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
 </head>
 <body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="https://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <hr>
 
 <h1>Module ra_server</h1>
@@ -21,7 +21,9 @@
      <a href="#type-command_meta">command_meta()</a>,
      UserCommand :: term(),
      <a href="#type-command_reply_mode">command_reply_mode()</a>} |
-    noop</pre></p>
+    {noop,
+     <a href="#type-command_meta">command_meta()</a>,
+     CurrentMachineVersion :: <a href="ra_machine.html#type-version">ra_machine:version()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_correlation">command_correlation()</a></h3>
@@ -50,6 +52,10 @@
     '$ra_cluster'</pre></p>
 
 
+<h3 class="typedecl"><a name="type-config">config()</a></h3>
+<p><pre>config() = <a href="#type-ra_server_config">ra_server_config()</a></pre></p>
+
+
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
 <p><pre>machine_conf() = 
     {module, module(), InitConfig :: map()} |
@@ -62,7 +68,8 @@
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
 <p><pre>ra_await_condition_fun() = 
-    fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; boolean())</pre></p>
+    fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+            {boolean(), <a href="#type-ra_server_state">ra_server_state()</a>})</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_effect">ra_effect()</a></h3>
@@ -153,6 +160,11 @@
       stop_after =&gt; <a href="#type-ra_index">ra_index()</a>,
       machine := <a href="ra_machine.html#type-machine">ra_machine:machine()</a>,
       machine_state := term(),
+      machine_version := <a href="ra_machine.html#type-version">ra_machine:version()</a>,
+      machine_versions :=
+          [{<a href="#type-ra_index">ra_index()</a>, <a href="ra_machine.html#type-version">ra_machine:version()</a>}, ...],
+      effective_machine_version := <a href="ra_machine.html#type-version">ra_machine:version()</a>,
+      effective_machine_module := module(),
       aux_state =&gt; term(),
       condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>,
       condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>],
@@ -198,7 +210,6 @@
 <tr><td valign="top"><a href="#handle_aux-4">handle_aux/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#id-1">id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#uid-1">uid/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#machine-1">machine/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_id-1">leader_id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#make_rpcs-1">make_rpcs/1</a></td><td></td></tr>
@@ -254,7 +265,7 @@
 <h3 class="function"><a name="handle_follower-2">handle_follower/2</a></h3>
 <div class="spec">
 <p><pre>handle_follower(Append_entries_rpc :: <a href="#type-ra_msg">ra_msg()</a>,
-                State000 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+                State00 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
                    {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
 </div>
 
@@ -317,11 +328,6 @@
 <h3 class="function"><a name="uid-1">uid/1</a></h3>
 <div class="spec">
 <p><pre>uid(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-ra_uid">ra_uid()</a></pre></p>
-</div>
-
-<h3 class="function"><a name="machine-1">machine/1</a></h3>
-<div class="spec">
-<p><pre>machine(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; module()</pre></p>
 </div>
 
 <h3 class="function"><a name="leader_id-1">leader_id/1</a></h3>
@@ -395,7 +401,7 @@
 </div>
 <hr>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="https://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
 <p><i>Generated by EDoc</i></p>
 </body>
 </html>
