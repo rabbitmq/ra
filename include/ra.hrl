@@ -52,6 +52,8 @@
 
 -type chunk_flag() :: next | last.
 
+-type consistent_query_ref() :: {term(), ra:query_fun(), ra_index()}.
+
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the
@@ -136,6 +138,18 @@
          % term of the snapshot in question
          last_index :: ra_index(),
          last_term :: ra_term()}).
+
+-record(heartbeat_rpc, {
+        ref :: consistent_query_ref(),
+        term :: ra_term(),
+        leader_id :: ra_server_id()
+    }).
+
+-record(heartbeat_reply, {
+        success :: boolean(),
+        ref :: consistent_query_ref(),
+        term :: ra_term()
+    }).
 
 %% WAL defaults
 -define(WAL_MAX_SIZE_BYTES, 1024 * 1024 * 1024).

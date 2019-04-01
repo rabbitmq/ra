@@ -40,8 +40,6 @@
 -type ra_await_condition_fun() ::
     fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
 
--type consistent_query_ref() :: {term(), ra:query_fun(), ra_index()}.
-
 -type ra_server_state() ::
     #{id := ra_server_id(),
       uid := ra_uid(),
@@ -187,18 +185,6 @@
 % TODO: test what is a good defult here
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
-
--record(heartbeat_rpc, {
-        ref,
-        term,
-        leader_id
-    }).
-
--record(heartbeat_reply, {
-        success,
-        ref,
-        term
-    }).
 
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
 name(ClusterName, UniqueSuffix) ->
