@@ -53,6 +53,8 @@
          new_uid/1
         ]).
 
+-define(START_TIMEOUT, ?DEFAULT_TIMEOUT * 100).
+
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
 
 -type environment_param() ::
@@ -240,7 +242,7 @@ start_cluster([#{cluster_name := ClusterName} | _] =
                           sort_by_local(StartedIds, [])),
             %% TODO: handle case where no election was successfully triggered
             case members(hd(StartedIds),
-                         length(ServerConfigs) * ?DEFAULT_TIMEOUT) of
+                         length(ServerConfigs) * ?START_TIMEOUT) of
                 {ok, _, Leader} ->
                     ?INFO("ra: started cluster ~s with ~b servers~n"
                           "~b servers failed to start: ~w~n"
