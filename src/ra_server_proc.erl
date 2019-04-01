@@ -1229,7 +1229,6 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
             {keep_state,
              State#state{pending_commands = [{From, Msg} | Pending]}};
         _ when Leader =/= undefined ->
-            % rabbit_log:error("Redirect to ~p from ~p", [Leader, node()]),
             {keep_state, State, {reply, From, {redirect, Leader}}}
     end.
 

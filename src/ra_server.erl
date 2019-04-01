@@ -71,7 +71,8 @@
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
       waiting_apply_index => #{consistent_query_ref() => ra_index()},
-      waiting_heartbeats => #{consistent_query_ref() => #{ra_server_id() => boolean()}}
+      waiting_heartbeats => #{consistent_query_ref() => #{ra_server_id() => boolean()}},
+      pending_consistent_queries => [consistent_query_ref()]
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -279,7 +280,8 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
       waiting_apply_index => #{},
-      waiting_heartbeats => #{}}.
+      waiting_heartbeats => #{},
+      pending_consistent_queries => []}.
 
 recover(#{log_id := LogId,
           commit_index := CommitIndex,
@@ -317,9 +319,12 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
+
             {State3, Effects1} = apply_waiting_consistent_queries(State2, Effects0),
+            {State4, Effects2} = process_pending_consistent_queries(State3, Effects1),
+
             {State, More, RpcEffects0} =
-                make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
+                make_pipelined_rpc_effects(State4, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
@@ -331,7 +336,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                  false ->
                                      RpcEffects0
                              end,
-            Effects = Effects1 ++ RpcEffects,
+            Effects = Effects2 ++ RpcEffects,
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -460,7 +465,11 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
-    {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects1),
+
+    {State2, Effects2} = apply_waiting_consistent_queries(State1, Effects1),
+    {State3, Effects3} = process_pending_consistent_queries(State2, Effects2),
+
+    {State, _, Effects} = make_pipelined_rpc_effects(State3, Effects3),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
@@ -549,10 +558,17 @@ handle_leader(#append_entries_rpc{leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State0),
     {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader({consistent_query, From, QueryFun},
-              #{commit_index := CommitIndex} = State0) ->
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := true} = State0) ->
     Ref = {From, QueryFun, CommitIndex},
     {State1, Effects} = make_heartbeat_rpc_effects(Ref, State0),
     {leader, State1, Effects};
+handle_leader({consistent_query, From, QueryFun},
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := false,
+                pending_consistent_queries := PQ} = State0) ->
+    Ref = {From, QueryFun, CommitIndex},
+    {leader, State0#{pending_consistent_queries => [Ref | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm, log_id := LogId} = State0) when CurTerm < Term ->
@@ -2139,10 +2155,6 @@ heartbeat_rpc_quorum(Ref, PeerId, #{waiting_heartbeats := WH0,
         {_, none} -> {false, State, []};
         {WaitingPeers0, _} ->
             PeerIds = peer_ids(State),
-            MissingPeerIds = lists:filter(fun(PeerIdInCluster) ->
-                not maps:is_key(PeerIdInCluster, WaitingPeers0)
-            end,
-            PeerIds),
 
             %% Take only current peers
             WaitingPeers1 = maps:with(PeerIds, WaitingPeers0#{PeerId => true}),
@@ -2153,19 +2165,23 @@ heartbeat_rpc_quorum(Ref, PeerId, #{waiting_heartbeats := WH0,
                 true ->
                     {true, State#{waiting_heartbeats => maps:remove(Ref, WH0)}, []};
                 false ->
+                    MissingPeerIds = lists:filter(fun(PeerIdInCluster) ->
+                        not maps:is_key(PeerIdInCluster, WaitingPeers0)
+                    end,
+                    PeerIds),
                     Effects = heartbeat_rpc_effects(MissingPeerIds, Ref, State),
                     {false, State#{waiting_heartbeats => WH0#{Ref => WaitingPeers1}}, Effects}
             end
     end.
 
 -spec apply_or_schedule_consistent_query(consistent_query_ref(),
-                                        ra_server_state(),
-                                        ra_effects()) ->
+                                         ra_server_state(),
+                                         ra_effects()) ->
     {ra_server_state(), ra_effects()}.
 apply_or_schedule_consistent_query({_, _, ReadIndex} = Ref,
-                                  #{last_applied := ApplyIndex,
-                                    waiting_apply_index := Waiting} = State,
-                                  Effects) ->
+                                   #{last_applied := ApplyIndex,
+                                     waiting_apply_index := Waiting} = State,
+                                   Effects) ->
     case ApplyIndex >= ReadIndex of
         true ->
             {State, [consistent_query_reply(Ref, State) | Effects]};
@@ -2176,7 +2192,7 @@ apply_or_schedule_consistent_query({_, _, ReadIndex} = Ref,
 -spec apply_waiting_consistent_queries(ra_server_state(), ra_effects()) ->
     {ra_server_state(), ra_effects()}.
 apply_waiting_consistent_queries(#{last_applied := ApplyIndex,
-                                  waiting_apply_index := Waiting0} = State,
+                                   waiting_apply_index := Waiting0} = State,
                                 Effects0) ->
     ToReply = maps:filter(fun(_, ReadIndex) ->
                               ReadIndex =< ApplyIndex
@@ -2197,11 +2213,25 @@ apply_waiting_consistent_queries(#{last_applied := ApplyIndex,
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
 consistent_query_reply({From, QueryFun, _ReadIndex},
-                      #{id := Id,
-                        machine_state := MacState,
-                        machine := {machine, MacMod, _}}) ->
+                       #{id := Id,
+                         machine_state := MacState,
+                         machine := {machine, MacMod, _}}) ->
     Result = ra_machine:query(MacMod, QueryFun, MacState),
     {reply, From, {ok, Result, Id}}.
+
+
+process_pending_consistent_queries(#{cluster_change_permitted := false} = State0, Effects0) ->
+    {State0, Effects0};
+process_pending_consistent_queries(#{cluster_change_permitted := true,
+                                     pending_consistent_queries := Pending} = State0,
+                                   Effects0) ->
+    lists:foldl(
+        fun(Ref, {State, Effects}) ->
+            {NewState, NewEffects} = make_heartbeat_rpc_effects(Ref, State),
+            {NewState, NewEffects ++ Effects}
+        end,
+        {State0, Effects0},
+        Pending).
 
 %%% ===================
 %%% Internal unit tests
