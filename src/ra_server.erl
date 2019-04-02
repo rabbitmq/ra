@@ -565,7 +565,7 @@ handle_leader(#heartbeat_rpc{term = Term} = Msg,
           [LogId, Msg#heartbeat_rpc.leader_id,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
-handle_leader(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_leader(#heartbeat_rpc{ref = Ref, term = Term, leader_id = LeaderId},
               #{current_term := CurTerm, id := Id} = State) when CurTerm > Term ->
     Reply = heartbeat_reply(CurTerm, Ref, false),
     {leader, State, [cast_reply(Id, LeaderId, Reply)]};
@@ -674,11 +674,11 @@ handle_candidate(#append_entries_rpc{leader_id = LeaderId},
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
-handle_candidate(#heartbeat_rpc{ term = Term } = Msg,
+handle_candidate(#heartbeat_rpc{term = Term} = Msg,
                  #{current_term := CurTerm} = State0) when Term >= CurTerm ->
     State = update_meta(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
-handle_candidate(#heartbeat_rpc{ ref = Ref, leader_id = LeaderId},
+handle_candidate(#heartbeat_rpc{ref = Ref, leader_id = LeaderId},
                  #{current_term := CurTerm} = State) ->
     % term must be older return success=false
     Reply = heartbeat_reply(CurTerm, Ref, false),
@@ -742,7 +742,7 @@ handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
 
-handle_pre_vote(#heartbeat_rpc{ term = Term } = Msg,
+handle_pre_vote(#heartbeat_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
@@ -907,13 +907,13 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
            " ~b but current term is: ~b~n",
           [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_follower(#heartbeat_rpc{ref = Ref, term = Term, leader_id = LeaderId},
                 #{current_term := CurTerm, id := Id} = State0) when Term >= CurTerm ->
     State1 = update_term(Term, State0),
     State2 = State1#{leader_id => LeaderId},
     Reply = heartbeat_reply(Term, Ref, true),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
+handle_follower(#heartbeat_rpc{ref = Ref, term = Term, leader_id = LeaderId},
                 #{id := Id} = State)->
     Reply = heartbeat_reply(Term, Ref, false),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
@@ -972,7 +972,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
 handle_follower({_PeerId, #append_entries_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
-handle_follower({_PeerId, #heartbeat_reply{ term = Term }},
+handle_follower({_PeerId, #heartbeat_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
@@ -2139,15 +2139,15 @@ make_heartbeat_rpc_effects(Ref, #{waiting_heartbeats := WH0} = State) ->
         _ ->
             Effects = heartbeat_rpc_effects(PeerIds, Ref, State),
             WaitingPeers = maps:from_list([{PeerId, false} || PeerId <- PeerIds]),
-            WH1 = WH0#{ Ref => WaitingPeers},
+            WH1 = WH0#{Ref => WaitingPeers},
             {State#{waiting_heartbeats => WH1}, Effects}
     end.
 
 heartbeat_rpc_effects(PeerIds, Ref, #{current_term := Term, id := Id}) ->
     lists:map(fun(PeerId) ->
         {send_rpc, PeerId, #heartbeat_rpc{ref = Ref,
-                                                term = Term,
-                                                leader_id = Id}}
+                                          term = Term,
+                                          leader_id = Id}}
     end,
     PeerIds).
 
