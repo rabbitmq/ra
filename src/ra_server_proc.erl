@@ -398,11 +398,13 @@ leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
-        {leader, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {leader, State1, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             {keep_state, State, Actions};
-        {follower, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {follower, State1, Effects1} ->
+            %% TODO: refactor transition handlers
+            {State2, Effects2} = handle_leader_to_follower(State1, Effects1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects2, EventType, State2),
             % demonitor when stepping down
             ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
                                        erlang:demonitor(Ref);
@@ -855,6 +857,11 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 %% TODO: move to ra_server
+handle_leader_to_follower(#state{server_state = ServerState0} = State, Effects0) ->
+    {ServerState, Effects} =
+        ra_server:handle_leader_to_follower(ServerState0, Effects0),
+    {State#state{server_state = ServerState}, Effects}.
+
 perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
                                         machine_state := MacState,
                                         last_applied := Last,

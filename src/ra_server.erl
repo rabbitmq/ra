@@ -7,6 +7,7 @@
 -export([
          name/2,
          init/1,
+         handle_leader_to_follower/2,
          handle_leader/2,
          handle_candidate/2,
          handle_pre_vote/2,
@@ -109,7 +110,8 @@
                   await_condition_timeout |
                   {command, command()} |
                   {commands, [command()]} |
-                  ra_log:event().
+                  ra_log:event() |
+                  {consistent_query, term(), ra:query_fun()}.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -560,7 +562,7 @@ handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm, log_id := LogId} = State0) when CurTerm < Term ->
     ?INFO("~s: leader saw heartbeat_rpc from ~w for term ~b "
           "abdicates term: ~b!~n",
-          [LogId, Msg#append_entries_rpc.leader_id,
+          [LogId, Msg#heartbeat_rpc.leader_id,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#heartbeat_rpc{ ref = Ref, term = Term, leader_id = LeaderId},
@@ -1090,6 +1092,20 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
             {await_condition, State, []}
     end.
 
+-spec handle_leader_to_follower(ra_server_state(), ra_effects()) ->
+    {ra_server_state(), ra_effects()}.
+handle_leader_to_follower(#{pending_consistent_queries := Pending,
+                            waiting_heartbeats := Waiting,
+                            leader_id := Leader} = State0, Effects0) ->
+    PendingEffects = lists:map(fun({From, _, _}) ->
+        {reply, From, {redirect, Leader}}
+    end,
+    Pending ++ map:keys(Waiting)),
+    %% We don't clean waiting_apply_index here because the only guarantee
+    %% we give is that the process is up-to-date at read_index.
+    {State0#{pending_consistent_queries => [], waiting_heartbeats => #{}},
+     PendingEffects ++ Effects0}.
+
 -spec tick(ra_server_state()) -> ra_effects().
 tick(#{effective_machine_module := MacMod,
        machine_state := MacState}) ->
@@ -1226,10 +1242,13 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State, Effects1, Applied} ->
+        {State1, Effects1, Applied} ->
             % filter the effects that should be applied on a follower
-            Effects = filter_follower_effects(Effects1),
-            Reply = append_entries_reply(Term, true, State),
+            Effects2 = filter_follower_effects(Effects1),
+            Reply = append_entries_reply(Term, true, State1),
+
+            {State, Effects} = apply_waiting_consistent_queries(State1, Effects2),
+
             {follower, State, [cast_reply(Id, LeaderId, Reply),
                                {incr_metrics, ra_metrics, [{3, Applied}]}
                                | Effects]}
@@ -2144,13 +2163,17 @@ heartbeat_rpc_quorum(Ref, PeerId, #{waiting_heartbeats := WH0,
 
             %% Take only current peers
             WaitingPeers1 = maps:with(PeerIds, WaitingPeers0#{PeerId => true}),
-            Quorum = (maps:size(Cluster) div 2) + 1,
+            %% We don't need confiramtion from the leader node,
+            %% hence follower quorum is (n/2 + 1) - 1 = n/2
+            FollowerQuorum = (maps:size(Cluster) div 2),
 
             Confirmed = maps:filter(fun(_, Success) -> Success end, WaitingPeers1),
-            case Confirmed >= Quorum of
+            case maps:size(Confirmed) >= FollowerQuorum of
                 true ->
                     {true, State#{waiting_heartbeats => maps:remove(Ref, WH0)}, []};
                 false ->
+                    %% In case of cluster changes there may be more peers to send
+                    %% heartbeat RPC to.
                     MissingPeerIds = lists:filter(fun(PeerIdInCluster) ->
                         not maps:is_key(PeerIdInCluster, WaitingPeers0)
                     end,

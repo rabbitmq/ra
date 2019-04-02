@@ -1746,7 +1746,8 @@ base_state(NumServers, MacMod) ->
       effective_machine_module => MacMod,
       log => Log,
       waiting_apply_index => #{},
-      waiting_ro_heartbeats => #{}}.
+      waiting_ro_heartbeats => #{},
+      pending_consistent_queries => []}.
 
 mock_machine(Mod) ->
     meck:new(Mod, [non_strict]),
