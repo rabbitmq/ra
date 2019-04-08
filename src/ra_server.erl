@@ -1812,7 +1812,7 @@ add_next_cluster_change(Effects,
 add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
-add_reply(_, '$ra_no_return', _, Effects, Notifys) ->
+add_reply(_, '$ra_no_reply', _, Effects, Notifys) ->
     {Effects, Notifys};
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {wrap_reply, Reply}} | Effects], Notifys};
