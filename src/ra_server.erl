@@ -2124,12 +2124,8 @@ index_machine_version0(Idx, [{MIdx, V} | _])
 index_machine_version0(Idx, [_ | Rem]) ->
     index_machine_version0(Idx, Rem).
 
-read_only_heartbeat_reply(Term, Ref, Success) ->
-    #read_only_heartbeat_reply{term = Term, ref = Ref, success = Success}.
-
 heartbeat_reply(Term, Ref, Success) ->
     #heartbeat_reply{term = Term, ref = Ref, success = Success}.
-
 
 make_heartbeat_rpc_effects(Ref, #{waiting_heartbeats := WH0} = State) ->
     PeerIds = peer_ids(State),
