@@ -25,8 +25,11 @@
          consistent_query/3,
          % cluster operations
          start_cluster/1,
+         start_cluster/2,
          start_cluster/3,
+         start_cluster/4,
          start_or_restart_cluster/3,
+         start_or_restart_cluster/4,
          delete_cluster/1,
          delete_cluster/2,
          % server management
@@ -53,7 +56,7 @@
          new_uid/1
         ]).
 
--define(START_TIMEOUT, ?DEFAULT_TIMEOUT * 100).
+-define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
 
@@ -155,8 +158,30 @@ force_delete_server(ServerId) ->
                                [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
+start_or_restart_cluster(ClusterName, Machine, ServerIds) ->
+    start_or_restart_cluster(ClusterName, Machine, ServerIds, ?START_TIMEOUT).
+
+%% @param ClusterName the name of the cluster.
+%% @param Machine The {@link ra_machine:machine/0} configuration.
+%% @param ServerIds The list of ra server ids.
+%% @param Timeout The time to wait for any server to restart or start
+%% @returns
+%% `{ok, Started, NotStarted}'  if a cluster could be successfully
+%% started. A cluster can be successfully started if more than half of the
+%% servers provided could be started. Servers that could not be started need to
+%% be retried periodically using {@link start_server/1}
+%%
+%% `{error, cluster_not_formed}' if a cluster could not be started.
+%%
+%% If there was no existing cluster and a new cluster could not be formed
+%% any servers that did manage to start are
+%% forcefully deleted.
+-spec start_or_restart_cluster(ra_cluster_name(), ra_server:machine_conf(),
+                               [ra_server_id()], non_neg_integer()) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
 start_or_restart_cluster(ClusterName, Machine,
-                         [FirstServer | RemServers] = ServerIds) ->
+                         [FirstServer | RemServers] = ServerIds, Timeout) ->
     case ra_server_sup_sup:restart_server(FirstServer) of
         {ok, _} ->
             %% restart the rest of the servers
@@ -164,7 +189,7 @@ start_or_restart_cluster(ClusterName, Machine,
             {ok, ServerIds, []};
         {error, Err} ->
             ?ERR("start_or_restart_cluster: got an error: ~p~n", [Err]),
-            start_cluster(ClusterName, Machine, ServerIds)
+            start_cluster(ClusterName, Machine, ServerIds, Timeout)
     end.
 
 %% @doc Starts a new distributed ra cluster.
@@ -188,6 +213,31 @@ start_or_restart_cluster(ClusterName, Machine,
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(ClusterName, Machine, ServerIds) ->
+    start_cluster(ClusterName, Machine, ServerIds, ?START_TIMEOUT).
+
+%% @doc Starts a new distributed ra cluster.
+%%
+%% @param ClusterName the name of the cluster.
+%% @param Machine The {@link ra_machine:machine/0} configuration.
+%% @param ServerIds The list of ra server ids.
+%% @param Timeout The time to wait for each server to start
+%% @returns
+%% `{ok, Started, NotStarted}'  if a cluster could be successfully
+%% started. A cluster can be successfully started if more than half of the
+%% servers provided could be started. Servers that could not be started need to
+%% be retried periodically using {@link start_server/1}
+%%
+%% `{error, cluster_not_formed}' if a cluster could not be started.
+%%
+%% If a cluster could not be formed any servers that did manage to start are
+%% forcefully deleted.
+-spec start_cluster(ra_cluster_name(),
+                    ra_server:machine_conf(),
+                    [ra_server_id()],
+                    non_neg_integer()) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
+start_cluster(ClusterName, Machine, ServerIds, Timeout) ->
     Configs = [begin
                    UId = new_uid(ra_lib:to_binary(ClusterName)),
                    #{id => Id,
@@ -197,7 +247,7 @@ start_cluster(ClusterName, Machine, ServerIds) ->
                      initial_members => ServerIds,
                      machine => Machine}
                end || Id <- ServerIds],
-    start_cluster(Configs).
+    start_cluster(Configs, Timeout).
 
 %% @doc Starts a new distributed ra cluster.
 %%
@@ -215,8 +265,14 @@ start_cluster(ClusterName, Machine, ServerIds) ->
 -spec start_cluster([ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
+start_cluster(ServerConfigs) ->
+    start_cluster(ServerConfigs, ?START_TIMEOUT).
+
+-spec start_cluster([ra_server:ra_server_config()], non_neg_integer()) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
 start_cluster([#{cluster_name := ClusterName} | _] =
-               ServerConfigs) ->
+               ServerConfigs, Timeout) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(
             fun (C) ->
@@ -242,7 +298,7 @@ start_cluster([#{cluster_name := ClusterName} | _] =
                           sort_by_local(StartedIds, [])),
             %% TODO: handle case where no election was successfully triggered
             case members(hd(StartedIds),
-                         length(ServerConfigs) * ?START_TIMEOUT) of
+                         length(ServerConfigs) * Timeout) of
                 {ok, _, Leader} ->
                     ?INFO("ra: started cluster ~s with ~b servers~n"
                           "~b servers failed to start: ~w~n"
