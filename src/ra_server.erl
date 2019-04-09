@@ -577,13 +577,13 @@ handle_leader(#heartbeat_rpc{term = Term},
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
 handle_leader({PeerId, #heartbeat_reply{success = true, read_index = ReadIndex, term = Term}},
-              #{current_term := CurTerm} = State) when CurTerm >= Term  ->
-    case heartbeat_rpc_quorum(ReadIndex, PeerId, State) of
-        {{true, Refs}, State1, Effects} ->
-            {State2, Effects1} = apply_or_schedule_consistent_queries(Refs, State1, Effects),
-            {leader, State2, Effects1};
-        {false, State1, Effects} ->
-            {leader, State1, Effects}
+              #{current_term := CurTerm} = State0) when CurTerm >= Term  ->
+    case heartbeat_rpc_quorum(ReadIndex, PeerId, State0) of
+        {{true, Refs}, State1} ->
+            {State, Effects} = apply_or_schedule_consistent_queries(Refs, State1, []),
+            {leader, State, Effects};
+        {false, State1} ->
+            {leader, State1, []}
     end;
 handle_leader({_PeerId, #heartbeat_reply{success = false, term = Term}},
               #{current_term := CurTerm, log_id := LogId} = State0) when Term > CurTerm ->
@@ -2182,15 +2182,15 @@ heartbeat_rpc_quorum(NewReadIndex, PeerId, #{waiting_heartbeats := WH0,
                                              cluster := Cluster} = State) ->
     case maps:get(PeerId, Cluster, none) of
         none ->
-            {false, State, []};
+            {false, State};
         #{read_index := OldReadIndex} when OldReadIndex >= NewReadIndex ->
-            {false, State, []};
+            {false, State};
         #{read_index := OldReadIndex} = Peer when OldReadIndex < NewReadIndex ->
             NewCluster = Cluster#{PeerId => Peer#{read_index => NewReadIndex}},
             State1 = update_peer(PeerId, Peer#{read_index => NewReadIndex}, State),
             case read_quorum(NewCluster, NewReadIndex) of
                 false ->
-                    {false, State1, []};
+                    {false, State1};
                 true ->
                     {Refs, ReadIndexes} = maps:fold(
                         fun
@@ -2202,7 +2202,7 @@ heartbeat_rpc_quorum(NewReadIndex, PeerId, #{waiting_heartbeats := WH0,
                         {[], []},
                         WH0),
                     case Refs of
-                        [] -> {false, State1, []};
+                        [] -> {false, State1};
                         _  -> {{true, Refs}, State1#{waiting_heartbeats := maps:without(ReadIndexes, WH0)}}
                     end
             end
