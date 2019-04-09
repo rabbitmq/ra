@@ -2192,7 +2192,7 @@ heartbeat_rpc_quorum(NewReadIndex, PeerId, #{waiting_heartbeats := WH0,
                 false ->
                     {false, State1, []};
                 true ->
-                    {Refs, ReadIndexes} = maps:foldl(
+                    {Refs, ReadIndexes} = maps:fold(
                         fun
                             (ReadIndex, Ref, {AccRef, AccReadIndex}) when ReadIndex =< NewReadIndex ->
                                 {[Ref | AccRef], [ReadIndex | AccReadIndex]};
