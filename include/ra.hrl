@@ -140,13 +140,13 @@
          last_term :: ra_term()}).
 
 -record(heartbeat_rpc,
-        {ref :: consistent_query_ref(),
+        {read_index :: integer(),
          term :: ra_term(),
          leader_id :: ra_server_id()}).
 
 -record(heartbeat_reply,
         {success :: boolean(),
-         ref :: consistent_query_ref(),
+         read_index :: integer(),
          term :: ra_term()}).
 
 %% WAL defaults
