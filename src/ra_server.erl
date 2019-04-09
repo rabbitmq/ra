@@ -1388,14 +1388,18 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
             {error, Reason, RaState#{log => Log1}}
     end.
 
+%% reads user commands at the specified index
 -spec read_at(ra_index(), ra_server_state()) ->
     {ok, term(), ra_server_state()} |
     {error, ra_server_state()}.
-read_at(Idx, #{log := Log0} = RaState) ->
+read_at(Idx, #{log := Log0,
+               log_id := LogId} = RaState) ->
     case ra_log:fetch(Idx, Log0) of
         {{Idx, _, {'$usr', _, Data, _}}, Log} ->
             {ok, Data, RaState#{log => Log}};
-        {undefined, Log} ->
+        {Cmd, Log} ->
+            ?ERROR("~s: failed to read user command at ~b. Got ~w",
+                   [LogId, Idx, Cmd]),
             {error, RaState#{log => Log}}
     end.
 %%%===================================================================
@@ -1808,6 +1812,8 @@ add_next_cluster_change(Effects,
 add_next_cluster_change(Effects, State) ->
     {Effects, State}.
 
+add_reply(_, '$ra_no_reply', _, Effects, Notifys) ->
+    {Effects, Notifys};
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {wrap_reply, Reply}} | Effects], Notifys};
 add_reply(_, Reply, {notify, Corr, Pid},

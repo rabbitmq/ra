@@ -856,18 +856,20 @@ perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
             {error, Err}
     end.
 
+handle_effects(RaftState, Effects0, EvtType, State0) ->
+    handle_effects(RaftState, Effects0, EvtType, State0, []).
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.
-handle_effects(RaftState, Effects0, EvtType, State0) ->
-    lists:foldl(fun(Effects, {State, Actions}) when is_list(Effects) ->
-                        {S, A} = handle_effects(RaftState, Effects, EvtType,
-                                                State),
-                        %% TODO: avoid concat
-                        {S, Actions ++ A};
-                   (Effect, {State, Actions}) ->
-                        handle_effect(RaftState, Effect, EvtType,
-                                      State, Actions)
-                end, {State0, []}, Effects0).
+handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
+    {State, Actions} = lists:foldl(
+                         fun(Effects, {State, Actions}) when is_list(Effects) ->
+                                 handle_effects(RaftState, Effects, EvtType,
+                                                State, Actions);
+                            (Effect, {State, Actions}) ->
+                                 handle_effect(RaftState, Effect, EvtType,
+                                               State, Actions)
+                         end, {State0, Actions0}, Effects0),
+    {State, lists:reverse(Actions)}.
 
 handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
@@ -969,8 +971,7 @@ handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
     {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
                                                              ServerState0),
     State1 = State0#state{server_state = ServerState},
-    {State, Actions} = handle_effects(RaftState, Effects, EvtType, State1),
-    {State, Actions0 ++ Actions};
+    handle_effects(RaftState, Effects, EvtType, State1, Actions0);
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     {State, Actions};
@@ -1043,20 +1044,28 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
     {State, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
-handle_effect(RaftState, {log, Idx, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions) ->
-    case ra_server:read_at(Idx, SS0) of
-        {ok, Data, SS} ->
-            case Fun(Data) of
-                undefined ->
-                    {State#state{server_state = SS}, Actions};
-                Effect ->
-                    %% recurse with the new effect
-                    handle_effect(RaftState, Effect, EvtType,
-                                  State#state{server_state = SS}, Actions)
-            end;
-        {error, SS} ->
-            {State#state{server_state = SS}, Actions}
+handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
+              State = #state{server_state = SS0}, Actions) when is_list(Idxs) ->
+    %% Useful to implement a batch send of data obtained from the log.
+    %% 1) Retrieve all data from the list of indexes
+    {Data, SS} = lists:foldl(fun(Idx, {Data0, Acc0}) ->
+                                     case ra_server:read_at(Idx, Acc0) of
+                                         {ok, D, Acc} ->
+                                             {[D | Data0], Acc};
+                                         {error, _} ->
+                                             %% this is unrecoverable
+                                             exit({failed_to_read_index_for_log_effect,
+                                                   Idx})
+                                     end
+                             end, {[], SS0}, Idxs),
+    %% 2) Apply the fun to the list of data as a whole and deal with any effects
+    case Fun(lists:reverse(Data)) of
+        [] ->
+            {State#state{server_state = SS}, Actions};
+        Effects ->
+            %% recurse with the new effects
+            handle_effects(RaftState, Effects, EvtType,
+                           State#state{server_state = SS}, Actions)
     end;
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->

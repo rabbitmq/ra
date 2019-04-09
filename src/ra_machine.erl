@@ -118,7 +118,7 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
-    {log, ra_index(), fun((user_command()) -> maybe(effect()))} |
+    {log, [ra_index()], fun(([user_command()]) -> effects())} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
@@ -224,7 +224,7 @@
     {reply, Reply :: term(), AuxState, LogState} |
     {no_reply, AuxState, LogState}
       when AuxState :: term(),
-           LogState :: ra_log:ra_log().
+           LogState :: ra_log:state().
 
 -callback overview(state()) -> map().
 
@@ -288,7 +288,7 @@ init_aux(Mod, Name) ->
     {no_reply, AuxState, LogState} |
     undefined
       when AuxState :: term(),
-           LogState :: ra_log:ra_log().
+           LogState :: ra_log:state().
 handle_aux(Mod, RaftState, Type, Cmd, Aux, Log, MacState) ->
     ?OPT_CALL(Mod:handle_aux(RaftState, Type, Cmd, Aux, Log, MacState),
               undefined).

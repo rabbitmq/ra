@@ -160,17 +160,19 @@ callback.
 
 ### Reading a log
 
-Use `{log, Index :: ra_index(), fun((term()) -> effect() | undefined}` to read a
-command from the log at the specified index and optionally return an effect.
+Use `{log, Indexes :: [ra_index()], fun(([user_command()]) -> effects()}` to read
+commands from the log from the specified indexes and return a list of effects.
 
-Effectively this effect transforms a log entry to an effect.
+Effectively this effect transforms log entries into effects.
 
 Potential use cases could be when a command contains large binary data and you
 don't want to keep this in memory but load it on demand when needed for a side-effect.
 
 This is an advanced feature and will only work as long as the command is still
-in the log. If a release_cursor has been emitted with an index higher than this
+in the log. If a `release_cursor` has been emitted with an index higher than this
 the command may not longer be in the log and the function will not be called.
+
+There is currently no facility for reading partial data from a snapshot.
 
 ### Updating the Release Cursor (Snapshotting)
 

@@ -366,29 +366,33 @@ log_effect(Config) ->
     Mod = ?config(modname, Config),
     Self = self(),
     meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> undefined end),
-    meck:expect(Mod, apply, fun (#{index := Idx}, {cmd, _Data}, _) ->
-                                    %% dropping data store the index
-                                    {Idx, ok};
-                                (_, get_data, State) ->
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply, fun (#{index := Idx}, {cmd, _Data}, Idxs) ->
+                                    %% stash all indexes
+                                    {[Idx | Idxs], ok};
+                                (_, get_data, Idxs) ->
                                     %% now we need to refresh the data from
                                     %% the log and turn it into a send_msg
                                     %% effect
-                                    {State, ok,
-                                     {log, State,
-                                      fun ({cmd, Data}) ->
-                                              {send_msg, Self, {data, Data}}
+                                    {[], ok,
+                                     {log, lists:reverse(Idxs),
+                                      fun (Cmds) ->
+                                              Datas = [D || {_, D} <- Cmds],
+                                              [{send_msg, Self,
+                                                {datas, Datas}}]
                                       end}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
-    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi">>}),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi1">>}),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi2">>}),
     {ok, _, ServerId} = ra:process_command(ServerId, get_data),
     receive
-        {data, <<"hi">>} ->
+        {datas, [<<"hi1">>, <<"hi2">>]} ->
             ok
     after 5000 ->
+              flush(),
               exit(data_timeout)
     end,
     ok.
