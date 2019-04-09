@@ -69,8 +69,9 @@
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
+      read_index => non_neg_integer(),
       waiting_apply_index => #{consistent_query_ref() => ra_index()},
-      waiting_heartbeats => #{consistent_query_ref() => #{ra_server_id() => boolean()}},
+      waiting_heartbeats => #{non_neg_integer() => consistent_query_ref()},
       pending_consistent_queries => [consistent_query_ref()]
      }.
 
@@ -267,6 +268,7 @@ init(#{id := Id,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
+      read_index => 0,
       waiting_apply_index => #{},
       waiting_heartbeats => #{},
       pending_consistent_queries => []}.

@@ -36,6 +36,7 @@
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
+                           read_index := non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
