@@ -170,7 +170,8 @@
 -type command_meta_data() :: #{system_time := integer(),
                                index := ra_index(),
                                term := ra_term(),
-                               machine_version => version()}.
+                               machine_version => version(),
+                               from => from()}.
 %% extensible command meta data map
 
 
