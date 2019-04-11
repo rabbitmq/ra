@@ -19,6 +19,7 @@ all_tests() ->
     [
      start_stopped_server,
      server_is_force_deleted,
+     force_deleted_server_mem_tables_are_cleaned_up,
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
@@ -117,6 +118,31 @@ server_is_force_deleted(Config) ->
 
     ok = ra:force_delete_server(ServerId),
     ok.
+
+force_deleted_server_mem_tables_are_cleaned_up(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    _ = ra:start_server(Conf),
+    ok = ra:trigger_election(ServerId),
+    ok = enqueue(ServerId, msg1),
+
+    ok = ra:force_delete_server(ServerId),
+
+    [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
+    % force roll over after
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    timer:sleep(100),
+    ra_log_segment_writer:await(),
+
+    %% validate there are no mem tables for this server anymore
+    ?assertMatch(undefined, ets:info(Tid)),
+    ?assertMatch([], ets:lookup(ra_log_closed_mem_tables, UId)),
+
+    ok.
+
 
 cluster_is_deleted(Config) ->
     ClusterName = ?config(cluster_name, Config),

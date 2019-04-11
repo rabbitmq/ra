@@ -252,6 +252,9 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
         false ->
             ?DEBUG("segment_writer: skipping segment as directory ~s does "
                    "not exist~n", [Dir]),
+            %% clean up the tables for this process
+            _ = ets:delete(Tid),
+            _ = clean_closed_mem_tables(ServerUId, Tid),
             State
     end.
 
