@@ -147,17 +147,16 @@ write(Config) ->
     %% There is no way to create a log file from a list of entries without the write
     %% API. We have to prove first that writting a consecutive log file succeeds,
     %% so we can use it as a base for our tests
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun write_prop/2, [Dir, TestCase], 100).
+    run_proper(fun write_prop/1, [TestCase], 100).
 
-write_prop(Dir, TestCase) ->
+write_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        begin
            {ok, Log0} = ra_log:write(
                           Entries,
-                          ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                          ra_log:init(#{uid => TestCase})),
            {LogEntries, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
@@ -172,17 +171,16 @@ append_all([Entry | Entries], Log0) ->
     append_all(Entries, Log).
 
 write_missing_entry(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun write_missing_entry_prop/2, [Dir, TestCase], 100).
+    run_proper(fun write_missing_entry_prop/1, [TestCase], 100).
 
-write_missing_entry_prop(Dir, TestCase) ->
+write_missing_entry_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(3),
        ?FORALL(
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
-              Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+              Log = ra_log:init(#{uid => TestCase}),
               Reply = ra_log:write(Head ++ Tail, Log),
               reset(Log),
               ?WHENFAIL(ct:pal("Reply: ~p~n", [Reply]),
@@ -193,11 +191,10 @@ write_missing_entry_prop(Dir, TestCase) ->
           end)).
 
 write_overwrite_entry(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun write_overwrite_entry_prop/2, [Dir, TestCase], 100).
+    run_proper(fun write_overwrite_entry_prop/1, [TestCase], 100).
 
-write_overwrite_entry_prop(Dir, TestCase) ->
+write_overwrite_entry_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(3),
        ?FORALL(
@@ -205,7 +202,7 @@ write_overwrite_entry_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               NewEntry = [{Idx, Term, <<"overwrite">>}],
               {ok, Log} = ra_log:write(NewEntry, Log0),
               {LogEntries, Log1} = ra_log:take(1, length(Entries), Log),
@@ -218,11 +215,10 @@ write_overwrite_entry_prop(Dir, TestCase) ->
           end)).
 
 multi_write_missing_entry(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun multi_write_missing_entry_prop/2, [Dir, TestCase], 100).
+    run_proper(fun multi_write_missing_entry_prop/1, [TestCase], 100).
 
-multi_write_missing_entry_prop(Dir, TestCase) ->
+multi_write_missing_entry_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(3),
        ?FORALL(
@@ -230,7 +226,7 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Head,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               Reply = ra_log:write(Tail, Log0),
               reset(Log0),
               ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
@@ -241,18 +237,17 @@ multi_write_missing_entry_prop(Dir, TestCase) ->
           end)).
 
 append_missing_entry(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun append_missing_entry_prop/2, [Dir, TestCase], 100).
+    run_proper(fun append_missing_entry_prop/1, [TestCase], 100).
 
-append_missing_entry_prop(Dir, TestCase) ->
+append_missing_entry_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(3),
        ?FORALL(
           {Head, _Entry, Tail}, slice_gen(Entries),
           begin
               Log0 = append_all(Head,
-                               ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                               ra_log:init(#{uid => TestCase})),
               Failed = try
                            ra_log:append(hd(Tail), Log0),
                            false
@@ -270,15 +265,14 @@ append_missing_entry_prop(Dir, TestCase) ->
           end)).
 
 write_index_starts_zero(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun write_index_starts_zero_prop/2, [Dir, TestCase], 100).
+    run_proper(fun write_index_starts_zero_prop/1, [TestCase], 100).
 
-write_index_starts_zero_prop(Dir, TestCase) ->
+write_index_starts_zero_prop(TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_zero_gen(),
        begin
-           Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+           Log = ra_log:init(#{uid => TestCase}),
            Reply = ra_log:write([Entry], Log),
            reset(Log),
            ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
@@ -289,20 +283,20 @@ write_index_starts_zero_prop(Dir, TestCase) ->
        end).
 
 append(Config) ->
-    %% There is no way to create a log file from a list of entries without the write
+    %% There is no way to create a log file from a list of entries without the
+    %% write
     %% API. We have to prove first that writting a consecutive log file succeeds,
     %% so we can use it as a base for our tests
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun append_prop/2, [Dir, TestCase], 100).
+    run_proper(fun append_prop/1, [TestCase], 100).
 
-append_prop(Dir, TestCase) ->
+append_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        begin
            Log0 = append_all(
                    Entries,
-                   ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                   ra_log:init(#{uid => TestCase})),
            {LogEntries, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
@@ -311,11 +305,10 @@ append_prop(Dir, TestCase) ->
        end).
 
 append_overwrite_entry(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun append_overwrite_entry_prop/2, [Dir, TestCase], 100).
+    run_proper(fun append_overwrite_entry_prop/1, [TestCase], 100).
 
-append_overwrite_entry_prop(Dir, TestCase) ->
+append_overwrite_entry_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(3),
        ?FORALL(
@@ -323,7 +316,7 @@ append_overwrite_entry_prop(Dir, TestCase) ->
           begin
               {ok, Log} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               Failed = try
                            ra_log:append({Idx, Term, <<"overwrite">>}, Log),
                            false
@@ -337,15 +330,14 @@ append_overwrite_entry_prop(Dir, TestCase) ->
           end)).
 
 append_index_starts_one(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun append_index_starts_one_prop/2, [Dir, TestCase], 100).
+    run_proper(fun append_index_starts_one_prop/1, [TestCase], 100).
 
-append_index_starts_one_prop(Dir, TestCase) ->
+append_index_starts_one_prop(TestCase) ->
     ?FORALL(
        Entry, log_entry_but_one_gen(),
        begin
-           Log = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+           Log = ra_log:init(#{uid => TestCase}),
            Failed = try
                        ra_log:append(Entry, Log),
                        false
@@ -358,11 +350,10 @@ append_index_starts_one_prop(Dir, TestCase) ->
        end).
 
 take(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun take_prop/2, [Dir, TestCase], 100).
+    run_proper(fun take_prop/1, [TestCase], 100).
 
-take_prop(Dir, TestCase) ->
+take_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -370,7 +361,7 @@ take_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                  Entries,
-                                 ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                 ra_log:init(#{uid => TestCase})),
               {Selected, Log} = ra_log:take(Start, Num, Log0),
               Expected = lists:sublist(Entries, Start, Num),
               reset(Log),
@@ -380,11 +371,10 @@ take_prop(Dir, TestCase) ->
           end)).
 
 take_out_of_range(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun take_out_of_range_prop/2, [Dir, TestCase], 100).
+    run_proper(fun take_out_of_range_prop/1, [TestCase], 100).
 
-take_out_of_range_prop(Dir, TestCase) ->
+take_out_of_range_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -392,7 +382,7 @@ take_out_of_range_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               {Reply, Log} = ra_log:take(Start, Num, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Start: ~p Num: ~p~nReply: ~p~n", [Start, Num, Reply]),
@@ -400,11 +390,10 @@ take_out_of_range_prop(Dir, TestCase) ->
           end)).
 
 fetch(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun fetch_prop/2, [Dir, TestCase], 100).
+    run_proper(fun fetch_prop/1, [TestCase], 100).
 
-fetch_prop(Dir, TestCase) ->
+fetch_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -412,7 +401,7 @@ fetch_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               {Got, Log} = ra_log:fetch(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Got, Entry]),
@@ -420,11 +409,10 @@ fetch_prop(Dir, TestCase) ->
           end)).
 
 fetch_out_of_range(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun fetch_out_of_range_prop/2, [Dir, TestCase], 100).
+    run_proper(fun fetch_out_of_range_prop/1, [TestCase], 100).
 
-fetch_out_of_range_prop(Dir, TestCase) ->
+fetch_out_of_range_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -432,7 +420,7 @@ fetch_out_of_range_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               {Reply, Log} = ra_log:fetch(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: undefined~n", [Reply]),
@@ -440,17 +428,16 @@ fetch_out_of_range_prop(Dir, TestCase) ->
           end)).
 
 last_index_term(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_index_term_prop/2, [Dir, TestCase], 100).
+    run_proper(fun last_index_term_prop/1, [TestCase], 100).
 
-last_index_term_prop(Dir, TestCase) ->
+last_index_term_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(0),
        begin
            {ok, Log} = ra_log:write(
                              Entries,
-                             ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                             ra_log:init(#{uid => TestCase})),
            {LastIdx, LastTerm} = case Entries of
                                      [] ->
                                          {0, 0};
@@ -465,11 +452,10 @@ last_index_term_prop(Dir, TestCase) ->
        end).
 
 fetch_term(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun fetch_term_prop/2, [Dir, TestCase], 100).
+    run_proper(fun fetch_term_prop/1, [TestCase], 100).
 
-fetch_term_prop(Dir, TestCase) ->
+fetch_term_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -477,7 +463,7 @@ fetch_term_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                 Entries,
-                                ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                ra_log:init(#{uid => TestCase})),
               {Term, Log} = ra_log:fetch_term(Idx, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Term, ExpectedTerm]),
@@ -485,11 +471,10 @@ fetch_term_prop(Dir, TestCase) ->
           end)).
 
 fetch_out_of_range_term(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun fetch_out_of_range_term_prop/2, [Dir, TestCase], 100).
+    run_proper(fun fetch_out_of_range_term_prop/1, [TestCase], 100).
 
-fetch_out_of_range_term_prop(Dir, TestCase) ->
+fetch_out_of_range_term_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -497,7 +482,7 @@ fetch_out_of_range_term_prop(Dir, TestCase) ->
           begin
               {ok, Log0} = ra_log:write(
                                  Entries,
-                                 ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                                 ra_log:init(#{uid => TestCase})),
               {Term, Log} = ra_log:fetch_term(Start, Log0),
               reset(Log),
               ?WHENFAIL(io:format("Got: ~p for index: ~p~n", [Term, Start]),
@@ -505,17 +490,16 @@ fetch_out_of_range_term_prop(Dir, TestCase) ->
           end)).
 
 next_index_term(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_index_term_prop/2, [Dir, TestCase], 100).
+    run_proper(fun last_index_term_prop/1, [TestCase], 100).
 
-next_index_term_prop(Dir, TestCase) ->
+next_index_term_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        begin
            {ok, Log} = ra_log:write(
                               Entries,
-                              ra_log:init(#{data_dir => Dir, uid => TestCase})),
+                              ra_log:init(#{uid => TestCase})),
            {LastIdx, _LastTerm, _} = lists:last(Entries),
            Idx = ra_log:next_index(Log),
            reset(Log),
@@ -525,9 +509,8 @@ next_index_term_prop(Dir, TestCase) ->
 
 
 last_written_with_wal(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_with_wal_prop/2, [Dir, TestCase], 15).
+    run_proper(fun last_written_with_wal_prop/1, [TestCase], 15).
 
 build_action_list(Entries, Actions) ->
     lists:flatten(lists:map(fun(Index) ->
@@ -543,7 +526,8 @@ build_action_list(Entries, Actions) ->
 position(Entries) ->
     choose(1, length(Entries)).
 
-last_written_with_wal_prop(Dir, TestCase) ->
+last_written_with_wal_prop(TestCase) ->
+    ok = logger:set_primary_config(level, all),
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -555,7 +539,7 @@ last_written_with_wal_prop(Dir, TestCase) ->
           begin
               flush(),
               All = build_action_list(Entries, Actions),
-              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -597,11 +581,10 @@ last_written_with_wal_prop(Dir, TestCase) ->
           end)).
 
 last_written_with_segment_writer(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_with_segment_writer_prop/2, [Dir, TestCase], 25).
+    run_proper(fun last_written_with_segment_writer_prop/1, [TestCase], 25).
 
-last_written_with_segment_writer_prop(Dir, TestCase) ->
+last_written_with_segment_writer_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -613,7 +596,7 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
-              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{uid => TestCase}),
               {Log, Last, LastIdx, _Status} =
                   lists:foldl(fun({wait, Wait}, Acc) ->
                                       timer:sleep(Wait),
@@ -647,12 +630,11 @@ last_written_with_segment_writer_prop(Dir, TestCase) ->
           end)).
 
 last_written_with_crashing_segment_writer(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper_noshrink(fun last_written_with_crashing_segment_writer_prop/2,
-                        [Dir, TestCase], 1).
+    run_proper_noshrink(fun last_written_with_crashing_segment_writer_prop/1,
+                        [TestCase], 1).
 
-last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
+last_written_with_crashing_segment_writer_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -663,7 +645,7 @@ last_written_with_crashing_segment_writer_prop(Dir, TestCase) ->
               flush(),
               All = build_action_list(Entries, Actions),
               _ = supervisor:restart_child(ra_log_sup, ra_log_segment_writer),
-              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase,
+              Log0 = ra_log:init(#{uid => TestCase,
                                    resend_window => 2}),
               ra_log:take(1, 10, Log0),
               {Log, _Last, Ts} =
@@ -750,11 +732,10 @@ wait_for_wal(M, N) ->
 
 
 last_written(Config) ->
-    Dir = ?config(wal_dir, Config),
     TestCase = ?config(test_case, Config),
-    run_proper(fun last_written_prop/2, [Dir, TestCase], 10).
+    run_proper(fun last_written_prop/1, [TestCase], 10).
 
-last_written_prop(Dir, TestCase) ->
+last_written_prop(TestCase) ->
     ?FORALL(
        Entries, log_entries_gen(1),
        ?FORALL(
@@ -762,7 +743,7 @@ last_written_prop(Dir, TestCase) ->
           begin
               flush(),
               Actions = lists:zip3(Entries, Waits, Consumes),
-              Log0 = ra_log:init(#{data_dir => Dir, uid => TestCase}),
+              Log0 = ra_log:init(#{uid => TestCase}),
               {Log, Last} = lists:foldl(fun({Entry, Wait, Consume}, {Acc0, Last0}) ->
                                                 {ok, Acc} = ra_log:write([Entry], Acc0),
                                                 timer:sleep(Wait),
