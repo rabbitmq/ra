@@ -127,9 +127,9 @@ append(#state{index_offset = IndexOffset,
             Length = erlang:byte_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
-            IndexData = <<Index:64/integer, Term:64/integer,
-                          DataOffset:32/integer, Length:32/integer,
-                          Checksum:32/integer>>,
+            IndexData = <<Index:64/unsigned, Term:64/unsigned,
+                          DataOffset:32/unsigned, Length:32/unsigned,
+                          Checksum:32/unsigned>>,
             Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
             Range = update_range(Range0, Index),
             % fsync is done explicitly
@@ -282,9 +282,9 @@ dump_index(File) ->
             {0, DataOffset, undefined, #{}}
     end.
 
-dump_index_data(<<Idx:64/integer, Term:64/integer,
-                  Offset:32/integer, Length:32/integer,
-                  _:32/integer, Rest/binary>>,
+dump_index_data(<<Idx:64/unsigned, Term:64/unsigned,
+                  Offset:32/unsigned, Length:32/unsigned,
+                  _:32/unsigned, Rest/binary>>,
                  Acc) ->
 dump_index_data(Rest, [{Idx, Term, Offset, Length} | Acc]);
 dump_index_data(_, Acc) ->
@@ -296,14 +296,14 @@ parse_index_data(Data, DataOffset) ->
 parse_index_data(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
     % end of data
     {Num, DataOffset, Range, Index};
-parse_index_data(<<0:64/integer, 0:64/integer, 0:32/integer,
-                   0:32/integer, 0:32/integer, _Rest/binary>>,
+parse_index_data(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+                   0:32/unsigned, 0:32/integer, _Rest/binary>>,
                  Num, _LastIdx, DataOffset, Range, Index) ->
     % partially written index
     % end of written data
     {Num, DataOffset, Range, Index};
-parse_index_data(<<Idx:64/integer, Term:64/integer,
-                   Offset:32/integer, Length:32/integer,
+parse_index_data(<<Idx:64/unsigned, Term:64/unsigned,
+                   Offset:32/unsigned, Length:32/unsigned,
                    Crc:32/integer, Rest/binary>>,
                  Num, LastIdx, _DataOffset, Range, Index0) ->
     % trim index entries if Idx goes "backwards"
@@ -320,7 +320,7 @@ parse_index_data(<<Idx:64/integer, Term:64/integer,
                      Index#{Idx => {Term, Offset, Length, Crc}}).
 
 write_header(MaxCount, Fd) ->
-    Header = <<?MAGIC, ?VERSION:16/integer, MaxCount:16/integer>>,
+    Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
     {ok, 0} = ra_file_handle:position(Fd, 0),
     ok = ra_file_handle:write(Fd, Header).
 
@@ -329,7 +329,7 @@ read_header(Fd) ->
     case ra_file_handle:read(Fd, ?HEADER_SIZE) of
         {ok, Buffer} ->
             case Buffer of
-                <<?MAGIC, ?VERSION:16/integer, MaxCount:16/integer>> ->
+                <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>> ->
                     {ok, MaxCount};
                 _ ->
                     {error, invalid_segment_format}

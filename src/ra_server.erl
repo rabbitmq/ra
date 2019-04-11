@@ -1075,7 +1075,7 @@ current_term(State) ->
 % Internal
 
 become(leader, #{cluster := Cluster, log := Log0} = State) ->
-    Log = ra_log:release_resources(maps:size(Cluster), Log0),
+    Log = ra_log:release_resources(maps:size(Cluster) + 1, Log0),
     State#{log => Log};
 become(follower, #{log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one

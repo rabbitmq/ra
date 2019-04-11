@@ -140,7 +140,7 @@ init(#{uid := UId} = Conf) ->
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId) of
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, SnapIdx) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
                                           R ->  R
@@ -627,7 +627,8 @@ release_resources(MaxOpenSegments,
 
 %%% Local functions
 
-%% deletes all segments where the last index is lower than the Idx argumement
+%% deletes all segments where the last index is lower or equal to
+%% the Idx argumement
 delete_segments(Idx, #?MODULE{log_id = LogId,
                               uid = UId,
                               open_segments = OpenSegs0,
@@ -987,7 +988,7 @@ flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
     ok.
 
-recover_range(UId) ->
+recover_range(UId, SnapIdx) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_servers are part of the same
     % supervision tree
@@ -1011,7 +1012,9 @@ recover_range(UId) ->
                        undefined ->
                            ok = ra_log_segment:close(Seg),
                            %% delete the empty segment
-                           ok = file:delete(ra_log_segment:filename(Seg)),
+                           Fn =  ra_log_segment:filename(Seg),
+                           ok = ra_log_segment_writer:delete_segments(
+                                  UId, SnapIdx, [Fn]),
                            Acc;
                        SegRef ->
                            ok = ra_log_segment:close(Seg),

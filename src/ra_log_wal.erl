@@ -323,15 +323,15 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-            Entry = [<<Idx:64/integer,
-                       Term:64/integer>>,
+            Entry = [<<Idx:64/unsigned,
+                       Term:64/unsigned>>,
                      EntryData],
             Checksum = case ComputeChecksum of
                            true -> erlang:adler32(Entry);
                            false -> 0
                        end,
             Record = [HeaderData,
-                      <<Checksum:32/integer, EntryDataLen:32/integer>>,
+                      <<Checksum:32/integer, EntryDataLen:32/unsigned>>,
                       Entry],
             append_data(State0, Id, Idx, Term, Data0,
                         DataSize, Record, Trunc)
@@ -592,7 +592,7 @@ try_recover_records(Data, Cache) ->
               ok
     end.
 
-recover_records(<<Trunc:1/integer, 0:1/unsigned, IdRef:22/unsigned,
+recover_records(<<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
                   IdDataLen:16/unsigned, UId:IdDataLen/binary,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
@@ -607,7 +607,7 @@ recover_records(<<Trunc:1/integer, 0:1/unsigned, IdRef:22/unsigned,
                            {UId, <<1:1/unsigned, IdRef:22/unsigned>>}});
 recover_records(<<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
-                  EntryDataLen:32/integer,
+                  EntryDataLen:32/unsigned,
                   Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>, Cache) ->
@@ -630,7 +630,7 @@ validate_checksum(0, _, _, _) ->
 validate_checksum(Checksum, Idx, Term, Data) ->
     % building a binary just for the checksum may feel a bit wasteful
     % but this is only called during recovery which should be a rare event
-    case erlang:adler32(<<Idx:64/integer, Term:64/integer, Data/binary>>) of
+    case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, Data/binary>>) of
         Checksum ->
             ok;
         _ ->
