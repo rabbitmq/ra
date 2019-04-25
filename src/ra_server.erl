@@ -819,8 +819,9 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
                   current_term := CurTerm} = State) ->
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
-    ?DEBUG("~s: follower request_vote_rpc in ~b but current term ~b~n",
-          [LogId, _Term, CurTerm]),
+    ?DEBUG("~s: follower got append_entries_rpc from ~w in"
+           " ~b but current term is: ~b~n",
+          [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0}) ->
