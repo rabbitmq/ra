@@ -111,8 +111,6 @@ delete_server_rpc(RaName) ->
     Pid = ra_directory:where_is(RaName),
     ra_log_meta:delete(UId),
     Dir = ra_env:server_data_dir(UId),
-    ok = ra_log_segment_writer:release_segments(
-           ra_log_segment_writer, UId),
     _ = supervisor:terminate_child(?MODULE, UId),
     % TODO: move into separate retrying process
     try ra_lib:recursive_delete(Dir) of

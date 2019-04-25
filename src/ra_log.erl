@@ -632,14 +632,13 @@ release_resources(MaxOpenSegments,
 delete_segments(Idx, #?MODULE{log_id = LogId,
                               uid = UId,
                               open_segments = OpenSegs0,
-                              directory = Dir,
                               segment_refs = SegRefs0} = State0) ->
     case lists:partition(fun({_, To, _}) when To > Idx -> true;
                             (_) -> false
                          end, SegRefs0) of
         {_, []} ->
             State0;
-        {Active, Obsolete} ->
+        {Active, [Pivot | _] = Obsolete} ->
             ObsoleteKeys = [element(3, O) || O <- Obsolete],
             % close any open segments
             OpenSegs = lists:foldl(fun (K, OS0) ->
@@ -648,9 +647,7 @@ delete_segments(Idx, #?MODULE{log_id = LogId,
                                                error -> OS0
                                            end
                                    end, OpenSegs0, ObsoleteKeys),
-            ObsoleteFiles = [filename:join(Dir, O) || O <- ObsoleteKeys],
-            ok = ra_log_segment_writer:delete_segments(UId, Idx,
-                                                       ObsoleteFiles),
+            ok = ra_log_segment_writer:truncate_segments(UId, Pivot),
             ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
                    [LogId, length(ObsoleteKeys), Idx, length(Active)]),
             State0#?MODULE{open_segments = OpenSegs,
@@ -988,7 +985,7 @@ flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
     ok.
 
-recover_range(UId, SnapIdx) ->
+recover_range(UId, _SnapIdx) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_servers are part of the same
     % supervision tree
@@ -1011,10 +1008,6 @@ recover_range(UId, SnapIdx) ->
                    case ra_log_segment:segref(Seg) of
                        undefined ->
                            ok = ra_log_segment:close(Seg),
-                           %% delete the empty segment
-                           Fn =  ra_log_segment:filename(Seg),
-                           ok = ra_log_segment_writer:delete_segments(
-                                  UId, SnapIdx, [Fn]),
                            Acc;
                        SegRef ->
                            ok = ra_log_segment:close(Seg),

@@ -591,8 +591,9 @@ update_release_cursor(Config) ->
 
     [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
 
-    % no segments should remain
-    [] =  find_segments(Config),
+    % only one segment should remain as the segment writer always keeps
+    % at least one segment for each
+    [_] =  find_segments(Config),
 
     % append a few more items
     Log6 = append_and_roll(150, 155, 2, Log5),
@@ -663,7 +664,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
                                              1, initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
-    [] = find_segments(Config),
+    [_] = find_segments(Config),
     ok.
 
 transient_writer_is_handled(Config) ->
