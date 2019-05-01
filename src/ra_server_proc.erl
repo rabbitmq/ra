@@ -728,8 +728,6 @@ terminate(Reason, StateName,
     Parent = ra_directory:where_is_parent(UId),
     case Reason of
         {shutdown, delete} ->
-            catch ra_log_segment_writer:release_segments(
-                    ra_log_segment_writer, UId),
             catch ra_directory:unregister_name(UId),
             catch ra_log_meta:delete_sync(UId),
             catch ets:delete(ra_state, UId),

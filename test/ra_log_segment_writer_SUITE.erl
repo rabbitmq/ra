@@ -20,7 +20,9 @@ all_tests() ->
      accept_mem_tables_overwrite,
      accept_mem_tables_rollover,
      accept_mem_tables_for_down_server,
-     delete_segments,
+     truncate_segments,
+     truncate_segments_with_pending_update,
+     truncate_segments_with_pending_overwrite,
      my_segments,
      skip_entries_lower_than_snapshot_index,
      skip_all_entries_lower_than_snapshot_index
@@ -91,36 +93,124 @@ accept_mem_tables(Config) ->
     ok = gen_server:stop(TblWriterPid),
     ok.
 
-delete_segments(Config) ->
+
+truncate_segments(Config) ->
     Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{data_dir => Dir}),
+    SegConf = #{max_count => 12},
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(
+                           #{data_dir => Dir, segment_conf => SegConf}),
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
-    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(UId, Entries),
-    MemTables = [{UId, 1, 3, Tid}],
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
+    Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     receive
-        {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+        {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
-            ok = ra_log_segment_writer:delete_segments(TblWriterPid, UId, 2,
-                                                       [SegmentFile]),
-            timer:sleep(250),
+            SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
+            ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
+                                                         UId, Cur),
+            validate_segment_deleted(100, SegmentFile),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
-            ok = ra_log_segment_writer:delete_segments(TblWriterPid, UId, 3,
-                                                       [SegmentFile]),
-            validate_segment_deleted(100, SegmentFile),
-            % timer:sleep(1000),
-            % validate file is gone
-            % ?assert(false =:= filelib:is_file(SegmentFile)),
+            [{_, _, S1}, {_, _, S2}] = Rem,
+            SegmentFile1 = filename:join(?config(server_dir, Config), S1),
+            validate_segment_deleted(100, SegmentFile1),
+            SegmentFile2 = filename:join(?config(server_dir, Config), S2),
+            validate_segment_deleted(10, SegmentFile2),
+            ?assertMatch([_], segments_for(UId, Dir)),
             ok
     after 3000 ->
               throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+truncate_segments_with_pending_update(Config) ->
+    Dir = ?config(wal_dir, Config),
+    SegConf = #{max_count => 12},
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(
+                           #{data_dir => Dir, segment_conf => SegConf}),
+    UId = ?config(uid, Config),
+    % fake up a mem segment for Self
+    Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    %% write one more entry separately
+    {_MemTables2, _} = fake_mem_table(UId, Dir, [{33, 43, 33}]),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    receive
+        {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
+            % test a lower index _does not_ delete the file
+            SegmentFile = filename:join(?config(server_dir, Config), S),
+            ?assert(filelib:is_file(SegmentFile)),
+            ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
+                                                         UId, Cur),
+            timer:sleep(1000),
+            SegmentFile = filename:join(?config(server_dir, Config), S),
+            % test a fully inclusive snapshot index _does_ delete the current
+            % segment file
+            [{_, _, S1}, {_, _, S2}] = Rem,
+            SegmentFile1 = filename:join(?config(server_dir, Config), S1),
+            validate_segment_deleted(100, SegmentFile1),
+            SegmentFile2 = filename:join(?config(server_dir, Config), S2),
+            validate_segment_deleted(10, SegmentFile2),
+            ok
+    after 3000 ->
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+truncate_segments_with_pending_overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    SegConf = #{max_count => 12},
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(
+                           #{data_dir => Dir, segment_conf => SegConf}),
+    UId = ?config(uid, Config),
+    % fake up a mem segment for Self
+    Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
+    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    %% write one more entry separately
+    Entries2 = [{N, 43, N} || N <- lists:seq(12, 25)],
+    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables2, WalFile2),
+    receive
+        {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
+            % test a lower index _does not_ delete the file
+            SegmentFile = filename:join(?config(server_dir, Config), S),
+            ?assert(filelib:is_file(SegmentFile)),
+            ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
+                                                         UId, Cur),
+            timer:sleep(1000),
+            SegmentFile = filename:join(?config(server_dir, Config), S),
+            % test a fully inclusive snapshot index _does_ delete the current
+            % segment file
+            [{_, _, S1}, {_, _, S2}] = Rem,
+            SegmentFile1 = filename:join(?config(server_dir, Config), S1),
+            validate_segment_deleted(100, SegmentFile1),
+            SegmentFile2 = filename:join(?config(server_dir, Config), S2),
+            validate_segment_deleted(10, SegmentFile2),
+            ok
+    after 3000 ->
+              throw(ra_log_event_timeout)
+    end,
+    receive
+        {ra_log_event, {segments, _, [{16, 25, F} = Cur2, {12, 15, F2}]}} ->
+            ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
+                                                         UId, Cur2),
+            SegFile = filename:join(?config(server_dir, Config), F),
+            validate_segment_deleted(100, SegFile),
+            SegFile2 = filename:join(?config(server_dir, Config), F2),
+            validate_segment_deleted(10, SegFile2),
+            %% validate there is a new empty segment
+            ?assertMatch([_], segments_for(UId, Dir)),
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout2)
     end,
     ok = gen_server:stop(TblWriterPid),
     ok.
@@ -136,8 +226,6 @@ validate_segment_deleted(N, SegFile) ->
         false ->
             ok
     end.
-
-
 
 
 my_segments(Config) ->
@@ -350,8 +438,13 @@ make_mem_table(UId, Entries) ->
     Tid.
 
 flush() ->
-    receive _ ->
+    receive Msg ->
+                ct:pal("flush: ~p~n", [Msg]),
                 flush()
     after 0 -> ok
     end.
 
+segments_for(UId, DataDir) ->
+    Dir = filename:join(DataDir, ra_lib:to_list(UId)),
+    SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
+    SegFiles.

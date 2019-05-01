@@ -5,9 +5,8 @@
 -export([start_link/1,
          accept_mem_tables/2,
          accept_mem_tables/3,
-         delete_segments/3,
-         delete_segments/4,
-         release_segments/2,
+         truncate_segments/2,
+         truncate_segments/3,
          my_segments/1,
          my_segments/2,
          await/0,
@@ -24,9 +23,7 @@
          ]).
 
 -record(state, {data_dir :: file:filename(),
-                segment_conf = #{} :: ra_log_segment:ra_log_segment_options(),
-                active_segments = #{} :: #{ra_uid() =>
-                                           ra_log_segment:state()}}).
+                segment_conf = #{} :: ra_log_segment:ra_log_segment_options()}).
 
 -include("ra.hrl").
 
@@ -54,23 +51,14 @@ accept_mem_tables(_SegmentWriter, [], undefined) ->
 accept_mem_tables(SegmentWriter, Tables, WalFile) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
--spec delete_segments(ra_uid(), ra_index(),
-                      [file:filename_all()]) -> ok.
-delete_segments(Who, SnapIdx, SegmentFiles) ->
-    delete_segments(?MODULE, Who, SnapIdx, SegmentFiles).
+-spec truncate_segments(ra_uid(), ra_log:segment_ref()) -> ok.
+truncate_segments(Who, SegRef) ->
+    truncate_segments(?MODULE, Who, SegRef).
 
-%% delete segmetns for a ra server. Takes a list of absolute filenames and deletes
-%% all but the latest one immedately and sends the latest one to the segment
-%% writer process to delete in case it is still open.
--spec delete_segments(atom() | pid(), ra_uid(),
-                      ra_index(), [file:filename_all()]) -> ok.
-delete_segments(SegWriter, Who, SnapIdx, SegmentFiles) ->
-    % delete all closed segment files
-    gen_server:cast(SegWriter, {delete_segments, Who, SnapIdx, SegmentFiles}).
-
--spec release_segments(atom() | pid(), ra_uid()) -> ok.
-release_segments(SegWriter, Who) ->
-    gen_server:call(SegWriter, {release_segments, Who}).
+-spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
+truncate_segments(SegWriter, Who, SegRef) ->
+    % truncate all closed segment files
+    gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
 %% returns the absolute filenames of all the segments
 -spec my_segments(ra_uid()) -> [file:filename()].
@@ -117,23 +105,16 @@ init([#{data_dir := DataDir} = Conf]) ->
 
 handle_call(await, _From, State) ->
     {reply, ok, State};
-handle_call({release_segments, Who}, _From,
-            #state{active_segments = ActiveSegments0} = State0) ->
-    case maps:take(Who, ActiveSegments0) of
-        {Seg, ActiveSegments} ->
-            % defensive
-            _ = ra_log_segment:close(Seg),
-            {reply, ok, State0#state{active_segments = ActiveSegments}};
-        error ->
-            {reply, ok, State0}
-    end;
-handle_call({my_segments, Who}, _From,
-            #state{data_dir = DataDir} = State) ->
-    Dir = filename:join(DataDir, ra_lib:to_list(Who)),
-    SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
+handle_call({my_segments, Who}, _From, State) ->
+    SegFiles = segments_for(Who, State),
     {reply, SegFiles, State};
 handle_call(overview, _From, State) ->
     {reply, get_overview(State), State}.
+
+segments_for(UId, #state{data_dir = DataDir}) ->
+    Dir = filename:join(DataDir, ra_lib:to_list(UId)),
+    SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
+    SegFiles.
 
 handle_cast({mem_tables, Tables, WalFile}, State0) ->
     State = lists:foldl(fun do_segment/2, State0, Tables),
@@ -154,45 +135,48 @@ handle_cast({mem_tables, Tables, WalFile}, State0) ->
     %% segment write
     true = erlang:garbage_collect(),
     {noreply, State};
-handle_cast({delete_segments, Who, Idx, [SegmentFile | SegmentFiles]},
-            #state{active_segments = ActiveSegments} = State0) ->
-    _ = [_ = file:delete(F) || F <- SegmentFiles],
-    case ActiveSegments of
-        #{Who := Seg} ->
-            case ra_log_segment:is_same_as(Seg, SegmentFile) of
-                true ->
-                    % the segment file is the correct one
-                    case ra_log_segment:range(Seg) of
-                        {_From, To} when To =< Idx ->
-                            % segment can be deleted
-                            ok = ra_log_segment:close(Seg),
-                            ok = file:delete(SegmentFile),
-                            {noreply,
-                             State0#state{active_segments =
-                                          maps:remove(Who, ActiveSegments)}};
-                        _ ->
-                            {noreply, State0}
-                    end;
-                false ->
-                    %% don't validate the file got deleted as it is possible
-                    %% to get multiple requests under high load
-                    _ = file:delete(SegmentFile),
+handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
+            #state{segment_conf = SegConf} = State0) ->
+    %% remove all segments below the provided SegRef
+    %% Also delete the segref if the file hasn't changed
+    Files = segments_for(Who, State0),
+    {Keep, Discard} = lists:splitwith(
+                        fun (F) ->
+                                ra_lib:to_string(filename:basename(F)) =/= Name
+                        end, lists:reverse(Files)),
+    case Discard of
+        [] ->
+            %% should this be possible?
+            {noreply, State0};
+        Remove when Keep =/= [] ->
+            _ = [_ = file:delete(F) || F <- Remove],
+            {noreply, State0};
+        [Pivot | Remove] ->
+            %% remove all old files
+            _ = [_ = file:delete(F) || F <- Remove],
+            %% check if the pivot has changed
+            {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
+            case ra_log_segment:segref(Seg) of
+                SegRef ->
+                    %% it has not changed - we can delete that too
+                    %% as we are deleting the last segment - create an empty
+                    %% successor
+                    _ = ra_log_segment:close(
+                          open_successor_segment(Seg, SegConf)),
+                    _ = ra_log_segment:close(Seg),
+                    _ = file:delete(Pivot),
+                    {noreply, State0};
+                _ ->
+                    %% the segment has changed - leave it in place
                     {noreply, State0}
-            end;
-        _ ->
-            % if it isn't active we can just delete it
-            _ = file:delete(SegmentFile),
-            {noreply, State0}
+            end
     end.
 
 
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{active_segments = ActiveSegments}) ->
-    % ensure any open segments are closed
-    [ok = ra_log_segment:close(Seg)
-     || Seg <- maps:values(ActiveSegments)],
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -203,16 +187,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-get_overview(#state{active_segments = Active,
+get_overview(#state{data_dir = Dir,
                     segment_conf = Conf}) ->
-    #{active_segments => maps:size(Active),
+    #{data_dir => Dir,
       segment_conf => Conf
      }.
 
 do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
-                  segment_conf = SegConf,
-                  active_segments = ActiveSegments} = State) ->
+                  segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
     case filelib:is_dir(Dir) of
@@ -221,10 +204,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
             %% if it does not exist the server has
             %% never been started or has been deleted
             %% and we should just continue
-            Segment0 = case ActiveSegments of
-                           #{ServerUId := S} -> S;
-                           _ -> open_file(Dir, SegConf)
-                       end,
+            Segment0 = open_file(Dir, SegConf),
             case Segment0 of
                 undefined ->
                     State;
@@ -246,8 +226,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                               end,
 
                     ok = send_segments(ServerUId, Tid, SegRefs),
-                    State#state{active_segments =
-                                ActiveSegments#{ServerUId => Segment}}
+                    State
             end;
         false ->
             ?DEBUG("segment_writer: skipping segment as directory ~s does "
