@@ -70,7 +70,6 @@
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
       read_index => non_neg_integer(),
-      waiting_apply_index => #{consistent_query_ref() => ra_index()},
       waiting_heartbeats => #{non_neg_integer() => consistent_query_ref()},
       pending_consistent_queries => [consistent_query_ref()]
      }.
@@ -269,7 +268,6 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
       read_index => 0,
-      waiting_apply_index => #{},
       waiting_heartbeats => #{},
       pending_consistent_queries => []}.
 
@@ -310,11 +308,10 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
 
-            {State3, Effects1} = apply_waiting_consistent_queries(State2, Effects0),
-            {State4, Effects2} = process_pending_consistent_queries(State3, Effects1),
+            {State3, Effects1} = process_pending_consistent_queries(State2, Effects0),
 
             {State, More, RpcEffects0} =
-                make_pipelined_rpc_effects(State4, [{incr_metrics, ra_metrics,
+                make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
@@ -326,7 +323,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                  false ->
                                      RpcEffects0
                              end,
-            Effects = Effects2 ++ RpcEffects,
+            Effects = Effects1 ++ RpcEffects,
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -456,10 +453,9 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
 
-    {State2, Effects2} = apply_waiting_consistent_queries(State1, Effects1),
-    {State3, Effects3} = process_pending_consistent_queries(State2, Effects2),
+    {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
 
-    {State, _, Effects} = make_pipelined_rpc_effects(State3, Effects3),
+    {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
@@ -1105,8 +1101,6 @@ handle_leader_to_follower(#{pending_consistent_queries := Pending,
         {reply, From, {redirect, Leader}}
     end,
     Pending ++ map:keys(Waiting)),
-    %% We don't clean waiting_apply_index here because the only guarantee
-    %% we give is that the process is up-to-date at read_index.
     {State0#{pending_consistent_queries => [], waiting_heartbeats => #{}},
      PendingEffects ++ Effects0}.
 
@@ -1246,12 +1240,10 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State1, Effects1, Applied} ->
+        {State, Effects1, Applied} ->
             % filter the effects that should be applied on a follower
-            Effects2 = filter_follower_effects(Effects1),
-            Reply = append_entries_reply(Term, true, State1),
-
-            {State, Effects} = apply_waiting_consistent_queries(State1, Effects2),
+            Effects = filter_follower_effects(Effects1),
+            Reply = append_entries_reply(Term, true, State),
 
             {follower, State, [cast_reply(Id, LeaderId, Reply),
                                {incr_metrics, ra_metrics, [{3, Applied}]}
@@ -2230,37 +2222,10 @@ apply_or_schedule_consistent_queries(Refs, State0, Effects0) ->
                                          ra_effects()) ->
     {ra_server_state(), ra_effects()}.
 apply_or_schedule_consistent_query({_, _, ReadIndex} = Ref,
-                                   #{last_applied := ApplyIndex,
-                                     waiting_apply_index := Waiting} = State,
+                                   #{last_applied := ApplyIndex} = State,
                                    Effects) ->
-    case ApplyIndex >= ReadIndex of
-        true ->
-            {State, [consistent_query_reply(Ref, State) | Effects]};
-        false ->
-            {State#{waiting_apply_index => Waiting#{Ref => ReadIndex}}, Effects}
-    end.
-
--spec apply_waiting_consistent_queries(ra_server_state(), ra_effects()) ->
-    {ra_server_state(), ra_effects()}.
-apply_waiting_consistent_queries(#{last_applied := ApplyIndex,
-                                   waiting_apply_index := Waiting0} = State,
-                                Effects0) ->
-    ToReply = maps:filter(fun(_, ReadIndex) ->
-                              ReadIndex =< ApplyIndex
-                          end,
-                          Waiting0),
-    Keys = maps:keys(ToReply),
-
-    Waiting1 = maps:without(maps:keys(ToReply), Waiting0),
-    Effects1 =
-        lists:map(fun(Ref) ->
-                      consistent_query_reply(Ref, State)
-                  end,
-                  Keys)
-        ++
-        Effects0,
-
-    {State#{waiting_apply_index => Waiting1}, Effects1}.
+    true = ApplyIndex >= ReadIndex,
+    {State, [consistent_query_reply(Ref, State) | Effects]}.
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
 consistent_query_reply({From, QueryFun, _ReadIndex},
