@@ -545,15 +545,15 @@ handle_leader(#append_entries_rpc{leader_id = LeaderId},
 handle_leader({consistent_query, From, QueryFun},
               #{commit_index := CommitIndex,
                 cluster_change_permitted := true} = State0) ->
-    Ref = {From, QueryFun, CommitIndex},
-    {State1, Effects} = make_heartbeat_rpc_effects(Ref, State0),
+    QueryRef = {From, QueryFun, CommitIndex},
+    {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
     {leader, State1, Effects};
 handle_leader({consistent_query, From, QueryFun},
               #{commit_index := CommitIndex,
                 cluster_change_permitted := false,
                 pending_consistent_queries := PQ} = State0) ->
-    Ref = {From, QueryFun, CommitIndex},
-    {leader, State0#{pending_consistent_queries => [Ref | PQ]}, []};
+    QueryRef = {From, QueryFun, CommitIndex},
+    {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm, log_id := LogId} = State0)
@@ -576,8 +576,8 @@ handle_leader(#heartbeat_rpc{term = Term},
 handle_leader({PeerId, #heartbeat_reply{success = true, query_index = ReplyQueryIndex, term = Term}},
               #{current_term := CurTerm} = State0) when CurTerm >= Term  ->
     case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of
-        {{true, Refs}, State1} ->
-            {State, Effects} = apply_consistent_queries(Refs, State1, []),
+        {{true, QueryRefs}, State1} ->
+            {State, Effects} = apply_consistent_queries(QueryRefs, State1, []),
             {leader, State, Effects};
         {false, State1} ->
             {leader, State1, []}
@@ -2136,27 +2136,27 @@ heartbeat_reply(Term, QueryIndex, Success) ->
     #heartbeat_reply{term = Term, query_index = QueryIndex, success = Success}.
 
 update_heartbeat_rpc_effects(#{queries_waiting_heartbeats := Waiting} = State) ->
-    lists:foldl(fun({QueryIndex, Ref}, {State0, Effects0}) ->
-        {State1, Effects1} = make_heartbeat_rpc_effects_for_index(Ref, QueryIndex, State0),
+    lists:foldl(fun({QueryIndex, QueryRef}, {State0, Effects0}) ->
+        {State1, Effects1} = make_heartbeat_rpc_effects_for_index(QueryRef, QueryIndex, State0),
         {State1, Effects1 ++ Effects0}
     end,
     {State, []},
     queue:to_list(Waiting)).
 
-make_heartbeat_rpc_effects(Ref, #{query_index := QueryIndex} = State) ->
+make_heartbeat_rpc_effects(QueryRef, #{query_index := QueryIndex} = State) ->
     NewQueryIndex = QueryIndex + 1,
-    make_heartbeat_rpc_effects_for_index(Ref, NewQueryIndex, update_query_index(State, NewQueryIndex)).
+    make_heartbeat_rpc_effects_for_index(QueryRef, NewQueryIndex, update_query_index(State, NewQueryIndex)).
 
-make_heartbeat_rpc_effects_for_index(Ref, QueryIndex, #{queries_waiting_heartbeats := Waiting0} = State) ->
+make_heartbeat_rpc_effects_for_index(QueryRef, QueryIndex, #{queries_waiting_heartbeats := Waiting0} = State) ->
     Peers = peers(State),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
     case maps:size(Peers) of
         0 ->
-            apply_consistent_queries([Ref], State, []);
+            apply_consistent_queries([QueryRef], State, []);
         _ ->
             Effects = heartbeat_rpc_effects(Peers, QueryIndex, State),
-            Waiting1 = queue:in({QueryIndex, Ref}, Waiting0),
+            Waiting1 = queue:in({QueryIndex, QueryRef}, Waiting0),
             {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
@@ -2193,18 +2193,18 @@ heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Wait
                 false ->
                     {false, State1};
                 true ->
-                    {Refs, Waiting1} = take_from_queue_while(
-                        fun({QueryIndex, Ref}) ->
+                    {QueryRefs, Waiting1} = take_from_queue_while(
+                        fun({QueryIndex, QueryRef}) ->
                             case QueryIndex =< NewQueryIndex of
-                                true  -> {true, Ref};
+                                true  -> {true, QueryRef};
                                 false -> false
                             end
                         end,
                         Waiting0),
-                    case Refs of
+                    case QueryRefs of
                         [] -> {false, State1};
                         _  ->
-                            {{true, Refs},
+                            {{true, QueryRefs},
                              State1#{queries_waiting_heartbeats := Waiting1}}
                     end
             end
@@ -2239,22 +2239,22 @@ read_quorum(Cluster, NewQueryIndex) ->
                                            ra_server_state(),
                                            ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_consistent_queries(Refs, State0, Effects0) ->
-    lists:foldl(fun(Ref, {State, Effects}) ->
-        apply_consistent_query(Ref, State, Effects)
+apply_consistent_queries(QueryRefs, State0, Effects0) ->
+    lists:foldl(fun(QueryRef, {State, Effects}) ->
+        apply_consistent_query(QueryRef, State, Effects)
     end,
     {State0, Effects0},
-    Refs).
+    QueryRefs).
 
 -spec apply_consistent_query(consistent_query_ref(),
                                          ra_server_state(),
                                          ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_consistent_query({_, _, ReadCommitIndex} = Ref,
+apply_consistent_query({_, _, ReadCommitIndex} = QueryRef,
                                    #{last_applied := ApplyIndex} = State,
                                    Effects) ->
     true = ApplyIndex >= ReadCommitIndex,
-    {State, [consistent_query_reply(Ref, State) | Effects]}.
+    {State, [consistent_query_reply(QueryRef, State) | Effects]}.
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
 consistent_query_reply({From, QueryFun, _ReadCommitIndex},
@@ -2272,8 +2272,8 @@ process_pending_consistent_queries(#{cluster_change_permitted := true,
                                    Effects0) ->
     %% TODO: submit all pending queries with a single query index.
     lists:foldl(
-        fun(Ref, {State, Effects}) ->
-            {NewState, NewEffects} = make_heartbeat_rpc_effects(Ref, State),
+        fun(QueryRef, {State, Effects}) ->
+            {NewState, NewEffects} = make_heartbeat_rpc_effects(QueryRef, State),
             {NewState, NewEffects ++ Effects}
         end,
         {State0, Effects0},
