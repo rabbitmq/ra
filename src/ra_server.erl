@@ -69,8 +69,9 @@
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
-      read_index => non_neg_integer(),
-      waiting_heartbeats => #{non_neg_integer() => consistent_query_ref()},
+      query_index => non_neg_integer(),
+      %% TODO: make queue
+      queries_waiting_heartbeats => #{non_neg_integer() => consistent_query_ref()},
       pending_consistent_queries => [consistent_query_ref()]
      }.
 
@@ -267,8 +268,8 @@ init(#{id := Id,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
-      read_index => 0,
-      waiting_heartbeats => #{},
+      query_index => 0,
+      queries_waiting_heartbeats => #{},
       pending_consistent_queries => []}.
 
 recover(#{log_id := LogId,
@@ -452,7 +453,6 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
-
     {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
 
     {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
@@ -557,26 +557,28 @@ handle_leader({consistent_query, From, QueryFun},
     {leader, State0#{pending_consistent_queries => [Ref | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
-              #{current_term := CurTerm, log_id := LogId} = State0) when CurTerm < Term ->
+              #{current_term := CurTerm, log_id := LogId} = State0)
+        when CurTerm < Term ->
     ?INFO("~s: leader saw heartbeat_rpc from ~w for term ~b "
           "abdicates term: ~b!~n",
           [LogId, Msg#heartbeat_rpc.leader_id,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#heartbeat_rpc{term = Term, leader_id = LeaderId},
-              #{current_term := CurTerm, id := Id, read_index := ReadIndex} = State) when CurTerm > Term ->
-    Reply = heartbeat_reply(CurTerm, ReadIndex, false),
+              #{current_term := CurTerm, id := Id, query_index := QueryIndex} = State)
+        when CurTerm > Term ->
+    Reply = heartbeat_reply(CurTerm, QueryIndex, false),
     {leader, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader(#heartbeat_rpc{term = Term},
               #{current_term := CurTerm, log_id := LogId}) when CurTerm == Term ->
     ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
-handle_leader({PeerId, #heartbeat_reply{success = true, read_index = ReadIndex, term = Term}},
+handle_leader({PeerId, #heartbeat_reply{success = true, query_index = ReplyQueryIndex, term = Term}},
               #{current_term := CurTerm} = State0) when CurTerm >= Term  ->
-    case heartbeat_rpc_quorum(ReadIndex, PeerId, State0) of
+    case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of
         {{true, Refs}, State1} ->
-            {State, Effects} = apply_or_schedule_consistent_queries(Refs, State1, []),
+            {State, Effects} = apply_consistent_queries(Refs, State1, []),
             {leader, State, Effects};
         {false, State1} ->
             {leader, State1, []}
@@ -677,9 +679,9 @@ handle_candidate(#heartbeat_rpc{term = Term} = Msg,
     State = update_meta(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#heartbeat_rpc{leader_id = LeaderId},
-                 #{current_term := CurTerm, read_index := ReadIndex} = State) ->
+                 #{current_term := CurTerm, query_index := QueryIndex} = State) ->
     % term must be older return success=false
-    Reply = heartbeat_reply(CurTerm, ReadIndex, false),
+    Reply = heartbeat_reply(CurTerm, QueryIndex, false),
     {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_candidate({_PeerId, #heartbeat_reply{success = false, term = Term}},
                  #{log_id := LogId, current_term := CurTerm} = State0) when Term > CurTerm ->
@@ -905,17 +907,17 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
            " ~b but current term is: ~b~n",
           [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#heartbeat_rpc{read_index = RpcReadIndex, term = Term, leader_id = LeaderId},
+handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term, leader_id = LeaderId},
                 #{current_term := CurTerm, id := Id} = State0) when Term >= CurTerm ->
     State1 = update_term(Term, State0),
-    #{read_index := ReadIndex} = State1,
-    NewReadIndex = max(RpcReadIndex, ReadIndex),
-    State2 = update_read_index(State1#{leader_id => LeaderId}, NewReadIndex),
-    Reply = heartbeat_reply(Term, NewReadIndex, true),
+    #{query_index := QueryIndex} = State1,
+    NewQueryIndex = max(RpcQueryIndex, QueryIndex),
+    State2 = update_query_index(State1#{leader_id => LeaderId}, NewQueryIndex),
+    Reply = heartbeat_reply(Term, NewQueryIndex, true),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{term = Term, leader_id = LeaderId},
-                #{id := Id, read_index := ReadIndex} = State)->
-    Reply = heartbeat_reply(Term, ReadIndex, false),
+                #{id := Id, query_index := QueryIndex} = State)->
+    Reply = heartbeat_reply(Term, QueryIndex, false),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0}) ->
@@ -1095,13 +1097,13 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
 -spec handle_leader_to_follower(ra_server_state(), ra_effects()) ->
     {ra_server_state(), ra_effects()}.
 handle_leader_to_follower(#{pending_consistent_queries := Pending,
-                            waiting_heartbeats := Waiting,
+                            queries_waiting_heartbeats := Waiting,
                             leader_id := Leader} = State0, Effects0) ->
     PendingEffects = lists:map(fun({From, _, _}) ->
         {reply, From, {redirect, Leader}}
     end,
     Pending ++ map:keys(Waiting)),
-    {State0#{pending_consistent_queries => [], waiting_heartbeats => #{}},
+    {State0#{pending_consistent_queries => [], queries_waiting_heartbeats => #{}},
      PendingEffects ++ Effects0}.
 
 -spec tick(ra_server_state()) -> ra_effects().
@@ -1627,7 +1629,7 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0,
-      read_index => 0}.
+      query_index => 0}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
@@ -1679,7 +1681,7 @@ update_meta(Term, VotedFor, #{uid := UId} = State) ->
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
-        update_read_index(update_meta(Term, undefined, State), 0);
+        update_query_index(update_meta(Term, undefined, State), 0);
 update_term(_, State) ->
     State.
 
@@ -2125,43 +2127,45 @@ index_machine_version0(Idx, [{MIdx, V} | _])
 index_machine_version0(Idx, [_ | Rem]) ->
     index_machine_version0(Idx, Rem).
 
-heartbeat_reply(Term, ReadIndex, Success) ->
-    #heartbeat_reply{term = Term, read_index = ReadIndex, success = Success}.
+heartbeat_reply(Term, QueryIndex, Success) ->
+    #heartbeat_reply{term = Term, query_index = QueryIndex, success = Success}.
 
-update_heartbeat_rpc_effects(#{waiting_heartbeats := WH} = State) ->
-    maps:fold(fun(ReadIndex, Ref, {State0, Effects0}) ->
-        {State1, Effects1} = make_heartbeat_rpc_effects(Ref, ReadIndex, State0),
+update_heartbeat_rpc_effects(#{queries_waiting_heartbeats := Waiting} = State) ->
+    maps:fold(fun(QueryIndex, Ref, {State0, Effects0}) ->
+        {State1, Effects1} = make_heartbeat_rpc_effects(Ref, QueryIndex, State0),
         {State1, Effects1 ++ Effects0}
     end,
     {State, []},
-    WH).
+    Waiting).
 
-make_heartbeat_rpc_effects(Ref, #{read_index := ReadIndex} = State) ->
-    NewReadIndex = ReadIndex + 1,
-    make_heartbeat_rpc_effects(Ref, NewReadIndex, update_read_index(State, NewReadIndex)).
+make_heartbeat_rpc_effects(Ref, #{query_index := QueryIndex} = State) ->
+    NewQueryIndex = QueryIndex + 1,
+    make_heartbeat_rpc_effects(Ref, NewQueryIndex, update_query_index(State, NewQueryIndex)).
 
-make_heartbeat_rpc_effects(Ref, ReadIndex, #{waiting_heartbeats := WH0} = State) ->
+make_heartbeat_rpc_effects(Ref, QueryIndex, #{queries_waiting_heartbeats := Waiting0} = State) ->
     Peers = peers(State),
+    %% TODO: do a quorum evaluation to find a queries to apply and apply all
+    %% queries until that point
     case maps:size(Peers) of
         0 ->
-            apply_or_schedule_consistent_queries([Ref], State, []);
+            apply_consistent_queries([Ref], State, []);
         _ ->
-            Effects = heartbeat_rpc_effects(Peers, ReadIndex, State),
-            WH1 = WH0#{ReadIndex => Ref},
-            {State#{waiting_heartbeats => WH1}, Effects}
+            Effects = heartbeat_rpc_effects(Peers, QueryIndex, State),
+            Waiting1 = Waiting0#{QueryIndex => Ref},
+            {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
-update_read_index(#{cluster := Cluster, id := Id} = State, NewReadIndex) ->
+update_query_index(#{cluster := Cluster, id := Id} = State, NewQueryIndex) ->
     Self = maps:get(Id, Cluster),
-    State#{cluster => Cluster#{Id => Self#{read_index => NewReadIndex}},
-           read_index => NewReadIndex}.
+    State#{cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}},
+           query_index => NewQueryIndex}.
 
-heartbeat_rpc_effects(Peers, NewReadIndex, #{current_term := Term, id := Id}) ->
+heartbeat_rpc_effects(Peers, NewQueryIndex, #{current_term := Term, id := Id}) ->
     lists:filtermap(fun({PeerId, Peer}) ->
-        case maps:get(read_index, Peer, 0) < NewReadIndex of
+        case maps:get(query_index, Peer, 0) < NewQueryIndex of
             true ->
                 {true,
-                    {send_rpc, PeerId, #heartbeat_rpc{read_index = NewReadIndex,
+                    {send_rpc, PeerId, #heartbeat_rpc{query_index = NewQueryIndex,
                                                       term = Term,
                                                       leader_id = Id}}};
             false ->
@@ -2170,65 +2174,68 @@ heartbeat_rpc_effects(Peers, NewReadIndex, #{current_term := Term, id := Id}) ->
     end,
     maps:to_list(Peers)).
 
-heartbeat_rpc_quorum(NewReadIndex, PeerId, #{waiting_heartbeats := WH0,
+heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Waiting0,
                                              cluster := Cluster} = State) ->
     case maps:get(PeerId, Cluster, none) of
         none ->
             {false, State};
-        #{read_index := OldReadIndex} when OldReadIndex >= NewReadIndex ->
+        #{query_index := OldQueryIndex} when OldQueryIndex >= NewQueryIndex ->
             {false, State};
-        #{read_index := OldReadIndex} = Peer when OldReadIndex < NewReadIndex ->
-            NewCluster = Cluster#{PeerId => Peer#{read_index => NewReadIndex}},
-            State1 = update_peer(PeerId, Peer#{read_index => NewReadIndex}, State),
-            case read_quorum(NewCluster, NewReadIndex) of
+        #{query_index := OldQueryIndex} = Peer when OldQueryIndex < NewQueryIndex ->
+            NewCluster = Cluster#{PeerId => Peer#{query_index => NewQueryIndex}},
+            State1 = update_peer(PeerId, Peer#{query_index => NewQueryIndex}, State),
+            case read_quorum(NewCluster, NewQueryIndex) of
                 false ->
                     {false, State1};
                 true ->
-                    {Refs, ReadIndexes} = maps:fold(
+                    {Refs, QueryIndexes} = maps:fold(
                         fun
-                            (ReadIndex, Ref, {AccRef, AccReadIndex}) when ReadIndex =< NewReadIndex ->
-                                {[Ref | AccRef], [ReadIndex | AccReadIndex]};
+                            (QueryIndex, Ref, {AccRef, AccQueryIndex})
+                                    when QueryIndex =< NewQueryIndex ->
+                                {[Ref | AccRef], [QueryIndex | AccQueryIndex]};
                             (_, _, Acc) ->
                                 Acc
                         end,
                         {[], []},
-                        WH0),
+                        Waiting0),
                     case Refs of
                         [] -> {false, State1};
-                        _  -> {{true, Refs}, State1#{waiting_heartbeats := maps:without(ReadIndexes, WH0)}}
+                        _  ->
+                            {{true, Refs},
+                             State1#{queries_waiting_heartbeats := maps:without(QueryIndexes, Waiting0)}}
                     end
             end
     end.
 
-read_quorum(Cluster, ReadIndex) ->
-    Peers = lists:filter(fun(#{read_index := RI}) -> RI >= ReadIndex end,
+read_quorum(Cluster, NewQueryIndex) ->
+    Peers = lists:filter(fun(#{query_index := RI}) -> RI >= NewQueryIndex end,
                          maps:values(Cluster)),
     length(Peers) >= ((maps:size(Cluster) div 2) + 1).
 
 
--spec apply_or_schedule_consistent_queries([consistent_query_ref()],
+-spec apply_consistent_queries([consistent_query_ref()],
                                            ra_server_state(),
                                            ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_or_schedule_consistent_queries(Refs, State0, Effects0) ->
+apply_consistent_queries(Refs, State0, Effects0) ->
     lists:foldl(fun(Ref, {State, Effects}) ->
-        apply_or_schedule_consistent_query(Ref, State, Effects)
+        apply_consistent_query(Ref, State, Effects)
     end,
     {State0, Effects0},
     Refs).
 
--spec apply_or_schedule_consistent_query(consistent_query_ref(),
+-spec apply_consistent_query(consistent_query_ref(),
                                          ra_server_state(),
                                          ra_effects()) ->
     {ra_server_state(), ra_effects()}.
-apply_or_schedule_consistent_query({_, _, ReadIndex} = Ref,
+apply_consistent_query({_, _, ReadCommitIndex} = Ref,
                                    #{last_applied := ApplyIndex} = State,
                                    Effects) ->
-    true = ApplyIndex >= ReadIndex,
+    true = ApplyIndex >= ReadCommitIndex,
     {State, [consistent_query_reply(Ref, State) | Effects]}.
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
-consistent_query_reply({From, QueryFun, _ReadIndex},
+consistent_query_reply({From, QueryFun, _ReadCommitIndex},
                        #{id := Id,
                          machine_state := MacState,
                          machine := {machine, MacMod, _}}) ->
@@ -2241,6 +2248,7 @@ process_pending_consistent_queries(#{cluster_change_permitted := false} = State0
 process_pending_consistent_queries(#{cluster_change_permitted := true,
                                      pending_consistent_queries := Pending} = State0,
                                    Effects0) ->
+    %% TODO: submit all pending queries with a single query index.
     lists:foldl(
         fun(Ref, {State, Effects}) ->
             {NewState, NewEffects} = make_heartbeat_rpc_effects(Ref, State),

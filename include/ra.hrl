@@ -36,7 +36,7 @@
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
-                           read_index := non_neg_integer(),
+                           query_index := non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
@@ -53,7 +53,7 @@
 
 -type chunk_flag() :: next | last.
 
--type consistent_query_ref() :: {term(), ra:query_fun(), ra_index()}.
+-type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -141,13 +141,13 @@
          last_term :: ra_term()}).
 
 -record(heartbeat_rpc,
-        {read_index :: integer(),
+        {query_index :: integer(),
          term :: ra_term(),
          leader_id :: ra_server_id()}).
 
 -record(heartbeat_reply,
         {success :: boolean(),
-         read_index :: integer(),
+         query_index :: integer(),
          term :: ra_term()}).
 
 %% WAL defaults

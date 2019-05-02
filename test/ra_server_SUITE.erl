@@ -1745,8 +1745,8 @@ base_state(NumServers, MacMod) ->
       effective_machine_version => 0,
       effective_machine_module => MacMod,
       log => Log,
-      waiting_apply_index => #{},
-      waiting_ro_heartbeats => #{},
+      query_index => 0,
+      queries_waiting_heartbeats => #{},
       pending_consistent_queries => []}.
 
 mock_machine(Mod) ->
