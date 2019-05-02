@@ -70,8 +70,7 @@
       condition_timeout_effects => [ra_effect()],
       pre_vote_token => reference(),
       query_index => non_neg_integer(),
-      %% TODO: make queue
-      queries_waiting_heartbeats => #{non_neg_integer() => consistent_query_ref()},
+      queries_waiting_heartbeats => queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries => [consistent_query_ref()]
      }.
 
@@ -269,7 +268,7 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       condition_timeout_effects => [],
       query_index => 0,
-      queries_waiting_heartbeats => #{},
+      queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => []}.
 
 recover(#{log_id := LogId,
@@ -1102,9 +1101,15 @@ handle_leader_to_follower(#{pending_consistent_queries := Pending,
     PendingEffects = lists:map(fun({From, _, _}) ->
         {reply, From, {redirect, Leader}}
     end,
-    Pending ++ map:keys(Waiting)),
-    {State0#{pending_consistent_queries => [], queries_waiting_heartbeats => #{}},
-     PendingEffects ++ Effects0}.
+    Pending),
+
+    WaitingEffects = lists:map(fun({_, {From, _, _}}) ->
+        {reply, From, {redirect, Leader}}
+    end,
+    queue:to_list(Waiting)),
+
+    {State0#{pending_consistent_queries => [], queries_waiting_heartbeats => queue:new()},
+     PendingEffects ++ WaitingEffects ++ Effects0}.
 
 -spec tick(ra_server_state()) -> ra_effects().
 tick(#{effective_machine_module := MacMod,
@@ -2131,18 +2136,18 @@ heartbeat_reply(Term, QueryIndex, Success) ->
     #heartbeat_reply{term = Term, query_index = QueryIndex, success = Success}.
 
 update_heartbeat_rpc_effects(#{queries_waiting_heartbeats := Waiting} = State) ->
-    maps:fold(fun(QueryIndex, Ref, {State0, Effects0}) ->
-        {State1, Effects1} = make_heartbeat_rpc_effects(Ref, QueryIndex, State0),
+    lists:foldl(fun({QueryIndex, Ref}, {State0, Effects0}) ->
+        {State1, Effects1} = make_heartbeat_rpc_effects_for_index(Ref, QueryIndex, State0),
         {State1, Effects1 ++ Effects0}
     end,
     {State, []},
-    Waiting).
+    queue:to_list(Waiting)).
 
 make_heartbeat_rpc_effects(Ref, #{query_index := QueryIndex} = State) ->
     NewQueryIndex = QueryIndex + 1,
-    make_heartbeat_rpc_effects(Ref, NewQueryIndex, update_query_index(State, NewQueryIndex)).
+    make_heartbeat_rpc_effects_for_index(Ref, NewQueryIndex, update_query_index(State, NewQueryIndex)).
 
-make_heartbeat_rpc_effects(Ref, QueryIndex, #{queries_waiting_heartbeats := Waiting0} = State) ->
+make_heartbeat_rpc_effects_for_index(Ref, QueryIndex, #{queries_waiting_heartbeats := Waiting0} = State) ->
     Peers = peers(State),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
@@ -2151,7 +2156,7 @@ make_heartbeat_rpc_effects(Ref, QueryIndex, #{queries_waiting_heartbeats := Wait
             apply_consistent_queries([Ref], State, []);
         _ ->
             Effects = heartbeat_rpc_effects(Peers, QueryIndex, State),
-            Waiting1 = Waiting0#{QueryIndex => Ref},
+            Waiting1 = queue:in({QueryIndex, Ref}, Waiting0),
             {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
@@ -2175,7 +2180,7 @@ heartbeat_rpc_effects(Peers, NewQueryIndex, #{current_term := Term, id := Id}) -
     maps:to_list(Peers)).
 
 heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Waiting0,
-                                             cluster := Cluster} = State) ->
+                                              cluster := Cluster} = State) ->
     case maps:get(PeerId, Cluster, none) of
         none ->
             {false, State};
@@ -2188,24 +2193,41 @@ heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Wait
                 false ->
                     {false, State1};
                 true ->
-                    {Refs, QueryIndexes} = maps:fold(
-                        fun
-                            (QueryIndex, Ref, {AccRef, AccQueryIndex})
-                                    when QueryIndex =< NewQueryIndex ->
-                                {[Ref | AccRef], [QueryIndex | AccQueryIndex]};
-                            (_, _, Acc) ->
-                                Acc
+                    {Refs, Waiting1} = take_from_queue_while(
+                        fun({QueryIndex, Ref}) ->
+                            case QueryIndex =< NewQueryIndex of
+                                true  -> {true, Ref};
+                                false -> false
+                            end
                         end,
-                        {[], []},
                         Waiting0),
                     case Refs of
                         [] -> {false, State1};
                         _  ->
                             {{true, Refs},
-                             State1#{queries_waiting_heartbeats := maps:without(QueryIndexes, Waiting0)}}
+                             State1#{queries_waiting_heartbeats := Waiting1}}
                     end
             end
     end.
+
+-spec take_from_queue_while(fun((El) -> {true, Res} | false), queue:queue(El)) ->
+    {[Res], queue:queue(El)}.
+take_from_queue_while(Fun, Queue) ->
+    take_from_queue_while(Fun, Queue, []).
+
+take_from_queue_while(Fun, Queue, Result) ->
+    case queue:peek(Queue) of
+        {value, El} ->
+            case Fun(El) of
+                {true, ResVal} ->
+                    take_from_queue_while(Fun, queue:drop(Queue), [ResVal | Result]);
+                false ->
+                    {Result, Queue}
+            end;
+        empty ->
+            {Result, Queue}
+    end.
+
 
 read_quorum(Cluster, NewQueryIndex) ->
     Peers = lists:filter(fun(#{query_index := RI}) -> RI >= NewQueryIndex end,
