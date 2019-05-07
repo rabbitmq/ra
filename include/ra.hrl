@@ -138,7 +138,7 @@
          last_term :: ra_term()}).
 
 %% WAL defaults
--define(WAL_MAX_SIZE_BYTES, 1024 * 1024 * 1024).
+-define(WAL_MAX_SIZE_BYTES, 512 * 1024 * 1024).
 
 %% logging shim
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
