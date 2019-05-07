@@ -164,11 +164,14 @@ read_meta(Dir) ->
         {ok, Fd} ->
             case read_meta_internal(Fd) of
                 {ok, Meta, _} ->
+                    _ = file:close(Fd),
                     {ok, Meta};
                 {error, _} = Err ->
                     _ = file:close(Fd),
                     Err
-            end
+            end;
+        Err ->
+            Err
     end.
 
 %% Internal

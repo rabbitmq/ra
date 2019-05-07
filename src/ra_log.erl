@@ -319,7 +319,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
     % to a leader writes that have not yet
     % been fully flushed
     case fetch_term(ToIdx, State0) of
-        {Term, State} ->
+        {Term, State} when is_integer(Term) ->
             % this case truncation shouldn't be too expensive as the cache
             % only contains the unflushed window of entries typically less than
             % 10ms worth of entries
@@ -563,8 +563,10 @@ can_write(#?MODULE{wal = Wal}) ->
     {boolean(), state()}.
 exists({Idx, Term}, Log0) ->
     case fetch_term(Idx, Log0) of
-        {Term, Log} -> {true, Log};
-        {_, Log} -> {false, Log}
+        {Term, Log} when is_integer(Term) ->
+            {true, Log};
+        {_, Log} ->
+            {false, Log}
     end.
 
 -spec overview(state()) -> map().

@@ -168,6 +168,7 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
                     {noreply, State0};
                 _ ->
                     %% the segment has changed - leave it in place
+                    _ = ra_log_segment:close(Seg),
                     {noreply, State0}
             end
     end.
@@ -224,6 +225,8 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                                   SRef ->
                                       [SRef | ClosedSegRefs]
                               end,
+
+                    _ = ra_log_segment:close(Segment),
 
                     ok = send_segments(ServerUId, Tid, SegRefs),
                     State
