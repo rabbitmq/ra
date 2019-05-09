@@ -980,7 +980,7 @@ handle_receive_snapshot(Msg, State) ->
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
-    {follower, State, [{next_event, cast, Msg}]};
+    {follower, State, [{next_event, Msg}]};
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout,

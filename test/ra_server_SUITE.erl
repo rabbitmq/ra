@@ -641,7 +641,7 @@ follower_catchup_condition(_Config) ->
 
     Msg = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                             last_log_term = 5},
-    {follower, State, [{next_event, cast, Msg}]} =
+    {follower, State, [{next_event, Msg}]} =
         ra_server:handle_await_condition(Msg, State),
     {follower, _, [{cast, n1, {n1, #append_entries_reply{success = false,
                                                          next_index = 4}}}]}
