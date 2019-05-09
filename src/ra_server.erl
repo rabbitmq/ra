@@ -651,6 +651,10 @@ handle_candidate(#request_vote_result{}, State) ->
 handle_candidate(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {candidate, State, []};
+handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
+    % simply forward all other events to ra_log
+    {Log, Effects} = ra_log:handle_event(Evt, Log0),
+    {pre_vote, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
 handle_candidate(Msg, State) ->

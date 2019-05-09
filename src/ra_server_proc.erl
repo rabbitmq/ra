@@ -578,7 +578,7 @@ follower(info, {'DOWN', MRef, process, Pid, Info},
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~s: Leader node ~w may be down, setting election timeout",
+            ?WARN("~s: Leader node ~w may be down, setting pre-vote timeout",
                   [log_id(State), Node]),
             {keep_state, State, [election_timeout_action(long, State)]};
         _ ->
