@@ -784,8 +784,8 @@ handle_follower(#append_entries_rpc{term = Term,
         {missing, Log0} ->
             Reply = append_entries_reply(Term, false, State0),
             ?INFO("~s: follower did not have entry at ~b in ~b."
-                  " Requesting from ~b~n",
-                  [LogId, PLIdx, PLTerm, Reply#append_entries_reply.next_index]),
+                  " Requesting ~w from ~b~n",
+                  [LogId, PLIdx, PLTerm, LeaderId, Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
              State0#{leader_id => LeaderId,
@@ -797,8 +797,8 @@ handle_follower(#append_entries_rpc{term = Term,
             CommitIndex = maps:get(commit_index, State0),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
-                  "Asking leader to resend from ~b~n",
-                  [LogId, PLIdx, OtherTerm, PLTerm, CommitIndex + 1]),
+                  "Asking leader ~w to resend from ~b~n",
+                  [LogId, PLIdx, OtherTerm, PLTerm, LeaderId, CommitIndex + 1]),
             % This situation arises when a minority leader replicates entries
             % that it cannot commit then gets replaced by a majority leader
             % that also has made progress
@@ -918,6 +918,10 @@ handle_follower(#request_vote_result{}, State) ->
     {follower, State, []};
 handle_follower(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
+    {follower, State, []};
+handle_follower(#append_entries_reply{}, State) ->
+    %% handle to avoid logging as unhandled
+    %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
