@@ -572,7 +572,7 @@ handle_leader(#heartbeat_rpc{term = Term},
               #{current_term := CurTerm, log_id := LogId}) when CurTerm == Term ->
     ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
-    exit(leader_saw_append_entries_rpc_in_same_term);
+    exit(leader_saw_heartbeat_rpc_in_same_term);
 handle_leader({PeerId, #heartbeat_reply{success = true, query_index = ReplyQueryIndex, term = Term}},
               #{current_term := CurTerm} = State0) when CurTerm >= Term  ->
     case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of

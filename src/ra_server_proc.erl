@@ -330,7 +330,6 @@ leader({call, From}, {state_query, Spec},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {consistent_query, QueryFun},
        #state{server_state = ServerState0} = State0) ->
-    %% TODO: make sure there is a command in the current term
     {leader, ServerState1, Effects} =
         ra_server:handle_leader({consistent_query, From, QueryFun},
                                 ServerState0),
