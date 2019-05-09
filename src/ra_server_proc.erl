@@ -584,6 +584,9 @@ follower(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
+follower(info, {node_event, _Node, up}, State) ->
+    %% we never use this but don't want it to be logged
+    {keep_state, State};
 follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, [])};
