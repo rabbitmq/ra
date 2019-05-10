@@ -452,7 +452,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
              % set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger
              % another election when not using follower timeouts
-             [maybe_set_election_timeout(long, State) | Actions]};
+             maybe_set_election_timeout(State, Actions)};
         {leader, State1, Effects} ->
             {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = State2#state{pending_commands = []},
