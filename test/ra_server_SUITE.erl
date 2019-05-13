@@ -1718,8 +1718,8 @@ follower_heartbeat(_Config) ->
         = ra_server:handle_follower(Heartbeat#heartbeat_rpc{term = LowerTerm}, State),
 
     %% Reply to the same term. Update query index
-    ExpectedNewState = State#{query_index => NewQueryIndex,
-                              cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}}},
+    ExpectedNewState = set_peer_query_index(State#{query_index => NewQueryIndex}, Id, NewQueryIndex),
+
     {follower,
      ExpectedNewState,
      [{cast,
@@ -1731,10 +1731,10 @@ follower_heartbeat(_Config) ->
 
     %% Reply to a higher term. Update follower term.
     NewTerm = Term + 1,
-    ExpectedNewStateHigherTerm = State#{query_index => NewQueryIndex,
-                                        current_term => NewTerm,
-                                        voted_for => undefined,
-                                        cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}}},
+    ExpectedNewStateHigherTerm = set_peer_query_index(State#{query_index => NewQueryIndex,
+                                                             current_term => NewTerm,
+                                                             voted_for => undefined},
+                                                      Id, NewQueryIndex),
     {follower,
      ExpectedNewStateHigherTerm,
      [{cast,
@@ -1746,7 +1746,7 @@ follower_heartbeat(_Config) ->
 
 follower_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term, leader_id := LeaderId} = State,
+    #{current_term := Term, leader_id := LeaderId, id := Id} = State,
     HeartbeatReply = #heartbeat_reply{success = true, term = Term, query_index = 2},
 
     %% Ignore lower or same term
@@ -1757,9 +1757,9 @@ follower_heartbeat_reply(_Config) ->
 
     %% Update term if the term is higher
     NewTerm = Term + 1,
-    ExpectedNewState = State#{current_term => NewTerm,
-                              voted_for => undefined},
-
+    ExpectedNewState = set_peer_query_index(State#{current_term => NewTerm,
+                                                   voted_for => undefined},
+                                            Id, 0),
     {follower, ExpectedNewState, []}
         = ra_server:handle_follower({LeaderId, HeartbeatReply#heartbeat_reply{term = NewTerm}}, State).
 
@@ -1781,8 +1781,10 @@ candidate_heartbeat(_Config) ->
     %% Higher term updates the candidate term and changes to follower
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
-    StateWithHigherTerm = State#{current_term => NewTerm,
-                                 voted_for => undefined},
+    StateWithHigherTerm = set_peer_query_index(
+                                State#{current_term => NewTerm,
+                                       voted_for => undefined},
+                                Id, 0),
     {follower, StateWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_candidate(HeartbeatHigherTerm, State),
 
@@ -1799,7 +1801,7 @@ candidate_heartbeat(_Config) ->
 
 candidate_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term} = State,
+    #{current_term := Term, id := Id} = State,
 
     HeartbeatReply = #heartbeat_reply{success = true, term = Term, query_index = 2},
     %% Same term is ignored
@@ -1818,8 +1820,10 @@ candidate_heartbeat_reply(_Config) ->
 
     %% Higher term updates term and changes to follower
     NewTerm = Term + 1,
-    StateWithHigherTerm = State#{current_term => NewTerm,
-                                 voted_for => undefined},
+    StateWithHigherTerm = set_peer_query_index(
+                                State#{current_term => NewTerm,
+                                       voted_for => undefined},
+                                Id, 0),
     {follower, StateWithHigherTerm, []}
         = ra_server:handle_candidate({no_peer, HeartbeatReply#heartbeat_reply{term = NewTerm}}, State),
     %% Success does not matter
@@ -1845,9 +1849,11 @@ pre_vote_heartbeat(_Config) ->
     %% Higher term updates term, changes to follower and resets votes
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
-    StateWithoutVotesWithHigherTerm = State#{votes => 0,
-                                             current_term => NewTerm,
-                                             voted_for => undefined},
+    StateWithoutVotesWithHigherTerm = set_peer_query_index(
+                                            State#{votes => 0,
+                                                   current_term => NewTerm,
+                                                   voted_for => undefined},
+                                            Id, 0),
     {follower, StateWithoutVotesWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_pre_vote(HeartbeatHigherTerm, State),
 
@@ -1863,7 +1869,7 @@ pre_vote_heartbeat(_Config) ->
 
 pre_vote_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term} = State,
+    #{current_term := Term, id := Id} = State,
 
     HeartbeatReply = #heartbeat_reply{success = true,
                                       term = Term,
@@ -1887,9 +1893,11 @@ pre_vote_heartbeat_reply(_Config) ->
 
     %% Heartbeat reply with higher term updates the term and resets to follower
     NewTerm = Term + 1,
-    StateWithoutVotesWithHigherTerm = State#{votes => 0,
-                                             current_term => NewTerm,
-                                             voted_for => undefined},
+    StateWithoutVotesWithHigherTerm = set_peer_query_index(
+                                            State#{votes => 0,
+                                                   current_term => NewTerm,
+                                                   voted_for => undefined},
+                                            Id, 0),
     {follower, StateWithoutVotesWithHigherTerm, []}
         = ra_server:handle_pre_vote(
             {no_peer, HeartbeatReply#heartbeat_reply{term = NewTerm}},
@@ -1921,8 +1929,10 @@ leader_heartbeat(_Config) ->
     %% Higher term updates term and changes to follower
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
-    StateWithHigherTerm = State#{current_term => NewTerm,
-                                 voted_for => undefined},
+    StateWithHigherTerm = set_peer_query_index(
+                                State#{current_term => NewTerm,
+                                       voted_for => undefined},
+                                Id, 0),
     {follower, StateWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_leader(HeartbeatHigherTerm, State),
 
@@ -1958,15 +1968,22 @@ leader_heartbeat_reply_success(_Config) ->
     {leader, StateWithQueryIndexForPeer, []}
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State),
 
-    StateWithQueries = State#{queries_waiting_heartbeats => queue:in({QueryIndex, QueryRef}, queue:new())},
+    StateWithQueries =
+        State#{
+            queries_waiting_heartbeats => queue:in({QueryIndex, QueryRef}, queue:new())
+        },
 
     %% Reply is ignored if peer is not known
+    % ct:pal("StateWithQueries ~p~n", [StateWithQueries]),
+    % ct:pal("Current quorum ~p~n", [ra_server:get_current_query_quorum(StateWithQueries)]),
+
     {leader, StateWithQueries, []}
         = ra_server:handle_leader({no_peer, HeartbeatReply}, StateWithQueries),
 
     %% Reply updates query index but does not apply lower index queries
     LowerQueryIndex = QueryIndex - 1,
     StateWithQueryIndexForPeerAndQueries = set_peer_query_index(StateWithQueries, ReplyingPeerId, LowerQueryIndex),
+
     {leader, StateWithQueryIndexForPeerAndQueries, []}
         = ra_server:handle_leader(
             {ReplyingPeerId,
