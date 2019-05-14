@@ -1109,10 +1109,10 @@ follower_catchup_cond(OriginalReason,
         {entry_ok, Log} ->
             {true, State0#{log => Log}};
         {term_mismatch, _, Log} ->
-            %% if the original reason to enter catchup was a missing entry
+            %% if the original reason to enter catch-up was a missing entry
             %% the next entry _could_ result in a term_mismatch if so we
-            %% exit await_condition temporarily to process the AER that resulted
-            %% in the term_mismatch
+            %% exit await_condition temporarily to process the AppendEntriesRpc
+            %% that resulted in the term_mismatch
             {OriginalReason == missing, State0#{log => Log}};
         {missing, Log} ->
             {false, State0#{log => Log}}
