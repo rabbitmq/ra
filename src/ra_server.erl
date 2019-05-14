@@ -2155,10 +2155,6 @@ index_machine_version0(Idx, [_ | Rem]) ->
 heartbeat_reply(#{current_term := CurTerm, query_index := QueryIndex}) ->
     #heartbeat_reply{term = CurTerm, query_index = QueryIndex}.
 
-
-%% TODO: remove term from query index in peers
-%% When leader gives up term it should redirect all the queries to a new leader
-%% Old term replies should be ignored.
 update_heartbeat_rpc_effects(#{query_index := QueryIndex,
                                queries_waiting_heartbeats := Waiting,
                                current_term := Term,
