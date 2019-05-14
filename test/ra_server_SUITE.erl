@@ -67,7 +67,11 @@ all() ->
      leader_heartbeat_reply_higher_term,
      leader_consistent_query_delay,
      leader_consistent_query,
-     leader_to_follower_redirects
+     leader_to_follower_redirects,
+     await_condition_heartbeat_dropped,
+     await_condition_heartbeat_reply_dropped,
+     receive_snapshot_heartbeat_dropped,
+     receive_snapshot_heartbeat_reply_dropped
     ].
 
 -define(MACFUN, fun (E, _) -> E end).
@@ -2108,6 +2112,78 @@ enable_cluster_change(State0) ->
     % noop consensus
     {leader, #{cluster_change_permitted := true}, _} =
         ra_server:handle_leader(AEReply, State).
+
+await_condition_heartbeat_dropped(_Config) ->
+    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    #{current_term := Term,
+      query_index := QueryIndex,
+      id := Id} = State,
+
+    Heartbeat = #heartbeat_rpc{term = Term,
+                               query_index = QueryIndex,
+                               leader_id = Id},
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(Heartbeat, State),
+    %% Term does not matter
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(Heartbeat#heartbeat_rpc{term = Term + 1},
+                                         State),
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(Heartbeat#heartbeat_rpc{term = Term - 1},
+                                         State).
+
+await_condition_heartbeat_reply_dropped(_Config) ->
+    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    #{current_term := Term,
+      query_index := QueryIndex} = State,
+
+    HeartbeatReply = #heartbeat_reply{term = Term,
+                                 query_index = QueryIndex},
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(HeartbeatReply, State),
+    %% Term does not matter
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(HeartbeatReply#heartbeat_reply{term = Term + 1},
+                                         State),
+    {await_condition, State, []} =
+        ra_server:handle_await_condition(HeartbeatReply#heartbeat_reply{term = Term - 1},
+                                         State).
+
+receive_snapshot_heartbeat_dropped(_Config) ->
+    State = base_state(3, ?FUNCTION_NAME),
+    #{current_term := Term,
+      query_index := QueryIndex,
+      id := Id} = State,
+
+    Heartbeat = #heartbeat_rpc{term = Term,
+                               query_index = QueryIndex,
+                               leader_id = Id},
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(Heartbeat, State),
+    %% Term does not matter
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term + 1},
+                                          State),
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term - 1},
+                                          State).
+
+receive_snapshot_heartbeat_reply_dropped(_Config) ->
+    State = base_state(3, ?FUNCTION_NAME),
+    #{current_term := Term,
+      query_index := QueryIndex} = State,
+
+    HeartbeatReply = #heartbeat_reply{term = Term,
+                                      query_index = QueryIndex},
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(HeartbeatReply, State),
+    %% Term does not matter
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term + 1},
+                                          State),
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term - 1},
+                                          State).
 
 set_peer_query_index(State, PeerId, QueryIndex) ->
     #{cluster := Cluster} = State,
