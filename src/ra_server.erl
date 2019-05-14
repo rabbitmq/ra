@@ -111,7 +111,9 @@
                   {command, command()} |
                   {commands, [command()]} |
                   ra_log:event() |
-                  {consistent_query, term(), ra:query_fun()}.
+                  {consistent_query, term(), ra:query_fun()} |
+                  #heartbeat_rpc{} |
+                  {ra_server_id, #heartbeat_reply{}}.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -2284,7 +2286,7 @@ take_from_queue_while(Fun, Queue, Result) ->
     end.
 
 -spec apply_consistent_queries_effects([consistent_query_ref()], ra_server_state()) ->
-    {ra_server_state(), ra_effects()}.
+    ra_effects().
 apply_consistent_queries_effects(QueryRefs, #{last_applied := ApplyIndex} = State) ->
     lists:map(fun({_, _, ReadCommitIndex} = QueryRef) ->
         true = ApplyIndex >= ReadCommitIndex,

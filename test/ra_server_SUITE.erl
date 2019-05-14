@@ -1695,7 +1695,8 @@ follower_heartbeat(_Config) ->
     NewQueryIndex = QIndex + 1,
     LowerTerm = Term - 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
-                               leader_id = n1},
+                               leader_id = n1,
+                               term = Term},
 
     %% Return lower term. No changes in state
     {follower,
@@ -2140,13 +2141,13 @@ await_condition_heartbeat_reply_dropped(_Config) ->
     HeartbeatReply = #heartbeat_reply{term = Term,
                                  query_index = QueryIndex},
     {await_condition, State, []} =
-        ra_server:handle_await_condition(HeartbeatReply, State),
+        ra_server:handle_await_condition({n2, HeartbeatReply}, State),
     %% Term does not matter
     {await_condition, State, []} =
-        ra_server:handle_await_condition(HeartbeatReply#heartbeat_reply{term = Term + 1},
+        ra_server:handle_await_condition({n2, HeartbeatReply#heartbeat_reply{term = Term + 1}},
                                          State),
     {await_condition, State, []} =
-        ra_server:handle_await_condition(HeartbeatReply#heartbeat_reply{term = Term - 1},
+        ra_server:handle_await_condition({n2, HeartbeatReply#heartbeat_reply{term = Term - 1}},
                                          State).
 
 receive_snapshot_heartbeat_dropped(_Config) ->

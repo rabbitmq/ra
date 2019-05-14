@@ -859,9 +859,9 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
 
 %% TODO: move to ra_server
 handle_leader_to_follower(#state{server_state = ServerState0} = State, Effects0) ->
-    {ServerState, Effects} =
-        ra_server:handle_leader_to_follower(ServerState0, Effects0),
-    {State#state{server_state = ServerState}, Effects ++ Effects0}.
+    {ServerState, L2FEffects} =
+        ra_server:handle_leader_to_follower(ServerState0),
+    {State#state{server_state = ServerState}, L2FEffects ++ Effects0}.
 
 perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
                                         machine_state := MacState,
