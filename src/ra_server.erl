@@ -784,21 +784,21 @@ handle_follower(#append_entries_rpc{term = Term,
         {missing, Log0} ->
             Reply = append_entries_reply(Term, false, State0),
             ?INFO("~s: follower did not have entry at ~b in ~b."
-                  " Requesting from ~b~n",
-                  [LogId, PLIdx, PLTerm, Reply#append_entries_reply.next_index]),
+                  " Requesting ~w from ~b~n",
+                  [LogId, PLIdx, PLTerm, LeaderId, Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply)],
             {await_condition,
              State0#{leader_id => LeaderId,
                      log => Log0,
-                     condition => fun follower_catchup_cond/2,
+                     condition => follower_catchup_cond_fun(missing),
                      % repeat reply effect on condition timeout
                      condition_timeout_effects => Effects}, Effects};
         {term_mismatch, OtherTerm, Log0} ->
             CommitIndex = maps:get(commit_index, State0),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
-                  "Asking leader to resend from ~b~n",
-                  [LogId, PLIdx, OtherTerm, PLTerm, CommitIndex + 1]),
+                  "Asking leader ~w to resend from ~b~n",
+                  [LogId, PLIdx, OtherTerm, PLTerm, LeaderId, CommitIndex + 1]),
             % This situation arises when a minority leader replicates entries
             % that it cannot commit then gets replaced by a majority leader
             % that also has made progress
@@ -814,7 +814,7 @@ handle_follower(#append_entries_rpc{term = Term,
             {await_condition,
              State#{leader_id => LeaderId,
                     log => Log0,
-                    condition => fun follower_catchup_cond/2,
+                    condition => follower_catchup_cond_fun(term_mismatch),
                     % repeat reply effect on condition timeout
                     condition_timeout_effects => Effects}, Effects}
     end;
@@ -918,6 +918,10 @@ handle_follower(#request_vote_result{}, State) ->
     {follower, State, []};
 handle_follower(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
+    {follower, State, []};
+handle_follower(#append_entries_reply{}, State) ->
+    %% handle to avoid logging as unhandled
+    %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
@@ -1089,7 +1093,13 @@ become(follower, #{log := Log0} = State) ->
 become(_RaftState, State) ->
     State.
 
-follower_catchup_cond(#append_entries_rpc{term = Term,
+follower_catchup_cond_fun(OriginalReason) ->
+    fun (Entry, State) ->
+            follower_catchup_cond(OriginalReason, Entry, State)
+    end.
+
+follower_catchup_cond(OriginalReason,
+                      #append_entries_rpc{term = Term,
                                           prev_log_index = PLIdx,
                                           prev_log_term = PLTerm},
                       State0 = #{current_term := CurTerm,
@@ -1099,11 +1109,16 @@ follower_catchup_cond(#append_entries_rpc{term = Term,
         {entry_ok, Log} ->
             {true, State0#{log => Log}};
         {term_mismatch, _, Log} ->
-            {false, State0#{log => Log}};
+            %% if the original reason to enter catch-up was a missing entry
+            %% the next entry _could_ result in a term_mismatch if so we
+            %% exit await_condition temporarily to process the AppendEntriesRpc
+            %% that resulted in the term_mismatch
+            {OriginalReason == missing, State0#{log => Log}};
         {missing, Log} ->
             {false, State0#{log => Log}}
     end;
-follower_catchup_cond(#install_snapshot_rpc{term = Term,
+follower_catchup_cond(_,
+                      #install_snapshot_rpc{term = Term,
                                             meta = #{index := PLIdx}},
                       #{current_term := CurTerm,
                         log := Log} = State)
@@ -1111,7 +1126,7 @@ follower_catchup_cond(#install_snapshot_rpc{term = Term,
     % term is ok - check if the snapshot index is greater than the last
     % index seen
     {PLIdx >= ra_log:next_index(Log), State};
-follower_catchup_cond(_Msg, State) ->
+follower_catchup_cond(_, _Msg, State) ->
     {false, State}.
 
 wal_down_condition(_Msg, #{log := Log} = State) ->

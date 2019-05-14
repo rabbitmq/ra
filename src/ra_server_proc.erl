@@ -44,8 +44,8 @@
 -export([send_rpc/2]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_BROADCAST_TIME, 50).
--define(DEFAULT_ELECTION_MULT, 3).
+-define(DEFAULT_BROADCAST_TIME, 100).
+-define(DEFAULT_ELECTION_MULT, 5).
 -define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
@@ -449,11 +449,10 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {next_state, follower, State,
-             % always set an election timeout here to ensure an unelectable
+             % set an election timeout here to ensure an unelectable
              % node doesn't cause an electable one not to trigger
              % another election when not using follower timeouts
-             % TODO: only set this is leader was not detected
-             [election_timeout_action(long, State) | Actions]};
+             maybe_set_election_timeout(State, Actions)};
         {leader, State1, Effects} ->
             {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = State2#state{pending_commands = []},
@@ -585,8 +584,15 @@ follower(info, {node_event, Node, down}, State) ->
             {keep_state, State}
     end;
 follower(info, {node_event, _Node, up}, State) ->
-    %% we never use this but don't want it to be logged
-    {keep_state, State};
+    case leader_id(State) of
+        {_, Node} ->
+            ?WARN("~s: Leader node ~w is back up, cancelling pre-vote timeout",
+                  [log_id(State), Node]),
+            {keep_state, State,
+             [{state_timeout, infinity, election_timeout}]};
+        _ ->
+            {keep_state, State}
+    end;
 follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, [])};
@@ -1127,13 +1133,14 @@ maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(short, State) | Actions].
 
 election_timeout_action(really_short, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT),
+    T = rand:uniform(Timeout),
     {state_timeout, T, election_timeout};
 election_timeout_action(short, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 2),
+    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + Timeout,
     {state_timeout, T, election_timeout};
 election_timeout_action(long, #state{broadcast_time = Timeout}) ->
-    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + (Timeout * 4),
+    %% this should be longer than aten detection poll interval
+    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT * 2) + 1000,
     {state_timeout, T, election_timeout}.
 
 % sets the tick timer for periodic actions such as sending rpcs to servers
