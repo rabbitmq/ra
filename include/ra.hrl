@@ -146,8 +146,7 @@
          leader_id :: ra_server_id()}).
 
 -record(heartbeat_reply,
-        {success :: boolean(),
-         query_index :: integer(),
+        {query_index :: integer(),
          term :: ra_term()}).
 
 %% WAL defaults
