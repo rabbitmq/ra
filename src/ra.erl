@@ -635,9 +635,11 @@ leader_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
 
 %% @doc Query the state machine
-%% This allows a caller to query the state machine by appending the query
-%% to the log and returning the result once applied. This guarantees the
-%% result is consistent.
+%% This allows a caller to query the state machine on the leader node with
+%% an additional heartbeat to check that the node is still the leader.
+%% Consistency guarantee is that the query will return result containing
+%% at least all changes, committed before this query is issued.
+%% This may include changes which were committed while the query is running.
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun :: query_fun()) ->
     {ok, Reply :: term(), ra_server_id() | not_known}.

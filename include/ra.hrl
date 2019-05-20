@@ -36,6 +36,7 @@
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
+                           query_index := non_neg_integer(),
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
@@ -51,6 +52,8 @@
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
 -type chunk_flag() :: next | last.
+
+-type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -136,6 +139,15 @@
          % term of the snapshot in question
          last_index :: ra_index(),
          last_term :: ra_term()}).
+
+-record(heartbeat_rpc,
+        {query_index :: integer(),
+         term :: ra_term(),
+         leader_id :: ra_server_id()}).
+
+-record(heartbeat_reply,
+        {query_index :: integer(),
+         term :: ra_term()}).
 
 %% WAL defaults
 -define(WAL_MAX_SIZE_BYTES, 512 * 1024 * 1024).

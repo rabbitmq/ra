@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
-<p><pre>command() = 
+<p><pre>command() =
     {<a href="#type-command_type">command_type()</a>,
      <a href="#type-command_meta">command_meta()</a>,
      UserCommand :: term(),
@@ -35,7 +35,7 @@
 
 
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
-<p><pre>command_reply_mode() = 
+<p><pre>command_reply_mode() =
     after_log_append |
     await_consensus |
     {notify, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
@@ -43,7 +43,7 @@
 
 
 <h3 class="typedecl"><a name="type-command_type">command_type()</a></h3>
-<p><pre>command_type() = 
+<p><pre>command_type() =
     '$usr' |
     '$ra_query' |
     '$ra_join' |
@@ -54,10 +54,12 @@
 
 <h3 class="typedecl"><a name="type-config">config()</a></h3>
 <p><pre>config() = <a href="#type-ra_server_config">ra_server_config()</a></pre></p>
+<h3 class="typedecl"><a name="type-consistent_query_ref">consistent_query_ref()</a></h3>
+<p><pre>consistent_query_ref() = {term(), <a href="ra.html#type-query_fun">ra:query_fun()</a>, <a href="#type-ra_index">ra_index()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><pre>machine_conf() = 
+<p><pre>machine_conf() =
     {module, module(), InitConfig :: map()} |
     {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState :: term()}</pre></p>
 <p>  The machine configuration.
@@ -67,13 +69,13 @@
   machines that cannot access any of the advanced features.</p>
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
-<p><pre>ra_await_condition_fun() = 
+<p><pre>ra_await_condition_fun() =
     fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
             {boolean(), <a href="#type-ra_server_state">ra_server_state()</a>})</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_effect">ra_effect()</a></h3>
-<p><pre>ra_effect() = 
+<p><pre>ra_effect() =
     <a href="ra_machine.html#type-effect">ra_machine:effect()</a> |
     <a href="ra_log.html#type-effect">ra_log:effect()</a> |
     {reply, <a href="#type-ra_reply_body">ra_reply_body()</a>} |
@@ -101,7 +103,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_msg">ra_msg()</a></h3>
-<p><pre>ra_msg() = 
+<p><pre>ra_msg() =
     #append_entries_rpc{} |
     {<a href="#type-ra_server_id">ra_server_id()</a>, #append_entries_reply{}} |
     {<a href="#type-ra_server_id">ra_server_id()</a>, #install_snapshot_result{}} |
@@ -118,7 +120,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_reply_body">ra_reply_body()</a></h3>
-<p><pre>ra_reply_body() = 
+<p><pre>ra_reply_body() =
     #append_entries_reply{} |
     #request_vote_result{} |
     #install_snapshot_result{} |
@@ -126,7 +128,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_server_config">ra_server_config()</a></h3>
-<p><pre>ra_server_config() = 
+<p><pre>ra_server_config() =
     #{id := <a href="#type-ra_server_id">ra_server_id()</a>,
       uid := <a href="#type-ra_uid">ra_uid()</a>,
       cluster_name := <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
@@ -140,7 +142,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_server_state">ra_server_state()</a></h3>
-<p><pre>ra_server_state() = 
+<p><pre>ra_server_state() =
     #{id := <a href="#type-ra_server_id">ra_server_id()</a>,
       uid := <a href="#type-ra_uid">ra_uid()</a>,
       log_id := <a href="unicode.html#type-chardata">unicode:chardata()</a>,
@@ -168,11 +170,16 @@
       aux_state =&gt; term(),
       condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>,
       condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>],
-      pre_vote_token =&gt; reference()}</pre></p>
+      pre_vote_token =&gt; reference(),
+      waiting_apply_index =&gt;
+          #{<a href="#type-consistent_query_ref">consistent_query_ref()</a> =&gt; <a href="#type-ra_index">ra_index()</a>},
+      waiting_heartbeats =&gt;
+          #{<a href="#type-consistent_query_ref">consistent_query_ref()</a> =&gt;
+                #{<a href="#type-ra_server_id">ra_server_id()</a> =&gt; boolean()}}}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_state">ra_state()</a></h3>
-<p><pre>ra_state() = 
+<p><pre>ra_state() =
     leader |
     follower |
     candidate |

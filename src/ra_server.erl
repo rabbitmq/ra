@@ -7,6 +7,7 @@
 -export([
          name/2,
          init/1,
+         handle_leader_to_follower/1,
          handle_leader/2,
          handle_candidate/2,
          handle_pre_vote/2,
@@ -67,7 +68,10 @@
       aux_state => term(),
       condition => ra_await_condition_fun(),
       condition_timeout_effects => [ra_effect()],
-      pre_vote_token => reference()
+      pre_vote_token => reference(),
+      query_index := non_neg_integer(),
+      queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
+      pending_consistent_queries := [consistent_query_ref()]
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -106,7 +110,10 @@
                   await_condition_timeout |
                   {command, command()} |
                   {commands, [command()]} |
-                  ra_log:event().
+                  ra_log:event() |
+                  {consistent_query, term(), ra:query_fun()} |
+                  #heartbeat_rpc{} |
+                  {ra_server_id, #heartbeat_reply{}}.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -261,7 +268,10 @@ init(#{id := Id,
       effective_machine_module => MacMod,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
-      condition_timeout_effects => []}.
+      condition_timeout_effects => [],
+      query_index => 0,
+      queries_waiting_heartbeats => queue:new(),
+      pending_consistent_queries => []}.
 
 recover(#{log_id := LogId,
           commit_index := CommitIndex,
@@ -299,8 +309,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
             {State2, Effects0, Applied} = evaluate_quorum(State1, []),
+
+            {State3, Effects1} = process_pending_consistent_queries(State2, Effects0),
+
             {State, More, RpcEffects0} =
-                make_pipelined_rpc_effects(State2, [{incr_metrics, ra_metrics,
+                make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
                                                      [{3, Applied}]}]),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
@@ -312,7 +325,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                  false ->
                                      RpcEffects0
                              end,
-            Effects = Effects0 ++ RpcEffects,
+            Effects = Effects1 ++ RpcEffects,
             case State of
                 #{id := Id, cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -441,7 +454,9 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
-    {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects1),
+    {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
+
+    {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
     {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
@@ -529,6 +544,59 @@ handle_leader(#append_entries_rpc{leader_id = LeaderId},
                 id := Id} = State0) ->
     Reply = append_entries_reply(CurTerm, false, State0),
     {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
+handle_leader({consistent_query, From, QueryFun},
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := true} = State0) ->
+    QueryRef = {From, QueryFun, CommitIndex},
+    {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
+    {leader, State1, Effects};
+handle_leader({consistent_query, From, QueryFun},
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := false,
+                pending_consistent_queries := PQ} = State0) ->
+    QueryRef = {From, QueryFun, CommitIndex},
+    {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
+%% Lihtweight version of append_entries_rpc
+handle_leader(#heartbeat_rpc{term = Term} = Msg,
+              #{current_term := CurTerm, log_id := LogId} = State0)
+        when CurTerm < Term ->
+    ?INFO("~s: leader saw heartbeat_rpc from ~w for term ~b "
+          "abdicates term: ~b!~n",
+          [LogId, Msg#heartbeat_rpc.leader_id,
+           Term, CurTerm]),
+    {follower, update_term(Term, State0), [{next_event, Msg}]};
+handle_leader(#heartbeat_rpc{term = Term, leader_id = LeaderId},
+              #{current_term := CurTerm, id := Id} = State)
+        when CurTerm > Term ->
+    Reply = heartbeat_reply(State),
+    {leader, State, [cast_reply(Id, LeaderId, Reply)]};
+handle_leader(#heartbeat_rpc{term = Term},
+              #{current_term := CurTerm, log_id := LogId}) when CurTerm == Term ->
+    ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
+         " this should not happen!~n", [LogId, Term]),
+    exit(leader_saw_heartbeat_rpc_in_same_term);
+handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex, term = Term}},
+              #{current_term := CurTerm, log_id := LogId} = State0) ->
+    case {CurTerm, Term} of
+        {Same, Same} ->
+            %% Heartbeat confirmed
+            case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of
+                {[], State} ->
+                    {leader, State, []};
+                {QueryRefs, State} ->
+                    Effects = apply_consistent_queries_effects(QueryRefs, State),
+                    {leader, State, Effects}
+            end;
+        {CurHigher, TermLower} when CurHigher > TermLower ->
+            %% Heartbeat reply for lower term. Ignoring
+            {leader, State0, []};
+        {CurLower, TermHigher} when CurLower < TermHigher ->
+            %% A node with higher term confirmed heartbeat. This should not happen
+            ?NOTICE("~s leader saw heartbeat_reply for term ~b "
+                    "abdicates term: ~b!~n",
+                    [LogId, Term, CurTerm]),
+            {follower, update_term(Term, State0), []}
+    end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
                 log_id := LogId} = State0) when Term > CurTerm ->
@@ -601,19 +669,34 @@ handle_candidate(#request_vote_result{term = Term},
   when Term > CurTerm ->
     ?INFO("~s: candidate request_vote_result with higher term"
            " received ~b -> ~b", [LogId, CurTerm, Term]),
-    State = update_meta(Term, undefined, State0),
+    State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, []};
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
                  #{current_term := CurTerm} = State0) when Term >= CurTerm ->
-    State = update_meta(Term, undefined, State0),
+    State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{leader_id = LeaderId},
                  #{current_term := CurTerm} = State) ->
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
+handle_candidate(#heartbeat_rpc{term = Term} = Msg,
+                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
+    State = update_term_and_voted_for(Term, undefined, State0),
+    {follower, State, [{next_event, Msg}]};
+handle_candidate(#heartbeat_rpc{leader_id = LeaderId}, State) ->
+    % term must be older return success=false
+    Reply = heartbeat_reply(State),
+    {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
+handle_candidate({_PeerId, #heartbeat_reply{term = Term}},
+                 #{log_id := LogId, current_term := CurTerm} = State0) when Term > CurTerm ->
+    ?INFO("~s: candidate heartbeat_reply with higher"
+          " term received ~b -> ~b~n",
+          [LogId, CurTerm, Term]),
+    State = update_term_and_voted_for(Term, undefined, State0),
+    {follower, State, []};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  #{current_term := CurTerm,
                    log_id := LogId} = State0)
@@ -621,7 +704,7 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     ?INFO("~s: candidate append_entries_reply with higher"
           " term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
-    State = update_meta(Term, undefined, State0),
+    State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm,
@@ -629,7 +712,7 @@ handle_candidate(#request_vote_rpc{term = Term} = Msg,
   when Term > CurTerm ->
     ?INFO("~s: candidate request_vote_rpc with higher term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
-    State = update_meta(Term, undefined, State0),
+    State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#pre_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm,
@@ -637,7 +720,7 @@ handle_candidate(#pre_vote_rpc{term = Term} = Msg,
   when Term > CurTerm ->
     ?INFO("~s: candidate pre_vote_rpc with higher term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
-    State = update_meta(Term, undefined, State0),
+    State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
@@ -669,6 +752,23 @@ handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
     State = update_term(Term, State0),
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
+
+handle_pre_vote(#heartbeat_rpc{term = Term} = Msg,
+                #{current_term := CurTerm} = State0)
+  when Term >= CurTerm ->
+    State = update_term(Term, State0),
+    % revert to follower state
+    {follower, State#{votes => 0}, [{next_event, Msg}]};
+
+handle_pre_vote(#heartbeat_rpc{leader_id = LeaderId}, State) ->
+    % term must be older return success=false
+    Reply = heartbeat_reply(State),
+    {pre_vote, State, [cast_reply(id(State), LeaderId, Reply)]};
+
+handle_pre_vote({_PeerId, #heartbeat_reply{term = Term}},
+                #{current_term := CurTerm} = State) when Term > CurTerm ->
+    {follower, update_term(Term, State#{votes => 0}), []};
+
 handle_pre_vote(#request_vote_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -827,6 +927,18 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
            " ~b but current term is: ~b~n",
           [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
+handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term, leader_id = LeaderId},
+                #{current_term := CurTerm, id := Id} = State0) when Term >= CurTerm ->
+    State1 = update_term(Term, State0),
+    #{query_index := QueryIndex} = State1,
+    NewQueryIndex = max(RpcQueryIndex, QueryIndex),
+    State2 = update_query_index(State1#{leader_id => LeaderId}, NewQueryIndex),
+    Reply = heartbeat_reply(State2),
+    {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
+handle_follower(#heartbeat_rpc{leader_id = LeaderId},
+                #{id := Id} = State)->
+    Reply = heartbeat_reply(State),
+    {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0}) ->
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -880,6 +992,9 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = Term}},
+                State = #{current_term := CurTerm}) when Term > CurTerm ->
+    {follower, update_term(Term, State), []};
+handle_follower({_PeerId, #heartbeat_reply{term = Term}},
                 State = #{current_term := CurTerm}) when Term > CurTerm ->
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
@@ -1002,6 +1117,25 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
             % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
+
+-spec handle_leader_to_follower(ra_server_state()) ->
+    {ra_server_state(), ra_effects()}.
+handle_leader_to_follower(#{pending_consistent_queries := Pending,
+                            queries_waiting_heartbeats := Waiting,
+                            leader_id := Leader,
+                            query_index := 0} = State0) ->
+    PendingEffects = lists:map(fun({From, _, _}) ->
+        {reply, From, {redirect, Leader}}
+    end,
+    Pending),
+
+    WaitingEffects = lists:map(fun({_, {From, _, _}}) ->
+        {reply, From, {redirect, Leader}}
+    end,
+    queue:to_list(Waiting)),
+
+    {State0#{pending_consistent_queries => [], queries_waiting_heartbeats => queue:new()},
+     PendingEffects ++ WaitingEffects}.
 
 -spec tick(ra_server_state()) -> ra_effects().
 tick(#{effective_machine_module := MacMod,
@@ -1154,6 +1288,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             % filter the effects that should be applied on a follower
             Effects = filter_follower_effects(Effects1),
             Reply = append_entries_reply(Term, true, State),
+
             {follower, State, [cast_reply(Id, LeaderId, Reply),
                                {incr_metrics, ra_metrics, [{3, Applied}]}
                                | Effects]}
@@ -1236,11 +1371,15 @@ make_pipelined_rpc_effects(MaxBatchSize, #{id := Id,
       end, {State, false, Effects}, Cluster).
 
 make_rpcs(State) ->
-    make_rpcs_for(stale_peers(State), State).
+    {State1, EffectsHR} = update_heartbeat_rpc_effects(State),
+    {State2, EffectsAER} = make_rpcs_for(stale_peers(State1), State1),
+    {State2, EffectsAER ++ EffectsHR}.
 
 % makes empty append entries for peers that aren't pipelineable
-make_all_rpcs(State) ->
-    make_rpcs_for(peers_not_sending_snapshots(State), State).
+make_all_rpcs(State0) ->
+    {State1, EffectsHR} = update_heartbeat_rpc_effects(State0),
+    {State2, EffectsAER} = make_rpcs_for(peers_not_sending_snapshots(State1), State1),
+    {State2, EffectsAER ++ EffectsHR}.
 
 make_rpcs_for(Peers, State) ->
     maps:fold(fun(PeerId, #{next_index := Next}, {S0, Effs}) ->
@@ -1441,7 +1580,7 @@ call_for_election(candidate, #{id := Id,
             || PeerId <- PeerIds],
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
-    State = update_meta(NewTerm, Id, State0),
+    State = update_term_and_voted_for(NewTerm, Id, State0),
     {candidate, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
 call_for_election(pre_vote, #{id := Id,
@@ -1462,7 +1601,7 @@ call_for_election(pre_vote, #{id := Id,
     % vote for self
     VoteForSelf = #pre_vote_result{term = Term, token = Token,
                                    vote_granted = true},
-    State = update_meta(Term, Id, State0),
+    State = update_term_and_voted_for(Term, Id, State0),
     {pre_vote, State#{leader_id => undefined, votes => 0,
                       pre_vote_token => Token},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
@@ -1531,7 +1670,8 @@ pre_vote_result(Term, Token, Success) ->
 new_peer() ->
     #{next_index => 1,
       match_index => 0,
-      commit_index_sent => 0}.
+      commit_index_sent => 0,
+      query_index => 0}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
@@ -1571,19 +1711,23 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_meta(Term, VotedFor, #{current_term := Term,
-                              voted_for := VotedFor} = State) ->
-    %% no update needed
-   State;
-update_meta(Term, VotedFor, #{uid := UId} = State) ->
-    ok = ra_log_meta:store(UId, current_term, Term),
-    ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),
-    State#{current_term => Term,
-           voted_for => VotedFor}.
+update_term_and_voted_for(Term, VotedFor, #{uid := UId,
+                                            current_term := CurTerm} = State) ->
+    CurVotedFor = maps:get(voted_for, State, undefined),
+    case Term =:= CurTerm andalso VotedFor =:= CurVotedFor of
+        true ->
+            %% no update needed
+            State;
+        false ->
+            ok = ra_log_meta:store(UId, current_term, Term),
+            ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),
+            reset_query_index(State#{current_term => Term,
+                                     voted_for => VotedFor})
+    end.
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
-        update_meta(Term, undefined, State);
+        update_term_and_voted_for(Term, undefined, State);
 update_term(_, State) ->
     State.
 
@@ -2015,6 +2159,7 @@ drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
 cast_reply(From, To, Msg) ->
     {cast, To, {From, Msg}}.
 
+
 index_machine_version(Idx, #{machine_versions := Versions}) ->
     %% scan for versions
     index_machine_version0(Idx, Versions).
@@ -2027,6 +2172,168 @@ index_machine_version0(Idx, [{MIdx, V} | _])
   when Idx >= MIdx -> V;
 index_machine_version0(Idx, [_ | Rem]) ->
     index_machine_version0(Idx, Rem).
+
+heartbeat_reply(#{current_term := CurTerm, query_index := QueryIndex}) ->
+    #heartbeat_reply{term = CurTerm, query_index = QueryIndex}.
+
+update_heartbeat_rpc_effects(#{query_index := QueryIndex,
+                               queries_waiting_heartbeats := Waiting,
+                               current_term := Term,
+                               id := Id} = State) ->
+    Peers = peers(State),
+    %% TODO: do a quorum evaluation to find a queries to apply and apply all
+    %% queries until that point
+    case maps:size(Peers) of
+        0 ->
+            %% Apply all if there are no peers.
+            {_, QueryRefs} = lists:unzip(queue:to_list(Waiting)),
+            Effects = apply_consistent_queries_effects(QueryRefs, State),
+            {State#{queries_waiting_heartbeats => queue:new()}, Effects};
+        _ ->
+            Effects = heartbeat_rpc_effects(Peers, Id, Term, QueryIndex),
+            {State, Effects}
+    end.
+
+make_heartbeat_rpc_effects(QueryRef,
+                           #{query_index := QueryIndex,
+                             queries_waiting_heartbeats := Waiting0,
+                             current_term := Term,
+                             id := Id} = State0) ->
+    Peers = peers(State0),
+    %% TODO: do a quorum evaluation to find a queries to apply and apply all
+    %% queries until that point
+    case maps:size(Peers) of
+        0 ->
+            Effects = apply_consistent_queries_effects([QueryRef], State0),
+            {State0, Effects};
+        _ ->
+            NewQueryIndex = QueryIndex + 1,
+            State = update_query_index(State0, NewQueryIndex),
+            Effects = heartbeat_rpc_effects(Peers, Id, Term, NewQueryIndex),
+            Waiting1 = queue:in({NewQueryIndex, QueryRef}, Waiting0),
+            {State#{queries_waiting_heartbeats => Waiting1}, Effects}
+    end.
+
+update_query_index(#{cluster := Cluster, id := Id} = State, NewQueryIndex) ->
+    Self = maps:get(Id, Cluster),
+    State#{cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}},
+           query_index => NewQueryIndex}.
+
+reset_query_index(#{cluster := Cluster} = State) ->
+    State#{
+        cluster =>
+            maps:map(fun(_PeerId, Peer) -> Peer#{query_index => 0} end,
+                     Cluster)
+    }.
+
+
+heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
+    lists:filtermap(fun({PeerId, Peer}) ->
+        heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex)
+    end,
+    maps:to_list(Peers)).
+
+heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
+    case maps:get(query_index, Peer, 0) < QueryIndex of
+        true ->
+            {true,
+                {send_rpc, PeerId, #heartbeat_rpc{query_index = QueryIndex,
+                                                  term = Term,
+                                                  leader_id = Id}}};
+        false ->
+            false
+    end.
+
+heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Waiting0} = State) ->
+    State1 = update_peer_query_index(PeerId, NewQueryIndex, State),
+    ConsensusQueryIndex = get_current_query_quorum(State1),
+    {QueryRefs, Waiting1} = take_from_queue_while(
+        fun({QueryIndex, QueryRef}) ->
+            case QueryIndex > ConsensusQueryIndex of
+                true  -> false;
+                false -> {true, QueryRef}
+            end
+        end,
+        Waiting0),
+    case QueryRefs of
+        [] -> {[], State1};
+        _  -> {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
+    end.
+
+update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
+    case maps:get(PeerId, Cluster, none) of
+        none -> State0;
+        #{query_index := PeerQueryIndex} = Peer ->
+            case QueryIndex > PeerQueryIndex of
+                true  ->
+                    update_peer(PeerId,
+                                Peer#{query_index => QueryIndex},
+                                State0);
+                false ->
+                    State0
+            end
+    end.
+
+get_current_query_quorum(#{cluster := Cluster}) ->
+    SortedQueryIndexes =
+        lists:sort(
+            fun erlang:'>'/2,
+            lists:map(
+                fun(#{query_index := PeerQueryIndex}) ->
+                    PeerQueryIndex
+                end,
+                maps:values(Cluster))),
+
+    lists:nth(maps:size(Cluster) div 2 + 1, SortedQueryIndexes).
+
+-spec take_from_queue_while(fun((El) -> {true, Res} | false), queue:queue(El)) ->
+    {[Res], queue:queue(El)}.
+take_from_queue_while(Fun, Queue) ->
+    take_from_queue_while(Fun, Queue, []).
+
+take_from_queue_while(Fun, Queue, Result) ->
+    case queue:peek(Queue) of
+        {value, El} ->
+            case Fun(El) of
+                {true, ResVal} ->
+                    take_from_queue_while(Fun, queue:drop(Queue), [ResVal | Result]);
+                false ->
+                    {Result, Queue}
+            end;
+        empty ->
+            {Result, Queue}
+    end.
+
+-spec apply_consistent_queries_effects([consistent_query_ref()], ra_server_state()) ->
+    ra_effects().
+apply_consistent_queries_effects(QueryRefs, #{last_applied := ApplyIndex} = State) ->
+    lists:map(fun({_, _, ReadCommitIndex} = QueryRef) ->
+        true = ApplyIndex >= ReadCommitIndex,
+        consistent_query_reply(QueryRef, State)
+    end,
+    QueryRefs).
+
+-spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
+consistent_query_reply({From, QueryFun, _ReadCommitIndex},
+                       #{id := Id,
+                         machine_state := MacState,
+                         machine := {machine, MacMod, _}}) ->
+    Result = ra_machine:query(MacMod, QueryFun, MacState),
+    {reply, From, {ok, Result, Id}}.
+
+process_pending_consistent_queries(#{cluster_change_permitted := false} = State0, Effects0) ->
+    {State0, Effects0};
+process_pending_consistent_queries(#{cluster_change_permitted := true,
+                                     pending_consistent_queries := Pending} = State0,
+                                   Effects0) ->
+    %% TODO: submit all pending queries with a single query index.
+    lists:foldl(
+        fun(QueryRef, {State, Effects}) ->
+            {NewState, NewEffects} = make_heartbeat_rpc_effects(QueryRef, State),
+            {NewState, NewEffects ++ Effects}
+        end,
+        {State0#{pending_consistent_queries => []}, Effects0},
+        Pending).
 
 %%% ===================
 %%% Internal unit tests

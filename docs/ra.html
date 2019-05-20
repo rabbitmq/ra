@@ -88,8 +88,8 @@ an optional process scoped term as correlation identifier.</td></tr>
   leader node.</td></tr>
 <tr><td valign="top"><a href="#leader_query-3">leader_query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine
-  This allows a caller to query the state machine by appending the query
-  to the log and returning the result once applied.</td></tr>
+  This allows a caller to query the state machine on the leader node with
+  an additional heartbeat to check that the node is still the leader.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Query the members of a cluster.</td></tr>
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td></td></tr>
@@ -522,9 +522,11 @@ the correct ra server.</p>
                      Reply :: term(),
                      <a href="#type-ra_server_id">ra_server_id()</a> | not_known}</pre></p>
 </div><p>Query the state machine
-  This allows a caller to query the state machine by appending the query
-  to the log and returning the result once applied. This guarantees the
-  result is consistent.</p>
+  This allows a caller to query the state machine on the leader node with
+  an additional heartbeat to check that the node is still the leader.
+  Consistency guarantee is that the query will return result containing
+  at least all changes, committed before this query is issued.
+  This may include changes which were committed while the query is running.</p>
 
 <h3 class="function"><a name="consistent_query-3">consistent_query/3</a></h3>
 <div class="spec">

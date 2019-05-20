@@ -140,13 +140,16 @@ cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_server_id(), query_fun(),
-            local | consistent | leader, timeout()) ->
-    ra_server_proc:ra_leader_call_ret(term()).
+            local | consistent | leader | command, timeout()) ->
+    ra_server_proc:ra_leader_call_ret(term())
+    | {ok, Reply :: term(), ra_server_id() | not_known}.
 query(ServerRef, QueryFun, local, Timeout) ->
     statem_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, leader, Timeout) ->
     leader_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
+    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout);
+query(ServerRef, QueryFun, command, Timeout) ->
     % TODO: timeout
     command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
 
@@ -325,6 +328,15 @@ leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
+leader({call, From}, {consistent_query, QueryFun},
+       #state{server_state = ServerState0} = State0) ->
+    {leader, ServerState1, Effects} =
+        ra_server:handle_leader({consistent_query, From, QueryFun},
+                                ServerState0),
+    {State1, Actions} =
+        ?HANDLE_EFFECTS(Effects, {call, From},
+                        State0#state{server_state = ServerState1}),
+    {keep_state, State1, Actions};
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_event, _Node, _Evt}, State) ->
@@ -385,11 +397,15 @@ leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
-        {leader, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {leader, State1, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             {keep_state, State, Actions};
-        {follower, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {follower, State1, Effects1} ->
+            %% TODO: refactor transition handlers
+            {State2, Effects2} = handle_leader_to_follower(State1, Effects1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects2,
+                                               EventType,
+                                               State2),
             % demonitor when stepping down
             ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
                                        erlang:demonitor(Ref);
@@ -851,6 +867,11 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
     {NextState, State#state{server_state = ServerState}, Effects}.
 
 %% TODO: move to ra_server
+handle_leader_to_follower(#state{server_state = ServerState0} = State, Effects0) ->
+    {ServerState, L2FEffects} =
+        ra_server:handle_leader_to_follower(ServerState0),
+    {State#state{server_state = ServerState}, L2FEffects ++ Effects0}.
+
 perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
                                         machine_state := MacState,
                                         last_applied := Last,
