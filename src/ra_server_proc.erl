@@ -401,11 +401,9 @@ leader(EventType, Msg, State0) ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects1} ->
-            %% TODO: refactor transition handlers
-            {State2, Effects2} = handle_leader_to_follower(State1, Effects1),
-            {State, Actions} = ?HANDLE_EFFECTS(Effects2,
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1,
                                                EventType,
-                                               State2),
+                                               State1),
             % demonitor when stepping down
             ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
                                        erlang:demonitor(Ref);
@@ -866,12 +864,6 @@ handle_await_condition(Msg, #state{server_state = ServerState0} = State) ->
         ra_server:handle_await_condition(Msg, ServerState0),
     {NextState, State#state{server_state = ServerState}, Effects}.
 
-%% TODO: move to ra_server
-handle_leader_to_follower(#state{server_state = ServerState0} = State, Effects0) ->
-    {ServerState, L2FEffects} =
-        ra_server:handle_leader_to_follower(ServerState0),
-    {State#state{server_state = ServerState}, L2FEffects ++ Effects0}.
-
 perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
                                         machine_state := MacState,
                                         last_applied := Last,
@@ -1146,6 +1138,12 @@ leader_id(#state{server_state = ServerState}) ->
 current_term(#state{server_state = ServerState}) ->
     ra_server:current_term(ServerState).
 
+process_pending_queries(NewLeader, #state{server_state = ServerState0} = State) ->
+    {ServerState, Froms} = ra_server:process_new_leader_queries(ServerState0),
+    [_ = gen_statem:reply(F, {redirect, NewLeader})
+     || F <- Froms],
+    State#state{server_state = ServerState}.
+
 maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
                            Actions) when LeaderMon =/= undefined ->
     % only when a leader is known should we cancel the election timeout
@@ -1190,8 +1188,9 @@ follower_leader_change(Old, #state{pending_commands = Pending,
                   [log_id(New), NewLeader, current_term(New)]),
             [ok = gen_statem:reply(From, {redirect, NewLeader})
              || {From, _Data} <- Pending],
-            New#state{pending_commands = [],
-                      leader_monitor = MRef}
+            process_pending_queries(NewLeader,
+                                    New#state{pending_commands = [],
+                                              leader_monitor = MRef})
     end.
 
 aten_register(Node) ->

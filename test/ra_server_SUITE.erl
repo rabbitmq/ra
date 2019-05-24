@@ -67,7 +67,6 @@ all() ->
      leader_heartbeat_reply_higher_term,
      leader_consistent_query_delay,
      leader_consistent_query,
-     leader_to_follower_redirects,
      await_condition_heartbeat_dropped,
      await_condition_heartbeat_reply_dropped,
      receive_snapshot_heartbeat_dropped,
@@ -1691,7 +1690,7 @@ follower_heartbeat(_Config) ->
       cluster := Cluster,
       id := Id,
       leader_id := LeaderId} = State,
-    #{Id := Self} = Cluster,
+    #{Id := _} = Cluster,
     NewQueryIndex = QIndex + 1,
     LowerTerm = Term - 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
@@ -2073,35 +2072,6 @@ leader_consistent_query(_Config) ->
      [{send_rpc, n2, HeartBeatRpc2},
       {send_rpc, n3, HeartBeatRpc2}]} =
         ra_server:handle_leader({consistent_query, from2, Fun}, StateWithQuery).
-
-
-leader_to_follower_redirects(_Config) ->
-    State = base_state(3, ?FUNCTION_NAME),
-    #{commit_index := CommitIndex,
-      leader_id := LeaderId,
-      query_index := QueryIndex} = State,
-
-    Fun = {m,f,[a]},
-    Query1 = {from1, Fun, CommitIndex},
-    Query2 = {from2, Fun, CommitIndex},
-
-    StateWithPending = State#{pending_consistent_queries => [Query1]},
-    StateWithWaiting = State#{queries_waiting_heartbeats => queue:in({QueryIndex, Query2}, queue:new())},
-
-    {State, [{reply, from1, {redirect, LeaderId}}]} =
-        ra_server:handle_leader_to_follower(StateWithPending),
-
-    {State, [{reply, from2, {redirect, LeaderId}}]} =
-        ra_server:handle_leader_to_follower(StateWithWaiting),
-
-    %% This should not happen in theory, but there is probably no point
-    %% in crashing.
-    StateWithBoth = State#{pending_consistent_queries => [Query1],
-                           queries_waiting_heartbeats => queue:in({QueryIndex, Query2}, queue:new())},
-
-    {State, [{reply, from1, {redirect, LeaderId}},
-             {reply, from2, {redirect, LeaderId}}]} =
-        ra_server:handle_leader_to_follower(StateWithBoth).
 
 enable_cluster_change(State0) ->
     {leader, #{cluster_change_permitted := false} = State1, _Effects} =

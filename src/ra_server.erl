@@ -7,7 +7,7 @@
 -export([
          name/2,
          init/1,
-         handle_leader_to_follower/1,
+         process_new_leader_queries/1,
          handle_leader/2,
          handle_candidate/2,
          handle_pre_vote/2,
@@ -1118,24 +1118,19 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
             {await_condition, State, []}
     end.
 
--spec handle_leader_to_follower(ra_server_state()) ->
-    {ra_server_state(), ra_effects()}.
-handle_leader_to_follower(#{pending_consistent_queries := Pending,
-                            queries_waiting_heartbeats := Waiting,
-                            leader_id := Leader,
-                            query_index := 0} = State0) ->
-    PendingEffects = lists:map(fun({From, _, _}) ->
-        {reply, From, {redirect, Leader}}
-    end,
-    Pending),
 
-    WaitingEffects = lists:map(fun({_, {From, _, _}}) ->
-        {reply, From, {redirect, Leader}}
-    end,
-    queue:to_list(Waiting)),
+-spec process_new_leader_queries(ra_server_state()) ->
+    {ra_server_state(), [from()]}.
+process_new_leader_queries(#{pending_consistent_queries := Pending,
+                             queries_waiting_heartbeats := Waiting} = State0) ->
+    From0 = lists:map(fun({From, _, _}) -> From end, Pending),
 
-    {State0#{pending_consistent_queries => [], queries_waiting_heartbeats => queue:new()},
-     PendingEffects ++ WaitingEffects}.
+    From1 = lists:map(fun({_, {From, _, _}}) -> From end,
+                      queue:to_list(Waiting)),
+
+    {State0#{pending_consistent_queries => [],
+             queries_waiting_heartbeats => queue:new()},
+     From0 ++ From1}.
 
 -spec tick(ra_server_state()) -> ra_effects().
 tick(#{effective_machine_module := MacMod,
