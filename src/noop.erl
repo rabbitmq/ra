@@ -89,7 +89,7 @@ print_metrics(undefined) ->
     print_metrics(hd(ets:lookup(ra_metrics, noop)));
 print_metrics({noop, A0, B0}) ->
     timer:sleep(1000),
-    [{noop, A, B} = X] = ets:lookup(ra_metrics, noop),
+    [{noop, _, A, _, B, _} = X] = ets:lookup(ra_metrics, noop),
     io:format("metrics ~b ~b per second~n",
               [A-A0, B-B0]),
     print_metrics(X).
