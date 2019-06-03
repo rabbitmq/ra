@@ -203,7 +203,6 @@ init(Config0 = #{id := Id}) ->
     yes = ra_directory:register_name(UId, self(),
                                      maps:get(parent, Config, undefined), Key),
 
-    _ = ets:insert(ra_metrics, {Key, 0, 0}),
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
     %% as most messages are sent using noconnect we explicitly attempt to
@@ -263,6 +262,7 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
                              [log_id(State)]),
                       [election_timeout_action(short, State)]
               end,
+    _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     {next_state, follower, State, set_tick_timer(State, Actions)}.
 
 leader(enter, OldState, State0) ->
@@ -377,8 +377,10 @@ leader(info, {NodeEvt, Node},
     end;
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
-    Effects = ra_server:tick(State1#state.server_state),
+    ServerState = State1#state.server_state,
+    Effects = ra_server:tick(ServerState),
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
+    _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     true = erlang:garbage_collect(),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,

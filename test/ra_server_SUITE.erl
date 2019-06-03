@@ -304,7 +304,7 @@ follower_aer_1(_Config) ->
                           machine_state := {simple, _, one}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 3,
                                               last_term = 1,
-                                              last_index = 1}}}, _]}
+                                              last_index = 1}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State2),
 
     % AER with index [3], commit = 3 -> commit_index = 3
@@ -322,7 +322,7 @@ follower_aer_1(_Config) ->
                           machine_state := {_, _, two}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
-                                              last_index = 2}}}, _]}
+                                              last_index = 2}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {2, 2, 1}}}, State4),
 
     % AER with index [] -> last_applied: 2 - replies with last_index = 2,
@@ -345,7 +345,7 @@ follower_aer_1(_Config) ->
                  machine_state := {_, _, tre}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
-                                              last_index = 3}}}, _]}
+                                              last_index = 3}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {3, 3, 1}}}, State6),
     ok.
 
@@ -367,7 +367,7 @@ follower_aer_2(_Config) ->
                           machine_state := {simple, _, <<>>}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
-                                            last_index = 1}}}, _]}
+                                            last_index = 1}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State1),
 
     % AER with index [], leader_commit = 1 -> last_applied: 1, reply: last_index = 1, next_index = 2
@@ -396,7 +396,7 @@ follower_aer_3(_Config) ->
                           machine_state := {simple, _, one}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
-                                            last_index = 1}}}, _]}
+                                            last_index = 1}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State1),
     % AER with index [3] -> last_applied = 1 - reply(false): last_index, 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 2,
@@ -469,7 +469,7 @@ follower_aer_4(_Config) ->
                            machine_state := {_, _, for}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
-                                            last_index = 4}}}, _]}
+                                            last_index = 4}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {4, 4, 1}}}, State1),
     % AER with index [5], commit_index = 10 -> last_applied = 4, commit_index = 5
     ok.
@@ -545,7 +545,7 @@ follower_handles_append_entries_rpc(_Config) ->
     {follower, #{leader_id := n1, current_term := 6},
      [{cast, n1, {n1, #append_entries_reply{term = 6, success = true,
                                             next_index = 4, last_index = 3,
-                                            last_term = 5}}}, _Metrics]}
+                                            last_term = 5}}} | _]}
           = ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
 
     % reply false if term < current_term (5.1)
@@ -572,7 +572,7 @@ follower_handles_append_entries_rpc(_Config) ->
     {follower,  #{log := Log},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             next_index = 3, last_index = 2,
-                                            last_term = 4}}}, _Metric0]}
+                                            last_term = 4}}}]}
     = begin
           {follower, Inter3, _} =
               ra_server:handle_follower(AE, State#{last_applied => 1}),
@@ -589,7 +589,7 @@ follower_handles_append_entries_rpc(_Config) ->
                  machine_state := <<"hi4">>},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             last_index = 4,
-                                            last_term = 5}}}, _Metrics1]}
+                                            last_term = 5}}}]}
     = begin
           {follower, Inter4, _}
         = ra_server:handle_follower(
@@ -740,7 +740,7 @@ append_entries_reply_success(_Config) ->
                            leader_commit = 3,
                            entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }, _Metrics]} = ra_server:handle_leader(Msg, State),
+      }]} = ra_server:handle_leader(Msg, State),
 
     Msg1 = {n2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
@@ -1105,7 +1105,7 @@ leader_server_join(_Config) ->
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                          n4, await_consensus}}, State0),
     % {leader, State, Effects} = ra_server:handle_leader({written, 4}, State1),
-    [{incr_metrics, _, _},
+    [
      {send_rpc, n4,
       #append_entries_rpc{entries =
                           [_, _, _, {4, 5, {'$ra_cluster_change', _,
@@ -1141,7 +1141,7 @@ leader_server_leave(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
     % raft servers should switch to the new configuration after log append
     {leader, #{cluster := #{n1 := _, n2 := _, n3 := _}},
-     [_, {send_rpc, n3, N3}, {send_rpc, n2, N2} | _]} =
+     [{send_rpc, n3, N3}, {send_rpc, n2, N2} | _]} =
         ra_server:handle_leader({command, {'$ra_leave', meta(), n4, await_consensus}},
                               State),
     % the leaving server is no longer included
@@ -1201,7 +1201,7 @@ follower_cluster_change(_Config) ->
     {follower, #{cluster := #{n1 := _, n2 := _,
                               n3 := _, n4 := _},
                  cluster_index_term := {4, 5}},
-     [{cast, n1, {n2, #append_entries_reply{}}}, _Metrics]} =
+     [{cast, n1, {n2, #append_entries_reply{}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AE, State),
             ra_server:handle_follower(written_evt({4, 4, 5}), Int)
@@ -1322,7 +1322,6 @@ command(_Config) ->
                             },
     From = maps:get(from, Meta),
     {leader, _, [{reply, From, {wrap_reply, {4, 5}}},
-                 _,  % metrics
                  {send_rpc, n3, AE}, {send_rpc, n2, AE} |
                  _]} =
         ra_server:handle_leader({command, Cmd}, State),
@@ -1575,8 +1574,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                               prev_log_term = 1,
                               leader_commit = 4 % entry is already committed
                              },
-    {follower, _FState, [{cast, n1, {n3, #append_entries_reply{success = true}}},
-                         _Metrics]} =
+    {follower, _FState, [{cast, n1, {n3, #append_entries_reply{success = true}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AER, FState1),
             ra_server:handle_follower(written_evt({4, 4, 2}), Int)
