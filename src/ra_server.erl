@@ -18,6 +18,7 @@
          handle_state_enter/2,
          tick/1,
          overview/1,
+         metrics/1,
          is_new/1,
          is_fully_persisted/1,
          is_fully_replicated/1,
@@ -308,13 +309,12 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
-            {State2, Effects0, Applied} = evaluate_quorum(State1, []),
+            {State2, Effects0, _Applied} = evaluate_quorum(State1, []),
 
-            {State3, Effects1} = process_pending_consistent_queries(State2, Effects0),
+            {State3, Effects1} = process_pending_consistent_queries(State2,
+                                                                    Effects0),
 
-            {State, More, RpcEffects0} =
-                make_pipelined_rpc_effects(State3, [{incr_metrics, ra_metrics,
-                                                     [{3, Applied}]}]),
+            {State, More, RpcEffects0} = make_pipelined_rpc_effects(State3, []),
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
@@ -418,17 +418,16 @@ handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
             {leader, State, []};
         {ok, Idx, Term, State0} ->
             {State, _, Effects0} = make_pipelined_rpc_effects(State0, []),
-            Effects1 = [{incr_metrics, ra_metrics, [{2, 1}]} | Effects0],
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
                           {_, _, _, await_consensus} ->
-                              Effects1;
+                              Effects0;
                           {_, #{from := From}, _, _} ->
                               [{reply, From,
-                                {wrap_reply, {Idx, Term}}} | Effects1];
+                                {wrap_reply, {Idx, Term}}} | Effects0];
                           _ ->
-                              Effects1
+                              Effects0
                       end,
             {leader, State, Effects}
     end;
@@ -448,16 +447,15 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
 
     {State, _, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
                                                   Effects0),
-    %% TOOD: ra_metrics
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
-    {State1, Effects1, Applied} = evaluate_quorum(State0#{log => Log},
+    {State1, Effects1, _Applied} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
     {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
 
     {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
-    {leader, State, [{incr_metrics, ra_metrics, [{3, Applied}]} | Effects]};
+    {leader, State, Effects};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
     {leader, State#{log => Log1}, Effects};
@@ -1157,6 +1155,23 @@ overview(#{log := Log, effective_machine_module := MacMod,
     O#{log => LogOverview,
        machine => MacOverview}.
 
+-spec metrics(ra_server_state()) ->
+    {atom(), ra_term(),
+     ra_index(), ra_index(),
+     ra_index(), ra_index()}.
+metrics(#{id := Id,
+          commit_index := CI,
+          last_applied := LA,
+          current_term := CT,
+          log := Log}) ->
+    Key = ra_lib:ra_server_id_to_local_name(Id),
+    SnapIdx = case ra_log:snapshot_index_term(Log) of
+                  undefined -> 0;
+                  {I, _} -> I
+              end,
+    {LW, _} = ra_log:last_index_term(Log),
+    {Key, CT, CI, LW, LA, SnapIdx}.
+
 -spec is_new(ra_server_state()) -> boolean().
 is_new(#{log := Log}) ->
     ra_log:next_index(Log) =:= 1.
@@ -1279,14 +1294,12 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State, Effects1, Applied} ->
+        {State, Effects1, _} ->
             % filter the effects that should be applied on a follower
             Effects = filter_follower_effects(Effects1),
             Reply = append_entries_reply(Term, true, State),
 
-            {follower, State, [cast_reply(Id, LeaderId, Reply),
-                               {incr_metrics, ra_metrics, [{3, Applied}]}
-                               | Effects]}
+            {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]}
     end;
 evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
