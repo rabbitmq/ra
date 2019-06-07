@@ -108,7 +108,7 @@ name_of(UId) ->
         [] -> undefined
     end.
 
--spec cluster_name_of(ra_uid()) -> ra_cluster_name().
+-spec cluster_name_of(ra_uid()) -> maybe(ra_cluster_name()).
 cluster_name_of(UId) ->
     case ets:lookup(?MODULE, UId) of
 	[{_, _, _, _, ClusterName}] -> ClusterName;
