@@ -192,16 +192,17 @@ statem_call(ServerRef, Msg, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init(Config0 = #{id := Id}) ->
+init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
     #{uid := UId,
       log_id := LogId,
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
-    % ensure ra_directory has the new pid
+						% ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(),
-                                     maps:get(parent, Config, undefined), Key),
+                                     maps:get(parent, Config, undefined), Key,
+				     ClusterName),
 
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
