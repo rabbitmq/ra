@@ -898,6 +898,41 @@ handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % TODO: review / refactor to remove the mod call here
     ?MODULE:send_rpc(To, Rpc),
     {State0, Actions};
+handle_effect(_, {pipeline_rpcs, PeerIds}, _, State0, Actions) ->
+    % CommitIndex = ra_server:commit_index(State0#state.server_state),
+    {More, Monitors, SS} =
+    lists:fold(
+      fun (PeerId, {LastMore, Monitors0, S0}) ->
+              case ra_server:make_rpc_for(PeerId, S0) of
+                  {rpc, {NextIdx, More, Rpc, S1}} ->
+                      Msg = {'$gen_cast', Rpc},
+                      case erlang:send(PeerId, Msg, [noconnect, nosuspend]) of
+                          ok ->
+                              S = ra_server:update_peer_next_idx(PeerId,
+                                                                 NextIdx, S1),
+                              {More or LastMore, S};
+                          _ ->
+                              %% if it's nosuspend or no connect don't increment
+                              %% as the send was lost
+                              %% also don't return more result as we don't
+                              %% want to resend quite yet for this peer
+                              {LastMore, S1}
+                      end;
+                  {snapshot, {SnapState, Id, Term}} ->
+                      {SS, Monitors} = do_snapshot(PeerId, SnapState, Id,
+                                                   Term, Monitors0, S0),
+                      {LastMore, Monitors, SS}
+              end
+      end,
+      {false, State0#state.server_state}, PeerIds),
+    State = State0#state{server_state = SS,
+                         monitors = Monitors},
+    case More of
+        true ->
+            {State, Actions};
+        false ->
+            {State, [{next_event, info, pipeline_rpcs} | Actions]}
+    end;
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
@@ -940,37 +975,38 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
-              #state{server_state = SS0,
-                     monitors = Monitors} = State0, Actions) ->
-    ChunkSize = application:get_env(ra, snapshot_chunk_size,
-                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
-    %% leader effect only
-    Me = self(),
-    Pid = spawn(fun () ->
-                        try send_snapshots(Me, Id, Term, To,
-                                           ChunkSize, SnapState) of
-                            _ -> ok
-                        catch
-                            C:timeout:S ->
-                                %% timeout is ok as we've already blocked
-                                %% for a while
-                                erlang:raise(C, timeout, S);
-                            C:E:S ->
-                                %% insert an arbitrary pause here as a primitive
-                                %% throttling operation as certain errors
-                                %% happen quickly
-                                ok = timer:sleep(5000),
-                                erlang:raise(C, E, S)
-                        end
-                end),
-    MRef = erlang:monitor(process, Pid),
-    %% update the peer state so that no pipelined entries are sent during
-    %% the snapshot sending phase
-    SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
-    {State0#state{server_state = SS,
-                  monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
-                  Actions};
+% handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
+%               #state{server_state = SS0,
+%                      monitors = Monitors} = State0, Actions) ->
+%     %% leader effect only
+%     % Me = self(),
+%     % Pid = spawn(fun () ->
+%     %                     ChunkSize = application:get_env(ra, snapshot_chunk_size,
+%     %                                                     ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+%     %                     try send_snapshots(Me, Id, Term, To,
+%     %                                        ChunkSize, SnapState) of
+%     %                         _ -> ok
+%     %                     catch
+%     %                         C:timeout:S ->
+%     %                             %% timeout is ok as we've already blocked
+%     %                             %% for a while
+%     %                             erlang:raise(C, timeout, S);
+%     %                         C:E:S ->
+%     %                             %% insert an arbitrary pause here as a primitive
+%     %                             %% throttling operation as certain errors
+%     %                             %% happen quickly
+%     %                             ok = timer:sleep(5000),
+%     %                             erlang:raise(C, E, S)
+%     %                     end
+%     %             end),
+%     % MRef = erlang:monitor(process, Pid),
+%     % %% update the peer state so that no pipelined entries are sent during
+%     % %% the snapshot sending phase
+%     % SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
+%     {SS, MRef} = begin_snapshot(To, SnapState, Id, Term, Monitors, SS0),
+%     {State0#state{server_state = SS,
+%                   monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
+%                   Actions};
 handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
     _ = spawn(fun() ->
@@ -1104,6 +1140,33 @@ send_rpcs(State0) ->
 make_rpcs(State) ->
     {ServerState, Rpcs} = ra_server:make_rpcs(State#state.server_state),
     {State#state{server_state = ServerState}, Rpcs}.
+
+do_snapshot(To, SnapState, Id, Term, Monitors, SS0) ->
+    Me = self(),
+    Pid = spawn(fun () ->
+                        ChunkSize = application:get_env(ra, snapshot_chunk_size,
+                                                        ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+                        try send_snapshots(Me, Id, Term, To,
+                                           ChunkSize, SnapState) of
+                            _ -> ok
+                        catch
+                            C:timeout:S ->
+                                %% timeout is ok as we've already blocked
+                                %% for a while
+                                erlang:raise(C, timeout, S);
+                            C:E:S ->
+                                %% insert an arbitrary pause here as a primitive
+                                %% throttling operation as certain errors
+                                %% happen quickly
+                                ok = timer:sleep(5000),
+                                erlang:raise(C, E, S)
+                        end
+                end),
+    MRef = erlang:monitor(process, Pid),
+    %% update the peer state so that no pipelined entries are sent during
+    %% the snapshot sending phase
+    SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
+    {SS, Monitors#{Pid => {snapshot_sender, MRef}}}.
 
 send_rpc(To, Msg) ->
     % fake gen cast - need to avoid any blocking delays here
@@ -1295,9 +1358,7 @@ receive_snapshot_timeout() ->
                         ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
 
 send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
-    {ok,
-     Meta,
-     ReadState} = ra_snapshot:begin_read(SnapState),
+    {ok, Meta, ReadState} = ra_snapshot:begin_read(SnapState),
 
     RPC = #install_snapshot_rpc{term = Term,
                                 leader_id = Id,
