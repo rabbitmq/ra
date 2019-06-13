@@ -252,7 +252,7 @@ written_event_after_snapshot(Config) ->
                          snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
+    {Log2, _} = ra_log:update_release_cursor(2, [], 1,
                                              <<"one+two">>, Log1b),
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {2, 1}} = Evt} ->
@@ -265,7 +265,7 @@ written_event_after_snapshot(Config) ->
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     Log6b = deliver_all_log_events(Log6, 100),
-    {Log7, _} = ra_log:update_release_cursor(4, #{}, 1,
+    {Log7, _} = ra_log:update_release_cursor(4, [], 1,
                                              <<"one+two+three+four">>,
                                              Log6b),
     _ = receive
@@ -572,8 +572,7 @@ update_release_cursor(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log2, _} = ra_log:update_release_cursor(127, [n1, n2],
                                              1, initial_state, Log1),
 
     Log3 = deliver_all_log_events(Log2, 500),
@@ -584,8 +583,7 @@ update_release_cursor(Config) ->
     [_] = find_segments(Config),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
-    {Log4, _} = ra_log:update_release_cursor(149, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log4, _} = ra_log:update_release_cursor(149, [n1, n2],
                                              1, initial_state, Log3b),
     Log5 = deliver_all_log_events(Log4, 500),
 
@@ -615,8 +613,7 @@ update_release_cursor_with_machine_version(Config) ->
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
     MacVer = 2,
-    {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log2, _} = ra_log:update_release_cursor(127, [n1, n2],
                                              MacVer,
                                              initial_state, Log1),
     Log = deliver_all_log_events(Log2, 500),
@@ -659,8 +656,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     Log5 = validate_read(1, 155, 2, Log4),
 
     % then update the release cursor
-    {Log6, _} = ra_log:update_release_cursor(154, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log6, _} = ra_log:update_release_cursor(154, [n1, n2],
                                              1, initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 

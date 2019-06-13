@@ -38,7 +38,8 @@
          state_query/3,
          trigger_election/2,
          ping/2,
-         log_fold/4
+         log_fold/4,
+         erlang_send/3
         ]).
 
 -export([send_rpc/2]).
@@ -177,6 +178,7 @@ leader_call(ServerRef, Msg, Timeout) ->
 statem_call(ServerRef, Msg, Timeout) ->
     case gen_statem_safe_call(ServerRef, Msg, Timeout) of
         {redirect, Leader} ->
+            ct:pal("Redirect ~w to ~w", [Msg, Leader]),
             statem_call(Leader, Msg, Timeout);
         {wrap_reply, Reply} ->
             {ok, Reply, ServerRef};
@@ -204,7 +206,7 @@ init(Config0 = #{id := Id}) ->
                                      maps:get(parent, Config, undefined), Key),
 
     % ensure each relevant erlang node is connected
-    Peers = maps:keys(maps:remove(Id, Cluster)),
+    Peers = ra_peers:peer_ids(Cluster),
     %% as most messages are sent using noconnect we explicitly attempt to
     %% connect to all relevant nodes
     _ = spawn(fun () ->
@@ -326,6 +328,7 @@ leader({call, From}, {local_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
+    ?INFO("STATE QEURY", []),
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {consistent_query, QueryFun},
@@ -377,6 +380,7 @@ leader(info, {NodeEvt, Node},
     end;
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
+    ?INFO("tick timeout RPcs ~w", [RpcEffs]),
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
@@ -428,7 +432,7 @@ leader(EventType, Msg, State0) ->
                 true ->
                     {stop, {shutdown, delete}, State};
                 false ->
-                    {next_state, terminating_leader, State, Actions}
+                    {next_state, terminating_leader, send_rpcs(State), Actions}
             end
     end.
 
@@ -898,41 +902,66 @@ handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % TODO: review / refactor to remove the mod call here
     ?MODULE:send_rpc(To, Rpc),
     {State0, Actions};
-handle_effect(_, {pipeline_rpcs, PeerIds}, _, State0, Actions) ->
-    % CommitIndex = ra_server:commit_index(State0#state.server_state),
+handle_effect(_, {pipeline_rpcs, PeerIds}, _,
+              #state{monitors = Monitors0} = State0, Actions) ->
     {More, Monitors, SS} =
-    lists:fold(
-      fun (PeerId, {LastMore, Monitors0, S0}) ->
-              case ra_server:make_rpc_for(PeerId, S0) of
-                  {rpc, {NextIdx, More, Rpc, S1}} ->
-                      Msg = {'$gen_cast', Rpc},
-                      case erlang:send(PeerId, Msg, [noconnect, nosuspend]) of
-                          ok ->
-                              S = ra_server:update_peer_next_idx(PeerId,
-                                                                 NextIdx, S1),
-                              {More or LastMore, S};
-                          _ ->
-                              %% if it's nosuspend or no connect don't increment
-                              %% as the send was lost
-                              %% also don't return more result as we don't
-                              %% want to resend quite yet for this peer
-                              {LastMore, S1}
+    lists:foldl(
+      fun (PeerId, {LastMore, M0, S0}) ->
+              %% only generate rpc if node is connected
+              case is_connected(PeerId) of
+                  true ->
+                      case ra_server:make_rpc_for(PeerId, S0) of
+                          {rpc, {NextIdx, More, Rpc}, S1} ->
+                              Msg = {'$gen_cast', Rpc},
+                              case erlang_send(PeerId, Msg) of
+                                  ok ->
+                                      S = ra_server:update_peer_next_idx(
+                                            PeerId, NextIdx, S1),
+                                      {More or LastMore, M0, S};
+                                  _ ->
+                                      %% if it's nosuspend or no connect
+                                      %% don't increment as the send was lost
+                                      %% also don't return more result as we don't
+                                      %% want to resend quite yet for this peer
+                                      {LastMore, M0, S1}
+                              end;
+                          {snapshot, {SnapState, Id, Term}, S1} ->
+                              {M, SS} = do_snapshot(PeerId, SnapState, Id,
+                                                    Term, M0, S1),
+                              {LastMore, M, SS}
                       end;
-                  {snapshot, {SnapState, Id, Term}} ->
-                      {SS, Monitors} = do_snapshot(PeerId, SnapState, Id,
-                                                   Term, Monitors0, S0),
-                      {LastMore, Monitors, SS}
+                  false ->
+                      {LastMore, M0, S0}
               end
       end,
-      {false, State0#state.server_state}, PeerIds),
+      {false, Monitors0, State0#state.server_state}, PeerIds),
     State = State0#state{server_state = SS,
                          monitors = Monitors},
     case More of
-        true ->
-            {State, Actions};
         false ->
-            {State, [{next_event, info, pipeline_rpcs} | Actions]}
+            {State, Actions};
+        true ->
+            %% to ensure incoming events are processed we don't use next
+            %% event here but instead enqueue the event after all waiting events
+            {State, [{timeout, 0, pipeline_rpcs} | Actions]}
     end;
+handle_effect(_, {send_rpcs, PeerIds}, _,
+              #state{monitors = Monitors0} = State0, Actions) ->
+    {Monitors, SS} =
+        lists:foldl(
+          fun (PeerId, {M0, S0}) ->
+                  case ra_server:make_rpc_for(PeerId, S0) of
+                      {rpc, {_NextIdx, _More, Rpc}, S1} ->
+                          Msg = {'$gen_cast', Rpc},
+                          _ = erlang_send(PeerId, Msg),
+                          {M0, S1};
+                      {snapshot, {SnapState, Id, Term}, S1} ->
+                          do_snapshot(PeerId, SnapState, Id,
+                                      Term, M0, S1)
+                  end
+          end, {Monitors0, State0#state.server_state}, PeerIds),
+    {State0#state{server_state = SS,
+                  monitors = Monitors}, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
@@ -1166,7 +1195,7 @@ do_snapshot(To, SnapState, Id, Term, Monitors, SS0) ->
     %% update the peer state so that no pipelined entries are sent during
     %% the snapshot sending phase
     SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
-    {SS, Monitors#{Pid => {snapshot_sender, MRef}}}.
+    {Monitors#{Pid => {snapshot_sender, MRef}}, SS}.
 
 send_rpc(To, Msg) ->
     % fake gen cast - need to avoid any blocking delays here
@@ -1291,7 +1320,7 @@ do_state_query(all, State) -> State;
 do_state_query(machine, #{machine_state := MacState}) ->
     MacState;
 do_state_query(members, #{cluster := Cluster}) ->
-    maps:keys(Cluster).
+    ra_peers:all(Cluster).
 
 config_defaults() ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
@@ -1329,10 +1358,16 @@ reject_command(Pid, Corr, State) ->
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.
 
+erlang_send(To, Msg) ->
+    ?MODULE:erlang_send(To, Msg, [noconnect, nosuspend]).
+
+erlang_send(To, Msg, Opts) ->
+    erlang:send(To, Msg, Opts).
+
 send(To, Msg) ->
     % we do not want to block the ra server whilst attempting to set up
     % a TCP connection to a potentially down node.
-    case erlang:send(To, Msg, [noconnect, nosuspend]) of
+    case erlang_send(To, Msg) of
         ok -> ok;
         _ -> ok
     end.
@@ -1396,3 +1431,8 @@ make_command(Type, {call, From}, Data, Mode) ->
 make_command(Type, _, Data, Mode) ->
     Ts = os:system_time(millisecond),
     {Type, #{ts => Ts}, Data, Mode}.
+
+is_connected(PeerId) ->
+    PeerNode = ra_lib:ra_server_id_node(PeerId),
+    lists:keymember(PeerNode, 1, nodes()) orelse PeerNode == node().
+

@@ -132,6 +132,7 @@
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
     {send_rpc, ra_server_id(), #append_entries_rpc{}} |
+    {send_rpcs | pipeline_rpcs, [ra_server_id()]} |
     {send_snapshot, To :: ra_server_id(),
      {Module :: module(), Ref :: term(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
@@ -312,23 +313,24 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
         true ->
             {MI, NI} = ra_peers:match_and_next_index(PeerId, Cluster0),
 
-            Cluster = ra_peers:set_match_and_next_index(PeerId,
-                                                        max(MI, LastIdx),
-                                                        max(NI, NextIdx),
-                                                        Cluster0),
-            State1 = State0#{cluster => Cluster},
+            Cluster1 = ra_peers:set_match_and_next_index(PeerId,
+                                                         max(MI, LastIdx),
+                                                         max(NI, NextIdx),
+                                                         Cluster0),
+            State1 = State0#{cluster => Cluster1},
             {State2, Effects0} = evaluate_quorum(State1, []),
             {State, Effects1} = process_pending_consistent_queries(State2,
                                                                    Effects0),
 
-            Effects = [{next_event, info, pipeline_rpcs} | Effects1],
-            case State of
-                #{id := Id, cluster := #{Id := _}} ->
+            Effects = make_pipeline_rpcs_effect(State) ++ Effects1,
+            #{commit_index := CI,
+              cluster_index_term := {CITIndex, _},
+              cluster := Cluster} = State,
+            case ra_peers:is_member(Id, Cluster)  of
+                true ->
                     % leader is in the cluster
                     {leader, State, Effects};
-                #{commit_index := CI, cluster_index_term := {CITIndex, _},
-                  log_id := LogId}
-                  when CI >= CITIndex ->
+                false when CI >= CITIndex ->
                     % leader is not in the cluster and the new cluster
                     % config has been committed
                     % time to say goodbye
@@ -404,10 +406,10 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                       % entry at the same index in a different term.
                       % decrement next_index but don't go lower than
                       % match index.
-                      ra_peers:set__next_index(PeerId, NextIndex, Cluster0)
+                      ra_peers:set_next_index(PeerId, NextIndex, Cluster0)
               end,
     State = State0#{cluster => Cluster, log => Log},
-    {leader, State, [{next_event, info, pipeline_rpcs}]};
+    {leader, State, make_pipeline_rpcs_effect(State)};
 handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
     case append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
@@ -426,7 +428,7 @@ handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
                               []
                       end,
             {leader, State,
-             [{next_event, info, pipeline_rpcs} | Effects]}
+             make_pipeline_rpcs_effect(State) ++ Effects}
     end;
 handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
     %% TODO: refactor to use wal batch API?
@@ -442,14 +444,14 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
                             end
                     end, {State00, []}, Cmds),
 
-    {leader, State, [{next_event, info, pipeline_rpcs} | Effects0]};
+    {leader, State, make_pipeline_rpcs_effect(State) ++ Effects0};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log},
                                                   Effects0),
     {State, Effects2} = process_pending_consistent_queries(State1, Effects1),
 
-    {leader, State, [{next_event, info, pipeline_rpcs} | Effects2]};
+    {leader, State, make_pipeline_rpcs_effect(State) ++ Effects2};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
     {leader, State#{log => Log1}, Effects};
@@ -478,28 +480,14 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                   [LogId, PeerId]),
             {leader, State0, []};
         true ->
-
-            Cluster = ra_peer:update_post_snapshot_installation(PeerId,
-                                                                LastIndex,
-                                                                Cluster0),
+            Cluster = ra_peers:update_post_snapshot_installation(PeerId,
+                                                                 LastIndex,
+                                                                 Cluster0),
             State = State0#{cluster => Cluster},
-
-            %% we can now demonitor the process
-            % Effects0 = case Peer0 of
-            %                #{status := {sending_snapshot, Pid}} ->
-            %                    [{demonitor, process, Pid}];
-            %                _ -> []
-            %            end,
-            {leader, State, [{next_event, info, pipeline_rpcs}]}
+            {leader, State, make_pipeline_rpcs_effect(State)}
     end;
-handle_leader(pipeline_rpcs, #{log := Log,
-                               commit_index := CommitIndex,
-                               cluster := Cluster} = State0) ->
-
-    NextLogIdx = ra_log:next_index(Log),
-    Effects = ra_peers:make_pipelined_rpc_effect(CommitIndex, NextLogIdx,
-                                                 Cluster),
-    {leader, State0, Effects};
+handle_leader(pipeline_rpcs, State0) ->
+    {leader, State0, make_pipeline_rpcs_effect(State0)};
 handle_leader(#install_snapshot_rpc{term = Term,
                                     leader_id = Leader} = Evt,
               #{current_term := CurTerm,
@@ -567,26 +555,35 @@ handle_leader(#heartbeat_rpc{term = Term},
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_heartbeat_rpc_in_same_term);
 handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex, term = Term}},
-              #{current_term := CurTerm, log_id := LogId} = State0) ->
-    case {CurTerm, Term} of
-        {Same, Same} ->
-            %% Heartbeat confirmed
-            case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of
-                {[], State} ->
-                    {leader, State, []};
-                {QueryRefs, State} ->
-                    Effects = apply_consistent_queries_effects(QueryRefs, State),
-                    {leader, State, Effects}
-            end;
-        {CurHigher, TermLower} when CurHigher > TermLower ->
-            %% Heartbeat reply for lower term. Ignoring
+              #{current_term := CurTerm,
+                cluster := Cluster,
+                log_id := LogId} = State0) ->
+    case ra_peers:is_member(PeerId, Cluster) of
+        false ->
+            ?WARN("~s: leader saw heartbeat_reply for unknown peer ~w~n",
+                  [LogId, PeerId]),
             {leader, State0, []};
-        {CurLower, TermHigher} when CurLower < TermHigher ->
-            %% A node with higher term confirmed heartbeat. This should not happen
-            ?NOTICE("~s leader saw heartbeat_reply for term ~b "
-                    "abdicates term: ~b!~n",
-                    [LogId, Term, CurTerm]),
-            {follower, update_term(Term, State0), []}
+        true ->
+            case {CurTerm, Term} of
+                {Same, Same} ->
+                    %% Heartbeat confirmed
+                    case heartbeat_rpc_quorum(ReplyQueryIndex, PeerId, State0) of
+                        {[], State} ->
+                            {leader, State, []};
+                        {QueryRefs, State} ->
+                            Effects = apply_consistent_queries_effects(QueryRefs, State),
+                            {leader, State, Effects}
+                    end;
+                {CurHigher, TermLower} when CurHigher > TermLower ->
+                    %% Heartbeat reply for lower term. Ignoring
+                    {leader, State0, []};
+                {CurLower, TermHigher} when CurLower < TermHigher ->
+                    %% A node with higher term confirmed heartbeat. This should not happen
+                    ?NOTICE("~s leader saw heartbeat_reply for term ~b "
+                            "abdicates term: ~b!~n",
+                            [LogId, Term, CurTerm]),
+                    {follower, update_term(Term, State0), []}
+            end
     end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
@@ -639,14 +636,14 @@ handle_leader(Msg, State) ->
 
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
-    {ra_state(), ra_server_state(), ra_effects()}.
+    {candidate | leader | follower, ra_server_state(), ra_effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{current_term := Term,
                    votes := Votes,
                    machine := Mac,
-                   cluster := Nodes} = State0) ->
+                   cluster := Cluster} = State0) ->
     NewVotes = Votes + 1,
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    case trunc(ra_peers:count(Cluster) / 2) + 1 of
         NewVotes ->
             {State, Effects} = make_all_rpcs(
                                  initialise_peers(State0)),
@@ -731,7 +728,7 @@ handle_candidate(#pre_vote_result{}, State) ->
 handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {pre_vote, State#{log => Log}, Effects};
+    {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
 handle_candidate(Msg, State) ->
@@ -783,10 +780,10 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
                 #{current_term := Term, votes := Votes,
                   pre_vote_token := Token,
-                  cluster := Nodes} = State0) ->
+                  cluster := Cluster} = State0) ->
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    case trunc(ra_peers:count(Cluster) / 2) + 1 of
         NewVotes ->
             call_for_election(candidate, State);
         _ ->
@@ -1179,15 +1176,12 @@ is_fully_persisted(#{log := Log}) ->
     LastWritten =:= LastIdxTerm.
 
 -spec is_fully_replicated(ra_server_state()) -> boolean().
-is_fully_replicated(#{commit_index := CI,
-                      cluster := Cluster}) ->
-    case ra_peers:peer_match_indexes(Cluster) of
-        [] ->
-            true; % there is only one server
-        MatchIndexes ->
-            MinMI = lists:min(MatchIndexes),
-            MinMI >= CI
-    end.
+is_fully_replicated(#{cluster := Cluster,
+                      commit_index := CommitIndex,
+                      log := Log}) ->
+    NextLogIdx = ra_log:next_index(Log),
+    ?DEBUG("is fully replicated ~w ~w", [Cluster, NextLogIdx]),
+    [] =:= ra_peers:stale(CommitIndex, NextLogIdx, Cluster).
 
 handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
                                    effective_machine_module := MacMod,
@@ -1226,7 +1220,7 @@ current_term(State) ->
 % Internal
 
 become(leader, #{cluster := Cluster, log := Log0} = State) ->
-    Log = ra_log:release_resources(maps:size(Cluster) + 1, Log0),
+    Log = ra_log:release_resources(ra_peers:count(Cluster) + 1, Log0),
     State#{log => Log};
 become(follower, #{log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
@@ -1332,16 +1326,27 @@ filter_follower_effects(Effects) ->
                     end, [], Effects)).
 
 make_rpcs(#{commit_index := CommitIndex,
+            log := Log,
             cluster := Cluster} = State0) ->
     {State, EffectsHR} = update_heartbeat_rpc_effects(State0),
-    PeerIds = ra_peers:stale(CommitIndex, Cluster),
-    {State, [{send_rpcs, PeerIds} | EffectsHR]}.
+    NextLogIdx = ra_log:next_index(Log),
+    case ra_peers:stale(CommitIndex, NextLogIdx, Cluster) of
+        [] ->
+            {State, EffectsHR};
+        PeerIds ->
+            {State, [{send_rpcs, PeerIds} | EffectsHR]}
+    end.
 
 % makes empty append entries for peers that aren't pipelineable
 make_all_rpcs(#{cluster := Cluster} = State0) ->
     {State, EffectsHR} = update_heartbeat_rpc_effects(State0),
-    PeerIds = ra_peers:not_sending_snapshots(Cluster),
-    {State, [{send_rpcs, PeerIds} | EffectsHR]}.
+    case ra_peers:not_sending_snapshots(Cluster) of
+        [] ->
+            {State, EffectsHR};
+        PeerIds ->
+            PeerIds = ra_peers:not_sending_snapshots(Cluster),
+            {State, [{send_rpcs, PeerIds} | EffectsHR]}
+    end.
 
 -spec make_rpc_for(ra_server_id(), ra_server_state()) ->
     {rpc, {ra_index(), boolean(), term()}, ra_server_state()} |
@@ -1408,7 +1413,8 @@ update_release_cursor(Index, MacState,
                       State = #{log := Log0, cluster := Cluster}) ->
     MacVersion = index_machine_version(Index, State),
     % simply pass on release cursor index to log
-    {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
+    ServerIds = ra_peers:all(Cluster),
+    {Log, Effects} = ra_log:update_release_cursor(Index, ServerIds,
                                                   MacVersion,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
@@ -1431,31 +1437,29 @@ persist_last_applied(#{last_applied := LastApplied, uid := UId} = State) ->
 -spec update_peer_status(ra_server_id(), ra_peer_status(),
                          ra_server_state()) -> ra_server_state().
 update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
-    Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
-    State#{cluster => maps:put(PeerId, Peer, Peers)}.
+    State#{cluster => ra_peers:set_status(PeerId, Status, Peers)}.
 
 -spec update_peer_next_idx(ra_server_id(), ra_index(), ra_server_state()) ->
     ra_server_state().
 update_peer_next_idx(PeerId, NextIdx,
                      #{cluster := Peers0,
                        commit_index := CommitIndex} = State) ->
-    Peers1 = ra_peers:set_next_idx(PeerId, NextIdx, Peers0),
+    Peers1 = ra_peers:set_next_index(PeerId, NextIdx, Peers0),
     Peers = ra_peers:set_commit_index(PeerId, CommitIndex, Peers1),
     State#{cluster => Peers}.
 
 peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
-     PeerKv =
-         maps:to_list(
-           lists:filter(fun(PeerId) ->
-                            case ra_peers:status(PeerId, Peers) of
-                                {sending_snapshot, Pid} ->
-                                    Pid =:= SnapshotPid;
-                                _ ->
-                                    false
-                            end
-                       end, ra_peers:peer_ids(Peers))),
+    PeerKv = lists:filter(fun(PeerId) ->
+                                  case ra_peers:status(PeerId, Peers) of
+                                      {sending_snapshot, Pid} ->
+                                          Pid =:= SnapshotPid;
+                                      _ ->
+                                          false
+                                  end
+                          end, ra_peers:peer_ids(Peers)),
+    ?INFO("peer_snahost_process_exitied ~w" , [PeerKv]),
      case PeerKv of
-         [{PeerId}] ->
+         [PeerId] ->
              Peers1 = ra_peers:set_status(PeerId, normal, Peers),
              State#{cluster => Peers1};
          _ ->
@@ -1710,7 +1714,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     PeerIds = ra_peers:peer_ids(Cluster0),
     NextIdx = ra_log:next_index(Log),
     Cluster = lists:foldl(fun(PeerId, Acc) ->
-                                  ra_peers:set_next_idx(PeerId, NextIdx, Acc)
+                                  ra_peers:reset_peer(PeerId, NextIdx, Acc)
                           end, Cluster0, PeerIds),
     State#{cluster => Cluster}.
 
@@ -1787,22 +1791,23 @@ apply_with({Idx, _, {'$ra_query', CmdMeta, QueryFun, ReplyType}},
     {Effects, Notifys} = add_reply(CmdMeta, Result, ReplyType,
                                    Effects0, Notifys0),
     {Mod, Idx, State, MacSt, Effects, Notifys};
-apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
+apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewMembers, ReplyType}},
            {Mod, _, State0, MacSt, Effects0, Notifys0}) ->
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
                                    Effects0, Notifys0),
     State = case State0 of
-                #{cluster_index_term := {CI, CT}}
+                #{cluster_index_term := {CI, CT},
+                  id := Id}
                   when Idx > CI andalso Term >= CT ->
                     ?DEBUG("~s: applying ra cluster change to ~w~n",
-                           [log_id(State0), maps:keys(NewCluster)]),
+                           [log_id(State0), NewMembers]),
                     %% we are recovering and should apply the cluster change
-                    State0#{cluster => NewCluster,
+                    State0#{cluster => ra_peers:init(Id, NewMembers),
                             cluster_change_permitted => true,
                             cluster_index_term => {Idx, Term}};
                 _  ->
                     ?DEBUG("~s: committing ra cluster change to ~w~n",
-                           [log_id(State0), maps:keys(NewCluster)]),
+                           [log_id(State0), NewMembers]),
                     %% else just enable further cluster changes again
                     State0#{cluster_change_permitted => true}
             end,
@@ -1935,7 +1940,7 @@ append_log_leader({'$ra_join', From, JoiningServerId, ReplyMode},
     end;
 append_log_leader({'$ra_leave', From, LeavingServerId, ReplyMode},
                   State = #{cluster := OldCluster}) ->
-    case ra_peers:is_member( LeavingServerId, OldCluster) of
+    case ra_peers:is_member(LeavingServerId, OldCluster) of
         true ->
             Cluster = ra_peers:remove(LeavingServerId, OldCluster),
             append_cluster_change(Cluster, From, ReplyMode, State);
@@ -1949,15 +1954,16 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     {ok, NextIdx, Term, State#{log => Log}}.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
-                        {_, State = #{cluster_index_term := {Idx, CITTerm}}})
+                        {_, State = #{cluster_index_term := {Idx, CITTerm},
+                                      id := Id}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster
     % change (can this even happen?) we should revert back to the last known
     % cluster
     case Cmd of
-        {'$ra_cluster_change', _, Cluster, _} ->
-            {Idx, State#{cluster => Cluster,
+        {'$ra_cluster_change', _, Members, _} ->
+            {Idx, State#{cluster => ra_peers:init(Id, Members),
                          cluster_index_term => {Idx, Term}}};
         _ ->
             % revert back to previous cluster
@@ -1967,9 +1973,9 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
                             cluster_index_term => {PrevIdx, PrevTerm}},
             pre_append_log_follower(Entry, {Idx, State1})
     end;
-pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
-                    {_, State}) ->
-    {{Idx, Term}, State#{cluster => Cluster,
+pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Members, _}},
+                    {_, #{id := Id} = State}) ->
+    {{Idx, Term}, State#{cluster => ra_peers:init(Id, Members),
                          cluster_index_term => {Idx, Term}}};
 pre_append_log_follower({Idx, _, _}, {_, State}) ->
     {Idx, State}.
@@ -1981,7 +1987,7 @@ append_cluster_change(Cluster, From, ReplyMode,
                                 current_term := Term}) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
-    Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
+    Command = {'$ra_cluster_change', From, ra_peers:all(Cluster), ReplyMode},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
     % TODO: is it safe to do change the cluster config with an async write?
@@ -2133,17 +2139,14 @@ make_heartbeat_rpc_effects(QueryRef,
             {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
-update_query_index(#{cluster := Cluster, id := Id} = State, NewQueryIndex) ->
-    Self = maps:get(Id, Cluster),
-    State#{cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}},
-           query_index => NewQueryIndex}.
+update_query_index(State, NewQueryIndex) ->
+    State#{query_index => NewQueryIndex}.
 
 reset_query_index(#{cluster := Cluster} = State) ->
-    State#{
-        cluster =>
-            maps:map(fun(_PeerId, Peer) -> Peer#{query_index => 0} end,
-                     Cluster)
-    }.
+    State#{cluster =>
+           lists:foldl(fun(PeerId, Acc) ->
+                               ra_peers:set_query_index(PeerId, 0, Acc)
+                       end, Cluster, ra_peers:peer_ids(Cluster))}.
 
 
 heartbeat_rpc_effects(Cluster, Id, Term, QueryIndex) ->
@@ -2163,20 +2166,23 @@ heartbeat_rpc_effect_for_peer(PeerId, Cluster, Id, Term, QueryIndex) ->
             false
     end.
 
-heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Waiting0} = State) ->
+heartbeat_rpc_quorum(NewQueryIndex, PeerId,
+                     #{queries_waiting_heartbeats := Waiting0} = State) ->
     State1 = update_peer_query_index(PeerId, NewQueryIndex, State),
     ConsensusQueryIndex = get_current_query_quorum(State1),
     {QueryRefs, Waiting1} = take_from_queue_while(
-        fun({QueryIndex, QueryRef}) ->
-            case QueryIndex > ConsensusQueryIndex of
-                true  -> false;
-                false -> {true, QueryRef}
-            end
-        end,
-        Waiting0),
+                              fun({QueryIndex, QueryRef}) ->
+                                      case QueryIndex > ConsensusQueryIndex of
+                                          true  -> false;
+                                          false -> {true, QueryRef}
+                                      end
+                              end,
+                              Waiting0),
     case QueryRefs of
-        [] -> {[], State1};
-        _  -> {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
+        [] ->
+            {[], State1};
+        _ ->
+            {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
     end.
 
 update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster0} = State0) ->
@@ -2184,16 +2190,12 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster0} = State0) ->
     Cluster = ra_peers:set_query_index(PeerId, max(QI, QueryIndex), Cluster0),
     State0#{cluster => Cluster}.
 
-get_current_query_quorum(#{cluster := Cluster}) ->
-    SortedQueryIndexes =
-        lists:sort(
-          fun erlang:'>'/2,
-          lists:map(
-            fun(PeerId) ->
-                    ra_peers:query_index(PeerId, Cluster)
-            end,
-            ra_peers:peer_ids(Cluster))),
-
+get_current_query_quorum(#{cluster := Cluster,
+                           query_index := QI}) ->
+    QIs = [ra_peers:query_index(P, Cluster)
+           || P <- ra_peers:peer_ids(Cluster)],
+    SortedQueryIndexes = lists:sort(fun erlang:'>'/2,
+                                    [QI | QIs]),
     lists:nth(ra_peers:count(Cluster) div 2 + 1, SortedQueryIndexes).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false), queue:queue(El)) ->
@@ -2246,6 +2248,12 @@ process_pending_consistent_queries(#{cluster_change_permitted := true,
         {State0#{pending_consistent_queries => []}, Effects0},
         Pending).
 
+make_pipeline_rpcs_effect(#{log := Log,
+                            commit_index := CommitIndex,
+                            cluster := Cluster}) ->
+    NextLogIdx = ra_log:next_index(Log),
+    ra_peers:make_pipeline_rpc_effect(CommitIndex, NextLogIdx,
+                                      Cluster).
 %%% ===================
 %%% Internal unit tests
 %%% ===================

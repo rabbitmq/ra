@@ -473,31 +473,30 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 
--spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
+-spec update_release_cursor(Idx :: ra_index(), Members :: [ra_server_id()],
                             MacVersion :: ra_machine:version(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState,
+update_release_cursor(Idx, Members, MacVersion, MacState,
                       #?MODULE{snapshot_state = SnapState} = State) ->
     case ra_snapshot:pending(SnapState) of
         undefined ->
-            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
+            update_release_cursor0(Idx, Members, MacVersion, MacState, State);
         _ ->
             % if a snapshot is in progress don't even evaluate
             {State, []}
     end.
 
-update_release_cursor0(Idx, Cluster, MacVersion, MacState,
+update_release_cursor0(Idx, Members, MacVersion, MacState,
                        #?MODULE{segment_refs = SegRefs,
                                 snapshot_state = SnapState,
                                 snapshot_interval = SnapInter} = State0) ->
-    ClusterServerIds = maps:keys(Cluster),
     SnapLimit = case ra_snapshot:current(SnapState) of
                     undefined -> SnapInter;
                     {I, _} -> I + SnapInter
                 end,
     Meta = #{index => Idx,
-             cluster => ClusterServerIds,
+             cluster => Members,
              machine_version => MacVersion},
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.

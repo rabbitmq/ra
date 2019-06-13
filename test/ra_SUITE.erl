@@ -53,7 +53,6 @@ groups() ->
 suite() -> [{timetrap, {seconds, 120}}].
 
 init_per_suite(Config) ->
-
     ok = logger:set_primary_config(level, all),
     Config.
 
@@ -77,6 +76,7 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    ok = logger:set_primary_config(level, all),
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
@@ -120,6 +120,7 @@ stop_server_idemp(Config) ->
     ok.
 
 leader_steps_down_after_replicating_new_cluster(Config) ->
+    ok = logger:set_primary_config(level, all),
     N1 = nn(Config, 1),
     N2 = nn(Config, 2),
     N3 = nn(Config, 3),
@@ -439,7 +440,8 @@ members(Config) ->
                                   {simple, fun erlang:'+'/2, 9}),
     {ok, _, Leader} = ra:process_command(hd(Cluster), 5,
                                          ?PROCESS_COMMAND_TIMEOUT),
-    {ok, Cluster, Leader} = ra:members(Leader),
+    {ok, Members, Leader} = ra:members(Leader),
+    ?assertEqual(lists:sort(Cluster), lists:sort(Members)),
     terminate_cluster(Cluster).
 
 consistent_query(Config) ->
@@ -458,8 +460,9 @@ add_member(Config) ->
     [A, _B] = Cluster = start_local_cluster(2, Name, add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9),
     C = ra_server:name(Name, "3"),
-    ok = ra:start_server(Name, C, add_machine(), Cluster),
-    {ok, _, _Leader} = ra:add_member(Leader, {C, node()}),
+    ServerId = {C, node()},
+    ok = ra:start_server(Name, ServerId, add_machine(), Cluster),
+    {ok, _, _Leader} = ra:add_member(Leader, ServerId),
     {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
@@ -595,7 +598,7 @@ snapshot_installation_with_call_crash(Config) ->
                       {ok, {N3Idx, _}, _} = ra:local_query({N3, node()},
                                                            fun ra_lib:id/1),
                       (N1Idx == N2Idx) and (N1Idx == N3Idx)
-              end, 20)),
+              end, 30)),
     ok.
 
 
@@ -651,17 +654,18 @@ contains(Match, Entries) ->
 
 follower_catchup(Config) ->
     meck:new(ra_server_proc, [passthrough]),
-    meck:expect(ra_server_proc, send_rpc,
-                fun(P, #append_entries_rpc{entries = Entries} = T) ->
+    meck:expect(ra_server_proc, erlang_send,
+                fun(P, {'$gen_cast',
+                        #append_entries_rpc{entries = Entries} = T}, Opts) ->
                         case contains(500, Entries) of
                             true ->
                                 ct:pal("dropped 500"),
                                 ok;
                             false ->
-                                meck:passthrough([P, T])
+                                meck:passthrough([P, T, Opts])
                         end;
-                   (P, T) ->
-                        meck:passthrough([P, T])
+                   (P, T, O) ->
+                        meck:passthrough([P, T, O])
                 end),
     Name = ?config(test_name, Config),
     % suite unique server names
@@ -740,7 +744,7 @@ post_partition_liveness(Config) ->
     {ok, _, Leader}  = ra:members({N1, node()}),
 
     % simulate partition
-    meck:expect(ra_server_proc, send_rpc, fun(_, _) -> ok end),
+    meck:expect(ra_server_proc, erlang_send, fun(_, _, _) -> ok end),
     Corr = make_ref(),
     % send an entry that will not be replicated
     ok = ra:pipeline_command(Leader, 500, Corr),

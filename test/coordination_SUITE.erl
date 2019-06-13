@@ -174,13 +174,14 @@ delete_one_server_cluster(Config) ->
     ok.
 
 delete_two_server_cluster(Config) ->
+    ok = logger:set_primary_config(level, all),
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1, s2]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
-    timer:sleep(250),
+    timer:sleep(2000),
     {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
     {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
@@ -211,7 +212,7 @@ delete_three_server_cluster(Config) ->
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1, s2]],
     % s3 isn't available
     S3 = make_node_name(s3),
     NodeIds = NodeIds0 ++ [{ClusterName, S3}],
@@ -256,6 +257,7 @@ node_setup(DataDir) ->
     filelib:ensure_dir(LogFile),
     _ = error_logger:logfile({open, LogFile}),
     _ = error_logger:tty(false),
+    ok = logger:set_primary_config(level, all),
     ok.
 
 get_current_host() ->
@@ -279,6 +281,7 @@ start_slave(N, PrivDir) ->
     ct:pal("starting slave node with ~s~n", [Pa]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
+    _ = rpc:call(S, logger, set_primary_config, [level, all]),
     S.
 
 %% ra_machine impl
