@@ -426,13 +426,14 @@ leader(EventType, Msg, State0) ->
             {State, _Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {stop, normal, State};
         {delete_and_terminate, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = send_rpcs(State2),
+            {State2, Rpcs} = make_rpcs(State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects ++ Rpcs, EventType,
+                                               State2),
             case ra_server:is_fully_replicated(State#state.server_state) of
                 true ->
                     {stop, {shutdown, delete}, State};
                 false ->
-                    {next_state, terminating_leader, send_rpcs(State), Actions}
+                    {next_state, terminating_leader, State, Actions}
             end
     end.
 
@@ -672,15 +673,17 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
 terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
     ?DEBUG("~s: terminating leader received ~W~n", [LogName, Msg, 10]),
-    {keep_state, State, Actions} = leader(EvtType, Msg, State0),
-    NS = State#state.server_state,
+    {keep_state, State1, Actions0} = leader(EvtType, Msg, State0),
+    NS = State1#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
-            {stop, {shutdown, delete}, State};
+            {stop, {shutdown, delete}, State1};
         false ->
             ?DEBUG("~s: is not fully replicated after ~W~n",
                    [LogName, Msg, 7]),
-            {keep_state, send_rpcs(State), Actions}
+            {State2, Rpcs} = make_rpcs(State1),
+            {State, Actions} = ?HANDLE_EFFECTS(Rpcs, EvtType, State2),
+            {keep_state, State, Actions ++ Actions0}
     end.
 
 terminating_follower(enter, OldState, State0) ->
@@ -953,8 +956,15 @@ handle_effect(_, {send_rpcs, PeerIds}, _,
                   case ra_server:make_rpc_for(PeerId, S0) of
                       {rpc, {_NextIdx, _More, Rpc}, S1} ->
                           Msg = {'$gen_cast', Rpc},
-                          _ = erlang_send(PeerId, Msg),
-                          {M0, S1};
+                          case erlang_send(PeerId, Msg) of
+                              ok  ->
+                                  %% still need to update commit index sent
+                                  S2 = ra_server:update_commit_index_sent(PeerId,
+                                                                          S1),
+                                  {M0, S2};
+                              _ ->
+                                  {M0, S1}
+                          end;
                       {snapshot, {SnapState, Id, Term}, S1} ->
                           do_snapshot(PeerId, SnapState, Id,
                                       Term, M0, S1)
@@ -1158,13 +1168,6 @@ handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
     {State, Actions}.
-
-send_rpcs(State0) ->
-    {State, Rpcs} = make_rpcs(State0),
-    % module call so that we can mock
-    % TODO: review
-    [ok = ?MODULE:send_rpc(To, Rpc) || {send_rpc, To, Rpc} <-  Rpcs],
-    State.
 
 make_rpcs(State) ->
     {ServerState, Rpcs} = ra_server:make_rpcs(State#state.server_state),

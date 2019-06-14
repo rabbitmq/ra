@@ -33,6 +33,7 @@
          update_release_cursor/3,
          persist_last_applied/1,
          update_peer_status/3,
+         update_commit_index_sent/2,
          update_peer_next_idx/3,
          handle_down/5,
          terminate/2,
@@ -645,8 +646,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     case trunc(ra_peers:count(Cluster) / 2) + 1 of
         NewVotes ->
-            {State, Effects} = make_all_rpcs(
-                                 initialise_peers(State0)),
+            {State, Effects} = make_all_rpcs(initialise_peers(State0)),
             Noop = {noop, #{ts => os:system_time(millisecond)},
                     ra_machine:version(Mac)},
             {leader, maps:without([votes, leader_id], State),
@@ -1353,18 +1353,19 @@ make_all_rpcs(#{cluster := Cluster} = State0) ->
     {snapshot, {SnapState :: ra_snapshot:state(), ra_server_id(), ra_term()},
      ra_server_state()}.
 make_rpc_for(PeerId, #{id := Id, log := Log0,
-                       cluster := Cluster,
+                       cluster := Cluster0,
                        commit_index := CommitIndex,
                        current_term := Term} = State) ->
-    Next = ra_peers:next_index(PeerId, Cluster),
-    MI = ra_peers:match_index(PeerId, Cluster),
+    Next = ra_peers:next_index(PeerId, Cluster0),
+    MI = ra_peers:match_index(PeerId, Cluster0),
     PrevIdx = Next - 1,
     NextLogIdx = ra_log:next_index(Log0),
     case ra_log_fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when is_integer(PrevTerm) ->
             {Entries, Log} = ra_log:take(Next, ?AER_CHUNK_SIZE, Log0),
             NextIndex = case Entries of
-                            [] -> Next;
+                            [] ->
+                                Next;
                             _ ->
                                 {LastIdx, _, _} = lists:last(Entries),
                                 %% assertion
@@ -1373,12 +1374,13 @@ make_rpc_for(PeerId, #{id := Id, log := Log0,
                         end,
             More = (NextIndex < NextLogIdx andalso
                     NextIndex - MI < ?MAX_PIPELINE_DISTANCE),
-            {rpc, {NextIndex, More, #append_entries_rpc{entries = Entries,
-                                                        term = Term,
-                                                        leader_id = Id,
-                                                        prev_log_index = PrevIdx,
-                                                        prev_log_term = PrevTerm,
-                                                        leader_commit = CommitIndex}},
+            {rpc, {NextIndex, More,
+                   #append_entries_rpc{entries = Entries,
+                                       term = Term,
+                                       leader_id = Id,
+                                       prev_log_index = PrevIdx,
+                                       prev_log_term = PrevTerm,
+                                       leader_commit = CommitIndex}},
              State#{log => Log}};
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
@@ -1438,6 +1440,12 @@ persist_last_applied(#{last_applied := LastApplied, uid := UId} = State) ->
                          ra_server_state()) -> ra_server_state().
 update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
     State#{cluster => ra_peers:set_status(PeerId, Status, Peers)}.
+
+-spec update_commit_index_sent(ra_server_id(),
+                               ra_server_state()) -> ra_server_state().
+update_commit_index_sent(PeerId, #{cluster := Peers,
+                                   commit_index := CommitIndex} = State) ->
+    State#{cluster => ra_peers:set_commit_index(PeerId, CommitIndex, Peers)}.
 
 -spec update_peer_next_idx(ra_server_id(), ra_index(), ra_server_state()) ->
     ra_server_state().
