@@ -56,7 +56,8 @@ basics(Config) ->
     ok = ra_directory:init(Dir),
     UId = <<"test1">>,
     Self = self(),
-    yes = ra_directory:register_name(UId, Self, test1),
+    yes = ra_directory:register_name(UId, Self, undefined,
+				     test1, <<"test_cluster_name">>),
     % registrations should always succeed - no negative test
     % no = register_name(Name, spawn(fun() -> ok end), test1),
     Self = ra_directory:where_is(UId),
@@ -69,6 +70,7 @@ basics(Config) ->
           end),
     receive done -> ok after 500 -> exit(timeout) end,
     test1 = ra_directory:name_of(UId),
+    <<"test_cluster_name">> = ra_directory:cluster_name_of(UId),
     _ = ra_directory:send(UId, hi_Name),
     receive
         hi_Name -> ok
@@ -78,6 +80,7 @@ basics(Config) ->
     UId = ra_directory:unregister_name(UId),
     undefined = ra_directory:where_is(UId),
     undefined = ra_directory:name_of(UId),
+    undefined = ra_directory:cluster_name_of(UId),
     undefined = ra_directory:uid_of(test1),
     ok.
 
