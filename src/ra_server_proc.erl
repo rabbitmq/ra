@@ -328,7 +328,6 @@ leader({call, From}, {local_query, QueryFun},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
-    ?INFO("STATE QEURY", []),
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {consistent_query, QueryFun},
@@ -1014,38 +1013,6 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-% handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
-%               #state{server_state = SS0,
-%                      monitors = Monitors} = State0, Actions) ->
-%     %% leader effect only
-%     % Me = self(),
-%     % Pid = spawn(fun () ->
-%     %                     ChunkSize = application:get_env(ra, snapshot_chunk_size,
-%     %                                                     ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
-%     %                     try send_snapshots(Me, Id, Term, To,
-%     %                                        ChunkSize, SnapState) of
-%     %                         _ -> ok
-%     %                     catch
-%     %                         C:timeout:S ->
-%     %                             %% timeout is ok as we've already blocked
-%     %                             %% for a while
-%     %                             erlang:raise(C, timeout, S);
-%     %                         C:E:S ->
-%     %                             %% insert an arbitrary pause here as a primitive
-%     %                             %% throttling operation as certain errors
-%     %                             %% happen quickly
-%     %                             ok = timer:sleep(5000),
-%     %                             erlang:raise(C, E, S)
-%     %                     end
-%     %             end),
-%     % MRef = erlang:monitor(process, Pid),
-%     % %% update the peer state so that no pipelined entries are sent during
-%     % %% the snapshot sending phase
-%     % SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
-%     {SS, MRef} = begin_snapshot(To, SnapState, Id, Term, Monitors, SS0),
-%     {State0#state{server_state = SS,
-%                   monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
-%                   Actions};
 handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
     _ = spawn(fun() ->
@@ -1058,8 +1025,9 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
     T = {dirty_timeout, 500},
     Me = self(),
     [begin
-         _ = spawn(fun () -> Reply = gen_statem:call(N, M, T),
-                             ok = gen_statem:cast(Me, Reply)
+         _ = spawn(fun () ->
+                           Reply = gen_statem:call(N, M, T),
+                           ok = gen_statem:cast(Me, Reply)
                    end)
      end || {N, M} <- VoteRequests],
     {State, Actions};
@@ -1437,5 +1405,5 @@ make_command(Type, _, Data, Mode) ->
 
 is_connected(PeerId) ->
     PeerNode = ra_lib:ra_server_id_node(PeerId),
-    lists:keymember(PeerNode, 1, nodes()) orelse PeerNode == node().
+    lists:member(PeerNode, nodes()) orelse PeerNode == node().
 

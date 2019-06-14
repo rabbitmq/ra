@@ -64,7 +64,6 @@
 -spec init(ra_server_id(), [ra_server_id()]) ->
     state().
 init(Self, Members0) ->
-    ?INFO("~w ra_peers:init ~w", [Self, Members0]),
     Members = lists:delete(Self, Members0),
     Peers = lists:foldl(fun(N, Acc) ->
                                 Acc#{N => #peer{}}
@@ -146,8 +145,14 @@ set_next_index(PeerId, NextIdx, State) ->
 
 -spec set_match_index(ra_server_id(), ra_index(), state()) ->
     state().
-set_match_index(PeerId, NextIdx, State) ->
-    ?UPDATE_PEER(PeerId, match_index, NextIdx, State).
+set_match_index(PeerId, MatchIndex, State) ->
+    Peers0 = State#?MODULE.peers,
+    Peer = maps:get(PeerId, Peers0),
+    validate_match_index(PeerId, Peer, MatchIndex),
+    Peers = maps:put(PeerId, Peer#peer{match_index = MatchIndex},
+                     Peers0),
+    State#?MODULE{peers = Peers}.
+
 
 -spec set_commit_index(ra_server_id(), ra_index(), state()) ->
     state().
@@ -169,6 +174,7 @@ set_status(PeerId, Status, State) ->
 set_match_and_next_index(PeerId, MatchIdx, NextIdx, State) ->
     Peers0 = State#?MODULE.peers,
     Peer = maps:get(PeerId, Peers0),
+    validate_match_index(PeerId, Peer, MatchIdx),
     Peers = maps:put(PeerId, Peer#peer{match_index = MatchIdx,
                                        next_index = NextIdx}, Peers0),
     State#?MODULE{peers = Peers}.
@@ -227,7 +233,6 @@ not_sending_snapshots(#?MODULE{peers = Peers}) ->
       maps:filter(fun (_, #peer{status = {sending_snapshot, _}}) ->
                           false;
                       (_,  _) ->
-                          % there are unconfirmed items
                           true
                   end, Peers)).
 
@@ -248,6 +253,15 @@ stale(CommitIndex, NextLogIdx,  #?MODULE{peers = Peers}) ->
                       (_, _Peer) ->
                           false
                   end, Peers)).
+
+%% internal
+
+validate_match_index(PeerId, Peer, MatchIndex) ->
+    case Peer#peer.match_index =< MatchIndex  of
+        true -> ok;
+        false ->
+            exit({peer_invariant, match_index, PeerId, MatchIndex, Peer})
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

@@ -1361,8 +1361,8 @@ make_rpc_for(PeerId, #{id := Id, log := Log0,
     PrevIdx = Next - 1,
     NextLogIdx = ra_log:next_index(Log0),
     case ra_log_fetch_term(PrevIdx, Log0) of
-        {PrevTerm, Log} when is_integer(PrevTerm) ->
-            {Entries, Log} = ra_log:take(Next, ?AER_CHUNK_SIZE, Log0),
+        {PrevTerm, Log1} when is_integer(PrevTerm) ->
+            {Entries, Log} = ra_log:take(Next, ?AER_CHUNK_SIZE, Log1),
             NextIndex = case Entries of
                             [] ->
                                 Next;
@@ -1465,7 +1465,6 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
                                           false
                                   end
                           end, ra_peers:peer_ids(Peers)),
-    ?INFO("peer_snahost_process_exitied ~w" , [PeerKv]),
      case PeerKv of
          [PeerId] ->
              Peers1 = ra_peers:set_status(PeerId, normal, Peers),
@@ -2036,12 +2035,14 @@ evaluate_quorum(State0, Effects) ->
     State = #{commit_index := CI} = increment_commit_index(State0),
     apply_to(CI, State, Effects).
 
-increment_commit_index(State = #{current_term := CurrentTerm}) ->
+increment_commit_index(State = #{current_term := CurrentTerm,
+                                 commit_index := CI}) ->
     PotentialNewCommitIndex = agreed_commit(match_indexes(State)),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State) of
-        {CurrentTerm, Log} ->
+        {CurrentTerm, Log}
+          when PotentialNewCommitIndex > CI ->
             State#{commit_index => PotentialNewCommitIndex,
                    log => Log};
         {_, Log} ->
@@ -2057,7 +2058,7 @@ match_indexes(#{log := Log,
 -spec agreed_commit(list()) -> ra_index().
 agreed_commit(Indexes) ->
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    Nth = trunc(length(SortedIdxs) / 2) + 1,
+    Nth = length(SortedIdxs) div 2 + 1,
     lists:nth(Nth, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{log_id := LogId}) ->
