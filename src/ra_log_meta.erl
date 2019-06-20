@@ -24,6 +24,7 @@
 
 -define(TBL_NAME, ?MODULE).
 -define(TIMEOUT, 30000).
+-define(SYNC_INTERVAL, 500).
 
 -record(?MODULE, {ref :: reference()}).
 
@@ -38,11 +39,11 @@ start_link(Config) ->
 
 -spec init(file:filename()) -> {ok, state()}.
 init(Dir) ->
+    process_flag(trap_exit, true),
     MetaFile = filename:join(Dir, "meta.dets"),
     ok = filelib:ensure_dir(MetaFile),
     {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile},
-                                           %% fsync is done explicitly
-                                           {auto_save, infinity}]),
+                                           {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
     ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
     ?INFO("ra: meta data store initialised. ~b record(s) recovered",
@@ -84,10 +85,10 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
     Objects = maps:values(Inserts),
     ok = dets:insert(?MODULE, Objects),
     true = ets:insert(?MODULE, Objects),
-    ok = dets:sync(?MODULE),
     {ok, Replies, State}.
 
 terminate(_, #?MODULE{ref = Ref}) ->
+    ok = dets:sync(?MODULE),
     _ = dets:close(Ref),
     ok.
 
