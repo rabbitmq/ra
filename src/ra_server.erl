@@ -47,6 +47,7 @@
       uid := ra_uid(),
       log_id := unicode:chardata(),
       leader_id => maybe(ra_server_id()),
+      config => ra_server_config(),
       cluster := ra_cluster(),
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
@@ -64,6 +65,7 @@
       machine_state := term(),
       machine_version := ra_machine:version(),
       machine_versions := [{ra_index(), ra_machine:version()}, ...],
+      metrics_key := term(),
       effective_machine_version := ra_machine:version(),
       effective_machine_module := module(),
       aux_state => term(),
@@ -162,6 +164,7 @@
                               initial_members := [ra_server_id()],
                               machine := machine_conf(),
                               friendly_name => unicode:chardata(),
+                              metrics_key => term(),
                               % TODO: review - only really used for
                               % setting election timeouts
                               broadcast_time => non_neg_integer(), % ms
@@ -204,6 +207,12 @@ init(#{id := Id,
        machine := MachineConf} = Config) ->
     LogId = maps:get(friendly_name, Config,
                      lists:flatten(io_lib:format("~w", [Id]))),
+    MetricKey = case Config of
+                    #{metrics_key := K} ->
+                        K;
+                    _ ->
+                        ra_lib:ra_server_id_to_local_name(Id)
+                end,
     Name = ra_lib:ra_server_id_to_local_name(Id),
     Machine = case MachineConf of
                   {simple, Fun, S} ->
@@ -265,6 +274,7 @@ init(#{id := Id,
       machine_state => MacState,
       machine_version => LatestMacVer,
       machine_versions => [{SnapshotIdx, MacVer}],
+      metrics_key => MetricKey,
       effective_machine_version => MacVer,
       effective_machine_module => MacMod,
       %% aux state is transient and needs to be initialized every time
@@ -1159,18 +1169,17 @@ overview(#{log := Log, effective_machine_module := MacMod,
     {atom(), ra_term(),
      ra_index(), ra_index(),
      ra_index(), ra_index()}.
-metrics(#{id := Id,
+metrics(#{metrics_key := Key,
           commit_index := CI,
           last_applied := LA,
           current_term := CT,
           log := Log}) ->
-    Key = ra_lib:ra_server_id_to_local_name(Id),
     SnapIdx = case ra_log:snapshot_index_term(Log) of
                   undefined -> 0;
                   {I, _} -> I
               end,
     {LW, _} = ra_log:last_index_term(Log),
-    {Key, CT, CI, LW, LA, SnapIdx}.
+    {Key, CT, SnapIdx, LA, CI, LW}.
 
 -spec is_new(ra_server_state()) -> boolean().
 is_new(#{log := Log}) ->

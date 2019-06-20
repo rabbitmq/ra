@@ -1611,6 +1611,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                               initial_state => <<>>}},
                 machine_version => 0,
                 machine_versions => [{0, 0}],
+                metrics_key => n1,
                 effective_machine_version => 0,
                 effective_machine_module =>  ra_machine_simple,
                 machine_state => [{4,apple}],
@@ -1661,6 +1662,7 @@ leader_receives_install_snapshot_result(_Config) ->
                machine_state => [{4,apple}],
                machine_version => 0,
                machine_versions => [{0, 0}],
+               metrics_key => n1,
                effective_machine_version => 1,
                effective_machine_module => ra_machine_simple,
                query_index => 0,
@@ -2256,6 +2258,7 @@ base_state(NumServers, MacMod) ->
       machine_state => <<"hi3">>, % last entry has been applied
       machine_version => 0,
       machine_versions => [{0, 0}],
+      metrics_key => n1,
       effective_machine_version => 0,
       effective_machine_module => MacMod,
       log => Log,

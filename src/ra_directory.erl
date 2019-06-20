@@ -52,7 +52,7 @@ deinit() ->
 		    ra_cluster_name()) -> yes | no.
 register_name(UId, Pid, ParentPid, RaServerName, ClusterName) ->
     true = ets:insert(?MODULE, {UId, Pid, ParentPid, RaServerName,
-				ClusterName}),
+                                ClusterName}),
     ok = dets:insert(?REVERSE_TBL, {RaServerName, UId}),
     yes.
 
@@ -146,13 +146,13 @@ overview() ->
     Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
     lists:foldl(fun ({UId, Pid, Parent, Node, ClusterName}, Acc) ->
                         Acc#{Node =>
-				 #{uid => UId,
-				   pid => Pid,
-				   parent => Parent,
-				   state => maps:get(Node, States, undefined),
-				   cluster_name => ClusterName,
-				   snapshot_state => maps:get(UId, Snaps,
-							      undefined)}}
+                             #{uid => UId,
+                               pid => Pid,
+                               parent => Parent,
+                               state => maps:get(Node, States, undefined),
+                               cluster_name => ClusterName,
+                               snapshot_state => maps:get(UId, Snaps,
+                                                          undefined)}}
                 end, #{}, Dir).
 
 -spec list_registered() -> [{atom(), ra_uid()}].
