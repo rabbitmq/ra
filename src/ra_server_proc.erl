@@ -454,6 +454,7 @@ candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -504,6 +505,7 @@ pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -612,6 +614,7 @@ follower(info, {node_event, _Node, up}, State) ->
     end;
 follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);

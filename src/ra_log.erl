@@ -180,7 +180,7 @@ init(#{uid := UId} = Conf) ->
                            end,
     LastTerm = ra_lib:default(LastTerm0, -1),
     State0 = State00#?MODULE{last_term = LastTerm,
-                           last_written_index_term = {LastIdx, LastTerm}},
+                             last_written_index_term = {LastIdx, LastTerm}},
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map

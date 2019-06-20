@@ -67,24 +67,32 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
                         end
                 end
         end,
-    {Inserts, Replies} =
+    {Inserts, Replies, ShouldSync} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
-               {Inserts0, Replies}) ->
-                  {DoInsert(Id, Key, Value, Inserts0), Replies};
+               {Inserts0, Replies, DoSync}) ->
+                  {DoInsert(Id, Key, Value, Inserts0), Replies, DoSync};
               ({call, From, {store, Id, Key, Value}},
-               {Inserts0, Replies}) ->
+               {Inserts0, Replies, _DoSync}) ->
                   {DoInsert(Id, Key, Value, Inserts0),
-                   [{reply, From, ok} | Replies]};
-              ({cast, {delete, Id}}, {Inserts0, Replies}) ->
-                  {handle_delete(Id, Ref, Inserts0), Replies};
-              ({call, From, {delete, Id}},{Inserts0, Replies}) ->
+                   [{reply, From, ok} | Replies], true};
+              ({cast, {delete, Id}},
+               {Inserts0, Replies, DoSync}) ->
+                  {handle_delete(Id, Ref, Inserts0), Replies, DoSync};
+              ({call, From, {delete, Id}},
+               {Inserts0, Replies, _DoSync}) ->
                   {handle_delete(Id, Ref, Inserts0),
-                   [{reply, From, ok} | Replies]}
-          end, {#{}, []}, Commands),
+                   [{reply, From, ok} | Replies], true}
+          end, {#{}, [], false}, Commands),
     Objects = maps:values(Inserts),
     ok = dets:insert(?MODULE, Objects),
     true = ets:insert(?MODULE, Objects),
+    case ShouldSync of
+        true ->
+            ok = dets:sync(?MODULE);
+        false ->
+            ok
+    end,
     {ok, Replies, State}.
 
 terminate(_, #?MODULE{ref = Ref}) ->
