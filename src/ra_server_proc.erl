@@ -140,7 +140,7 @@ cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_server_id(), query_fun(),
-            local | consistent | leader | command, timeout()) ->
+            local | consistent | leader, timeout()) ->
     ra_server_proc:ra_leader_call_ret(term())
     | {ok, Reply :: term(), ra_server_id() | not_known}.
 query(ServerRef, QueryFun, local, Timeout) ->
@@ -148,10 +148,7 @@ query(ServerRef, QueryFun, local, Timeout) ->
 query(ServerRef, QueryFun, leader, Timeout) ->
     leader_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
-    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout);
-query(ServerRef, QueryFun, command, Timeout) ->
-    % TODO: timeout
-    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
+    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout).
 
 -spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
 log_fold(ServerRef, Fun, InitialState, Timeout) ->

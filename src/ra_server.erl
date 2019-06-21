@@ -74,7 +74,8 @@
       pre_vote_token => reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
-      pending_consistent_queries := [consistent_query_ref()]
+      pending_consistent_queries := [consistent_query_ref()],
+      commit_latency => maybe(non_neg_integer())
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -82,7 +83,7 @@
                     | terminating_leader | terminating_follower | recover
                     | recovered | stop | receive_snapshot.
 
--type command_type() :: '$usr' | '$ra_query' | '$ra_join' | '$ra_leave' |
+-type command_type() :: '$usr' | '$ra_join' | '$ra_leave' |
                         '$ra_cluster_change' | '$ra_cluster'.
 
 -type command_meta() :: #{from => from(),
@@ -1167,18 +1168,24 @@ overview(#{log := Log, effective_machine_module := MacMod,
 -spec metrics(ra_server_state()) ->
     {atom(), ra_term(),
      ra_index(), ra_index(),
-     ra_index(), ra_index()}.
+     ra_index(), ra_index(), non_neg_integer()}.
 metrics(#{metrics_key := Key,
           commit_index := CI,
           last_applied := LA,
           current_term := CT,
-          log := Log}) ->
+          log := Log} = State) ->
     SnapIdx = case ra_log:snapshot_index_term(Log) of
                   undefined -> 0;
                   {I, _} -> I
               end,
+    CL = case  State of
+             #{commit_latency := L} ->
+                 L;
+             _ ->
+                 -1
+         end,
     {LW, _} = ra_log:last_index_term(Log),
-    {Key, CT, SnapIdx, LA, CI, LW}.
+    {Key, CT, SnapIdx, LA, CI, LW, CL}.
 
 -spec is_new(ra_server_state()) -> boolean().
 is_new(#{log := Log}) ->
@@ -1834,12 +1841,20 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
             {State, FinalEffs};
         %% assert first item read is from
         {[{From, _, _} | _] = Entries, State1} ->
-            {_, AppliedTo, State, MacState, Effects, Notifys} =
+            {_, AppliedTo, State, MacState, Effects, Notifys, LastTs} =
                 lists:foldl(ApplyFun, {MacMod, LastApplied, State1, MacState0,
-                                       Effects0, Notifys0}, Entries),
+                                       Effects0, Notifys0, undefined},
+                            Entries),
+            CommitLatency = case LastTs of
+                                undefined ->
+                                    undefined;
+                                _ when is_integer(LastTs) ->
+                                    os:system_time(millisecond) - LastTs
+                            end,
             %% due to machine versioning all entries may not have been applied
             apply_to(ApplyTo, ApplyFun, Notifys, Effects,
                      State#{last_applied => AppliedTo,
+                            commit_latency => CommitLatency,
                             machine_state => MacState})
     end;
 apply_to(_ApplyTo, _, Notifys, Effects, State)
@@ -1856,37 +1871,33 @@ make_notify_effects(Nots, Prior) ->
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
-            State = #{machine_version := MacVer,
-                      effective_machine_version := Effective},
-            MacSt, Effects, Notifys})
+            #{machine_version := MacVer,
+              effective_machine_version := Effective} = State,
+            MacSt, Effects, Notifys, LastTs})
       when MacVer < Effective ->
     %% we cannot apply any further entries
-    {Mod, LastAppliedIdx, State, MacSt, Effects, Notifys};
+    {Mod, LastAppliedIdx, State, MacSt, Effects, Notifys, LastTs};
 apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
            {Module, _LastAppliedIdx,
             State = #{effective_machine_version := MacVer},
-            MacSt, Effects, Notifys0}) ->
+            MacSt, Effects, Notifys0, LastTs}) ->
     %% augment the meta data structure
     Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+    Ts = maps:get(ts, CmdMeta, LastTs),
     case ra_machine:apply(Module, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
             {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
                                              Effects, Notifys0),
-            {Module, Idx, State, NextMacSt, [AppEffs | ReplyEffs], Notifys};
+            {Module, Idx, State, NextMacSt,
+             [AppEffs | ReplyEffs], Notifys, Ts};
         {NextMacSt, Reply} ->
             {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
                                              Effects, Notifys0),
-            {Module, Idx, State, NextMacSt, ReplyEffs, Notifys}
+            {Module, Idx, State, NextMacSt,
+             ReplyEffs, Notifys, Ts}
     end;
-apply_with({Idx, _, {'$ra_query', CmdMeta, QueryFun, ReplyType}},
-           {Mod, _LastApplied, State, MacSt, Effects0, Notifys0}) ->
-    %% TODO: are all queries calls?
-    Result = ra_machine:query(Mod, QueryFun, MacSt),
-    {Effects, Notifys} = add_reply(CmdMeta, Result, ReplyType,
-                                   Effects0, Notifys0),
-    {Mod, Idx, State, MacSt, Effects, Notifys};
 apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
-           {Mod, _, State0, MacSt, Effects0, Notifys0}) ->
+           {Mod, _, State0, MacSt, Effects0, Notifys0, LastTs}) ->
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
                                    Effects0, Notifys0),
     State = case State0 of
@@ -1906,17 +1917,18 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
             end,
     % add pending cluster change as next event
     {Effects1, State1} = add_next_cluster_change(Effects, State),
-    {Mod, Idx, State1, MacSt, Effects1, Notifys};
+    {Mod, Idx, State1, MacSt, Effects1, Notifys, LastTs};
 apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
            {CurModule, LastAppliedIdx,
-            State0 = #{current_term := CurrentTerm,
-                       machine := Machine,
-                       machine_version := MacVer,
-                       %% active machine versions and their index (from last snapshot)
-                       machine_versions := MacVersions,
-                       cluster_change_permitted := ClusterChangePerm0,
-                       effective_machine_version := OldMacVer,
-                       log_id := LogId}, MacSt, Effects, Notifys}) ->
+            #{current_term := CurrentTerm,
+              machine := Machine,
+              machine_version := MacVer,
+              %% active machine versions and their index (from last snapshot)
+              machine_versions := MacVersions,
+              cluster_change_permitted := ClusterChangePerm0,
+              effective_machine_version := OldMacVer,
+              log_id := LogId} = State0,
+            MacSt, Effects, Notifys, LastTs}) ->
     ClusterChangePerm = case CurrentTerm of
                             Term ->
                                 ?DEBUG("~s: enabling ra cluster changes in"
@@ -1938,9 +1950,10 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                             effective_machine_module => Module},
             Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
             apply_with({Idx, Term,
-                                {'$usr', Meta,
-                                 {machine_version, OldMacVer, NextMacVer}, none}},
-                       {Module, LastAppliedIdx, State, MacSt, Effects, Notifys});
+                        {'$usr', Meta,
+                         {machine_version, OldMacVer, NextMacVer}, none}},
+                       {Module, LastAppliedIdx, State, MacSt,
+                        Effects, Notifys, LastTs});
         true ->
             %% we cannot make progress as we don't understand the new
             %% machine version so we
@@ -1951,13 +1964,14 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                    " cannot apply any further entries~n",
                    [LogId, NextMacVer, MacVer]),
             State = State0#{effective_machine_version => NextMacVer},
-            {CurModule, LastAppliedIdx, State, MacSt, Effects, Notifys};
+            {CurModule, LastAppliedIdx, State,
+             MacSt, Effects, Notifys, LastTs};
         false ->
             State = State0#{cluster_change_permitted => ClusterChangePerm},
-            {CurModule, Idx, State, MacSt, Effects, Notifys}
+            {CurModule, Idx, State, MacSt, Effects, Notifys, LastTs}
     end;
 apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
-           {Module, _, State0, MacSt, Effects0, Notifys0}) ->
+           {Module, _, State0, MacSt, Effects0, Notifys0, _LastTs}) ->
     % cluster deletion
     {Effects1, Notifys} = add_reply(CmdMeta, ok, ReplyType, Effects0, Notifys0),
     NotEffs = make_notify_effects(Notifys, []),
