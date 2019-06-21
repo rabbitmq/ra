@@ -43,9 +43,7 @@
     fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
 
 -type ra_server_state() ::
-    #{id := ra_server_id(),
-      uid := ra_uid(),
-      log_id := unicode:chardata(),
+    #{id := {ra_server_id(), ra_uid(), unicode:chardata()},
       leader_id => maybe(ra_server_id()),
       config => ra_server_config(),
       cluster := ra_cluster(),
@@ -254,9 +252,7 @@ init(#{id := Id,
 
     CommitIndex = max(LastApplied, FirstIndex),
 
-    #{id => Id,
-      uid => UId,
-      log_id => LogId,
+    #{id => {Id, UId, LogId},
       cluster => Cluster0,
       % There may be scenarios when a single server
       % starts up but hasn't
@@ -285,7 +281,7 @@ init(#{id := Id,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => []}.
 
-recover(#{log_id := LogId,
+recover(#{id := {_, _, LogId},
           commit_index := CommitIndex,
           machine_version := MacVer,
           effective_machine_version := EffMacVer,
@@ -310,7 +306,7 @@ recover(#{log_id := LogId,
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              next_index = NextIdx,
                                              last_index = LastIdx}},
-              State0 = #{current_term := Term, id := Id, log_id := LogId}) ->
+              State0 = #{current_term := Term, id := {Id, _, LogId}}) ->
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~s: saw append_entries_reply from unknown peer ~w~n",
@@ -338,11 +334,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                              end,
             Effects = Effects1 ++ RpcEffects,
             case State of
-                #{id := Id, cluster := #{Id := _}} ->
+                #{id := {Id, _, _}, cluster := #{Id := _}} ->
                     % leader is in the cluster
                     {leader, State, Effects};
                 #{commit_index := CI, cluster_index_term := {CITIndex, _},
-                  log_id := LogId}
+                  id := {_, _, LogId}}
                   when CI >= CITIndex ->
                     % leader is not in the cluster and the new cluster
                     % config has been committed
@@ -355,7 +351,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
     end;
 handle_leader({PeerId, #append_entries_reply{term = Term}},
               #{current_term := CurTerm,
-                log_id := LogId} = State0) when Term > CurTerm ->
+                id := {_, _, LogId}} = State0) when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~s saw append_entries_reply from unknown peer ~w~n",
@@ -371,7 +367,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
-              State0 = #{log_id := LogId, cluster := Nodes, log := Log0}) ->
+              State0 = #{id := {_, _, LogId},
+                         cluster := Nodes, log := Log0}) ->
     #{PeerId := Peer0 = #{match_index := MI,
                           next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
@@ -421,7 +418,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
     {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
-handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
+handle_leader({command, Cmd}, State00 = #{id := {_, _, LogId}}) ->
     case append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
             ?WARN("~s command ~W NOT appended to log, "
@@ -442,7 +439,7 @@ handle_leader({command, Cmd}, State00 = #{log_id := LogId}) ->
                       end,
             {leader, State, Effects}
     end;
-handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
+handle_leader({commands, Cmds}, State00) ->
     %% TODO: refactor to use wal batch API?
     {State0, Effects0} =
         lists:foldl(fun(C, {S0, E}) ->
@@ -472,7 +469,7 @@ handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_leader({aux_command, Type, Cmd}, State0) ->
     handle_aux(leader, Type, Cmd, State0);
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
-              #{log_id := LogId, current_term := CurTerm} = State0)
+              #{id := {_, _, LogId}, current_term := CurTerm} = State0)
   when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
@@ -485,7 +482,7 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
             {follower, update_term(Term, State0), []}
     end;
 handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
-              #{log_id := LogId} = State0) ->
+              #{id := {_, _, LogId}} = State0) ->
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~s: saw install_snapshot_result from unknown peer ~w~n",
@@ -521,7 +518,7 @@ handle_leader(pipeline_rpcs, State0) ->
 handle_leader(#install_snapshot_rpc{term = Term,
                                     leader_id = Leader} = Evt,
               #{current_term := CurTerm,
-                log_id := LogId} = State0) when Term > CurTerm ->
+                id := {_, _, LogId}} = State0) when Term > CurTerm ->
     case peer(Leader, State0) of
         undefined ->
             ?WARN("~s: saw install_snapshot_rpc from unknown leader ~w~n",
@@ -536,20 +533,20 @@ handle_leader(#install_snapshot_rpc{term = Term,
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
-                log_id := LogId} = State0) when Term > CurTerm ->
+                id := {_, _, LogId}} = State0) when Term > CurTerm ->
     ?INFO("~s: leader saw append_entries_rpc from ~w for term ~b "
           "abdicates term: ~b!~n",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
-                                                  log_id := LogId}) ->
+                                                  id := {_, _, LogId}}) ->
     ?ERR("~s: leader saw append_entries_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
 handle_leader(#append_entries_rpc{leader_id = LeaderId},
               #{current_term := CurTerm,
-                id := Id} = State0) ->
+                id := {Id, _, _}} = State0) ->
     Reply = append_entries_reply(CurTerm, false, State0),
     {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader({consistent_query, From, QueryFun},
@@ -566,7 +563,8 @@ handle_leader({consistent_query, From, QueryFun},
     {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
-              #{current_term := CurTerm, log_id := LogId} = State0)
+              #{current_term := CurTerm,
+                id := {_, _, LogId}} = State0)
         when CurTerm < Term ->
     ?INFO("~s: leader saw heartbeat_rpc from ~w for term ~b "
           "abdicates term: ~b!~n",
@@ -574,17 +572,18 @@ handle_leader(#heartbeat_rpc{term = Term} = Msg,
            Term, CurTerm]),
     {follower, update_term(Term, State0), [{next_event, Msg}]};
 handle_leader(#heartbeat_rpc{term = Term, leader_id = LeaderId},
-              #{current_term := CurTerm, id := Id} = State)
+              #{current_term := CurTerm, id := {Id, _, _}} = State)
         when CurTerm > Term ->
     Reply = heartbeat_reply(State),
     {leader, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader(#heartbeat_rpc{term = Term},
-              #{current_term := CurTerm, log_id := LogId}) when CurTerm == Term ->
+              #{current_term := CurTerm, id := {_, _, LogId}})
+  when CurTerm == Term ->
     ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_heartbeat_rpc_in_same_term);
 handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex, term = Term}},
-              #{current_term := CurTerm, log_id := LogId} = State0) ->
+              #{current_term := CurTerm, id := {_, _, LogId}} = State0) ->
     case {CurTerm, Term} of
         {Same, Same} ->
             %% Heartbeat confirmed
@@ -607,7 +606,7 @@ handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex, term = Te
     end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
-                log_id := LogId} = State0) when Term > CurTerm ->
+                id := {_, _, LogId}} = State0) when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~s: leader saw request_vote_rpc for unknown peer ~w~n",
@@ -625,7 +624,7 @@ handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
     {leader, State, [{reply, Reply}]};
 handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
-                log_id := LogId} = State0) when Term > CurTerm ->
+                id := {_, _, LogId}} = State0) when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~s: leader saw pre_vote_rpc for unknown peer ~w~n",
@@ -673,7 +672,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     end;
 handle_candidate(#request_vote_result{term = Term},
                  #{current_term := CurTerm,
-                   log_id := LogId} = State0)
+                   id := {_, _, LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~s: candidate request_vote_result with higher term"
            " received ~b -> ~b", [LogId, CurTerm, Term]),
@@ -699,7 +698,8 @@ handle_candidate(#heartbeat_rpc{leader_id = LeaderId}, State) ->
     Reply = heartbeat_reply(State),
     {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_candidate({_PeerId, #heartbeat_reply{term = Term}},
-                 #{log_id := LogId, current_term := CurTerm} = State0) when Term > CurTerm ->
+                 #{id := {_, _, LogId},
+                   current_term := CurTerm} = State0) when Term > CurTerm ->
     ?INFO("~s: candidate heartbeat_reply with higher"
           " term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
@@ -707,7 +707,7 @@ handle_candidate({_PeerId, #heartbeat_reply{term = Term}},
     {follower, State, []};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
                  #{current_term := CurTerm,
-                   log_id := LogId} = State0)
+                   id := {_, _, LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~s: candidate append_entries_reply with higher"
           " term received ~b -> ~b~n",
@@ -716,7 +716,7 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm,
-                   log_id := LogId} = State0)
+                   id := {_, _, LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~s: candidate request_vote_rpc with higher term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
@@ -724,7 +724,7 @@ handle_candidate(#request_vote_rpc{term = Term} = Msg,
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#pre_vote_rpc{term = Term} = Msg,
                  #{current_term := CurTerm,
-                   log_id := LogId} = State0)
+                   id := {_, _, LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~s: candidate pre_vote_rpc with higher term received ~b -> ~b~n",
           [LogId, CurTerm, Term]),
@@ -836,8 +836,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries0},
-                State00 = #{log_id := LogId, log := Log00,
-                            id := Id, current_term := CurTerm})
+                State00 = #{log := Log00,
+                            id := {Id, _, LogId}, current_term := CurTerm})
   when Term >= CurTerm ->
     State0 = update_term(Term, State00),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
@@ -927,7 +927,7 @@ handle_follower(#append_entries_rpc{term = Term,
                     condition_timeout_effects => Effects}, Effects}
     end;
 handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
-                #{id := Id,log_id := LogId,
+                #{id := {Id, _, LogId},
                   current_term := CurTerm} = State) ->
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
@@ -935,8 +935,10 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
            " ~b but current term is: ~b~n",
           [LogId, LeaderId, _Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term, leader_id = LeaderId},
-                #{current_term := CurTerm, id := Id} = State0) when Term >= CurTerm ->
+handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term,
+                               leader_id = LeaderId},
+                #{current_term := CurTerm, id := {Id, _, _}} = State0)
+  when Term >= CurTerm ->
     State1 = update_term(Term, State0),
     #{query_index := QueryIndex} = State1,
     NewQueryIndex = max(RpcQueryIndex, QueryIndex),
@@ -944,7 +946,7 @@ handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term, leader_
     Reply = heartbeat_reply(State2),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{leader_id = LeaderId},
-                #{id := Id} = State)->
+                #{id := {Id, _, _}} = State)->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
@@ -960,7 +962,7 @@ handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 #{current_term := Term, voted_for := VotedFor,
-                  log_id := LogId} = State)
+                  id := {_, _, LogId}} = State)
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
     ?DEBUG("~w: follower request_vote_rpc for ~w already voted for ~w in ~b",
@@ -971,7 +973,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
                 #{current_term := CurTerm,
-                  log_id := LogId} = State0)
+                  id := {_, _, LogId}} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
@@ -993,7 +995,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
     end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
                 State = #{current_term := CurTerm,
-                          log_id := LogId})
+                          id := {_, _, LogId}})
   when Term < CurTerm ->
     ?INFO("~s: declining vote to ~w for term ~b, current term ~b~n",
           [LogId, _Cand, Term, CurTerm]),
@@ -1008,7 +1010,7 @@ handle_follower({_PeerId, #heartbeat_reply{term = Term}},
 handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := LastIndex,
                                                term := LastTerm}},
-                State = #{log_id := LogId, current_term := CurTerm})
+                State = #{id := {_, _, LogId}, current_term := CurTerm})
   when Term < CurTerm ->
     ?DEBUG("~s: install_snapshot old term ~b in ~b~n",
           [LogId, LastIndex, LastTerm]),
@@ -1023,7 +1025,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := SnapIdx} = Meta,
                                       leader_id = LeaderId,
                                       chunk_state = {1, _ChunkFlag}} = Rpc,
-                #{log_id := LogId, log := Log0,
+                #{id := {_, _, LogId}, log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
   when Term >= CurTerm andalso SnapIdx > LastApplied ->
@@ -1057,7 +1059,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                        term := LastTerm},
                                               chunk_state = {Num, ChunkFlag},
                                               data = Data},
-                        #{id := Id, log_id := LogId, log := Log0,
+                        #{id := {Id, _, LogId}, log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     ?DEBUG("~s: receiving snapshot chunk: ~b / ~w~n",
@@ -1220,17 +1222,15 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
             {RaftState, State0, []}
     end.
 
-
-
 % property helpers
 
 -spec id(ra_server_state()) -> ra_server_id().
-id(#{id := Id}) -> Id.
+id(#{id := {Id, _, _}}) -> Id.
 
-log_id(#{log_id := Id}) -> Id.
+log_id(#{id := {_, _, LogId}}) -> LogId.
 
 -spec uid(ra_server_state()) -> ra_uid().
-uid(#{uid := UId}) -> UId.
+uid(#{id := {_, UId, _}}) -> UId.
 
 -spec leader_id(ra_server_state()) -> maybe(ra_server_id()).
 leader_id(State) ->
@@ -1292,7 +1292,8 @@ wal_down_condition(_Msg, #{log := Log} = State) ->
     {ra_log:can_write(Log), State}.
 
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
-                                 id := Id, leader_id := LeaderId,
+                                 id := {Id, _, _},
+                                 leader_id := LeaderId,
                                  current_term := Term,
                                  log := Log} = State0, Effects0)
   when LeaderId =/= undefined ->
@@ -1351,7 +1352,7 @@ filter_follower_effects(Effects) ->
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
 
-make_pipelined_rpc_effects(MaxBatchSize, #{id := Id,
+make_pipelined_rpc_effects(MaxBatchSize, #{id := {Id, _, _},
                                            commit_index := CommitIndex,
                                            log := Log,
                                            cluster := Cluster} = State,
@@ -1412,7 +1413,7 @@ make_rpcs_for(Peers, State) ->
               end, {State, []}, Peers).
 
 make_rpc_effect(PeerId, Next, MaxBatchSize,
-                #{id := Id, log := Log0,
+                #{id := {Id, _, _}, log := Log0,
                   current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
@@ -1440,7 +1441,8 @@ make_rpc_effect(PeerId, Next, MaxBatchSize,
     end.
 
 make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
-                        #{log := Log0, current_term := Term, id := Id,
+                        #{log := Log0, current_term := Term,
+                          id := {Id, _, _},
                           commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
     %% TODO: refactor to avoid lists:last call later
@@ -1488,7 +1490,8 @@ persist_last_applied(#{persisted_last_applied := PLA,
                        last_applied := LA} = State) when LA =< PLA ->
     % if last applied is less than PL for some reason do nothing
     State;
-persist_last_applied(#{last_applied := LastApplied, uid := UId} = State) ->
+persist_last_applied(#{last_applied := LastApplied,
+                       id := {_, UId, _}} = State) ->
     ok = ra_log_meta:store(UId, last_applied, LastApplied),
     State#{persisted_last_applied => LastApplied}.
 
@@ -1522,12 +1525,12 @@ handle_down(leader, machine, Pid, Info, State) ->
     handle_leader({command,  {'$usr', #{ts => os:system_time(millisecond)},
                              {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info, #{log_id := LogId} = State) ->
+handle_down(leader, snapshot_sender, Pid, Info, #{id := {_, _, LogId}} = State) ->
     ?DEBUG("~s: Snapshot sender process ~w exited with ~W~n",
           [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
-            #{log_id := LogId, log := Log0} = State) ->
+            #{id := {_, _, LogId}, log := Log0} = State) ->
     case Info of
         noproc -> ok;
         normal -> ok;
@@ -1543,11 +1546,11 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log,
-            log_id := LogId} = _State, {shutdown, delete}) ->
+            id := {_, _, LogId}} = _State, {shutdown, delete}) ->
     ?NOTICE("~s: terminating with reason 'delete'~n", [LogId]),
     catch ra_log:delete_everything(Log),
     ok;
-terminate(#{log_id := LogId} = State, Reason) ->
+terminate(#{id := {_, _, LogId}} = State, Reason) ->
     ?DEBUG("~s: terminating with reason '~w'~n", [LogId, Reason]),
     #{log := Log} = persist_last_applied(State),
     catch ra_log:close(Log),
@@ -1575,7 +1578,7 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     {ok, term(), ra_server_state()} |
     {error, ra_server_state()}.
 read_at(Idx, #{log := Log0,
-               log_id := LogId} = RaState) ->
+               id := {_, _, LogId}} = RaState) ->
     case ra_log:fetch(Idx, Log0) of
         {{Idx, _, {'$usr', _, Data, _}}, Log} ->
             {ok, Data, RaState#{log => Log}};
@@ -1588,8 +1591,7 @@ read_at(Idx, #{log := Log0,
 %%% Internal functions
 %%%===================================================================
 
-call_for_election(candidate, #{id := Id,
-                               log_id := LogId,
+call_for_election(candidate, #{id := {Id, _, LogId},
                                current_term := CurrentTerm} = State0) ->
     NewTerm = CurrentTerm + 1,
     ?DEBUG("~s: election called for in term ~b~n", [LogId, NewTerm]),
@@ -1606,8 +1608,7 @@ call_for_election(candidate, #{id := Id,
     State = update_term_and_voted_for(NewTerm, Id, State0),
     {candidate, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
-call_for_election(pre_vote, #{id := Id,
-                              log_id := LogId,
+call_for_election(pre_vote, #{id := {Id, _, LogId},
                               machine_version := MacVer,
                               current_term := Term} = State0) ->
     ?DEBUG("~s: pre_vote election called for in term ~b~n", [LogId, Term]),
@@ -1699,7 +1700,7 @@ new_peer() ->
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
 
-peers(#{id := Id, cluster := Peers}) ->
+peers(#{id := {Id, _, _}, cluster := Peers}) ->
     maps:remove(Id, Peers).
 
 %% remove any peers that are currently receiving a snapshot
@@ -1734,7 +1735,7 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_term_and_voted_for(Term, VotedFor, #{uid := UId,
+update_term_and_voted_for(Term, VotedFor, #{id := {_, UId, _},
                                             current_term := CurTerm} = State) ->
     CurVotedFor = maps:get(voted_for, State, undefined),
     case Term =:= CurTerm andalso VotedFor =:= CurVotedFor of
@@ -1927,7 +1928,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
               machine_versions := MacVersions,
               cluster_change_permitted := ClusterChangePerm0,
               effective_machine_version := OldMacVer,
-              log_id := LogId} = State0,
+              id := {_, _, LogId}} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
     ClusterChangePerm = case CurrentTerm of
                             Term ->
@@ -2159,7 +2160,7 @@ agreed_commit(Indexes) ->
     Nth = trunc(length(SortedIdxs) / 2) + 1,
     lists:nth(Nth, SortedIdxs).
 
-log_unhandled_msg(RaState, Msg, #{log_id := LogId}) ->
+log_unhandled_msg(RaState, Msg, #{id := {_, _, LogId}}) ->
     ?WARN("~s: ~w received unhandled msg: ~W~n", [LogId, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
@@ -2209,7 +2210,7 @@ heartbeat_reply(#{current_term := CurTerm, query_index := QueryIndex}) ->
 update_heartbeat_rpc_effects(#{query_index := QueryIndex,
                                queries_waiting_heartbeats := Waiting,
                                current_term := Term,
-                               id := Id} = State) ->
+                               id := {Id, _, _}} = State) ->
     Peers = peers(State),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
@@ -2228,7 +2229,7 @@ make_heartbeat_rpc_effects(QueryRef,
                            #{query_index := QueryIndex,
                              queries_waiting_heartbeats := Waiting0,
                              current_term := Term,
-                             id := Id} = State0) ->
+                             id := {Id, _, _}} = State0) ->
     Peers = peers(State0),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
@@ -2244,7 +2245,7 @@ make_heartbeat_rpc_effects(QueryRef,
             {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
-update_query_index(#{cluster := Cluster, id := Id} = State, NewQueryIndex) ->
+update_query_index(#{cluster := Cluster, id := {Id, _, _}} = State, NewQueryIndex) ->
     Self = maps:get(Id, Cluster),
     State#{cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}},
            query_index => NewQueryIndex}.
@@ -2345,7 +2346,7 @@ apply_consistent_queries_effects(QueryRefs, #{last_applied := ApplyIndex} = Stat
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
 consistent_query_reply({From, QueryFun, _ReadCommitIndex},
-                       #{id := Id,
+                       #{id := {Id, _, _},
                          machine_state := MacState,
                          machine := {machine, MacMod, _}}) ->
     Result = ra_machine:query(MacMod, QueryFun, MacState),

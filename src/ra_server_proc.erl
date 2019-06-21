@@ -192,8 +192,7 @@ statem_call(ServerRef, Msg, Timeout) ->
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    #{uid := UId,
-      log_id := LogId,
+    #{id := {_, UId, LogId},
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
 						% ensure ra_directory has the new pid
