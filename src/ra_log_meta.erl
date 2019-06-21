@@ -24,7 +24,7 @@
 
 -define(TBL_NAME, ?MODULE).
 -define(TIMEOUT, 30000).
--define(SYNC_INTERVAL, 500).
+-define(SYNC_INTERVAL, 5).
 
 -record(?MODULE, {ref :: reference()}).
 
