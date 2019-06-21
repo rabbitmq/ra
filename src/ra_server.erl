@@ -291,7 +291,7 @@ recover(#{log_id := LogId,
           last_applied := LastApplied} = State0) ->
     ?DEBUG("~s: recovering state machine version ~b:~b from index ~b to ~b~n",
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex]),
-    {#{log := Log0} = State, _, _} =
+    {#{log := Log0} = State, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
                          %% Clear out the effects to avoid building
@@ -319,7 +319,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = update_peer(PeerId, Peer, State0),
-            {State2, Effects0, _Applied} = evaluate_quorum(State1, []),
+            {State2, Effects0} = evaluate_quorum(State1, []),
 
             {State3, Effects1} = process_pending_consistent_queries(State2,
                                                                     Effects0),
@@ -460,8 +460,7 @@ handle_leader({commands, Cmds}, State00 = #{id := _Id}) ->
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
-    {State1, Effects1, _Applied} = evaluate_quorum(State0#{log => Log},
-                                                  Effects0),
+    {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
     {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
 
     {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
@@ -1303,7 +1302,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State, Effects1, _} ->
+        {State, Effects1} ->
             % filter the effects that should be applied on a follower
             Effects = filter_follower_effects(Effects1),
             Reply = append_entries_reply(Term, true, State),
@@ -1813,12 +1812,12 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     State#{cluster => Cluster}.
 
 apply_to(ApplyTo, State, Effs) ->
-    apply_to(ApplyTo, fun apply_with/2, 0, #{}, Effs, State).
+    apply_to(ApplyTo, fun apply_with/2, #{}, Effs, State).
 
 apply_to(ApplyTo, ApplyFun, State, Effs) ->
-    apply_to(ApplyTo, ApplyFun, 0, #{}, Effs, State).
+    apply_to(ApplyTo, ApplyFun, #{}, Effs, State).
 
-apply_to(ApplyTo, ApplyFun, NumApplied0, Notifys0, Effects0,
+apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
          #{last_applied := LastApplied,
            machine_version := MacVer,
            effective_machine_module := MacMod,
@@ -1832,23 +1831,23 @@ apply_to(ApplyTo, ApplyFun, NumApplied0, Notifys0, Effects0,
             %% reverse list before consing the notifications to ensure
             %% notifications are processed first
             FinalEffs = make_notify_effects(Notifys0, lists:reverse(Effects0)),
-            {State, FinalEffs, NumApplied0};
+            {State, FinalEffs};
         %% assert first item read is from
         {[{From, _, _} | _] = Entries, State1} ->
             {_, AppliedTo, State, MacState, Effects, Notifys} =
                 lists:foldl(ApplyFun, {MacMod, LastApplied, State1, MacState0,
                                        Effects0, Notifys0}, Entries),
             %% due to machine versioning all entries may not have been applied
-            NumApplied = NumApplied0 + (AppliedTo - LastApplied),
-            apply_to(ApplyTo, ApplyFun, NumApplied,
-                     Notifys, Effects, State#{last_applied => AppliedTo,
-                                              machine_state => MacState})
+            apply_to(ApplyTo, ApplyFun, Notifys, Effects,
+                     State#{last_applied => AppliedTo,
+                            machine_state => MacState})
     end;
-apply_to(_, _, NumApplied, Notifys, Effects, State) when is_list(Effects) -> % ApplyTo
+apply_to(_ApplyTo, _, Notifys, Effects, State)
+  when is_list(Effects) ->
     %% reverse list before consing the notifications to ensure
     %% notifications are processed first
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
-    {State, FinalEffs, NumApplied}.
+    {State, FinalEffs}.
 
 make_notify_effects(Nots, Prior) ->
     maps:fold(fun (Pid, Corrs, Acc) ->
