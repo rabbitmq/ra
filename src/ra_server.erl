@@ -45,7 +45,6 @@
 -type ra_server_state() ::
     #{id := {ra_server_id(), ra_uid(), unicode:chardata()},
       leader_id => maybe(ra_server_id()),
-      config => ra_server_config(),
       cluster := ra_cluster(),
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
