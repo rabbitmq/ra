@@ -210,12 +210,9 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                 undefined ->
                     State;
                 _ ->
-                    {Segment1, Closed0} =
+                    {Segment, Closed0} =
                         append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                           Segment0, SegConf),
-                    % fsync
-                    {ok, Segment} = ra_log_segment:sync(Segment1),
-
                     % notify writerid of new segment update
                     % includes the full range of the segment
                     ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0],
