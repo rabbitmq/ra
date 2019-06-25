@@ -31,7 +31,6 @@ all_tests() ->
      members,
      consistent_query,
      consistent_query_stale,
-     command_query_stale,
      server_catches_up,
      snapshot_installation,
      snapshot_installation_with_call_crash,
@@ -84,6 +83,7 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 single_server_processes_command(Config) ->
+    ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
     N1 = nn(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
@@ -366,34 +366,6 @@ local_query_stale(Config) ->
     {ok, {_, LeaderV}, _} = ra:local_query(Leader, fun(S) -> S end),
     ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
     ?assertNotMatch(LeaderV, NonLeaderV),
-    terminate_cluster(Cluster).
-
-command_query_stale(Config) ->
-    [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
-                                               add_machine()),
-    {ok, 0, _} = ra_server_proc:query(B, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
-    {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
-    {ok, 5, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
-
-    NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
-    ra:stop_server(NonLeader),
-
-    Correlation = make_ref(),
-    [ra:pipeline_command(Leader, 1, Correlation) || _ <- lists:seq(1, 5000)],
-
-    wait_for_applied({Correlation, 5005}),
-
-    ra:restart_server(NonLeader),
-
-    {ok, NonLeaderV, _} = ra_server_proc:query(NonLeader, fun(S) -> S end, command, 100000),
-    {ok, LeaderV, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
-    ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
-    ?assertMatch(LeaderV, NonLeaderV),
-    {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
-    {ok, V, _} = ra_server_proc:query(NonLeader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
-    {ok, V, _} = ra_server_proc:query(Leader, fun(S) -> S end, command, ?DEFAULT_TIMEOUT),
-    {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
-    ?assertNotMatch(Index, IndexAfter),
     terminate_cluster(Cluster).
 
 consistent_query_stale(Config) ->

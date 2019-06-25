@@ -41,12 +41,20 @@ apply(#{index := I}, {noop, _}, State) ->
 
 
 start(Nodes) ->
-    Servers = [begin
+    ServerIds = [{noop, N} || N <- Nodes],
+    Configs = [begin
                    rpc:call(N, ?MODULE, prepare, []),
-                   {noop, N}
+                   Id = {noop, N},
+                   UId = ra:new_uid(ra_lib:to_binary(noop)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => noop,
+                     metrics_key => "the noop",
+                     log_init_args => #{uid => UId},
+                     initial_members => ServerIds,
+                     machine => {module, ?MODULE, #{}}}
                end || N <- Nodes],
-    {ra:start_cluster(noop, {module, ?MODULE, #{}}, Servers),
-     Servers}.
+    {ra:start_cluster(Configs), ServerIds}.
 
 prepare() ->
     _ = application:ensure_all_started(ra),

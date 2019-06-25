@@ -241,7 +241,7 @@ init_close_init(Config) ->
     Log0 = ?config(ra_log, Config),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(2, "entry2", Log1),
-    ok = ra_log_meta:store(?config(uid, Config), current_term, 2),
+    ok = ra_log_meta:store_sync(?config(uid, Config), current_term, 2),
     ok = ra_log:close(Log2),
     LogA = InitFun(init_close_init),
     {2, 2} = ra_log:last_index_term(LogA),

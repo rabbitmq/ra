@@ -160,8 +160,7 @@ setup_log() ->
     ok.
 
 init_test(_Config) ->
-    #{id := Id,
-      uid := UId,
+    #{id := {Id, UId, _},
       cluster := Cluster,
       current_term := CurrentTerm,
       log := Log0} = base_state(3, ?FUNCTION_NAME),
@@ -219,16 +218,17 @@ recover_restores_cluster_changes(_Config) ->
     {leader, #{cluster := Cluster,
                log := Log0}, _} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
-                                         n2, await_consensus}}, State),
+                                           n2, await_consensus}}, State),
     ?assert(maps:size(Cluster) =:= 2),
     % intercept ra_log:init call to simulate persisted log data
     % ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
-    meck:expect(ra_log_meta, fetch, fun (_, last_applied, 0) ->
-                                            element(1, ra_log:last_index_term(Log0));
-                                        (_, _, Def) ->
-                                            Def
-                                    end),
+    meck:expect(ra_log_meta, fetch,
+                fun (_, last_applied, 0) ->
+                        element(1, ra_log:last_index_term(Log0));
+                    (_, _, Def) ->
+                        Def
+                end),
 
     #{cluster := #{n1 := _, n2 := _}} = ra_server_init(InitConf),
     ok.
@@ -950,7 +950,7 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
 
 
 leader_replies_to_append_entries_rpc_with_lower_term(_Config) ->
-    State = #{id := Id,
+    State = #{id := {Id, _, _},
               current_term := CTerm} = base_state(3, ?FUNCTION_NAME),
     AERpc = #append_entries_rpc{term = CTerm - 1,
                                 leader_id = n3,
@@ -1186,7 +1186,7 @@ follower_cluster_change(_Config) ->
     OldCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n3 => new_peer_with(#{next_index => 4, match_index => 3})},
-    State = (base_state(3, ?FUNCTION_NAME))#{id => n2,
+    State = (base_state(3, ?FUNCTION_NAME))#{id => {n2, <<"n2">>, "n2"},
                              cluster => OldCluster},
     NewCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
@@ -1217,7 +1217,7 @@ leader_applies_new_cluster(_Config) ->
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
-    State = (base_state(3, ?FUNCTION_NAME))#{id => n1, cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
     Command = {command, {'$ra_join', meta(), n4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
@@ -1269,7 +1269,7 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
-    State = (base_state(3, ?FUNCTION_NAME))#{id => n1, cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
     Command = {command, {'$ra_join', meta(), n4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
@@ -1601,9 +1601,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 cluster_index_term => {0,0},
                 commit_index => 3,
                 current_term => Term,
-                id => n1,
-                uid => <<"n1">>,
-                log_id => <<"n1">>,
+                id => {n1, <<"n1">>, <<"n1">>},
                 last_applied => 4,
                 log => Log,
                 machine => {machine, ra_machine_simple,
@@ -1611,6 +1609,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                               initial_state => <<>>}},
                 machine_version => 0,
                 machine_versions => [{0, 0}],
+                metrics_key => n1,
                 effective_machine_version => 0,
                 effective_machine_module =>  ra_machine_simple,
                 machine_state => [{4,apple}],
@@ -1652,15 +1651,14 @@ leader_receives_install_snapshot_result(_Config) ->
                cluster_index_term => {0,0},
                commit_index => 4,
                current_term => Term,
-               id => n1,
-               uid => <<"n1">>,
-               log_id => <<"n1">>,
+               id => {n1, <<"n1">>, <<"n1">>},
                last_applied => 4,
                log => Log0,
                machine => {machine, ?FUNCTION_NAME, #{}},
                machine_state => [{4,apple}],
                machine_version => 0,
                machine_versions => [{0, 0}],
+               metrics_key => n1,
                effective_machine_version => 1,
                effective_machine_module => ra_machine_simple,
                query_index => 0,
@@ -1686,7 +1684,7 @@ follower_heartbeat(_Config) ->
     #{current_term := Term,
       query_index := QIndex,
       cluster := Cluster,
-      id := Id,
+      id := {Id, _, _},
       leader_id := LeaderId} = State,
     #{Id := _} = Cluster,
     NewQueryIndex = QIndex + 1,
@@ -1729,7 +1727,7 @@ follower_heartbeat(_Config) ->
 
 follower_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term, leader_id := LeaderId, id := Id} = State,
+    #{current_term := Term, leader_id := LeaderId, id := {Id, _, _}} = State,
     HeartbeatReply = #heartbeat_reply{term = Term, query_index = 2},
 
     %% Ignore lower or same term
@@ -1750,7 +1748,7 @@ candidate_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       leader_id := LeaderId,
-      id := Id,
+      id := {Id, _, _},
       query_index := QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
@@ -1783,7 +1781,7 @@ candidate_heartbeat(_Config) ->
 
 candidate_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term, id := Id} = State,
+    #{current_term := Term, id := {Id, _, _}} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term, query_index = 2},
     %% Same term is ignored
@@ -1808,7 +1806,7 @@ pre_vote_heartbeat(_Config) ->
     #{current_term := Term,
       query_index := QueryIndex,
       leader_id := LeaderId,
-      id := Id} = State,
+      id := {Id, _, _}} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
                                term = Term,
@@ -1841,7 +1839,7 @@ pre_vote_heartbeat(_Config) ->
 
 pre_vote_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term, id := Id} = State,
+    #{current_term := Term, id := {Id, _, _}} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = 2},
@@ -1872,7 +1870,7 @@ leader_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       leader_id := LeaderId,
-      id := Id,
+      id := {Id, _, _},
       query_index := QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
@@ -1910,7 +1908,7 @@ leader_heartbeat(_Config) ->
 leader_heartbeat_reply_same_term(_Config) ->
     BaseState = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
-      id := Id,
+      id := {Id, _, _},
       commit_index := CommitIndex} = BaseState,
     QueryIndex = 10,
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
@@ -1990,7 +1988,7 @@ leader_consistent_query_delay(_Config) ->
     #{commit_index := CommitIndex,
       query_index := QueryIndex,
       current_term := Term,
-      id := Id} = State,
+      id := {Id, _, _}} = State,
 
     %% If cluster changes are not permitted - delay the heartbeats
     Fun = fun(_) -> query_result end,
@@ -2039,7 +2037,7 @@ leader_consistent_query(_Config) ->
     #{commit_index := CommitIndex,
       query_index := QueryIndex,
       current_term := Term,
-      id := Id} = State,
+      id := {Id, _, _}} = State,
 
     Fun = fun(_) -> query_result end,
     Query1 = {from1, Fun, CommitIndex},
@@ -2086,7 +2084,7 @@ await_condition_heartbeat_dropped(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
     #{current_term := Term,
       query_index := QueryIndex,
-      id := Id} = State,
+      id := {Id, _, _}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -2122,7 +2120,7 @@ receive_snapshot_heartbeat_dropped(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       query_index := QueryIndex,
-      id := Id} = State,
+      id := {Id, _, _}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -2241,9 +2239,7 @@ base_state(NumServers, MacMod) ->
                                                      match_index => 3})}
                         end, #{}, lists:seq(1, NumServers)),
     mock_machine(MacMod),
-    #{id => n1,
-      uid => <<"n1">>,
-      log_id => <<"n1">>,
+    #{id => {n1, <<"n1">>, <<"n1">>},
       leader_id => n1,
       cluster => Servers,
       cluster_index_term => {0, 0},
@@ -2256,6 +2252,7 @@ base_state(NumServers, MacMod) ->
       machine_state => <<"hi3">>, % last entry has been applied
       machine_version => 0,
       machine_versions => [{0, 0}],
+      metrics_key => n1,
       effective_machine_version => 0,
       effective_machine_module => MacMod,
       log => Log,

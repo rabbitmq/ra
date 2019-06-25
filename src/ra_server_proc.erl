@@ -140,7 +140,7 @@ cast_command(ServerRef, Priority, Cmd) ->
     gen_statem:cast(ServerRef, {command, Priority, Cmd}).
 
 -spec query(ra_server_id(), query_fun(),
-            local | consistent | leader | command, timeout()) ->
+            local | consistent | leader, timeout()) ->
     ra_server_proc:ra_leader_call_ret(term())
     | {ok, Reply :: term(), ra_server_id() | not_known}.
 query(ServerRef, QueryFun, local, Timeout) ->
@@ -148,10 +148,7 @@ query(ServerRef, QueryFun, local, Timeout) ->
 query(ServerRef, QueryFun, leader, Timeout) ->
     leader_call(ServerRef, {local_query, QueryFun}, Timeout);
 query(ServerRef, QueryFun, consistent, Timeout) ->
-    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout);
-query(ServerRef, QueryFun, command, Timeout) ->
-    % TODO: timeout
-    command(ServerRef, {'$ra_query', QueryFun, await_consensus}, Timeout).
+    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout).
 
 -spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
 log_fold(ServerRef, Fun, InitialState, Timeout) ->
@@ -195,8 +192,7 @@ statem_call(ServerRef, Msg, Timeout) ->
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    #{uid := UId,
-      log_id := LogId,
+    #{id := {_, UId, LogId},
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
 						% ensure ra_directory has the new pid
@@ -454,6 +450,7 @@ candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -504,6 +501,7 @@ pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -612,6 +610,7 @@ follower(info, {node_event, _Node, up}, State) ->
     end;
 follower(_, tick_timeout, State) ->
     true = erlang:garbage_collect(),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
