@@ -376,9 +376,10 @@ leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
-    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
+    {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
     _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     true = erlang:garbage_collect(),
+    State = maybe_persist_last_applied(State2),
     {keep_state, State, set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->
@@ -608,9 +609,10 @@ follower(info, {node_event, _Node, up}, State) ->
         _ ->
             {keep_state, State}
     end;
-follower(_, tick_timeout, State) ->
+follower(_, tick_timeout, State0) ->
     true = erlang:garbage_collect(),
-    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
+    _ = ets:insert(ra_metrics, ra_server:metrics(State0#state.server_state)),
+    State = maybe_persist_last_applied(State0),
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
@@ -831,8 +833,7 @@ queue_take(N, Q0, Acc) ->
 handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     case catch ra_server:handle_leader(Msg, ServerState0) of
         {NextState, ServerState, Effects}  ->
-            State = State0#state{server_state =
-                                 ra_server:persist_last_applied(ServerState)},
+            State = State0#state{server_state = ServerState},
             {NextState, State, Effects};
         OtherErr ->
             ?ERR("handle_leader err ~p~n", [OtherErr]),
@@ -852,8 +853,7 @@ handle_pre_vote(Msg, #state{server_state = ServerState0} = State) ->
 handle_follower(Msg, #state{server_state = ServerState0} = State0) ->
     {NextState, ServerState, Effects} =
         ra_server:handle_follower(Msg, ServerState0),
-    State = State0#state{server_state =
-                         ra_server:persist_last_applied(ServerState)},
+    State = State0#state{server_state = ServerState},
     {NextState, State, Effects}.
 
 handle_receive_snapshot(Msg, #state{server_state = ServerState0} = State) ->
