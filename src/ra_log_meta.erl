@@ -24,7 +24,7 @@
 
 -define(TBL_NAME, ?MODULE).
 -define(TIMEOUT, 30000).
--define(SYNC_INTERVAL, 5).
+-define(SYNC_INTERVAL, 20).
 
 -record(?MODULE, {ref :: reference()}).
 
@@ -43,7 +43,8 @@ init(Dir) ->
     MetaFile = filename:join(Dir, "meta.dets"),
     ok = filelib:ensure_dir(MetaFile),
     {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile},
-                                           {auto_save, ?SYNC_INTERVAL}]),
+                                           {auto_save, ?SYNC_INTERVAL}
+                                          ]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
     ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
     ?INFO("ra: meta data store initialised. ~b record(s) recovered",
@@ -57,7 +58,7 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
                     #{Id := Data} ->
                         Inserts0#{Id => update_key(Key, Value, Data)};
                     _ ->
-                        case dets:lookup(Ref, Id) of
+                        case ets:lookup(?MODULE, Id) of
                             [{Id, T, V, A}] ->
                                 Data = {Id, T, V, A},
                                 Inserts0#{Id => update_key(Key, Value, Data)};
@@ -67,7 +68,7 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
                         end
                 end
         end,
-    {Inserts, Replies, ShouldSync} =
+    {Inserts, Replies, _ShouldSync} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
                {Inserts0, Replies, DoSync}) ->
@@ -87,12 +88,7 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
     Objects = maps:values(Inserts),
     ok = dets:insert(?MODULE, Objects),
     true = ets:insert(?MODULE, Objects),
-    case ShouldSync of
-        true ->
-            ok = dets:sync(?MODULE);
-        false ->
-            ok
-    end,
+    ok = dets:sync(?MODULE),
     {ok, Replies, State}.
 
 terminate(_, #?MODULE{ref = Ref}) ->
