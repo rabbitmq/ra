@@ -537,12 +537,14 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
             {State0, []}
     end.
 
+%% this is only used by tests  TODO: move to test suite
 -spec append_sync(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
 append_sync({Idx, Term, _} = Entry, Log0) ->
     Log = append(Entry, Log0),
     await_written_idx(Idx, Term, Log).
 
+%% this is only used by tests  TODO: move to test suite
 -spec write_sync(Entries :: [log_entry()], State :: state()) ->
     {ok, state()} |
     {error, {integrity_error, term()} | wal_down}.
@@ -630,7 +632,7 @@ release_resources(MaxOpenSegments,
 %%% Local functions
 
 %% deletes all segments where the last index is lower or equal to
-%% the Idx argumement
+%% the Idx argument
 delete_segments(Idx, #?MODULE{log_id = LogId,
                               uid = UId,
                               open_segments = OpenSegs0,

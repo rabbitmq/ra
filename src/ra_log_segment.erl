@@ -282,6 +282,10 @@ dump_index(File) ->
             {0, DataOffset, undefined, #{}}
     end.
 
+dump_index_data(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+                   0:32/unsigned, 0:32/integer, _Rest/binary>>,
+                 Acc) ->
+    Acc;
 dump_index_data(<<Idx:64/unsigned, Term:64/unsigned,
                   Offset:32/unsigned, Length:32/unsigned,
                   _:32/unsigned, Rest/binary>>,

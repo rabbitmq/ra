@@ -434,19 +434,19 @@ leave_and_terminate(ServerId) ->
     leave_and_terminate(ServerId, ServerId).
 
 -spec leave_and_terminate(ra_server_id(), ra_server_id()) ->
-    ok | timeout | {error, no_proc}.
+    ok | timeout | {error, noproc}.
 leave_and_terminate(ServerRef, ServerId) ->
     leave_and_terminate(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
 -spec leave_and_terminate(ra_server_id(), ra_server_id(), timeout()) ->
-    ok | timeout | {error, no_proc}.
+    ok | timeout | {error, noproc}.
 leave_and_terminate(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~p timed out", [Who]),
             timeout;
-        {error, no_proc} = Err ->
+        {error, noproc} = Err ->
             Err;
         {ok, _, _} ->
             ?INFO("We (Ra node ~p) have successfully left the cluster. Terminating.", [ServerId]),
@@ -458,19 +458,19 @@ leave_and_delete_server(ServerId) ->
     leave_and_delete_server(ServerId, ServerId).
 
 -spec leave_and_delete_server(ra_server_id(), ra_server_id()) ->
-    ok | timeout | {error, no_proc}.
+    ok | timeout | {error, noproc}.
 leave_and_delete_server(ServerRef, ServerId) ->
     leave_and_delete_server(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
 -spec leave_and_delete_server(ra_server_id(), ra_server_id(), timeout()) ->
-    ok | timeout | {error, no_proc}.
+    ok | timeout | {error, noproc}.
 leave_and_delete_server(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~p timed out", [Who]),
             timeout;
-        {error, no_proc} = Err ->
+        {error, noproc} = Err ->
             Err;
         {ok, _, _} ->
             ?INFO("Ra node ~w has succesfully left the cluster.", [ServerId]),
