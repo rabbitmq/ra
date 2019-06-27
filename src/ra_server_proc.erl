@@ -92,6 +92,9 @@
 -type ra_event() :: {ra_event, Sender :: ra_server_id(), ra_event_body()}.
 %% the Sender is the ra process that emitted the ra_event.
 
+
+-type server_loc() :: ra_server_id() | [ra_server_id()].
+
 -export_type([ra_leader_call_ret/1,
               ra_cmd_ret/0,
               safe_call_ret/1,
@@ -126,61 +129,78 @@ start_link(Config = #{id := Id}) ->
     Name = ra_lib:ra_server_id_to_local_name(Id),
     gen_statem:start_link({local, Name}, ?MODULE, Config, []).
 
--spec command(ra_server_id(), ra_command(), timeout()) ->
+-spec command(server_loc(), ra_command(), timeout()) ->
     ra_cmd_ret().
-command(ServerRef, Cmd, Timeout) ->
-    leader_call(ServerRef, {command, normal, Cmd}, Timeout).
+command(ServerLoc, Cmd, Timeout) ->
+    leader_call(ServerLoc, {command, normal, Cmd}, Timeout).
 
 -spec cast_command(ra_server_id(), ra_command()) -> ok.
-cast_command(ServerRef, Cmd) ->
-    gen_statem:cast(ServerRef, {command, low, Cmd}).
+cast_command(ServerId, Cmd) ->
+    gen_statem:cast(ServerId, {command, low, Cmd}).
 
 -spec cast_command(ra_server_id(), ra_command_priority(), ra_command()) -> ok.
-cast_command(ServerRef, Priority, Cmd) ->
-    gen_statem:cast(ServerRef, {command, Priority, Cmd}).
+cast_command(ServerId, Priority, Cmd) ->
+    gen_statem:cast(ServerId, {command, Priority, Cmd}).
 
--spec query(ra_server_id(), query_fun(),
+-spec query(server_loc(), query_fun(),
             local | consistent | leader, timeout()) ->
     ra_server_proc:ra_leader_call_ret(term())
     | {ok, Reply :: term(), ra_server_id() | not_known}.
-query(ServerRef, QueryFun, local, Timeout) ->
-    statem_call(ServerRef, {local_query, QueryFun}, Timeout);
-query(ServerRef, QueryFun, leader, Timeout) ->
-    leader_call(ServerRef, {local_query, QueryFun}, Timeout);
-query(ServerRef, QueryFun, consistent, Timeout) ->
-    leader_call(ServerRef, {consistent_query, QueryFun}, Timeout).
+query(ServerLoc, QueryFun, local, Timeout) ->
+    statem_call(ServerLoc, {local_query, QueryFun}, Timeout);
+query(ServerLoc, QueryFun, leader, Timeout) ->
+    leader_call(ServerLoc, {local_query, QueryFun}, Timeout);
+query(ServerLoc, QueryFun, consistent, Timeout) ->
+    leader_call(ServerLoc, {consistent_query, QueryFun}, Timeout).
 
 -spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
-log_fold(ServerRef, Fun, InitialState, Timeout) ->
-    gen_statem:call(ServerRef, {log_fold, Fun, InitialState}, Timeout).
+log_fold(ServerId, Fun, InitialState, Timeout) ->
+    gen_statem:call(ServerId, {log_fold, Fun, InitialState}, Timeout).
 
 %% used to query the raft state rather than the machine state
--spec state_query(ra_server_id(), all | members | machine, timeout()) ->
+-spec state_query(server_loc(), all | members | machine, timeout()) ->
     ra_leader_call_ret(term()).
-state_query(ServerRef, Spec, Timeout) ->
-    leader_call(ServerRef, {state_query, Spec}, Timeout).
+state_query(ServerLoc, Spec, Timeout) ->
+    leader_call(ServerLoc, {state_query, Spec}, Timeout).
 
 -spec trigger_election(ra_server_id(), timeout()) -> ok.
-trigger_election(ServerRef, Timeout) ->
-    gen_statem:call(ServerRef, trigger_election, Timeout).
+trigger_election(ServerId, Timeout) ->
+    gen_statem:call(ServerId, trigger_election, Timeout).
 
 -spec ping(ra_server_id(), timeout()) -> safe_call_ret({pong, states()}).
-ping(ServerRef, Timeout) ->
-    gen_statem_safe_call(ServerRef, ping, Timeout).
+ping(ServerId, Timeout) ->
+    gen_statem_safe_call(ServerId, ping, Timeout).
 
-leader_call(ServerRef, Msg, Timeout) ->
-    statem_call(ServerRef, {leader_call, Msg}, Timeout).
+leader_call(ServerLoc, Msg, Timeout) ->
+    statem_call(ServerLoc, {leader_call, Msg}, Timeout).
 
-statem_call(ServerRef, Msg, Timeout) ->
-    case gen_statem_safe_call(ServerRef, Msg, Timeout) of
+statem_call(ServerIds, Msg, Timeout)
+  when is_list(ServerIds) ->
+    multi_statem_call(ServerIds, Msg, [], Timeout);
+statem_call(ServerId, Msg, Timeout) ->
+    case gen_statem_safe_call(ServerId, Msg, Timeout) of
         {redirect, Leader} ->
             statem_call(Leader, Msg, Timeout);
         {wrap_reply, Reply} ->
-            {ok, Reply, ServerRef};
+            {ok, Reply, ServerId};
         {error, _} = E ->
             E;
         timeout ->
-            {timeout, ServerRef};
+            {timeout, ServerId};
+        Reply ->
+            Reply
+    end.
+
+multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
+    case statem_call(ServerId, Msg, Timeout) of
+        {Tag, _} = E
+          when Tag == error orelse Tag == timeout ->
+            case ServerIds of
+                [] ->
+                    {error, {no_more_servers_to_try, [E | Errs]}};
+                _ ->
+                    multi_statem_call(ServerIds, Msg, [E | Errs], Timeout)
+            end;
         Reply ->
             Reply
     end.
@@ -1212,9 +1232,9 @@ stop_monitor(MRef) ->
     erlang:demonitor(MRef),
     ok.
 
-gen_statem_safe_call(ServerRef, Msg, Timeout) ->
+gen_statem_safe_call(ServerId, Msg, Timeout) ->
     try
-        gen_statem:call(ServerRef, Msg, Timeout)
+        gen_statem:call(ServerId, Msg, Timeout)
     catch
          exit:{timeout, _} ->
             timeout;
