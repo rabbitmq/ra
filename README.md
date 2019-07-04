@@ -29,7 +29,7 @@ The following Raft features are implemented:
 
 ## Supported Erlang/OTP Versions
 
-Ra requires Erlang/OTP 21.2+.
+Ra requires Erlang/OTP 21.3+.
 
 ## Quick start
 
