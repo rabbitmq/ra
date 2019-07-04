@@ -237,14 +237,14 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     % check data dirs exist for all nodes
-    [ begin
-          UId = ra_directory:uid_of(Name),
-          ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
-      end || {Name, _} <- Peers],
+    [begin
+         UId = ra_directory:uid_of(Name),
+         ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+     end || {Name, _} <- Peers],
     ra:stop_server(ServerId2),
     ra:stop_server(ServerId3),
-    {error, {no_more_servers_to_try, Errs}} = ra:delete_cluster(Peers, 250),
-    ct:pal("Errs~p", [Errs]),
+    {error, {no_more_servers_to_try, Err}} = ra:delete_cluster(lists:reverse(Peers), 250),
+    ct:pal("Err~p", [Err]),
     ra:stop_server(ServerId1),
     ok.
 
