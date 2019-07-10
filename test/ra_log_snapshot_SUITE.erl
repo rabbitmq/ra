@@ -48,7 +48,7 @@ end_per_group(_Group, _Config) ->
 
 init_per_testcase(TestCase, Config) ->
     Dir = filename:join(?config(priv_dir, Config), TestCase),
-    file:make_dir(Dir),
+    ok = ra_lib:make_dir(Dir),
     [{dir, Dir} | Config].
 
 end_per_testcase(_TestCase, _Config) ->

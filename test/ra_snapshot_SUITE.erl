@@ -54,8 +54,7 @@ init_per_testcase(TestCase, Config) ->
     ok = ra_snapshot:init_ets(),
     SnapDir = filename:join([?config(priv_dir, Config),
                              TestCase, "snapshots"]),
-    ok = filelib:ensure_dir(SnapDir),
-    ok = file:make_dir(SnapDir),
+    ok = ra_lib:make_dir(SnapDir),
     [{uid, ra_lib:to_binary(TestCase)},
      {snap_dir, SnapDir} | Config].
 

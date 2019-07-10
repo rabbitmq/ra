@@ -531,7 +531,7 @@ snapshot_installation(Config) ->
 
 
     OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
-    file:make_dir(OthDir),
+    ok = ra_lib:make_dir(OthDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir),
     Meta = meta(15, 2, [n1]),

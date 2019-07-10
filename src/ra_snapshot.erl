@@ -204,7 +204,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                         directory = Dir} = State) ->
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    ok = file:make_dir(SnapDir),
+    ok = ra_lib:make_dir(SnapDir),
     %% call prepare then write_snapshot
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
@@ -239,7 +239,7 @@ begin_accept(#{index := Idx, term := Term} = Meta,
              #?MODULE{module = Mod,
                       directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    ok = file:make_dir(SnapDir),
+    ok = ra_lib:make_dir(SnapDir),
     {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
                                            state = AcceptState}}}.

@@ -247,13 +247,13 @@ start_cluster_minority(Config) ->
 %% Utility
 
 node_setup(DataDir) ->
+    ok = ra_lib:make_dir(DataDir),
     LogFile = filename:join([DataDir, atom_to_list(node()), "ra.log"]),
     SaslFile = filename:join([DataDir, atom_to_list(node()), "ra_sasl.log"]),
     application:load(sasl),
     application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     application:stop(sasl),
     application:start(sasl),
-    filelib:ensure_dir(LogFile),
     _ = error_logger:logfile({open, LogFile}),
     _ = error_logger:tty(false),
     ok.
