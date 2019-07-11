@@ -128,8 +128,8 @@ init(#{uid := UId} = Conf) ->
     SnapshotsDir = filename:join(Dir, "snapshots"),
 
     %% ensure directories are there
-    ok =  ra_lib:ensure_dir(Dir),
-    ok = ra_lib:ensure_dir(SnapshotsDir),
+    ok = ra_lib:make_dir(Dir),
+    ok = ra_lib:make_dir(SnapshotsDir),
     % initialise metrics for this server
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir),

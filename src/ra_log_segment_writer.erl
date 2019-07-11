@@ -316,14 +316,16 @@ open_file(Dir, SegConf) ->
     File = case find_segment_files(Dir) of
                [] ->
                    F = ra_lib:zpad_filename("", "segment", 1),
-                   Fn = filename:join(Dir, F),
-                   _ = file:make_dir(Dir),
-                   Fn;
+                   % Checking the directory below with filelib:ensure_dir
+                   _ = ra_lib:make_dir(Dir),
+                   filename:join(Dir, F);
                [F | _] ->
                    F
            end,
-    %% there is a small chance we'll get here without the target directory
-    %% existing this could happend during server deletion
+    %% The above call to ra_lib:make_dir should ensure that the target directory
+    %% is created.
+    %% There is a small chance we'll get here without the target directory
+    %% existing which could happen during server deletion
     case filelib:ensure_dir(File) of
         ok ->
             case ra_log_segment:open(File, SegConf#{mode => append}) of

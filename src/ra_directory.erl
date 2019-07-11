@@ -34,8 +34,8 @@ init(Dir) ->
                           {read_concurrency, true},
                           {write_concurrency, true}
                          ]),
+    ok = ra_lib:make_dir(Dir),
     Dets = filename:join(Dir, "names.dets"),
-    ok = filelib:ensure_dir(Dets),
     {ok, ?REVERSE_TBL} = dets:open_file(?REVERSE_TBL,
                                         [{file, Dets},
                                          {auto_save, 500},

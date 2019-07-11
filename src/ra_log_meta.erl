@@ -40,8 +40,8 @@ start_link(Config) ->
 -spec init(file:filename()) -> {ok, state()}.
 init(Dir) ->
     process_flag(trap_exit, true),
+    ok = ra_lib:make_dir(Dir),
     MetaFile = filename:join(Dir, "meta.dets"),
-    ok = filelib:ensure_dir(MetaFile),
     {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile},
                                            {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),

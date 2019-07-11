@@ -16,7 +16,7 @@ start_link() ->
 
 init([]) ->
     DataDir = ra_env:data_dir(),
-    ok = filelib:ensure_dir(DataDir),
+    ok = ra_lib:make_dir(DataDir),
     %% the ra log ets process is supervised by the system to keep mem tables
     %% alive whilst the rest of the log infra might be down
     Ets = #{id => ra_log_ets,

@@ -210,7 +210,7 @@ setup_ra_cluster(Config, Machine) ->
     Nodes = ?config(nodes, Config),
     Name = ?config(name, Config),
     DataDir = data_dir(Config),
-    filelib:ensure_dir(DataDir),
+    ok = ra_lib:make_dir(DataDir),
 
     Configs = lists:map(
                 fun(Node) ->
@@ -235,6 +235,7 @@ setup_ra_cluster(Config, Machine) ->
     ServerId.
 
 node_setup(DataDir) ->
+    ok = ra_lib:make_dir(DataDir),
     LogFile = filename:join([DataDir, atom_to_list(node()), "ra.log"]),
     SaslFile = filename:join([DataDir, atom_to_list(node()), "ra_sasl.log"]),
     logger:set_primary_config(level, debug),
@@ -244,8 +245,6 @@ node_setup(DataDir) ->
     application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     application:stop(sasl),
     application:start(sasl),
-    filelib:ensure_dir(LogFile),
-    % _ = error_logger:logfile({open, LogFile}),
     _ = error_logger:tty(false),
     ok.
 

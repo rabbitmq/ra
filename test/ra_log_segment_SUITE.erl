@@ -35,7 +35,7 @@ groups() ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
-    _ = file:make_dir(Dir),
+    ok = ra_lib:make_dir(Dir),
     _ = ets:new(ra_open_file_metrics,
                 [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics,

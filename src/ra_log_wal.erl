@@ -162,7 +162,6 @@ force_roll_over(Wal) ->
 start_link(Config, Options) ->
     gen_batch_server:start_link({local, ?MODULE}, ?MODULE, Config, Options).
 
-
 %%% Callbacks
 
 -spec init(wal_conf()) -> {ok, state()}.
@@ -220,8 +219,7 @@ recover_wal(Dir, #{max_size_bytes := MaxWalSize,
                    compute_checksums := ComputeChecksum,
                    write_strategy := WriteStrategy}) ->
     % ensure configured directory exists
-    ok = filelib:ensure_dir(Dir),
-    _ = file:make_dir(Dir),
+    ok = ra_lib:make_dir(Dir),
     %  recover each mem table and notify segment writer
     %  this may result in duplicated segments but that is better than
     %  losing any data

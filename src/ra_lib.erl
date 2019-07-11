@@ -25,7 +25,7 @@
          recursive_delete/1,
          make_uid/0,
          make_uid/1,
-         ensure_dir/1,
+         make_dir/1,
          derive_safe_string/2,
          validate_base64uri/1,
          partition_parallel/2
@@ -199,15 +199,22 @@ make_uid(Prefix0) ->
     B = list_to_binary(lists:foldl(F, "", lists:seq(1, ?UID_LENGTH))),
     <<Prefix/binary, B/binary>>.
 
--spec ensure_dir(file:name_all()) ->
+-spec make_dir(file:name_all()) ->
     ok | {error, file:posix() | badarg}.
-ensure_dir(Dir) ->
-    case file:make_dir(Dir) of
-        ok -> ok;
-        {error, eexist} -> ok;
-        Err ->
-            Err
-    end.
+make_dir(Dir) ->
+    handle_ensure_dir(filelib:ensure_dir(Dir), Dir).
+
+handle_ensure_dir(ok, Dir) ->
+    handle_make_dir(file:make_dir(Dir));
+handle_ensure_dir(Error, _Dir) ->
+    Error.
+
+handle_make_dir(ok) ->
+    ok;
+handle_make_dir({error, eexist}) ->
+    ok;
+handle_make_dir(Error) ->
+    Error.
 
 -spec validate_base64uri(string()) -> boolean().
 validate_base64uri(Str) ->
