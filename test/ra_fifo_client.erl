@@ -73,7 +73,7 @@ init(ClusterName, Nodes) ->
 %% @param MaxPending size defining the max number of pending commands.
 -spec init(ra_cluster_name(), [ra_server_id()], non_neg_integer()) -> state().
 init(ClusterName, Nodes, SoftLimit) ->
-    Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
+    Timeout = application:get_env(kernel, net_ticktime, 60) + 5,
     #state{cluster_name = ClusterName,
            servers = Nodes,
            soft_limit = SoftLimit,
@@ -82,7 +82,7 @@ init(ClusterName, Nodes, SoftLimit) ->
 -spec init(ra_cluster_name(), [ra_server_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
 init(ClusterName, Nodes, SoftLimit, BlockFun, UnblockFun) ->
-    Timeout = application:get_env(kernel, net_ticktime, 60000) + 5000,
+    Timeout = application:get_env(kernel, net_ticktime, 60) + 50,
     #state{cluster_name = ClusterName,
            servers = Nodes,
            block_handler = BlockFun,
