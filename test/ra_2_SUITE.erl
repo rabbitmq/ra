@@ -103,7 +103,7 @@ server_is_force_deleted(Config) ->
 
     validate_ets_table_deletes([UId], [Pid], [ServerId]),
     % start a node with the same nodeid but different uid
-    % simulatin the case where a queue got deleted then re-declared shortly
+    % simulating the case where a queue got deleted then re-declared shortly
     % afterwards
     UId2 = ?config(uid2, Config),
     ok = ra:start_server(Conf#{uid => UId2,

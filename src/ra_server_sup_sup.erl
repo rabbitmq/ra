@@ -104,7 +104,7 @@ delete_server(NodeId) ->
     end.
 
 delete_server_rpc(RaName) ->
-    ?INFO("Deleting server ~w and it's data directory.~n",
+    ?INFO("Deleting server ~w and its data directory.~n",
           [RaName]),
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
@@ -112,23 +112,50 @@ delete_server_rpc(RaName) ->
     ra_log_meta:delete(UId),
     Dir = ra_env:server_data_dir(UId),
     _ = supervisor:terminate_child(?MODULE, UId),
-    % TODO: move into separate retrying process
-    try ra_lib:recursive_delete(Dir) of
-        ok ->
-            _ = ra_directory:unregister_name(UId),
-            %% forcefully clean up ETS tables
-            catch ets:delete(ra_log_metrics, UId),
-            catch ets:delete(ra_log_snapshot_state, UId),
-            catch ets:delete(ra_metrics, RaName),
-            catch ets:delete(ra_state, RaName),
-            catch ets:delete(ra_open_file_metrics, Pid),
-            ok
-    catch
-        _:_ = Err ->
-            ?WARN("delete_server/1 failed to delete directory ~s~n"
-                  "Error: ~p~n", [Dir, Err])
-    end,
+    delete_data_directory(Dir),
+    _ = ra_directory:unregister_name(UId),
+    %% forcefully clean up ETS tables
+    catch ets:delete(ra_log_metrics, UId),
+    catch ets:delete(ra_log_snapshot_state, UId),
+    catch ets:delete(ra_metrics, RaName),
+    catch ets:delete(ra_state, RaName),
+    catch ets:delete(ra_open_file_metrics, Pid),
     ok.
+
+delete_data_directory(Directory) ->
+    DeleteFunction = fun() ->
+                         try ra_lib:recursive_delete(Directory) of
+                            ok ->
+                                % moving on
+                                ok
+                         catch
+                            _:_ = Err ->
+                                ?WARN("delete_server/1 failed to delete directory ~s~n"
+                                    "Error: ~p~n", [Directory, Err]),
+                                error
+                         end
+                     end,
+    case DeleteFunction() of
+        ok ->
+            ok;
+        _ ->
+            spawn(fun() ->
+                      retry(DeleteFunction, 2)
+                  end)
+    end.
+
+retry(Func, 0) ->
+    exhausted;
+retry(Func, Attempt) ->
+    % do not retry immediately
+    timer:sleep(100),
+    case Func() of
+        ok ->
+            ok;
+        _ ->
+            retry(Func, Attempt - 1)
+    end.
+
 
 remove_all() ->
     _ = [begin
