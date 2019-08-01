@@ -140,22 +140,9 @@ delete_data_directory(Directory) ->
             ok;
         _ ->
             spawn(fun() ->
-                      retry(DeleteFunction, 2)
+                      ra_lib:retry(DeleteFunction, 2)
                   end)
     end.
-
-retry(_Func, 0) ->
-    exhausted;
-retry(Func, Attempt) ->
-    % do not retry immediately
-    timer:sleep(100),
-    case Func() of
-        ok ->
-            ok;
-        _ ->
-            retry(Func, Attempt - 1)
-    end.
-
 
 remove_all() ->
     _ = [begin
