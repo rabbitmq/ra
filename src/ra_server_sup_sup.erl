@@ -144,7 +144,7 @@ delete_data_directory(Directory) ->
                   end)
     end.
 
-retry(Func, 0) ->
+retry(_Func, 0) ->
     exhausted;
 retry(Func, Attempt) ->
     % do not retry immediately
