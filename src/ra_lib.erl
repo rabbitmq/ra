@@ -28,7 +28,8 @@
          make_dir/1,
          derive_safe_string/2,
          validate_base64uri/1,
-         partition_parallel/2
+         partition_parallel/2,
+         retry/2
         ]).
 
 ceiling(X) when X < 0 ->
@@ -266,6 +267,17 @@ collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
     exit(partition_parallel_timeout)
   end.
 
+retry(_Func, 0) ->
+    exhausted;
+retry(Func, Attempt) ->
+    % do not retry immediately
+    timer:sleep(5000),
+    case Func() of
+        ok ->
+            ok;
+        _ ->
+            retry(Func, Attempt - 1)
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
