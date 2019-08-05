@@ -140,16 +140,13 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
     %% remove all segments below the provided SegRef
     %% Also delete the segref if the file hasn't changed
     Files = segments_for(Who, State0),
-    {Keep, Discard} = lists:splitwith(
-                        fun (F) ->
-                                ra_lib:to_string(filename:basename(F)) =/= Name
-                        end, lists:reverse(Files)),
+    {_Keep, Discard} = lists:splitwith(
+                         fun (F) ->
+                                 ra_lib:to_string(filename:basename(F)) =/= Name
+                         end, lists:reverse(Files)),
     case Discard of
         [] ->
             %% should this be possible?
-            {noreply, State0};
-        Remove when Keep =/= [] ->
-            _ = [_ = file:delete(F) || F <- Remove],
             {noreply, State0};
         [Pivot | Remove] ->
             %% remove all old files

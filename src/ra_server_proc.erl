@@ -612,7 +612,7 @@ follower(info, {'DOWN', MRef, process, Pid, Info},
 follower(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~s: Leader node ~w may be down, setting pre-vote timeout",
+            ?INFO("~s: Leader node ~w may be down, setting pre-vote timeout",
                   [log_id(State), Node]),
             {keep_state, State, [election_timeout_action(long, State)]};
         _ ->
@@ -621,7 +621,7 @@ follower(info, {node_event, Node, down}, State) ->
 follower(info, {node_event, _Node, up}, State) ->
     case leader_id(State) of
         {_, Node} ->
-            ?WARN("~s: Leader node ~w is back up, cancelling pre-vote timeout",
+            ?INFO("~s: Leader node ~w is back up, cancelling pre-vote timeout",
                   [log_id(State), Node]),
             {keep_state, State,
              [{state_timeout, infinity, election_timeout}]};
@@ -727,7 +727,7 @@ await_condition({call, From}, trigger_election, State) ->
                          {next_event, cast, election_timeout}]};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
                 State = #state{leader_monitor = MRef}) ->
-    ?WARN("~s: Leader monitor down. Setting election timeout.",
+    ?INFO("~s: Leader monitor down. Setting election timeout.",
           [log_id(State)]),
     {keep_state, State#state{leader_monitor = undefined},
      [election_timeout_action(short, State)]};

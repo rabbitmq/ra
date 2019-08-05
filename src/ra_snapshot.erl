@@ -130,15 +130,13 @@ init(UId, Module, SnapshotsDir) ->
     true = filelib:is_dir(SnapshotsDir),
     {ok, Snaps0} = file:list_dir(SnapshotsDir),
     Snaps = lists:reverse(lists:sort(Snaps0)),
-   %% /snapshots/term_index/
+    %% /snapshots/term_index/
     case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
         undefined ->
             ok = delete_snapshots(SnapshotsDir, Snaps),
             State;
         Current0 ->
             Current = filename:join(SnapshotsDir, Current0),
-            %% TODO: validate Current snapshot integrity before accepting it as
-            %% current
             {ok, #{index := Idx, term := Term}} = Module:read_meta(Current),
             true = ets:insert(?ETSTBL, {UId, Idx}),
 

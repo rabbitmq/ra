@@ -138,8 +138,9 @@ truncate_segments_with_pending_update(Config) ->
     {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
     ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
     %% write one more entry separately
-    {_MemTables2, _} = fake_mem_table(UId, Dir, [{33, 43, 33}]),
-    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    Entries2 = [{N, 42, N} || N <- lists:seq(33, 40)],
+    {MemTables2, _} = fake_mem_table(UId, Dir, Entries2),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables2, WalFile),
     receive
         {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
@@ -184,8 +185,9 @@ truncate_segments_with_pending_overwrite(Config) ->
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
-            timer:sleep(1000),
+            _ = ra_log_segment_writer:my_segments(UId),
             SegmentFile = filename:join(?config(server_dir, Config), S),
+            ?assert(filelib:is_file(SegmentFile)),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
             [{_, _, S1}, {_, _, S2}] = Rem,
