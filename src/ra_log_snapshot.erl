@@ -51,7 +51,7 @@ write(Dir, Meta, MacState) ->
     file:write_file(File, [<<?MAGIC,
                              ?VERSION:8/unsigned,
                              Checksum:32/integer>>,
-                           Data]).
+                           Data], [sync, raw]).
 
 begin_accept(SnapDir, Meta) ->
     File = filename(SnapDir),
