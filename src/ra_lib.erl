@@ -29,7 +29,8 @@
          derive_safe_string/2,
          validate_base64uri/1,
          partition_parallel/2,
-         retry/2
+         retry/2,
+         write_file/2
         ]).
 
 ceiling(X) when X < 0 ->
@@ -277,6 +278,27 @@ retry(Func, Attempt) ->
             ok;
         _ ->
             retry(Func, Attempt - 1)
+    end.
+
+
+write_file(Name, IOData) ->
+    case file:open(Name, [binary, write, raw]) of
+        {ok, Fd} ->
+            case file:write(Fd, IOData) of
+                ok ->
+                    case file:sync(Fd) of
+                        ok ->
+                            file:close(Fd);
+                        Err ->
+                            _ = file:close(Fd),
+                            Err
+                    end;
+                Err ->
+                    _ = file:close(Fd),
+                    Err
+            end;
+        Err ->
+            Err
     end.
 
 -ifdef(TEST).

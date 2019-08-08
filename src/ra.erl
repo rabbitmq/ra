@@ -123,10 +123,13 @@ restart_server(ServerId) ->
 stop_server(ServerId) ->
     try ra_server_sup_sup:stop_server(ServerId) of
         ok -> ok;
-        {error, not_found} -> ok
+        {error, not_found} -> ok;
+        {error, {badrpc, nodedown}} ->
+            {error, nodedown}
     catch
         exit:noproc -> ok;
-        exit:{{nodedown, _}, _} -> {error, nodedown}
+        exit:{{nodedown, _}, _} ->
+            {error, nodedown}
     end.
 
 %% @doc Deletes a ra server
