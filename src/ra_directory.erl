@@ -104,7 +104,7 @@ where_is_parent(UId) when is_binary(UId) ->
 -spec name_of(ra_uid()) -> maybe(atom()).
 name_of(UId) ->
     case ets:lookup(?MODULE, UId) of
-        [{_, _, _, Node, _}] -> Node;
+        [{_, _, _, ServerName, _}] -> ServerName;
         [] -> undefined
     end.
 
