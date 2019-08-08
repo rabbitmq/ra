@@ -83,9 +83,12 @@ stop_server({RaName, Node}) ->
     Pid = rpc:call(Node, ra_directory,
                    where_is_parent, [RaName]),
     case Pid of
-        undefined -> ok;
-        _ when is_pid(Pid) -> supervisor:terminate_child({?MODULE, Node}, Pid);
-        Err -> {error, Err}
+        undefined ->
+          ok;
+        _ when is_pid(Pid) ->
+          supervisor:terminate_child({?MODULE, Node}, Pid);
+        Err ->
+        {error, Err}
     end;
 stop_server(RaName) ->
     % local node
