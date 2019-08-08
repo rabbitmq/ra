@@ -80,10 +80,13 @@ prepare_restart_rpc(RaName) ->
 
 -spec stop_server(RaNodeId :: ra_server_id()) -> ok | {error, term()}.
 stop_server({RaName, Node}) ->
-    %% TODO: this could timeout
     Pid = rpc:call(Node, ra_directory,
                    where_is_parent, [RaName]),
-    supervisor:terminate_child({?MODULE, Node}, Pid);
+    case Pid of
+        undefined -> ok;
+        _ when is_pid(Pid) -> supervisor:terminate_child({?MODULE, Node}, Pid);
+        Err -> {error, Err}
+    end;
 stop_server(RaName) ->
     % local node
     case ra_directory:where_is_parent(RaName) of
