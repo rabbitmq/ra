@@ -50,19 +50,19 @@ deinit() ->
 
 -spec register_name(ra_uid(), pid(), maybe(pid()), atom(),
 		    ra_cluster_name()) -> yes | no.
-register_name(UId, Pid, ParentPid, RaServerName, ClusterName) ->
-    true = ets:insert(?MODULE, {UId, Pid, ParentPid, RaServerName,
+register_name(UId, Pid, ParentPid, ServerName, ClusterName) ->
+    true = ets:insert(?MODULE, {UId, Pid, ParentPid, ServerName,
                                 ClusterName}),
-    ok = dets:insert(?REVERSE_TBL, {RaServerName, UId}),
+    ok = dets:insert(?REVERSE_TBL, {ServerName, UId}),
     yes.
 
 -spec register_name(ra_uid(), pid(), maybe(pid()), atom()) -> yes | no.
-register_name(UId, Pid, ParentPid, RaServerName) ->
-    register_name(UId, Pid, ParentPid, RaServerName, undefined).
+register_name(UId, Pid, ParentPid, ServerName) ->
+    register_name(UId, Pid, ParentPid, ServerName, undefined).
 
 -spec register_name(ra_uid(), pid(), atom()) -> yes | no.
-register_name(UId, Pid, RaServerName) ->
-    register_name(UId, Pid, undefined, RaServerName).
+register_name(UId, Pid, ServerName) ->
+    register_name(UId, Pid, undefined, ServerName).
 
 -spec unregister_name(ra_uid()) -> ra_uid().
 unregister_name(UId) ->
@@ -144,12 +144,12 @@ overview() ->
     Dir = ets:tab2list(?MODULE),
     States = maps:from_list(ets:tab2list(ra_state)),
     Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
-    lists:foldl(fun ({UId, Pid, Parent, Node, ClusterName}, Acc) ->
-                        Acc#{Node =>
+    lists:foldl(fun ({UId, Pid, Parent, ServerName, ClusterName}, Acc) ->
+                        Acc#{ServerName =>
                              #{uid => UId,
                                pid => Pid,
                                parent => Parent,
-                               state => maps:get(Node, States, undefined),
+                               state => maps:get(ServerName, States, undefined),
                                cluster_name => ClusterName,
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}
