@@ -591,8 +591,8 @@ write_config(Config0, #?MODULE{directory = Dir}) ->
     ConfigPath = filename:join(Dir, "config"),
     % clean config of potentially unserialisable data
     Config = maps:without([parent], Config0),
-    ok = file:write_file(ConfigPath,
-                         list_to_binary(io_lib:format("~p.", [Config]))),
+    ok = ra_lib:write_file(ConfigPath,
+                           list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
 read_config(Dir) ->

@@ -48,10 +48,10 @@ write(Dir, Meta, MacState) ->
     Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin, Bin],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
-    file:write_file(File, [<<?MAGIC,
-                             ?VERSION:8/unsigned,
-                             Checksum:32/integer>>,
-                           Data]).
+    ra_lib:write_file(File, [<<?MAGIC,
+                               ?VERSION:8/unsigned,
+                               Checksum:32/integer>>,
+                             Data]).
 
 begin_accept(SnapDir, Meta) ->
     File = filename(SnapDir),
