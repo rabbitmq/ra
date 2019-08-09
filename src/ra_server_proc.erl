@@ -666,6 +666,8 @@ receive_snapshot(enter, OldState, State0) ->
     {keep_state, State,
      [{state_timeout, receive_snapshot_timeout(), receive_snapshot_timeout}
       | Actions]};
+receive_snapshot(_, tick_timeout, State0) ->
+    {keep_state, State0, set_tick_timer(State0, [])};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
@@ -743,6 +745,8 @@ await_condition(info, {node_event, Node, down}, State) ->
 await_condition(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
+await_condition(_, tick_timeout, State0) ->
+    {keep_state, State0, set_tick_timer(State0, [])};
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
