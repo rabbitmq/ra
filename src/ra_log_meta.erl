@@ -155,7 +155,15 @@ handle_delete(Id, Ref, Inserts) ->
   maps:remove(Id, Inserts).
 
 update_key(current_term, Value, Data) ->
-    setelement(2, Data, Value);
+    case element(2, Data) of
+        %% current term matches the new value, nothing to do
+        Value -> Data;
+        %% current term has changed. Clear voted_for field as part of the update.
+        %% See rabbitmq/ra#111.
+        _     ->
+          Data1 = setelement(3, Data, undefined),
+          setelement(2, Data1, Value)
+    end;
 update_key(voted_for, Value, Data) ->
     setelement(3, Data, Value);
 update_key(last_applied, Value, Data) ->
