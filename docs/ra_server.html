@@ -16,7 +16,7 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
-<p><pre>command() =
+<p><pre>command() = 
     {<a href="#type-command_type">command_type()</a>,
      <a href="#type-command_meta">command_meta()</a>,
      UserCommand :: term(),
@@ -35,31 +35,24 @@
 
 
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
-<p><pre>command_reply_mode() =
-    after_log_append |
-    await_consensus |
+<p><pre>command_reply_mode() = 
+    after_log_append | await_consensus |
     {notify, <a href="#type-command_correlation">command_correlation()</a>, pid()} |
     noreply</pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_type">command_type()</a></h3>
-<p><pre>command_type() =
-    '$usr' |
-    '$ra_query' |
-    '$ra_join' |
-    '$ra_leave' |
-    '$ra_cluster_change' |
+<p><pre>command_type() = 
+    '$usr' | '$ra_join' | '$ra_leave' | '$ra_cluster_change' |
     '$ra_cluster'</pre></p>
 
 
 <h3 class="typedecl"><a name="type-config">config()</a></h3>
 <p><pre>config() = <a href="#type-ra_server_config">ra_server_config()</a></pre></p>
-<h3 class="typedecl"><a name="type-consistent_query_ref">consistent_query_ref()</a></h3>
-<p><pre>consistent_query_ref() = {term(), <a href="ra.html#type-query_fun">ra:query_fun()</a>, <a href="#type-ra_index">ra_index()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><pre>machine_conf() =
+<p><pre>machine_conf() = 
     {module, module(), InitConfig :: map()} |
     {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState :: term()}</pre></p>
 <p>  The machine configuration.
@@ -69,13 +62,13 @@
   machines that cannot access any of the advanced features.</p>
 
 <h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
-<p><pre>ra_await_condition_fun() =
+<p><pre>ra_await_condition_fun() = 
     fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
             {boolean(), <a href="#type-ra_server_state">ra_server_state()</a>})</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_effect">ra_effect()</a></h3>
-<p><pre>ra_effect() =
+<p><pre>ra_effect() = 
     <a href="ra_machine.html#type-effect">ra_machine:effect()</a> |
     <a href="ra_log.html#type-effect">ra_log:effect()</a> |
     {reply, <a href="#type-ra_reply_body">ra_reply_body()</a>} |
@@ -103,7 +96,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_msg">ra_msg()</a></h3>
-<p><pre>ra_msg() =
+<p><pre>ra_msg() = 
     #append_entries_rpc{} |
     {<a href="#type-ra_server_id">ra_server_id()</a>, #append_entries_reply{}} |
     {<a href="#type-ra_server_id">ra_server_id()</a>, #install_snapshot_result{}} |
@@ -112,15 +105,17 @@
     #pre_vote_rpc{} |
     #pre_vote_result{} |
     #install_snapshot_rpc{} |
-    election_timeout |
-    await_condition_timeout |
+    election_timeout | await_condition_timeout |
     {command, <a href="#type-command">command()</a>} |
     {commands, [<a href="#type-command">command()</a>]} |
-    <a href="ra_log.html#type-event">ra_log:event()</a></pre></p>
+    <a href="ra_log.html#type-event">ra_log:event()</a> |
+    {consistent_query, term(), <a href="ra.html#type-query_fun">ra:query_fun()</a>} |
+    #heartbeat_rpc{} |
+    {ra_server_id, #heartbeat_reply{}}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_reply_body">ra_reply_body()</a></h3>
-<p><pre>ra_reply_body() =
+<p><pre>ra_reply_body() = 
     #append_entries_reply{} |
     #request_vote_result{} |
     #install_snapshot_result{} |
@@ -128,7 +123,7 @@
 
 
 <h3 class="typedecl"><a name="type-ra_server_config">ra_server_config()</a></h3>
-<p><pre>ra_server_config() =
+<p><pre>ra_server_config() = 
     #{id := <a href="#type-ra_server_id">ra_server_id()</a>,
       uid := <a href="#type-ra_uid">ra_uid()</a>,
       cluster_name := <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
@@ -136,16 +131,15 @@
       initial_members := [<a href="#type-ra_server_id">ra_server_id()</a>],
       machine := <a href="#type-machine_conf">machine_conf()</a>,
       friendly_name =&gt; <a href="unicode.html#type-chardata">unicode:chardata()</a>,
+      metrics_key =&gt; term(),
       broadcast_time =&gt; non_neg_integer(),
       tick_timeout =&gt; non_neg_integer(),
       await_condition_timeout =&gt; non_neg_integer()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_server_state">ra_server_state()</a></h3>
-<p><pre>ra_server_state() =
-    #{id := <a href="#type-ra_server_id">ra_server_id()</a>,
-      uid := <a href="#type-ra_uid">ra_uid()</a>,
-      log_id := <a href="unicode.html#type-chardata">unicode:chardata()</a>,
+<p><pre>ra_server_state() = 
+    #{id := {<a href="#type-ra_server_id">ra_server_id()</a>, <a href="#type-ra_uid">ra_uid()</a>, <a href="unicode.html#type-chardata">unicode:chardata()</a>},
       leader_id =&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_server_id">ra_server_id()</a>),
       cluster := <a href="#type-ra_cluster">ra_cluster()</a>,
       cluster_change_permitted := boolean(),
@@ -165,32 +159,25 @@
       machine_version := <a href="ra_machine.html#type-version">ra_machine:version()</a>,
       machine_versions :=
           [{<a href="#type-ra_index">ra_index()</a>, <a href="ra_machine.html#type-version">ra_machine:version()</a>}, ...],
+      metrics_key := term(),
       effective_machine_version := <a href="ra_machine.html#type-version">ra_machine:version()</a>,
       effective_machine_module := module(),
       aux_state =&gt; term(),
       condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>,
       condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>],
       pre_vote_token =&gt; reference(),
-      waiting_apply_index =&gt;
-          #{<a href="#type-consistent_query_ref">consistent_query_ref()</a> =&gt; <a href="#type-ra_index">ra_index()</a>},
-      waiting_heartbeats =&gt;
-          #{<a href="#type-consistent_query_ref">consistent_query_ref()</a> =&gt;
-                #{<a href="#type-ra_server_id">ra_server_id()</a> =&gt; boolean()}}}</pre></p>
+      query_index := non_neg_integer(),
+      queries_waiting_heartbeats :=
+          <a href="queue.html#type-queue">queue:queue</a>({non_neg_integer(), <a href="#type-consistent_query_ref">consistent_query_ref()</a>}),
+      pending_consistent_queries := [<a href="#type-consistent_query_ref">consistent_query_ref()</a>],
+      commit_latency =&gt; <a href="#type-maybe">maybe</a>(non_neg_integer())}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_state">ra_state()</a></h3>
-<p><pre>ra_state() =
-    leader |
-    follower |
-    candidate |
-    pre_vote |
-    await_condition |
-    delete_and_terminate |
-    terminating_leader |
-    terminating_follower |
-    recover |
-    recovered |
-    stop |
+<p><pre>ra_state() = 
+    leader | follower | candidate | pre_vote | await_condition |
+    delete_and_terminate | terminating_leader |
+    terminating_follower | recover | recovered | stop |
     receive_snapshot</pre></p>
 
 
@@ -208,9 +195,11 @@
 <tr><td valign="top"><a href="#handle_follower-2">handle_follower/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_receive_snapshot-2">handle_receive_snapshot/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_await_condition-2">handle_await_condition/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#process_new_leader_queries-1">process_new_leader_queries/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-1">tick/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_state_enter-2">handle_state_enter/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#metrics-1">metrics/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#is_new-1">is_new/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#is_fully_persisted-1">is_fully_persisted/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#is_fully_replicated-1">is_fully_replicated/1</a></td><td></td></tr>
@@ -290,6 +279,12 @@
                            <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
 </div>
 
+<h3 class="function"><a name="process_new_leader_queries-1">process_new_leader_queries/1</a></h3>
+<div class="spec">
+<p><pre>process_new_leader_queries(State0 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+                              {<a href="#type-ra_server_state">ra_server_state()</a>, [<a href="#type-from">from()</a>]}</pre></p>
+</div>
+
 <h3 class="function"><a name="tick-1">tick/1</a></h3>
 <div class="spec">
 <p><pre>tick(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-ra_effects">ra_effects()</a></pre></p>
@@ -305,6 +300,18 @@
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
 <p><pre>overview(State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; map()</pre></p>
+</div>
+
+<h3 class="function"><a name="metrics-1">metrics/1</a></h3>
+<div class="spec">
+<p><pre>metrics(State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+           {atom(),
+            <a href="#type-ra_term">ra_term()</a>,
+            <a href="#type-ra_index">ra_index()</a>,
+            <a href="#type-ra_index">ra_index()</a>,
+            <a href="#type-ra_index">ra_index()</a>,
+            <a href="#type-ra_index">ra_index()</a>,
+            non_neg_integer()}</pre></p>
 </div>
 
 <h3 class="function"><a name="is_new-1">is_new/1</a></h3>

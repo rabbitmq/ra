@@ -45,8 +45,11 @@
 <tr><td valign="top"><a href="#force_delete_server-1">force_delete_server/1</a></td><td>Deletes a ra server
   The server is forcefully deleted.</td></tr>
 <tr><td valign="top"><a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a></td><td>Starts or restarts a ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_or_restart_cluster-4">start_or_restart_cluster/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-4">start_cluster/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-1">start_cluster/1</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_server-4">start_server/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion
@@ -151,13 +154,14 @@ an optional process scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>start_or_restart_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
                          Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-                         RemServers :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
+                         ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                             {ok,
                              [<a href="#type-ra_server_id">ra_server_id()</a>],
                              [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>ServerIds</tt>: The list of ra server ids.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -174,6 +178,33 @@ an optional process scoped term as correlation identifier.</td></tr>
  
  </p>
 
+<h3 class="function"><a name="start_or_restart_cluster-4">start_or_restart_cluster/4</a></h3>
+<div class="spec">
+<p><pre>start_or_restart_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+                         Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
+                         RemServers :: [<a href="#type-ra_server_id">ra_server_id()</a>],
+                         Timeout :: non_neg_integer()) -&gt;
+                            {ok,
+                             [<a href="#type-ra_server_id">ra_server_id()</a>],
+                             [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                            {error, cluster_not_formed}</pre></p>
+<p><tt>ClusterName</tt>: the name of the cluster.<br>
+<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>Timeout</tt>: The time to wait for any server to restart or start<br>
+</p>
+<p>returns: <p>
+  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
+  started. A cluster can be successfully started if more than half of the
+  servers provided could be started. Servers that could not be started need to
+  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+ 
+  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
+ 
+  If there was no existing cluster and a new cluster could not be formed
+  any servers that did manage to start are
+  forcefully deleted.</p>
+</div>
+
 <h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
 <div class="spec">
 <p><pre>start_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
@@ -184,6 +215,32 @@ an optional process scoped term as correlation identifier.</td></tr>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 <tt>ServerIds</tt>: The list of ra server ids.<br>
+</p>
+<p>returns: <p>
+  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
+  started. A cluster can be successfully started if more than half of the
+  servers provided could be started. Servers that could not be started need to
+  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+ 
+  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
+ 
+  If a cluster could not be formed any servers that did manage to start are
+  forcefully deleted.</p>
+</div><p>Starts a new distributed ra cluster.
+ </p>
+
+<h3 class="function"><a name="start_cluster-4">start_cluster/4</a></h3>
+<div class="spec">
+<p><pre>start_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+              Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
+              ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>],
+              Timeout :: non_neg_integer()) -&gt;
+                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+<p><tt>ClusterName</tt>: the name of the cluster.<br>
+<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>ServerIds</tt>: The list of ra server ids.<br>
+<tt>Timeout</tt>: The time to wait for each server to start<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -218,6 +275,14 @@ an optional process scoped term as correlation identifier.</td></tr>
 </div><p>Starts a new distributed ra cluster.
  </p>
 
+<h3 class="function"><a name="start_cluster-2">start_cluster/2</a></h3>
+<div class="spec">
+<p><pre>start_cluster(ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>],
+              Timeout :: non_neg_integer()) -&gt;
+                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+</div>
+
 <h3 class="function"><a name="start_server-4">start_server/4</a></h3>
 <div class="spec">
 <p><pre>start_server(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
@@ -242,7 +307,7 @@ an optional process scoped term as correlation identifier.</td></tr>
                   {ok, <a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()}</pre></p>
 <p><tt>ServerIds</tt>: the ra_server_ids of the cluster<br>
 </p>
-<p>returns: <code>{ok | error, nodedown}</code></p>
+<p>returns: <code>{{ok, Leader} | error, nodedown}</code></p>
 </div><p>Deletes a ra cluster in an orderly fashion
   This function commits and end of life command which after each server applies
   it will cause that server to shut down and delete all it's data.
@@ -260,10 +325,10 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="add_member-2">add_member/2</a></h3>
 <div class="spec">
-<p><pre>add_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
            ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
               <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to<br>
+<p><tt>ServerLoc</tt>: the ra server or servers to try to send the command to<br>
 <tt>ServerId</tt>: the ra server id of the new server<br>
 </p>
 </div><p>Add a ra server id to a ra cluster's membership configuration
@@ -274,7 +339,7 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="add_member-3">add_member/3</a></h3>
 <div class="spec">
-<p><pre>add_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
            ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
            Timeout :: timeout()) -&gt;
               <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
@@ -283,11 +348,10 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="remove_member-2">remove_member/2</a></h3>
 <div class="spec">
-<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>remove_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
                  <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to<br>
-<tt>ServerId</tt>: the ra server id of the server to remove<br>
+<p><tt>ServerId</tt>: the ra server id of the server to remove<br>
 </p>
 </div><p>Removes a server from the cluster's membership configuration
   This function returns after appending the command to the log.
@@ -295,7 +359,7 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="remove_member-3">remove_member/3</a></h3>
 <div class="spec">
-<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>remove_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
               Timeout :: timeout()) -&gt;
                  <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
@@ -328,7 +392,7 @@ an optional process scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>leave_and_terminate(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
                     ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                       ok | timeout | {error, no_proc}</pre></p>
+                       ok | timeout | {error, noproc}</pre></p>
 </div>
 
 <h3 class="function"><a name="leave_and_terminate-3">leave_and_terminate/3</a></h3>
@@ -336,27 +400,29 @@ an optional process scoped term as correlation identifier.</td></tr>
 <p><pre>leave_and_terminate(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
                     ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
                     Timeout :: timeout()) -&gt;
-                       ok | timeout | {error, no_proc}</pre></p>
+                       ok | timeout | {error, noproc}</pre></p>
 </div>
 
 <h3 class="function"><a name="leave_and_delete_server-1">leave_and_delete_server/1</a></h3>
 <div class="spec">
-<p><tt>leave_and_delete_server(ServerId) -&gt; any()</tt></p>
+<p><tt>leave_and_delete_server(ServerLoc) -&gt; any()</tt></p>
 </div>
 
 <h3 class="function"><a name="leave_and_delete_server-2">leave_and_delete_server/2</a></h3>
 <div class="spec">
-<p><pre>leave_and_delete_server(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>leave_and_delete_server(ServerLoc ::
+                            <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                         ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                           ok | timeout | {error, no_proc}</pre></p>
+                           ok | timeout | {error, noproc}</pre></p>
 </div>
 
 <h3 class="function"><a name="leave_and_delete_server-3">leave_and_delete_server/3</a></h3>
 <div class="spec">
-<p><pre>leave_and_delete_server(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>leave_and_delete_server(ServerRef ::
+                            <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                         ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
                         Timeout :: timeout()) -&gt;
-                           ok | timeout | {error, no_proc}</pre></p>
+                           ok | timeout | {error, noproc}</pre></p>
 </div>
 
 <h3 class="function"><a name="new_uid-1">new_uid/1</a></h3>
@@ -373,14 +439,13 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="process_command-3">process_command/3</a></h3>
 <div class="spec">
-<p><pre>process_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>process_command(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                 Command :: term(),
                 Timeout :: non_neg_integer()) -&gt;
                    {ok, Reply :: term(), Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} |
                    {error, term()} |
                    {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
-<p><tt>ServerId</tt>: the server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
+<p><tt>Command</tt>: an arbitrary term that the state machine can handle<br>
 <tt>Timeout</tt>: the time to wait before returning {timeout, ServerId}<br>
 </p>
 </div><p>Submits a command to a ra server. Returs after the command has
@@ -394,7 +459,8 @@ an optional process scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="process_command-2">process_command/2</a></h3>
 <div class="spec">
-<p><pre>process_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Command :: term()) -&gt;
+<p><pre>process_command(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+                Command :: term()) -&gt;
                    {ok, Reply :: term(), Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} |
                    {error, term()} |
                    {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>

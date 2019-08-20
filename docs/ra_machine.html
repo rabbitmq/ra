@@ -85,7 +85,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
     #{system_time := integer(),
       index := <a href="#type-ra_index">ra_index()</a>,
       term := <a href="#type-ra_term">ra_term()</a>,
-      machine_version =&gt; <a href="#type-version">version()</a>}</pre></p>
+      machine_version =&gt; <a href="#type-version">version()</a>,
+      from =&gt; <a href="#type-from">from()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
@@ -237,13 +238,12 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
            RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>,
            Type :: {call, From :: <a href="#type-from">from()</a>} | cast,
            Command :: term(),
-           AuxState,
-           LogState,
+           AuxState, LogState,
            MacState :: <a href="#type-state">state()</a>) -&gt;
               {reply, Reply :: term(), AuxState, LogState} |
               {no_reply, AuxState, LogState} |
               undefined</pre>
-<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-ra_log">ra_log:ra_log()</a></pre></li></ul></p>
+<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state">ra_log:state()</a></pre></li></ul></p>
 </div>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>
