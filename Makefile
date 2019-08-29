@@ -8,7 +8,8 @@ PROJECT = ra
 ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
-dep_gen_batch_server = hex 0.7.0
+# dep_gen_batch_server = hex 0.7.0
+dep_gen_batch_server = git git@github.com:rabbitmq/gen-batch-server.git garbage-collect-action
 dep_aten = hex 0.5.2
 DEPS = aten gen_batch_server
 

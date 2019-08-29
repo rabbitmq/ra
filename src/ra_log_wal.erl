@@ -532,7 +532,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          Pid ! {ra_log_event, {written, WrittenInfo}},
                          ok
                  end, Waiting),
-    {ok, State}.
+    {ok, [garbage_collect], State}.
 
 incr_batch(#batch{writes = Writes,
                   waiting = Waiting0,
