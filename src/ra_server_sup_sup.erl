@@ -118,7 +118,7 @@ delete_server_rpc(RaName) ->
     ra_log_meta:delete(UId),
     Dir = ra_env:server_data_dir(UId),
     _ = supervisor:terminate_child(?MODULE, UId),
-    delete_data_directory(Dir),
+    _ = delete_data_directory(Dir),
     _ = ra_directory:unregister_name(UId),
     %% forcefully clean up ETS tables
     catch ets:delete(ra_log_metrics, UId),

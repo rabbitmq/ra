@@ -186,7 +186,7 @@ init(#{dir := Dir} = Conf0) ->
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
-    {ok, state()}.
+    {ok, [gen_batch_server:action()], state()}.
 handle_batch(Ops, State0) ->
     State = lists:foldl(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
@@ -532,7 +532,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          Pid ! {ra_log_event, {written, WrittenInfo}},
                          ok
                  end, Waiting),
-    {ok, State}.
+    {ok, [garbage_collect], State}.
 
 incr_batch(#batch{writes = Writes,
                   waiting = Waiting0,
