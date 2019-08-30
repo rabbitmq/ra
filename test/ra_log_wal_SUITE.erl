@@ -155,6 +155,9 @@ write_many(Config) ->
            "Reductions: ~b",
            [NumWrites, Taken / 1000, Reds]),
 
+    % assert memory use after isn't absurdly larger than before
+    ?assert(MemAfter < (MemBefore * 2)),
+
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
