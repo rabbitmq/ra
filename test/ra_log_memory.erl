@@ -30,7 +30,7 @@
          to_list/1
         ]).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
 -type snapshot() :: {snapshot_meta(), term()}.

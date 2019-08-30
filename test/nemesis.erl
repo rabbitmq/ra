@@ -16,7 +16,7 @@
 
 -export([partition/1]).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -type scenario() :: [{wait, non_neg_integer()} |
                      {part, [node()], non_neg_integer()} |

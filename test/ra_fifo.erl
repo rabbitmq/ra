@@ -6,7 +6,7 @@
 -compile(inline).
 -compile({no_auto_import, [apply/3]}).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
 -export([

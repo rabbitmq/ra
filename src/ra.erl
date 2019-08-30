@@ -71,7 +71,14 @@
 -type query_fun() :: fun((term()) -> term()) |
                      {M :: module(), F :: atom(), A :: list()}.
 
--export_type([query_fun/0]).
+%% export some internal types
+-type index() :: ra_index().
+-type server_id() :: ra_server_id().
+
+-export_type([index/0,
+              server_id/0,
+              query_fun/0,
+              from/0]).
 
 %% @doc Starts the ra application
 -spec start() -> ok.

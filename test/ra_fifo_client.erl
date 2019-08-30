@@ -22,7 +22,7 @@
          cluster_name/1
          ]).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -define(SOFT_LIMIT, 256).
 
