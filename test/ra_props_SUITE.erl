@@ -1,7 +1,7 @@
 -module(ra_props_SUITE).
 -compile(export_all).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 -include_lib("proper/include/proper.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").

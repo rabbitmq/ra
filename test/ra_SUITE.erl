@@ -4,7 +4,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -define(PROCESS_COMMAND_TIMEOUT, 6000).
 

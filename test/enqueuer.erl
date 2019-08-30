@@ -15,7 +15,7 @@
          terminate/2,
          code_change/3]).
 
--include("ra.hrl").
+-include("src/ra.hrl").
 
 -type config() :: #{cluster_name := ra_cluster_name(),
                     servers := [ra_server_id()],

@@ -12,7 +12,8 @@
          map/2
         ]).
 
--include("ra.hrl").
+-include("src/ra.hrl").
+
 -compile({no_auto_import, [size/1]}).
 
 -record(state, {data = #{} :: #{integer() => term()},
