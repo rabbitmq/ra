@@ -2160,7 +2160,7 @@ agreed_commit(Indexes) ->
     lists:nth(Nth, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{id := {_, _, LogId}}) ->
-    ?WARN("~s: ~w received unhandled msg: ~W~n", [LogId, RaState, Msg, 6]).
+    ?DEBUG("~s: ~w received unhandled msg: ~W~n", [LogId, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, ?FOLD_LOG_BATCH_SIZE, Log0) of
