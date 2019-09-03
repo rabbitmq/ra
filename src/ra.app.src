@@ -1,5 +1,5 @@
 {application,ra,
-             [{description,"Experimental Raft library"},
+             [{description,"Raft library"},
               {vsn,"1.0.0"},
               {licenses,["Apache","MPL"]},
               {links,[{"github","https://github.com/rabbitmq/ra"}]},
