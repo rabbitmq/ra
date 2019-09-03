@@ -8,10 +8,11 @@ Ra (by virtue of being a Raft implementation) is a library that allows users to 
 
 ## Project Maturity
 
-This library is maturing and is currently in a pre-1.0 phase. This means that
-the primary APIs (`ra`, `ra_machine` modules) and on disk formats are unlikely
-to change significantly until 1.0 is tagged but _may_ need to be if deemed
-necessary.
+This library has been extensively tested and is suitable for production use.
+This means the primary APIs (`ra`, `ra_machine` modules) and on disk formats
+will be backwards-compatible going forwards in line with Semantic Versioning.
+Care has been taken to version all on-disk data formats to enable frictionless
+future upgrades.
 
 ### Status
 
