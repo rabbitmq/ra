@@ -1847,7 +1847,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                             Entries),
             CommitLatency = case LastTs of
                                 undefined ->
-                                    undefined;
+                                    -1;
                                 _ when is_integer(LastTs) ->
                                     os:system_time(millisecond) - LastTs
                             end,
