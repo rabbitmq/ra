@@ -42,7 +42,8 @@ all_tests() ->
      stop_leader_and_wait_for_elections,
      follower_catchup,
      post_partition_liveness,
-     all_metrics_are_integers
+     all_metrics_are_integers,
+     transfer_leadership
     ].
 
 groups() ->
@@ -745,6 +746,21 @@ post_partition_liveness(Config) ->
             exit(consensus_timeout)
     end,
     ok.
+
+transfer_leadership(Config) ->
+    Name = ?config(test_name, Config),
+    Members = [{n1, node()}, {n2, node()}, {n3, node()}],
+    {ok, _, _} = ra:start_cluster(Name, add_machine(), Members),
+    % issue command
+    {ok, _, Leader} = ra:process_command({n3, node()}, 5),
+    % transfer leadership
+    [Serv | _] = Members -- [Leader],
+    ct:pal("TRANSFER FROM ~p to ~p", [Leader, Serv]),
+    ok = ra:transfer_leadership(Leader, Serv),
+    {ok, _, NewLeader} = ra:process_command(Serv, 5),
+    ?assertEqual(NewLeader, Serv),
+    ?assertEqual(already_leader, ra:transfer_leadership(NewLeader, NewLeader)),
+    terminate_cluster(Members).
 
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),

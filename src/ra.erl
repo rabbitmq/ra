@@ -53,7 +53,8 @@
          leave_and_delete_server/3,
          %%
          overview/0,
-         new_uid/1
+         new_uid/1,
+         transfer_leadership/2
         ]).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
@@ -678,6 +679,10 @@ members(ServerRef) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerRef, Timeout) ->
     ra_server_proc:state_query(ServerRef, members, Timeout).
+
+-spec transfer_leadership(ra_server_id(), ra_server_id()) -> ok.
+transfer_leadership(ServerId, TargetServerId) ->
+    ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 
 %% internal
 

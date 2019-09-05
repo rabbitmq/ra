@@ -67,7 +67,8 @@
       effective_machine_module := module(),
       aux_state => term(),
       condition => ra_await_condition_fun(),
-      condition_timeout_effects => [ra_effect()],
+      condition_timeout_changes => #{transition_to := ra_state(),
+                                     effects := [ra_effect()]},
       pre_vote_token => reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
@@ -275,7 +276,7 @@ init(#{id := Id,
       effective_machine_module => MacMod,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
-      condition_timeout_effects => [],
+      condition_timeout_changes => #{},
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => []}.
@@ -646,6 +647,15 @@ handle_leader(#request_vote_result{}, State) ->
 handle_leader(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {leader, State, []};
+handle_leader({transfer_leadership, Leader}, State = #{id := {Leader, _, _}}) ->
+    {leader, State, [{reply, already_leader}]};
+handle_leader({transfer_leadership, ServerId}, State) ->
+    %% TODO find a timeout
+    gen_statem:cast(ServerId, transfer_leadership),
+    {await_condition, State#{condition => fun transfer_leadership_condition/2,
+                             condition_timeout_changes => #{effects => [],
+                                                            transition_to => leader}},
+     [{reply, ok}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, []}.
@@ -899,7 +909,8 @@ handle_follower(#append_entries_rpc{term = Term,
                      log => Log0,
                      condition => follower_catchup_cond_fun(missing),
                      % repeat reply effect on condition timeout
-                     condition_timeout_effects => Effects}, Effects};
+                     condition_timeout_changes => #{effects => Effects,
+                                                    transition_to => follower}}, Effects};
         {term_mismatch, OtherTerm, Log0} ->
             CommitIndex = maps:get(commit_index, State0),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
@@ -923,7 +934,8 @@ handle_follower(#append_entries_rpc{term = Term,
                     log => Log0,
                     condition => follower_catchup_cond_fun(term_mismatch),
                     % repeat reply effect on condition timeout
-                    condition_timeout_effects => Effects}, Effects}
+                    condition_timeout_changes => #{effects => Effects,
+                                                   transition_to => follower}}, Effects}
     end;
 handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
                 #{id := {Id, _, LogId},
@@ -1112,8 +1124,10 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout,
-                       #{condition_timeout_effects := Effects} = State) ->
-    {follower, State#{condition_timeout_effects => []}, Effects};
+                       #{condition_timeout_changes := #{effects := Effects,
+                                                        transition_to := TransitionTo}} = State) ->
+    {TransitionTo, State#{condition_timeout_changes => #{effects => [],
+                                                         transition_to => TransitionTo}}, Effects};
 handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -1289,6 +1303,13 @@ follower_catchup_cond(_, _Msg, State) ->
 
 wal_down_condition(_Msg, #{log := Log} = State) ->
     {ra_log:can_write(Log), State}.
+
+transfer_leadership_condition(#append_entries_rpc{term = Term},
+                              State = #{current_term := CurTerm})
+  when Term > CurTerm ->
+    {true, State};
+transfer_leadership_condition(_Msg, State) ->
+    {false, State}.
 
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := {Id, _, _},
