@@ -260,6 +260,20 @@ state transformations.
 
 Ra does not support the Erlang hot code swapping mechanism.
 
+## Cluster Setup
+
+Ra basically supports two approaches to setting up a cluster: Knowing about each member on startup and joining members dynamically. 
+
+### Fixed members on startup
+Use `ra:start_or_restart_cluster/3` on one of the nodes to set up a cluster. This will either create a new cluster or restart an existing one. As cluster membership is persistet in Ra logs, newly added nodes will be discovered from the log.
+
+### Joining nodes later
+
+**warning** Nodes joined later need to loose all their state before joining.
+
+In case you want to join a node you have two possibilities: The node can either have existing state (in which case you need to delete it with `ra:force_delete_server/1`) or be completely fresh. 
+
+Start a local server with `ra:start_server/1`, then call `ra:add_member/2` on an existing cluster member. The newly started node joins the existing cluster as a follower and replicates the existing logs, after which it will be a normal member of the cluster.
 
 ## Identity
 
