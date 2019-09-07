@@ -260,20 +260,32 @@ state transformations.
 
 Ra does not support the Erlang hot code swapping mechanism.
 
+
 ## Cluster Setup
 
-Ra basically supports two approaches to setting up a cluster: Knowing about each member on startup and joining members dynamically. 
+There are two approaches to forming a cluster:
 
-### Fixed members on startup
-Use `ra:start_or_restart_cluster/3` on one of the nodes to set up a cluster. This will either create a new cluster or restart an existing one. As cluster membership is persistet in Ra logs, newly added nodes will be discovered from the log.
+ * All cluster members can be known ahead of time
+ * All cluster members can be joining existing members dynamically (this implies that one "seed" member is chosen and started first)
 
-### Joining nodes later
+### Fixed Set of Members Known on Startup
 
-**warning** Nodes joined later need to loose all their state before joining.
+Use `ra:start_or_restart_cluster/3` on one of the nodes to set up a cluster.
+This will either create a new cluster or restart an existing one.
+As cluster membership is persistet in Ra logs, newly added nodes will be discovered from the log.
 
-In case you want to join a node you have two possibilities: The node can either have existing state (in which case you need to delete it with `ra:force_delete_server/1`) or be completely fresh. 
+### Dynamically Joining Nodes
 
-Start a local server with `ra:start_server/1`, then call `ra:add_member/2` on an existing cluster member. The newly started node joins the existing cluster as a follower and replicates the existing logs, after which it will be a normal member of the cluster.
+With this appraoch there has to be a "preconfigired" or "seed" nodes that other nodes
+will join. Nodes that join the seed later **will discard all their state** before joining.
+
+Ra API supports two options: the joining node can either have existing state
+(in which case it has to be discarded with `ra:force_delete_server/1`) or be completely fresh nodes.
+
+Start a local server with `ra:start_server/1`, then call `ra:add_member/2` on an existing cluster member.
+The newly started node joins the existing cluster as a follower and replicates the existing log,
+after which it will be a regular member of the cluster.
+
 
 ## Identity
 
