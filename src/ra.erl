@@ -657,14 +657,14 @@ leader_query(ServerRef, QueryFun, Timeout) ->
 %% This may include changes which were committed while the query is running.
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun :: query_fun()) ->
-    {ok, Reply :: term(), ra_server_id() | not_known}.
+    ra_server_proc:ra_leader_call_ret(term()).
 consistent_query(Server, QueryFun) ->
     consistent_query(Server, QueryFun, ?DEFAULT_TIMEOUT).
 
 -spec consistent_query(Server::ra_server_id(),
                        QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
-    {ok, Reply :: term(), ra_server_id() | not_known}.
+    ra_server_proc:ra_leader_call_ret(term()).
 consistent_query(Server, QueryFun, Timeout) ->
     ra_server_proc:query(Server, QueryFun, consistent, Timeout).
 
