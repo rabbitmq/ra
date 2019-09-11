@@ -1061,6 +1061,8 @@ handle_follower(#append_entries_reply{}, State) ->
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
+handle_follower(transfer_leadership, State) ->
+    call_for_election(pre_vote, State);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
@@ -1305,6 +1307,10 @@ wal_down_condition(_Msg, #{log := Log} = State) ->
     {ra_log:can_write(Log), State}.
 
 transfer_leadership_condition(#append_entries_rpc{term = Term},
+                              State = #{current_term := CurTerm})
+  when Term > CurTerm ->
+    {true, State};
+transfer_leadership_condition(#install_snapshot_rpc{term = Term},
                               State = #{current_term := CurTerm})
   when Term > CurTerm ->
     {true, State};
