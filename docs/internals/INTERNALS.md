@@ -272,7 +272,7 @@ There are two approaches to forming a cluster:
 
 Use `ra:start_or_restart_cluster/3` on one of the nodes to set up a cluster.
 This will either create a new cluster or restart an existing one.
-As cluster membership is persistet in Ra logs, newly added nodes will be discovered from the log.
+As cluster membership is persisted in Ra logs, newly added nodes will be discovered from the log.
 
 ### Dynamically Joining Nodes
 
