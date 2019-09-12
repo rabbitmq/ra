@@ -680,7 +680,8 @@ members(ServerRef) ->
 members(ServerRef, Timeout) ->
     ra_server_proc:state_query(ServerRef, members, Timeout).
 
--spec transfer_leadership(ra_server_id(), ra_server_id()) -> ok.
+-spec transfer_leadership(ra_server_id(), ra_server_id()) ->
+    ok | already_leader.
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 

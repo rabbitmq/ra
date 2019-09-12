@@ -276,7 +276,6 @@ init(#{id := Id,
       effective_machine_module => MacMod,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
-      condition_timeout_changes => #{},
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => []}.
@@ -651,10 +650,11 @@ handle_leader({transfer_leadership, Leader}, State = #{id := {Leader, _, _}}) ->
     {leader, State, [{reply, already_leader}]};
 handle_leader({transfer_leadership, ServerId}, State) ->
     %% TODO find a timeout
-    gen_statem:cast(ServerId, transfer_leadership),
-    {await_condition, State#{condition => fun transfer_leadership_condition/2,
-                             condition_timeout_changes => #{effects => [],
-                                                            transition_to => leader}},
+    gen_statem:cast(ServerId, try_become_leader),
+    {await_condition,
+     State#{condition => fun transfer_leadership_condition/2,
+            condition_timeout_changes => #{effects => [],
+                                           transition_to => leader}},
      [{reply, ok}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
@@ -1061,7 +1061,7 @@ handle_follower(#append_entries_reply{}, State) ->
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
-handle_follower(transfer_leadership, State) ->
+handle_follower(try_become_leader, State) ->
     call_for_election(pre_vote, State);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),

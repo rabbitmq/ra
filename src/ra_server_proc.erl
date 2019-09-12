@@ -169,7 +169,7 @@ trigger_election(ServerId, Timeout) ->
     gen_statem:call(ServerId, trigger_election, Timeout).
 
 -spec transfer_leadership(ra_server_id(), ra_server_id(), timeout()) ->
-                                 ra_leader_call_ret(term()).
+    ok | already_leader.
 transfer_leadership(ServerId, TargetServerId, Timeout) ->
     leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
 
@@ -483,8 +483,6 @@ candidate(_, tick_timeout, State0) ->
     {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
-candidate(_, transfer_leadership, State) ->
-    {keep_state, State, []};
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
@@ -536,8 +534,6 @@ pre_vote(_, tick_timeout, State0) ->
     {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
-pre_vote(_, transfer_leadership, State) ->
-    {keep_state, State, []};
 pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
@@ -647,8 +643,6 @@ follower(_, tick_timeout, State) ->
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-follower(_, transfer_leadership, State) ->
-    {next_state, candidate, State, [election_timeout_action(short, State)]};
 follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
@@ -762,8 +756,6 @@ await_condition(enter, OldState, State0) ->
     {keep_state, State, Actions};
 await_condition(_, tick_timeout, State0) ->
     {keep_state, State0, set_tick_timer(State0, [])};
-await_condition(_, transfer_leadership, State) ->
-    {keep_state, State, []};
 await_condition(EventType, Msg, #state{leader_monitor = MRef} = State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
