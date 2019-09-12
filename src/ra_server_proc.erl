@@ -38,7 +38,8 @@
          state_query/3,
          trigger_election/2,
          ping/2,
-         log_fold/4
+         log_fold/4,
+         transfer_leadership/3
         ]).
 
 -export([send_rpc/2]).
@@ -166,6 +167,11 @@ state_query(ServerLoc, Spec, Timeout) ->
 -spec trigger_election(ra_server_id(), timeout()) -> ok.
 trigger_election(ServerId, Timeout) ->
     gen_statem:call(ServerId, trigger_election, Timeout).
+
+-spec transfer_leadership(ra_server_id(), ra_server_id(), timeout()) ->
+    ok | already_leader.
+transfer_leadership(ServerId, TargetServerId, Timeout) ->
+    leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
 
 -spec ping(ra_server_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerId, Timeout) ->
@@ -446,7 +452,10 @@ leader(EventType, Msg, State0) ->
                     {stop, {shutdown, delete}, State};
                 false ->
                     {next_state, terminating_leader, State, Actions}
-            end
+            end;
+        {await_condition, State1, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
+            {next_state, await_condition, State, Actions}
     end.
 
 candidate(enter, OldState, State0) ->
