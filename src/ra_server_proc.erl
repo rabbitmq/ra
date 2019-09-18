@@ -119,7 +119,9 @@
                 leader_monitor :: reference() | undefined,
                 await_condition_timeout :: non_neg_integer(),
                 delayed_commands =
-                    queue:new() :: queue:queue(ra_server:command())}).
+                    queue:new() :: queue:queue(ra_server:command()),
+                ra_event_formatter ::
+                    undefined | ra_server:ra_event_formatter_fun()}).
 
 %%%===================================================================
 %%% API
@@ -238,11 +240,13 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
               end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
+    RaEventFormatter = maps:get(ra_event_formatter, Config, undefined),
     State = #state{server_state = ServerState,
                    log_id = LogId,
                    name = Key,
                    tick_timeout = TickTime,
-                   await_condition_timeout = AwaitCondTimeout},
+                   await_condition_timeout = AwaitCondTimeout,
+                   ra_event_formatter = RaEventFormatter},
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -1145,8 +1149,12 @@ send_rpc(To, Msg) ->
 gen_cast(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
-send_ra_event(To, Msg, EvtType, State) ->
-    send(To, wrap_ra_event(id(State), EvtType, Msg)).
+send_ra_event(To, Msg, EvtType,
+              #state{ra_event_formatter = undefined} = State) ->
+    send(To, wrap_ra_event(id(State), EvtType, Msg));
+send_ra_event(To, Msg, EvtType,
+              #state{ra_event_formatter = Format} = State) ->
+    send(To, Format(id(State), {EvtType, Msg})).
 
 wrap_ra_event(ServerId, EvtType, Evt) ->
     {ra_event, ServerId, {EvtType, Evt}}.

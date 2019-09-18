@@ -143,6 +143,8 @@
 -type ra_effects() :: [ra_effect()].
 
 -type simple_apply_fun(State) :: fun((term(), State) -> State).
+-type ra_event_formatter_fun() ::
+    fun((ra_server_id(), Evt :: term()) -> term()).
 
 -type machine_conf() :: {module, module(), InitConfig :: map()} |
                         {simple, simple_apply_fun(term()),
@@ -170,7 +172,8 @@
                               % for periodic actions such as sending stale rpcs
                               % and persisting last_applied index
                               tick_timeout => non_neg_integer(), % ms
-                              await_condition_timeout => non_neg_integer()}.
+                              await_condition_timeout => non_neg_integer(),
+                              ra_event_formatter => ra_event_formatter_fun()}.
 
 -type config() :: ra_server_config().
 
@@ -184,7 +187,8 @@
               command_type/0,
               command_meta/0,
               command_correlation/0,
-              command_reply_mode/0
+              command_reply_mode/0,
+              ra_event_formatter_fun/0
              ]).
 
 -define(AER_CHUNK_SIZE, 25).
