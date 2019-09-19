@@ -16,6 +16,7 @@
 -export([wal2list/1]).
 
 -compile([inline_list_funcs]).
+-compile({inline, [to_binary/1]}).
 
 -include("ra.hrl").
 
@@ -305,7 +306,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
                   wal = #wal{file_size = FileSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
     EntryData = to_binary(Data0),
-    EntryDataLen = byte_size(EntryData),
+    EntryDataLen = erlang:iolist_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
     % fixed overhead =
     % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
@@ -642,4 +643,5 @@ merge_conf_defaults(Conf) ->
                  write_strategy => default}, Conf).
 
 to_binary(Term) ->
-    term_to_binary(Term).
+    % term_to_binary(Term).
+    erlang:term_to_iodata(Term, [iovec]).
