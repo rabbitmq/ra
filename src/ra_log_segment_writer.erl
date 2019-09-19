@@ -280,7 +280,7 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _)
     {Seg, Closed};
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
-    Data = term_to_binary(Data0),
+    Data = erlang:term_to_iodata(Data0, [iovec]),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
             append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
@@ -292,7 +292,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
             StartIdx = start_index(UId, Idx),
             % recurse
             % TODO: there is a micro-inefficiency here in that we need to
-            % call term_to_binary and do an ETS lookup again that we have
+            % call term_to_iodata and do an ETS lookup again that we have
             % already done.
             append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
                               [Seg0 | Closed], SegConf)

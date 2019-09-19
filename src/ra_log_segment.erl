@@ -112,7 +112,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 data_start = ?HEADER_SIZE + IndexSize,
                 data_offset = ?HEADER_SIZE + IndexSize}}.
 
--spec append(state(), ra_index(), ra_term(), binary()) ->
+-spec append(state(), ra_index(), ra_term(), iodata()) ->
     {ok, state()} | {error, full}.
 append(#state{index_offset = IndexOffset,
               data_start = DataStart,
@@ -124,7 +124,7 @@ append(#state{index_offset = IndexOffset,
     % check if file is full
     case IndexOffset < DataStart of
         true ->
-            Length = erlang:byte_size(Data),
+            Length = erlang:iolist_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
