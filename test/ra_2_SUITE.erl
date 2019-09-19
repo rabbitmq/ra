@@ -28,7 +28,8 @@ all_tests() ->
      recover,
      supervision_tree,
      recover_after_kill,
-     start_server_uid_validation
+     start_server_uid_validation,
+     custom_ra_event_formatter
     ].
 
 groups() ->
@@ -376,6 +377,32 @@ start_server_uid_validation(Config) ->
     {error, invalid_uid} = ra:start_server(Conf#{uid => <<"">>}),
     ok.
 
+custom_ra_event_formatter(Config) ->
+    ServerId = ?config(server_id, Config),
+    UId = <<"ADSFASDF"/utf8>>,
+    Conf = #{cluster_name => ?config(cluster_name, Config),
+             id => ServerId,
+             uid => UId,
+             initial_members => [ServerId],
+             log_init_args => #{uid => UId},
+             ra_event_formatter => fun(SrvId, Evt) ->
+                                           {custom_event, SrvId, Evt}
+                                   end,
+             machine => {module, ?MODULE, #{}}},
+    ok = ra:start_server(Conf),
+    ra:trigger_election(ServerId),
+    _ = ra:members(ServerId),
+    ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
+    receive
+        {custom_event, ServerId, {applied, _}} ->
+            ok
+    after 2000 ->
+              flush(),
+              exit(custom_event_timeout)
+    end,
+    ok.
+
+
 enq_deq_n(N, ServerId) ->
     enq_deq_n(N, ServerId, []).
 
@@ -443,3 +470,12 @@ state_enter(eol, State) ->
 state_enter(S, _) ->
     ct:pal("state_enter ~w", [S]),
     [].
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.
