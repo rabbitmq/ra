@@ -946,9 +946,9 @@ handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
 handle_effect(_, {send_msg, To, Msg, Options}, _, State, Actions) ->
     case parse_send_msg_options(Options) of
         {true, true} ->
-            gen_cast(To, wrap_ra_event(id(State), machine, Msg));
+            gen_cast(To, wrap_ra_event(State, machine, Msg));
         {true, false} ->
-            send(To, wrap_ra_event(id(State), machine, Msg));
+            send(To, wrap_ra_event(State, machine, Msg));
         {false, true} ->
             gen_cast(To, Msg);
         {false, false} ->
@@ -1149,15 +1149,13 @@ send_rpc(To, Msg) ->
 gen_cast(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
-send_ra_event(To, Msg, EvtType,
-              #state{ra_event_formatter = undefined} = State) ->
-    send(To, wrap_ra_event(id(State), EvtType, Msg));
-send_ra_event(To, Msg, EvtType,
-              #state{ra_event_formatter = Format} = State) ->
-    send(To, Format(id(State), {EvtType, Msg})).
+send_ra_event(To, Msg, EvtType, State) ->
+    send(To, wrap_ra_event(State, EvtType, Msg)).
 
-wrap_ra_event(ServerId, EvtType, Evt) ->
-    {ra_event, ServerId, {EvtType, Evt}}.
+wrap_ra_event(#state{ra_event_formatter = undefined} = State, EvtType, Evt) ->
+    {ra_event, id(State), {EvtType, Evt}};
+wrap_ra_event(#state{ra_event_formatter = Format} = State, EvtType, Evt) ->
+    Format(id(State), {EvtType, Evt}).
 
 parse_send_msg_options(ra_event) ->
     {true, false};
