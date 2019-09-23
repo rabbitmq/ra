@@ -385,9 +385,7 @@ custom_ra_event_formatter(Config) ->
              uid => UId,
              initial_members => [ServerId],
              log_init_args => #{uid => UId},
-             ra_event_formatter => fun(SrvId, Evt) ->
-                                           {custom_event, SrvId, Evt}
-                                   end,
+             ra_event_formatter => {?MODULE, format_ra_event, [my_arg]},
              machine => {module, ?MODULE, #{}}},
     ok = ra:start_server(Conf),
     ra:trigger_election(ServerId),
@@ -402,6 +400,8 @@ custom_ra_event_formatter(Config) ->
     end,
     ok.
 
+format_ra_event(SrvId, Evt, my_arg) ->
+    {custom_event, SrvId, Evt}.
 
 enq_deq_n(N, ServerId) ->
     enq_deq_n(N, ServerId, []).

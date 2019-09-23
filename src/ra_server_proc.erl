@@ -121,7 +121,7 @@
                 delayed_commands =
                     queue:new() :: queue:queue(ra_server:command()),
                 ra_event_formatter ::
-                    undefined | ra_server:ra_event_formatter_fun()}).
+                    undefined | {module(), atom(), [term()]}}).
 
 %%%===================================================================
 %%% API
@@ -240,13 +240,13 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
               end),
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
-    RaEventFormatter = maps:get(ra_event_formatter, Config, undefined),
+    RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
     State = #state{server_state = ServerState,
                    log_id = LogId,
                    name = Key,
                    tick_timeout = TickTime,
                    await_condition_timeout = AwaitCondTimeout,
-                   ra_event_formatter = RaEventFormatter},
+                   ra_event_formatter = RaEventFormatterMFA},
     %% monitor nodes so that we can handle both nodeup and nodedown events
     ok = net_kernel:monitor_nodes(true),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -1154,8 +1154,8 @@ send_ra_event(To, Msg, EvtType, State) ->
 
 wrap_ra_event(#state{ra_event_formatter = undefined} = State, EvtType, Evt) ->
     {ra_event, id(State), {EvtType, Evt}};
-wrap_ra_event(#state{ra_event_formatter = Format} = State, EvtType, Evt) ->
-    Format(id(State), {EvtType, Evt}).
+wrap_ra_event(#state{ra_event_formatter = {M, F, A}} = State, EvtType, Evt) ->
+    apply(M, F, [id(State), {EvtType, Evt} | A]).
 
 parse_send_msg_options(ra_event) ->
     {true, false};
