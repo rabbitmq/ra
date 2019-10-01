@@ -103,7 +103,7 @@ Indicate whether the wal should compute and validate checksums. Default: true
     flushed. Then it writes all the data in a single call then fsyncs. Fastest but
     incurs some additional memory use.
 
-    - `do_sync`:
+    - `o_sync`:
 
     Like `default` but will try to open the file with `O_SYNC` and thus wont
     need the additional `fsync(2)` system call. If it fails to open the file with this
