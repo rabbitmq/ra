@@ -76,7 +76,7 @@
                 % a truncating write is received.
                 % no attempt is made to recover this information after a crash
                 % beyond the available WAL files
-                % all writers seen withing the lifetime of a WAL file
+                % all writers seen within the lifetime of a WAL file
                 % and the last index seen
                 writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
@@ -187,7 +187,7 @@ init(#{dir := Dir} = Conf0) ->
      || I <- lists:seq(0, ?METRICS_WINDOW_SIZE-1)],
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
-    %% TODO: recover wal shoudl return {stop, Reason} if it fails
+    %% TODO: recover wal should return {stop, Reason} if it fails
     %% rather than crash
     FileModes = [raw, append, binary],
     Conf = #conf{file_modes = FileModes,
