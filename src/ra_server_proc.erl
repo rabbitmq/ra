@@ -56,6 +56,8 @@
 -define(DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT, 30000).
 -define(DEFAULT_SNAPSHOT_CHUNK_SIZE, 1000000). % 1MB
 
+-define(FLUSH_COMMANDS_SIZE, 25).
+
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
@@ -109,19 +111,23 @@
 %% the state machine, log and server code. The tag is used to determine
 %% which component to dispatch the down to
 
--record(state, {server_state :: ra_server:ra_server_state(),
-                log_id :: unicode:chardata(),
-                name :: atom(),
-                broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
-                tick_timeout :: non_neg_integer(),
+-record(conf, {log_id :: unicode:chardata(),
+               name :: atom(),
+               broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
+               tick_timeout :: non_neg_integer(),
+               await_condition_timeout :: non_neg_integer(),
+               ra_event_formatter :: undefined | {module(), atom(), [term()]},
+               flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer()
+              }).
+
+-record(state, {conf :: #conf{},
+                server_state :: ra_server:ra_server_state(),
                 monitors = #{} :: monitors(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
-                await_condition_timeout :: non_neg_integer(),
                 delayed_commands =
-                    queue:new() :: queue:queue(ra_server:command()),
-                ra_event_formatter ::
-                    undefined | {module(), atom(), [term()]}}).
+                    queue:new() :: queue:queue(ra_server:command())
+               }).
 
 %%%===================================================================
 %%% API
@@ -241,13 +247,15 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     TickTime = maps:get(tick_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
-    State = #state{server_state = ServerState,
-                   log_id = LogId,
-                   name = Key,
-                   tick_timeout = TickTime,
-                   await_condition_timeout = AwaitCondTimeout,
-                   ra_event_formatter = RaEventFormatterMFA},
-    %% monitor nodes so that we can handle both nodeup and nodedown events
+    FlushCommandsSize = maps:get(low_priority_commands_flush_size, Config,
+                                  ?FLUSH_COMMANDS_SIZE),
+    State = #state{conf = #conf{log_id = LogId,
+                                name = Key,
+                                tick_timeout = TickTime,
+                                await_condition_timeout = AwaitCondTimeout,
+                                ra_event_formatter = RaEventFormatterMFA,
+                                flush_commands_size = FlushCommandsSize},
+                   server_state = ServerState},
     ok = net_kernel:monitor_nodes(true),
     {ok, recover, State, [{next_event, cast, go}]}.
 
@@ -329,10 +337,11 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
     end,
     {keep_state, State0#state{delayed_commands = queue:in(Cmd, Delayed)}, []};
 leader(EventType, flush_commands,
-       #state{server_state = ServerState0,
+       #state{conf = #conf{flush_commands_size = Size},
+              server_state = ServerState0,
               delayed_commands = Delayed0} = State0) ->
 
-    {DelQ, Delayed} = queue_take(25, Delayed0),
+    {DelQ, Delayed} = queue_take(Size, Delayed0),
     %% write a batch of delayed commands
     {leader, ServerState, Effects} =
         ra_server:handle_leader({commands, Delayed}, ServerState0),
@@ -647,7 +656,7 @@ follower(_, tick_timeout, State) ->
     {keep_state, State, set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
+follower(EventType, Msg, #state{conf = Conf,
                                 leader_monitor = MRef} = State0) ->
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
@@ -663,7 +672,8 @@ follower(EventType, Msg, #state{await_condition_timeout = AwaitCondTimeout,
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
             {next_state, await_condition, State,
-             [{state_timeout, AwaitCondTimeout, await_condition_timeout}
+             [{state_timeout, Conf#conf.await_condition_timeout,
+               await_condition_timeout}
               | Actions]};
         {receive_snapshot, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -782,7 +792,8 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{name = Key, server_state = ServerState} = State) ->
+          #state{conf = #conf{name = Key},
+                 server_state = ServerState} = State) ->
     ?INFO("~s: terminating with ~w in state ~w~n",
           [log_id(State), Reason, StateName]),
     UId = uid(State),
@@ -832,7 +843,7 @@ format_status(Opt, [_PDict, StateName, #state{server_state = NS}]) ->
 %%%===================================================================
 
 handle_enter(RaftState, OldRaftState,
-             #state{name = Name,
+             #state{conf = #conf{name = Name},
                     server_state = ServerState0} = State) ->
     true = ets:insert(ra_state, {Name, RaftState}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
@@ -1098,7 +1109,7 @@ handle_effect(_, {demonitor, node, Node}, _,
             {State, Actions}
     end;
 handle_effect(_, {incr_metrics, Table, Ops}, _,
-              State = #state{name = Key}, Actions) ->
+              State = #state{conf = #conf{name = Key}}, Actions) ->
     _ = ets:update_counter(Table, Key, Ops),
     {State, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
@@ -1152,9 +1163,11 @@ gen_cast(To, Msg) ->
 send_ra_event(To, Msg, EvtType, State) ->
     send(To, wrap_ra_event(State, EvtType, Msg)).
 
-wrap_ra_event(#state{ra_event_formatter = undefined} = State, EvtType, Evt) ->
+wrap_ra_event(#state{conf = #conf{ra_event_formatter = undefined}} = State,
+              EvtType, Evt) ->
     {ra_event, id(State), {EvtType, Evt}};
-wrap_ra_event(#state{ra_event_formatter = {M, F, A}} = State, EvtType, Evt) ->
+wrap_ra_event(#state{conf = #conf{ra_event_formatter = {M, F, A}}} = State,
+              EvtType, Evt) ->
     apply(M, F, [id(State), {EvtType, Evt} | A]).
 
 parse_send_msg_options(ra_event) ->
@@ -1167,7 +1180,7 @@ parse_send_msg_options(Options) when is_list(Options) ->
 id(#state{server_state = ServerState}) ->
     ra_server:id(ServerState).
 
-log_id(#state{log_id = N}) ->
+log_id(#state{conf = #conf{log_id = N}}) ->
     N.
 
 uid(#state{server_state = ServerState}) ->
@@ -1179,7 +1192,8 @@ leader_id(#state{server_state = ServerState}) ->
 current_term(#state{server_state = ServerState}) ->
     ra_server:current_term(ServerState).
 
-process_pending_queries(NewLeader, #state{server_state = ServerState0} = State) ->
+process_pending_queries(NewLeader,
+                        #state{server_state = ServerState0} = State) ->
     {ServerState, Froms} = ra_server:process_new_leader_queries(ServerState0),
     [_ = gen_statem:reply(F, {redirect, NewLeader})
      || F <- Froms],
@@ -1192,20 +1206,22 @@ maybe_set_election_timeout(#state{leader_monitor = LeaderMon},
 maybe_set_election_timeout(State, Actions) ->
     [election_timeout_action(short, State) | Actions].
 
-election_timeout_action(really_short, #state{broadcast_time = Timeout}) ->
+election_timeout_action(Length, #state{conf = Conf}) ->
+    election_timeout_action(Length, Conf);
+election_timeout_action(really_short, #conf{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout),
     {state_timeout, T, election_timeout};
-election_timeout_action(short, #state{broadcast_time = Timeout}) ->
+election_timeout_action(short, #conf{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + Timeout,
     {state_timeout, T, election_timeout};
-election_timeout_action(long, #state{broadcast_time = Timeout}) ->
+election_timeout_action(long, #conf{broadcast_time = Timeout}) ->
     %% this should be longer than aten detection poll interval
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT * 2) + 1000,
     {state_timeout, T, election_timeout}.
 
 % sets the tick timer for periodic actions such as sending rpcs to servers
 % that are stale to ensure liveness
-set_tick_timer(#state{tick_timeout = TickTimeout}, Actions) ->
+set_tick_timer(#state{conf = #conf{tick_timeout = TickTimeout}}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
 

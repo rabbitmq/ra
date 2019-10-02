@@ -89,7 +89,7 @@ A directory name where `ra` will store it's data.
 
 * `wal_max_size_bytes`:
 
-The maximum size of the WAL (Write Ahead Log). Default: 128Mb.
+The maximum size of the WAL (Write Ahead Log) in bytes. Default: 512Mb.
 
 * `wal_compute_checksums`:
 
@@ -121,6 +121,11 @@ that takes a format not the variant that takes a fun).
 
 Metrics key. The key used to write metrics into the `ra_metrics` table.
 
+* `low_priority_commands_flush_size`:
+
+When commands are pipelined using the low priority mode Ra tries to hold them
+back in favour of normal priority commands. This setting determines the number
+of low priority commands that are added to the log each flush cycle. Default: 25
 
 ```
 [{data_dir, "/tmp/ra-data"},
