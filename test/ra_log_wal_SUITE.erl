@@ -283,11 +283,11 @@ roll_over(Config) ->
     % the writer process
     receive
         {'$gen_cast', {mem_tables, [{UId, _Fst, _Lst, Tid}], _}} ->
-            [{UId, 5, 5, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, UId),
+            [{UId, _, _, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, UId),
             % the current tid is not the same as the rolled over one
             ?assert(Tid =/= CurrentTid),
             % ensure closed mem tables contain the previous mem_table
-            [{UId, _, 1, 4, Tid}] = ets:lookup(ra_log_closed_mem_tables, UId)
+            [{UId, _, _, _, Tid}] = ets:lookup(ra_log_closed_mem_tables, UId)
     after 2000 ->
               throw(new_mem_tables_timeout)
     end,

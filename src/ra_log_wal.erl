@@ -51,17 +51,23 @@
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
 
+-record(conf, {file_modes :: [term()],
+               dir :: string(),
+               segment_writer = ra_log_segment_writer :: atom(),
+               compute_checksums = false :: boolean(),
+               max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
+               write_strategy = default :: wal_write_strategy()
+              }).
+
 -record(wal, {fd :: maybe(file:io_device()),
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
+              max_size = ?MAX_SIZE_BYTES :: non_neg_integer(),
               file_size = 0 :: non_neg_integer()}).
 
--record(state, {file_num = 0 :: non_neg_integer(),
+-record(state, {conf = #conf{},
+                file_num = 0 :: non_neg_integer(),
                 wal :: #wal{} | undefined,
-                file_modes :: [term()],
-                dir :: string(),
-                segment_writer = ra_log_segment_writer :: atom(),
-                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
                 % No further writes are allowed until the missing
@@ -75,8 +81,6 @@
                 writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
                 metrics_cursor = 0 :: non_neg_integer(),
-                compute_checksums = false :: boolean(),
-                write_strategy = default :: wal_write_strategy(),
                 batch :: maybe(#batch{})
                }).
 
@@ -166,7 +170,10 @@ start_link(Config, Options) ->
 
 -spec init(wal_conf()) -> {ok, state()}.
 init(#{dir := Dir} = Conf0) ->
-    Conf = merge_conf_defaults(Conf0),
+    #{max_size_bytes := MaxWalSize,
+      segment_writer := SegWriter,
+      compute_checksums := ComputeChecksums,
+      write_strategy := WriteStrategy} = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
     % TODO: test that off_heap is actuall beneficial
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
@@ -179,10 +186,16 @@ init(#{dir := Dir} = Conf0) ->
     [true = ets:insert(ra_log_wal_metrics, {I, undefined})
      || I <- lists:seq(0, ?METRICS_WINDOW_SIZE-1)],
     % wait for the segment writer to process anything in flight
-    #{segment_writer := SegWriter} = Conf,
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal shoudl return {stop, Reason} if it fails
     %% rather than crash
+    FileModes = [raw, append, binary],
+    Conf = #conf{file_modes = FileModes,
+                 dir = Dir,
+                 segment_writer = SegWriter,
+                 compute_checksums = ComputeChecksums,
+                 max_size_bytes = MaxWalSize,
+                 write_strategy = WriteStrategy},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -196,9 +209,9 @@ terminate(_Reason, State) ->
     _ = cleanup(State),
     ok.
 
-format_status(#state{write_strategy = Strat,
-                     compute_checksums = Cs,
-                     max_size_bytes = MaxSize,
+format_status(#state{conf = #conf{write_strategy = Strat,
+                                  compute_checksums = Cs,
+                                  max_size_bytes = MaxSize},
                      writers = Writers,
                      wal = #wal{file_size = FSize,
                                 filename = Fn}}) ->
@@ -214,10 +227,7 @@ format_status(#state{write_strategy = Strat,
 handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
-recover_wal(Dir, #{max_size_bytes := MaxWalSize,
-                   segment_writer := TblWriter,
-                   compute_checksums := ComputeChecksum,
-                   write_strategy := WriteStrategy}) ->
+recover_wal(Dir, #conf{segment_writer = TblWriter} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
     %  recover each mem table and notify segment writer
@@ -249,16 +259,10 @@ recover_wal(Dir, #{max_size_bytes := MaxWalSize,
     [ok = ra_log_segment_writer:accept_mem_tables(TblWriter, M, F)
      || {_, M, F} <- All],
 
-    Modes = [raw, append, binary],
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(ra_log_recover_mem_tables,
-                      #state{dir = Dir,
-                             file_num = FileNum,
-                             file_modes = Modes,
-                             max_size_bytes = MaxWalSize,
-                             compute_checksums = ComputeChecksum,
-                             segment_writer = TblWriter,
-                             write_strategy = WriteStrategy}),
+                      #state{conf = Conf,
+                             file_num = FileNum}),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
     Open = ets:tab2list(ra_log_open_mem_tables),
@@ -300,9 +304,9 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
     end.
 
 write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
-           #state{max_size_bytes = MaxWalSize,
-                  compute_checksums = ComputeChecksum,
+           #state{conf = #conf{compute_checksums = ComputeChecksum},
                   wal = #wal{file_size = FileSize,
+                             max_size = MaxWalSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
@@ -404,24 +408,33 @@ roll_over(State0) ->
     State = flush_pending(State0),
     roll_over(ra_log_open_mem_tables, State).
 
-roll_over(OpnMemTbls, #state{wal = Wal0, dir = Dir, file_num = Num0,
-                             segment_writer = SegWriter} = State0) ->
+roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
+                             conf = #conf{dir = Dir,
+                                          max_size_bytes = MaxBytes,
+                                          segment_writer = SegWriter} = Conf0}
+          = State0) ->
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
     ?DEBUG("wal: opening new file ~p~n", [Fn]),
-    case Wal0 of
-        undefined ->
-            ok;
-        Wal ->
-            ok = close_file(Wal#wal.fd),
-            ok = close_open_mem_tables(OpnMemTbls, Wal#wal.filename, SegWriter)
-    end,
-    State = open_file(NextFile, State0),
-    State#state{file_num = Num}.
+    %% if this is the first wal since restart randomise the first
+    %% max wal size to reduce the likelyhood that each erlang node will
+    %% flush mem tables at the same time
+    NextMaxBytes = case Wal0 of
+                       undefined ->
+                           Half = MaxBytes div 2,
+                           Half + rand:uniform(Half);
+                       _ ->
+                           ok = close_file(Wal0#wal.fd),
+                           ok = close_open_mem_tables(OpnMemTbls,
+                                                      Wal0#wal.filename, SegWriter),
+                           MaxBytes
+                   end,
+    {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
+    State0#state{conf = Conf, wal = Wal, file_num = Num}.
 
-open_file(File, #state{write_strategy = o_sync,
-                       file_modes = Modes0} = State) ->
+open_wal(File, Max, #conf{write_strategy = o_sync,
+                          file_modes = Modes0} = Conf) ->
         Modes = [sync | Modes0],
         case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
@@ -429,17 +442,20 @@ open_file(File, #state{write_strategy = o_sync,
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
                 ok = ra_file_handle:sync(Fd),
-                State#state{file_modes = Modes,
-                            wal = #wal{fd = Fd, filename = File}};
+                {Conf, #wal{fd = Fd,
+                            max_size = Max,
+                            filename = File}};
             {error, enotsup} ->
-                ?WARN("WAL: o_sync write stragegy not supported. "
+                ?WARN("WAL: o_sync write strategy not supported. "
                       "Reverting back to default strategy.", []),
-                open_file(File, State#state{write_strategy = default})
+                open_wal(File, Max, Conf#conf{write_strategy = default})
         end;
-open_file(File, #state{file_modes = Modes} = State) ->
+open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
     ok = write_header(Fd),
-    State#state{file_modes = Modes, wal = #wal{fd = Fd, filename = File}}.
+    {Conf, #wal{fd = Fd,
+                max_size = Max,
+                filename = File}}.
 
 write_header(Fd) ->
     ok = ra_file_handle:write(Fd, <<?MAGIC>>),
@@ -499,8 +515,8 @@ start_batch(State) ->
 
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend} = Batch,
-                     write_strategy = WriteStrat} = State0) ->
-    case WriteStrat of
+                     conf = Conf} = State0) ->
+    case Conf#conf.write_strategy of
         default ->
             ok = ra_file_handle:write(Fd, lists:reverse(Pend)),
             ok = ra_file_handle:sync(Fd),
