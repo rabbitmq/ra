@@ -77,7 +77,7 @@ init(ClusterName, Nodes, SoftLimit) ->
     #state{cluster_name = ClusterName,
            servers = Nodes,
            soft_limit = SoftLimit,
-           timeout = Timeout}.
+           timeout = Timeout * 1000}.
 
 -spec init(ra_cluster_name(), [ra_server_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
@@ -88,7 +88,7 @@ init(ClusterName, Nodes, SoftLimit, BlockFun, UnblockFun) ->
            block_handler = BlockFun,
            unblock_handler = UnblockFun,
            soft_limit = SoftLimit,
-           timeout = Timeout}.
+           timeout = Timeout * 1000}.
 
 %% @doc Enqueues a message.
 %% @param Correlation an arbitrary erlang term used to correlate this

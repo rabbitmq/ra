@@ -151,7 +151,9 @@ validate_machine_state(Servers, Num) ->
                  end || N <- Servers],
     H = hd(MacStates),
     case lists:all(fun (S) -> H =:= S end, MacStates) of
-        true -> ok;
+        true ->
+            ct:pal("machine state are valid", []),
+            ok;
         false ->
             validate_machine_state(Servers, Num-1)
     end.
@@ -181,6 +183,7 @@ scenario_time([{_, _, T} | Rest], Acc) ->
 
 
 drain(ClusterName, Nodes) ->
+    ct:pal("draining ~w", [ClusterName]),
     F = ra_fifo_client:init(ClusterName, Nodes),
     drain0(F, []).
 
@@ -189,7 +192,11 @@ drain0(S0, Acc) ->
         {ok, {_, {_, {custard, Msg}}}, S} ->
             drain0(S, [Msg | Acc]);
         {ok, empty, _} ->
-            Acc
+            Acc;
+        Err ->
+            %% oh dear
+            ct:pal("drain failed after draining ~w~n with ~w", [Acc, Err]),
+            exit(Err)
     end.
 
 erlang_nodes(5) ->

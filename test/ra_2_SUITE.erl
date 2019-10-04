@@ -29,7 +29,8 @@ all_tests() ->
      supervision_tree,
      recover_after_kill,
      start_server_uid_validation,
-     custom_ra_event_formatter
+     custom_ra_event_formatter,
+     segment_writer_handles_server_deletion
     ].
 
 groups() ->
@@ -39,7 +40,8 @@ groups() ->
 
 init_per_group(_, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    {ok, _} = ra:start_in(PrivDir),
+    {ok, _} = ra:start([{data_dir, PrivDir},
+                        {segment_max_entries, 128}]),
     application:ensure_all_started(lg),
     Config.
 
@@ -397,6 +399,33 @@ custom_ra_event_formatter(Config) ->
     after 2000 ->
               flush(),
               exit(custom_event_timeout)
+    end,
+    ok.
+
+segment_writer_handles_server_deletion(Config) ->
+    %% start single node. bang in a whole load of entries - enough to fill at least
+    %% 1 and a bit segments
+    %% roll the wal then very shortly after delete the server
+    ServerId = ?config(server_id, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
+    ra:members(ServerId),
+    ok = enqueue(ServerId, msg1),
+    [begin
+         _ = ra:pipeline_command(ServerId, {enq, N})
+     end || N <- lists:seq(1, 1023)],
+    _ = enqueue(ServerId, final),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    MRef = erlang:monitor(process, whereis(ra_log_segment_writer)),
+    timer:sleep(5),
+    ra:delete_cluster([ServerId]),
+
+    %% assert segment writer did not crash
+    receive
+        {'DOWN', MRef, _Type, _Object, _Info} ->
+            exit(down_received)
+    after 1000 ->
+              ok
     end,
     ok.
 
