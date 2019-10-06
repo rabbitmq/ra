@@ -1,4 +1,4 @@
-# A Raft Implementation for Erlang and Elixir
+# A Raft implementation for Erlang and Elixir
 
 Ra is a [Raft](https://raft.github.io/) implementation
 by Team RabbitMQ. It is not tied to RabbitMQ and can be used in any Erlang or Elixir
