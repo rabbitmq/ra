@@ -407,7 +407,8 @@ follower_aer_3(_Config) ->
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             success = false,
                                             last_term = 1,
-                                            last_index = 1}}}]}
+                                            last_index = 1}}},
+      {record_leader_msg, n1}]}
         = ra_server:handle_follower(AER2, State2),
     % AER with index [2,3,4], commit_index = 3 -> commit_index = 3
     AER3 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 1,
@@ -553,11 +554,15 @@ follower_handles_append_entries_rpc(_Config) ->
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 4}, State),
 
     % reply false if log doesn't contain a term matching entry at prev_log_index
-    {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    {await_condition, _,
+     [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}},
+      %% it was still a valid leader message only that we need to back up a bit
+      {record_leader_msg, _}]}
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{prev_log_index = 4},
                                   State),
     % there is an entry but not with a macthing term
-    {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
+    {await_condition, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}},
+                          {record_leader_msg, _}]}
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{prev_log_term = 4},
                                   State),
 
@@ -610,7 +615,7 @@ follower_catchup_condition(_Config) ->
                                   leader_commit = 3},
 
     % from follower to await condition
-    {await_condition, State = #{condition := _}, [_AppendEntryReply]} =
+    {await_condition, State = #{condition := _}, _} =
         ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 5,
                                                            prev_log_index = 4},
                                 State0),
@@ -625,11 +630,11 @@ follower_catchup_condition(_Config) ->
     % append entry when prev log index exists but the term is different should
     % not also enter await condition as it then rewinds and request resends
     % of all log entries since last known commit index
-    {await_condition, _, [_]}
+    {await_condition, _, [_, _]}
     = ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 6,
-                                                         prev_log_term = 4,
-                                                         prev_log_index = 3},
-                              State),
+                                                           prev_log_term = 4,
+                                                           prev_log_index = 3},
+                                State),
 
     % append entry when term is ok but there is a gap should remain in await
     % condition we do not want to send a reply here
@@ -661,7 +666,8 @@ follower_catchup_condition(_Config) ->
     {follower, State, [{next_event, Msg}]} =
         ra_server:handle_await_condition(Msg, State),
     {follower, _, [{cast, n1, {n1, #append_entries_reply{success = false,
-                                                         next_index = 4}}}]}
+                                                         next_index = 4}}},
+                   {record_leader_msg, _}]}
     = ra_server:handle_await_condition(await_condition_timeout, State),
 
     {pre_vote, _, _} = ra_server:handle_await_condition(election_timeout, State).
@@ -680,7 +686,7 @@ wal_down_condition(_Config) ->
     meck:expect(ra_log, can_write, fun (_L) -> false end),
 
     % ra log fails
-    {await_condition, State = #{condition := _}, []}
+    {await_condition, State = #{condition := _}, [{record_leader_msg, _}]}
     = ra_server:handle_follower(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State0),
 
     % stay in await condition as ra_log_wal is not available
@@ -885,11 +891,9 @@ follower_pre_vote(_Config) ->
 
     % when candidate last log entry has a lower term
     % the current server is a better candidate and thus
-    % immedately enters pre_vote state
-    {pre_vote, #{current_term := 6},
-     [{next_event, cast, #pre_vote_result{term = 6, token = _,
-                                          vote_granted = true}},
-      {send_vote_requests, _}]} =
+    % requests that an election timeout is started
+    {follower, #{current_term := 6},
+     [start_election_timeout]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
                                                term = 6},
                               State),
@@ -1474,7 +1478,7 @@ follower_installs_snapshot(_Config) ->
                                   chunk_state = {1, last},
                                   data = []},
     {receive_snapshot, FState1,
-     [{next_event, ISRpc}]} =
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
         ra_server:handle_follower(ISRpc, FState),
 
     meck:expect(ra_log, recover_snapshot,
@@ -1528,7 +1532,7 @@ receive_snapshot_timeout(_Config) ->
                                   chunk_state = {1, last},
                                   data = []},
     {receive_snapshot, FState1,
-     [{next_event, ISRpc}]} =
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
         ra_server:handle_follower(ISRpc, FState),
 
     %% revert back to follower on timeout
