@@ -856,7 +856,7 @@ handle_follower(#append_entries_rpc{term = Term,
                 State00 = #{log := Log00,
                             id := {Id, _, LogId}, current_term := CurTerm})
   when Term >= CurTerm ->
-    %% this is a valid leader append entries message
+    %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
     State0 = update_term(Term, State00),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
