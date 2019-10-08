@@ -436,9 +436,7 @@ handle_leader({command, Cmd}, State00 = #{id := {_, _, LogId}}) ->
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
-                          {_, _, _, await_consensus} ->
-                              Effects0;
-                          {_, #{from := From}, _, _} ->
+                          {_, #{from := From}, _, after_log_append} ->
                               [{reply, From,
                                 {wrap_reply, {Idx, Term}}} | Effects0];
                           _ ->
@@ -461,7 +459,7 @@ handle_leader({commands, Cmds}, State00) ->
                     end, {State00, []}, Cmds),
 
     {State, _, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
-                                                  Effects0),
+                                                     Effects0),
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
@@ -777,23 +775,19 @@ handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
     State = update_term(Term, State0),
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
-
 handle_pre_vote(#heartbeat_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
-
 handle_pre_vote(#heartbeat_rpc{leader_id = LeaderId}, State) ->
     % term must be older return success=false
     Reply = heartbeat_reply(State),
     {pre_vote, State, [cast_reply(id(State), LeaderId, Reply)]};
-
 handle_pre_vote({_PeerId, #heartbeat_reply{term = Term}},
                 #{current_term := CurTerm} = State) when Term > CurTerm ->
     {follower, update_term(Term, State#{votes => 0}), []};
-
 handle_pre_vote(#request_vote_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -812,9 +806,13 @@ handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
     {follower, State0#{votes => 0}, [{next_event, ISR}]};
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
-                #{current_term := Term, votes := Votes,
+                #{current_term := Term,
+                  votes := Votes,
+                  id := {_, _, LogId},
                   pre_vote_token := Token,
                   cluster := Nodes} = State0) ->
+    ?DEBUG("~s: pre_vote granted ~w for term ~b votes ~b~n",
+          [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
     case trunc(maps:size(Nodes) / 2) + 1 of
@@ -1026,11 +1024,13 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
           [LogId, _Cand, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
-handle_follower({_PeerId, #append_entries_reply{term = Term}},
-                State = #{current_term := CurTerm}) when Term > CurTerm ->
+handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
+                State = #{current_term := CurTerm}) ->
+    Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
-handle_follower({_PeerId, #heartbeat_reply{term = Term}},
-                State = #{current_term := CurTerm}) when Term > CurTerm ->
+handle_follower({_PeerId, #heartbeat_reply{term = TheirTerm}},
+                State = #{current_term := CurTerm}) ->
+    Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := LastIndex,
