@@ -138,7 +138,10 @@
     {next_event, cast, ra_msg()} |
     {notify, pid(), reference()} |
     {incr_metrics, Table :: atom(),
-     [{Pos :: non_neg_integer(), Incr :: integer()}]}.
+     [{Pos :: non_neg_integer(), Incr :: integer()}]} |
+    %% used for tracking valid leader messages
+    {record_leader_msg, ra_server_id()} |
+    start_election_timeout.
 
 -type ra_effects() :: [ra_effect()].
 
@@ -433,9 +436,7 @@ handle_leader({command, Cmd}, State00 = #{id := {_, _, LogId}}) ->
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
-                          {_, _, _, await_consensus} ->
-                              Effects0;
-                          {_, #{from := From}, _, _} ->
+                          {_, #{from := From}, _, after_log_append} ->
                               [{reply, From,
                                 {wrap_reply, {Idx, Term}}} | Effects0];
                           _ ->
@@ -458,7 +459,7 @@ handle_leader({commands, Cmds}, State00) ->
                     end, {State00, []}, Cmds),
 
     {State, _, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
-                                                  Effects0),
+                                                     Effects0),
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
@@ -774,23 +775,19 @@ handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
     State = update_term(Term, State0),
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
-
 handle_pre_vote(#heartbeat_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     % revert to follower state
     {follower, State#{votes => 0}, [{next_event, Msg}]};
-
 handle_pre_vote(#heartbeat_rpc{leader_id = LeaderId}, State) ->
     % term must be older return success=false
     Reply = heartbeat_reply(State),
     {pre_vote, State, [cast_reply(id(State), LeaderId, Reply)]};
-
 handle_pre_vote({_PeerId, #heartbeat_reply{term = Term}},
                 #{current_term := CurTerm} = State) when Term > CurTerm ->
     {follower, update_term(Term, State#{votes => 0}), []};
-
 handle_pre_vote(#request_vote_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term > CurTerm ->
@@ -809,9 +806,13 @@ handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
     {follower, State0#{votes => 0}, [{next_event, ISR}]};
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
-                #{current_term := Term, votes := Votes,
+                #{current_term := Term,
+                  votes := Votes,
+                  id := {_, _, LogId},
                   pre_vote_token := Token,
                   cluster := Nodes} = State0) ->
+    ?DEBUG("~s: pre_vote granted ~w for term ~b votes ~b~n",
+          [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
     case trunc(maps:size(Nodes) / 2) + 1 of
@@ -853,6 +854,8 @@ handle_follower(#append_entries_rpc{term = Term,
                 State00 = #{log := Log00,
                             id := {Id, _, LogId}, current_term := CurTerm})
   when Term >= CurTerm ->
+    %% this is a valid leader, append entries message
+    Effects0 = [{record_leader_msg, LeaderId}],
     State0 = update_term(Term, State00),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
@@ -881,7 +884,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                      leader_id => LeaderId},
                     % evaluate commit index as we may have received an updated
                     % commit index for previously written entries
-                    evaluate_commit_index_follower(State1, []);
+                    evaluate_commit_index_follower(State1, Effects0);
                 [{FirstIdx, _, _} | _] -> % FirstTerm
 
                     {LastIdx, State1} = lists:foldl(
@@ -895,10 +898,11 @@ handle_follower(#append_entries_rpc{term = Term,
                                     leader_id => LeaderId},
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
-                            {follower, State#{log => Log}, []};
+                            {follower, State#{log => Log}, Effects0};
                         {error, wal_down} ->
                             {await_condition,
-                             State#{condition => fun wal_down_condition/2}, []};
+                             State#{condition => fun wal_down_condition/2},
+                             Effects0};
                         {error, _} = Err ->
                             exit(Err)
                     end
@@ -907,15 +911,17 @@ handle_follower(#append_entries_rpc{term = Term,
             Reply = append_entries_reply(Term, false, State0),
             ?INFO("~s: follower did not have entry at ~b in ~b."
                   " Requesting ~w from ~b~n",
-                  [LogId, PLIdx, PLTerm, LeaderId, Reply#append_entries_reply.next_index]),
-            Effects = [cast_reply(Id, LeaderId, Reply)],
+                  [LogId, PLIdx, PLTerm, LeaderId,
+                   Reply#append_entries_reply.next_index]),
+            Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
              State0#{leader_id => LeaderId,
                      log => Log0,
                      condition => follower_catchup_cond_fun(missing),
                      % repeat reply effect on condition timeout
                      condition_timeout_changes => #{effects => Effects,
-                                                    transition_to => follower}}, Effects};
+                                                    transition_to => follower}},
+             Effects};
         {term_mismatch, OtherTerm, Log0} ->
             CommitIndex = maps:get(commit_index, State0),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
@@ -933,14 +939,15 @@ handle_follower(#append_entries_rpc{term = Term,
             % simplest way to proceed
             {Reply, State} = mismatch_append_entries_reply(Term, CommitIndex,
                                                            State0),
-            Effects = [cast_reply(Id, LeaderId, Reply)],
+            Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
              State#{leader_id => LeaderId,
                     log => Log0,
                     condition => follower_catchup_cond_fun(term_mismatch),
                     % repeat reply effect on condition timeout
                     condition_timeout_changes => #{effects => Effects,
-                                                   transition_to => follower}}, Effects}
+                                                   transition_to => follower}},
+             Effects}
     end;
 handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
                 #{id := {Id, _, LogId},
@@ -1017,11 +1024,13 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
           [LogId, _Cand, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
-handle_follower({_PeerId, #append_entries_reply{term = Term}},
-                State = #{current_term := CurTerm}) when Term > CurTerm ->
+handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
+                State = #{current_term := CurTerm}) ->
+    Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
-handle_follower({_PeerId, #heartbeat_reply{term = Term}},
-                State = #{current_term := CurTerm}) when Term > CurTerm ->
+handle_follower({_PeerId, #heartbeat_reply{term = TheirTerm}},
+                State = #{current_term := CurTerm}) ->
+    Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := LastIndex,
@@ -1053,7 +1062,8 @@ handle_follower(#install_snapshot_rpc{term = Term,
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
     {receive_snapshot, State0#{log => Log,
-                               leader_id => LeaderId}, [{next_event, Rpc}]};
+                               leader_id => LeaderId},
+     [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#request_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {follower, State, []};
@@ -1698,10 +1708,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    [log_id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
             case FsmState of
                 follower ->
-                    %% immediately enter pre_vote election as this node is more
-                    %% likely to win but could be held back by a persistent
-                    %% stale pre voter
-                    call_for_election(pre_vote, State);
+                    {FsmState, State, [start_election_timeout]};
                 pre_vote ->
                     {FsmState, State,
                      [{reply, pre_vote_result(Term, Token, false)}]}
