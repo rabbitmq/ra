@@ -1,5 +1,5 @@
 # vim:sw=2:et:
-dist: xenial
+dist: bionic
 
 sudo: false
 
@@ -12,7 +12,8 @@ cache:
   apt: true
 
 otp_release:
-  - "21.2"
+  - "22.1"
+  - "21.3"
 
 script:
   - make xref
