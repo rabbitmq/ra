@@ -1416,6 +1416,6 @@ maybe_set_election_timeout(TimeoutLen, State, Actions) ->
      [election_timeout_action(TimeoutLen, State) | Actions]}.
 
 next_state(Next, State, Actions) ->
-    %% as changing states will alway cancel the state timeout we need
-    %% to set out own state tracking to false here
+    %% as changing states will always cancel the state timeout we need
+    %% to set our own state tracking to false here
     {next_state, Next, State#state{election_timeout_set = false}, Actions}.
