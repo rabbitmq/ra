@@ -88,11 +88,18 @@
     {notify, pid(), reference()} |
     {incr_metrics,
      Table :: atom(),
-     [{Pos :: non_neg_integer(), Incr :: integer()}]}</pre></p>
+     [{Pos :: non_neg_integer(), Incr :: integer()}]} |
+    {record_leader_msg, <a href="#type-ra_server_id">ra_server_id()</a>} |
+    start_election_timeout</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_effects">ra_effects()</a></h3>
 <p><pre>ra_effects() = [<a href="#type-ra_effect">ra_effect()</a>]</pre></p>
+
+
+<h3 class="typedecl"><a name="type-ra_event_formatter_fun">ra_event_formatter_fun()</a></h3>
+<p><pre>ra_event_formatter_fun() = 
+    fun((<a href="#type-ra_server_id">ra_server_id()</a>, Evt :: term()) -&gt; term())</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_msg">ra_msg()</a></h3>
@@ -134,7 +141,9 @@
       metrics_key =&gt; term(),
       broadcast_time =&gt; non_neg_integer(),
       tick_timeout =&gt; non_neg_integer(),
-      await_condition_timeout =&gt; non_neg_integer()}</pre></p>
+      await_condition_timeout =&gt; non_neg_integer(),
+      low_priority_commands_flush_size =&gt; non_neg_integer(),
+      ra_event_formatter =&gt; {module(), atom(), [term()]}}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_server_state">ra_server_state()</a></h3>
@@ -164,7 +173,8 @@
       effective_machine_module := module(),
       aux_state =&gt; term(),
       condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>,
-      condition_timeout_effects =&gt; [<a href="#type-ra_effect">ra_effect()</a>],
+      condition_timeout_changes =&gt;
+          #{transition_to := <a href="#type-ra_state">ra_state()</a>, effects := [<a href="#type-ra_effect">ra_effect()</a>]},
       pre_vote_token =&gt; reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats :=
