@@ -131,7 +131,9 @@
                 leader_last_seen :: integer() | undefined,
                 delayed_commands = queue:new() :: queue:queue(
                                                     ra_server:command()),
-                election_timeout_set = false :: boolean()
+                election_timeout_set = false :: boolean(),
+                %% the log index last time gc was forced
+                force_gc_index = 0 :: ra_index()
                }).
 
 %%%===================================================================
@@ -411,9 +413,17 @@ leader(_, tick_timeout, State0) ->
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
-    _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
-    true = erlang:garbage_collect(),
-    {keep_state, State, set_tick_timer(State, Actions)};
+    Metrics = {_, _, _, _, _, LW, _} = ra_server:metrics(ServerState),
+    _ = ets:insert(ra_metrics, Metrics),
+    %% only force gc collect if the log has had changes
+    case LW > State#state.force_gc_index of
+        true ->
+            true = erlang:garbage_collect();
+        false ->
+            ok
+    end,
+    {keep_state, State#state{force_gc_index = LW},
+     set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->
     % the machine timer timed out, add a timeout message

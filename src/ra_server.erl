@@ -760,7 +760,7 @@ handle_candidate(#pre_vote_result{}, State) ->
 handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {pre_vote, State#{log => Log}, Effects};
+    {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
 handle_candidate(Msg, State) ->
@@ -1563,8 +1563,8 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
     {ra_state(), ra_server_state(), ra_effects()}.
 handle_down(leader, machine, Pid, Info, State) ->
     %% commit command to be processed by state machine
-    handle_leader({command,  {'$usr', #{ts => os:system_time(millisecond)},
-                             {down, Pid, Info}, noreply}},
+    handle_leader({command, {'$usr', #{ts => os:system_time(millisecond)},
+                            {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info, #{id := {_, _, LogId}} = State) ->
     ?DEBUG("~s: Snapshot sender process ~w exited with ~W~n",

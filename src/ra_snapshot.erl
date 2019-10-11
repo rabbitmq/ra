@@ -280,8 +280,7 @@ abort_accept(#?MODULE{accepting = undefined} = State) ->
     State;
 abort_accept(#?MODULE{accepting = #accept{idxterm = {Idx, Term}},
                       directory = Dir} = State) ->
-    SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    _ = ra_lib:recursive_delete(SnapDir),
+    ok = delete(Dir, {Idx, Term}),
     State#?MODULE{accepting = undefined}.
 
 
