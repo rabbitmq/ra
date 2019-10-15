@@ -750,6 +750,8 @@ terminating_follower(enter, OldState, State0) ->
     {keep_state, State, Actions};
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
+    LogName = log_id(State0),
+    ?DEBUG("~s: terminating follower received ~W~n", [LogName, Msg, 10]),
     {State, Actions} = case follower(EvtType, Msg, State0) of
                            {next_state, terminating_follower, S, A} ->
                                {S, A};
@@ -972,6 +974,7 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
                                  handle_effects(RaftState, Effects, EvtType,
                                                 State, Actions);
                             (Effect, {State, Actions}) ->
+
                                  handle_effect(RaftState, Effect, EvtType,
                                                State, Actions)
                          end, {State0, Actions0}, Effects0),
@@ -990,16 +993,38 @@ handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
     %% default is to send without any wrapping
     ok = send(To, Msg),
     {State, Actions};
-handle_effect(_, {send_msg, To, Msg, Options}, _, State, Actions) ->
-    case parse_send_msg_options(Options) of
-        {true, true} ->
-            gen_cast(To, wrap_ra_event(State, machine, Msg));
-        {true, false} ->
-            send(To, wrap_ra_event(State, machine, Msg));
-        {false, true} ->
-            gen_cast(To, Msg);
-        {false, false} ->
-            send(To, Msg)
+handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
+              _, State, Actions) ->
+    ToNode = get_node(To),
+    case {has_local_opt(Options), RaftState} of
+        {true, follower} when ToNode == node() ->
+            %% we are a follower and should deliver this
+            %% check if we should deliver this
+            %% TODO: handle other options
+            send_msg(Eff, leader_id(State), State);
+        {_, follower} ->
+            %% else we leave it for the leader to handle
+            %% we are a leader and the msg
+            ok;
+        {true, leader} when ToNode =/= node() ->
+            Members  = do_state_query(members, State#state.server_state),
+            %% we need to evaluate whether to send the message
+            %% only send if there isn't a local node for the target pid
+            case lists:any(fun ({_, N}) -> N == ToNode end, Members) of
+                true ->
+                    %% there is a local member - don't send the message
+                    %% as it will be sent by the local follower
+                    ok;
+                false ->
+                    %% no local member - leader needs to send it
+                    send_msg(Eff, id(State), State)
+            end;
+        {_, leader} ->
+            %% send it anyway
+            send_msg(Eff, id(State), State);
+        _ ->
+            %% any other states cannot use send_msg
+           ok
     end,
     {State, Actions};
 handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
@@ -1009,7 +1034,8 @@ handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
 
     {State#state{server_state = ServerState}, Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
-    ok = send_ra_event(Who, Correlations, applied, State),
+    %% should only be done by leader
+    ok = send_ra_event(Who, Correlations, id(State), applied, State),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     ok = gen_cast(To, Msg),
@@ -1209,20 +1235,22 @@ send_rpc(To, Msg) ->
 gen_cast(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
-send_ra_event(To, Msg, EvtType, State) ->
-    send(To, wrap_ra_event(State, EvtType, Msg)).
+send_ra_event(To, Msg, LeaderId, EvtType, State) ->
+    send(To, wrap_ra_event(State, LeaderId, EvtType, Msg)).
 
-wrap_ra_event(#state{conf = #conf{ra_event_formatter = undefined}} = State,
-              EvtType, Evt) ->
-    {ra_event, id(State), {EvtType, Evt}};
-wrap_ra_event(#state{conf = #conf{ra_event_formatter = {M, F, A}}} = State,
-              EvtType, Evt) ->
-    apply(M, F, [id(State), {EvtType, Evt} | A]).
+wrap_ra_event(#state{conf = #conf{ra_event_formatter = undefined}},
+              LeaderId, EvtType, Evt) ->
+    {ra_event, LeaderId, {EvtType, Evt}};
+wrap_ra_event(#state{conf = #conf{ra_event_formatter = {M, F, A}}},
+              LeaderId, EvtType, Evt) ->
+    apply(M, F, [LeaderId, {EvtType, Evt} | A]).
 
 parse_send_msg_options(ra_event) ->
     {true, false};
 parse_send_msg_options(cast) ->
     {false, true};
+parse_send_msg_options(local) ->
+    {false, false};
 parse_send_msg_options(Options) when is_list(Options) ->
     {lists:member(ra_event, Options), lists:member(cast, Options)}.
 
@@ -1358,7 +1386,8 @@ reject_command(Pid, Corr, State) ->
             ?INFO("~s: follower received leader command from ~w. "
                   "Rejecting to ~w ~n", [log_id(State), Pid, LeaderId])
     end,
-    send_ra_event(Pid, {not_leader, LeaderId, Corr}, rejected, State).
+    send_ra_event(Pid, {not_leader, LeaderId, Corr},
+                  LeaderId, rejected, State).
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.
@@ -1441,3 +1470,30 @@ next_state(Next, State, Actions) ->
     %% as changing states will always cancel the state timeout we need
     %% to set our own state tracking to false here
     {next_state, Next, State#state{election_timeout_set = false}, Actions}.
+
+send_msg({send_msg, To, Msg, Options}, LeaderId, State) ->
+    case parse_send_msg_options(Options) of
+        {true, true} ->
+            gen_cast(To, wrap_ra_event(State, LeaderId, machine, Msg));
+        {true, false} ->
+            send(To, wrap_ra_event(State, LeaderId, machine, Msg));
+        {false, true} ->
+            gen_cast(To, Msg);
+        {false, false} ->
+            send(To, Msg)
+    end.
+
+has_local_opt(local) ->
+    true;
+has_local_opt(Opt) when is_atom(Opt) ->
+    false;
+has_local_opt(Opts) ->
+    lists:member(local, Opts).
+
+get_node(P) when is_pid(P) ->
+    node(P);
+get_node({_, Node}) ->
+    Node;
+get_node(Proc) when is_atom(Proc) ->
+    node().
+

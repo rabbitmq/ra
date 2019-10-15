@@ -30,7 +30,8 @@ all_tests() ->
      delete_three_server_cluster,
      delete_three_server_cluster_parallel,
      start_cluster_majority,
-     start_cluster_minority
+     start_cluster_minority,
+     local_send_msg
     ].
 
 groups() ->
@@ -269,6 +270,84 @@ start_cluster_minority(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
     ok.
 
+local_send_msg(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
+    % assert all were said to be started
+    [] = Started -- NodeIds,
+    %% spawn a receiver process on one node
+    {ok, _, Leader} = ra:members(hd(NodeIds)),
+    %% select a non-leader node to spawn on
+    [{_, N} | _] = lists:delete(Leader, NodeIds),
+    test_local_msg(Leader, N, N, local),
+    test_local_msg(Leader, N, N, [local, ra_event]),
+    test_local_msg(Leader, N, N, [local, cast]),
+    test_local_msg(Leader, N, N, [local, cast, ra_event]),
+    {_, LeaderNode} = Leader,
+    test_local_msg(Leader, node(), LeaderNode, local),
+    test_local_msg(Leader, node(), LeaderNode, [local, ra_event]),
+    test_local_msg(Leader, node(), LeaderNode, [local, cast]),
+    test_local_msg(Leader, node(), LeaderNode, [local, cast, ra_event]),
+    %% test the same but for alocal pid (non-member)
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, Opts0) ->
+    Opts = case Opts0 of
+               local -> [local];
+               _ -> lists:sort(Opts0)
+           end,
+    Self = self(),
+    ReceiveFun = fun () ->
+                         erlang:register(receiver_proc, self()),
+                         receive
+                             {'$gen_cast', {local_msg, Node}} ->
+                                 %% assert options match received message
+                                 %% structure
+                                 [cast, local] = Opts,
+                                 Self ! {got_it, Node};
+                             {local_msg, Node} ->
+                                 [local] = Opts,
+                                 Self ! {got_it, Node};
+                             {ra_event, _, {machine, {local_msg, Node}}} ->
+                                 [local, ra_event] = Opts,
+                                 Self ! {got_it, Node};
+                             {'$gen_cast',
+                              {ra_event, _, {machine, {local_msg, Node}}}} ->
+                                 [cast, local, ra_event] = Opts,
+                                 Self ! {got_it, Node};
+                             Msg ->
+                                 Self ! {unexpected_msg, Msg}
+                         after 2000 ->
+                                   exit(blah)
+                         end
+                 end,
+    ReceivePid = spawn(ReceiverNode, ReceiveFun),
+    ra:pipeline_command(Leader, {send_local_msg, ReceivePid, Opts0}),
+    %% the leader should send local deliveries if there is no local member
+    receive
+        {got_it, ExpectedSenderNode} -> ok
+    after 3000 ->
+              flush(),
+              exit(got_it_timeout)
+    end,
+
+    _ = spawn(ReceiverNode, ReceiveFun),
+    ra:pipeline_command(Leader, {send_local_msg, {receiver_proc, ReceiverNode},
+                                 Opts0}),
+    %% the leader should send local deliveries if there is no local member
+    receive
+        {got_it, ExpectedSenderNode} -> ok
+    after 3000 ->
+              flush(),
+              exit(got_it_timeout2)
+    end,
+    flush(),
+    ok.
+
 %% Utility
 
 node_setup(DataDir) ->
@@ -306,10 +385,22 @@ start_slave(N, PrivDir) ->
     _ = rpc:call(S, ra, start, []),
     S.
 
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.
+
 %% ra_machine impl
 
 init(_) ->
     {#{}, []}.
 
-apply(_Meta, _Cmd, Effects, State) ->
-    {State, Effects}.
+apply(_Meta, {send_local_msg, Pid, Opts}, State) ->
+    {State, ok, [{send_msg, Pid, {local_msg, node()}, Opts}]};
+apply(_Meta, _Cmd, State) ->
+    {State, []}.
+
