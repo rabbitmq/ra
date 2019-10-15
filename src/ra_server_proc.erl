@@ -727,7 +727,14 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
 terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
     ?DEBUG("~s: terminating leader received ~W~n", [LogName, Msg, 10]),
-    {keep_state, State, Actions} = leader(EvtType, Msg, State0),
+    {State, Actions} = case leader(EvtType, Msg, State0) of
+                           {next_state, terminating_leader, S, A} ->
+                               {S, A};
+                           {keep_state, S, A} ->
+                               {S, A};
+                           {stop, {shutdown, delete}, S} ->
+                               {S, []}
+                       end,
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
@@ -743,7 +750,12 @@ terminating_follower(enter, OldState, State0) ->
     {keep_state, State, Actions};
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
-    {keep_state, State, Actions} = follower(EvtType, Msg, State0),
+    {State, Actions} = case follower(EvtType, Msg, State0) of
+                           {next_state, terminating_follower, S, A} ->
+                               {S, A};
+                           {keep_state, S, A} ->
+                               {S, A}
+                       end,
     case ra_server:is_fully_persisted(State#state.server_state) of
         true ->
             {stop, {shutdown, delete}, State};

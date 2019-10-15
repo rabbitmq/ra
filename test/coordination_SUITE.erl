@@ -28,6 +28,7 @@ all_tests() ->
      delete_one_server_cluster,
      delete_two_server_cluster,
      delete_three_server_cluster,
+     delete_three_server_cluster_parallel,
      start_cluster_majority,
      start_cluster_minority
     ].
@@ -207,6 +208,30 @@ delete_three_server_cluster(Config) ->
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
+
+delete_three_server_cluster_parallel(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
+    %% spawn a delete command to try cause it to commit more than
+    %% one delete command
+    spawn(fun () -> {ok, _} = ra:delete_cluster(NodeIds) end),
+    spawn(fun () -> {ok, _} = ra:delete_cluster(NodeIds) end),
+    {ok, _} = ra:delete_cluster(NodeIds),
+    timer:sleep(250),
+    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
+    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
+    [begin
+         true = rpc:call(S, ?MODULE, check_sup, [])
+     end || {_, S} <- NodeIds],
+    % assert all nodes are actually started
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+check_sup() ->
+    [] == supervisor:which_children(ra_server_sup_sup).
 
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
