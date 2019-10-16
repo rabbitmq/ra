@@ -998,32 +998,31 @@ handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
     ToNode = get_node(To),
     case {has_local_opt(Options), RaftState} of
         {true, follower} when ToNode == node() ->
-            %% we are a follower and should deliver this
-            %% check if we should deliver this
+            %% We are a follower.
+            %% Check if we should deliver this (potentially local) effect.
             %% TODO: handle other options
             send_msg(Eff, leader_id(State), State);
         {_, follower} ->
-            %% else we leave it for the leader to handle
-            %% we are a leader and the msg
+            %% ...else we leave it for the leader to handle.
             ok;
         {true, leader} when ToNode =/= node() ->
             Members  = do_state_query(members, State#state.server_state),
-            %% we need to evaluate whether to send the message
-            %% only send if there isn't a local node for the target pid
+            %% We need to evaluate whether to send the message.
+            %% Only send if there isn't a local node for the target pid.
             case lists:any(fun ({_, N}) -> N == ToNode end, Members) of
                 true ->
-                    %% there is a local member - don't send the message
-                    %% as it will be sent by the local follower
+                    %% There is a local member so don't send the message
+                    %% as it will be sent by the local follower.
                     ok;
                 false ->
-                    %% no local member - leader needs to send it
+                    %% There is no local member so the leader needs to send it.
                     send_msg(Eff, id(State), State)
             end;
         {_, leader} ->
-            %% send it anyway
+            %% Send it anyway.
             send_msg(Eff, id(State), State);
         _ ->
-            %% any other states cannot use send_msg
+            %% Any other state cannot use send_msg.
            ok
     end,
     {State, Actions};
@@ -1496,4 +1495,3 @@ get_node({_, Node}) ->
     Node;
 get_node(Proc) when is_atom(Proc) ->
     node().
-
