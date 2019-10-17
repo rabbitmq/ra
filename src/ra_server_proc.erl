@@ -413,16 +413,16 @@ leader(_, tick_timeout, State0) ->
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
     {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
-    Metrics = {_, _, _, _, _, LW, _} = ra_server:metrics(ServerState),
+    Metrics = {_, _, _, LA, _, _, _} = ra_server:metrics(ServerState),
     _ = ets:insert(ra_metrics, Metrics),
-    %% only force gc collect if the log has had changes
-    case LW > State#state.force_gc_index of
+    %% only force gc collect if the state machine has changed
+    case LA > State#state.force_gc_index of
         true ->
             true = erlang:garbage_collect();
         false ->
             ok
     end,
-    {keep_state, State#state{force_gc_index = LW},
+    {keep_state, State#state{force_gc_index = LA},
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->

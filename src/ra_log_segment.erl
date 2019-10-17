@@ -23,6 +23,7 @@
 -define(MAGIC, "RASG").
 -define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
+-define(DEFAULT_MAX_PENDING, 4096).
 -define(INDEX_RECORD_SIZE, ((2 * 64 + 3 * 32) div 8)).
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
@@ -35,6 +36,7 @@
 -record(state,
         {version :: non_neg_integer(),
          max_count = ?DEFAULT_INDEX_MAX_COUNT :: non_neg_integer(),
+         max_pending = ?DEFAULT_MAX_PENDING :: non_neg_integer(),
          filename :: file:filename_all(),
          fd :: maybe(file:io_device()),
          index_size :: pos_integer(),
@@ -44,7 +46,8 @@
          mode = append :: read | append,
          index = undefined :: maybe(ra_segment_index()),
          range :: maybe({ra_index(), ra_index()}),
-         pending = [] :: [{non_neg_integer(), binary()}]
+         pending = [] :: [{non_neg_integer(), binary()}],
+         pending_count = 0 :: non_neg_integer()
         }).
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
@@ -100,10 +103,12 @@ process_file(true, Mode, Filename, Fd, _Options) ->
     end;
 process_file(false, Mode, Filename, Fd, Options) ->
     MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
+    MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
     ok = write_header(MaxCount, Fd),
     {ok, #state{version = 1,
                 max_count = MaxCount,
+                max_pending = MaxPending,
                 filename = Filename,
                 fd = Fd,
                 index_size = IndexSize,
@@ -114,11 +119,20 @@ process_file(false, Mode, Filename, Fd, Options) ->
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
+append(#state{max_pending = PendingCount,
+              pending_count = PendingCount,
+              pending = Pend,
+              fd = Fd} = State,
+       Index, Term, Data) ->
+    ok =  ra_file_handle:pwrite(Fd, Pend),
+    append(State#state{pending = [], pending_count = 0},
+           Index, Term, Data);
 append(#state{index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
               mode = append,
+              pending_count = PendCnt,
               pending = Pend0} = State,
        Index, Term, Data) ->
     % check if file is full
@@ -136,7 +150,8 @@ append(#state{index_offset = IndexOffset,
             {ok, State#state{index_offset = IndexOffset + ?INDEX_RECORD_SIZE,
                              data_offset = DataOffset + Length,
                              range = Range,
-                             pending = Pend}};
+                             pending = Pend,
+                             pending_count = PendCnt + 1}};
         false ->
             {error, full}
      end.
@@ -152,7 +167,8 @@ sync(#state{fd = Fd, pending = []} = State) ->
 sync(#state{fd = Fd, pending = Pend} = State) ->
     case ra_file_handle:pwrite(Fd, Pend) of
         ok ->
-            sync(State#state{pending = []});
+            sync(State#state{pending = [],
+                             pending_count = 0});
         {error, _} = Err ->
             Err
     end.
