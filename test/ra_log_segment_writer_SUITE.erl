@@ -420,7 +420,11 @@ accept_mem_tables_for_down_server(Config) ->
     [] = ets:tab2list(ra_log_closed_mem_tables),
 
     % assert wal file has been deleted.
-    false = filelib:is_file(WalFile),
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
     ok = gen_server:stop(TblWriterPid),
     ok.
 

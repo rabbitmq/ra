@@ -30,6 +30,7 @@
          validate_base64uri/1,
          partition_parallel/2,
          retry/2,
+         retry/3,
          write_file/2
         ]).
 
@@ -268,12 +269,15 @@ collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
     exit(partition_parallel_timeout)
   end.
 
-retry(_Func, 0) ->
+retry(Func, Attempts) ->
+    retry(Func, Attempts, 5000).
+
+retry(_Func, 0, _Sleep) ->
     exhausted;
-retry(Func, Attempt) ->
+retry(Func, Attempt, Sleep) ->
     % do not retry immediately
-    timer:sleep(5000),
-    case Func() of
+    timer:sleep(Sleep),
+    case catch Func() of
         ok ->
             ok;
         _ ->

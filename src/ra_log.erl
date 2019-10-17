@@ -917,8 +917,8 @@ resend_from(Idx, #?MODULE{uid = UId} = State0) ->
     end.
 
 resend_from0(Idx, #?MODULE{last_index = LastIdx,
-                         last_resend_time = undefined,
-                         cache = Cache} = State) ->
+                           last_resend_time = undefined,
+                           cache = Cache} = State) ->
     ?DEBUG("~s: ra_log: resending from ~b to ~b",
            [State#?MODULE.log_id, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->

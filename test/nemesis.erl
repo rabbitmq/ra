@@ -95,6 +95,8 @@ handle_step(#state{steps = [{wait, Time} | Rem]} = State) ->
     State#state{steps = Rem};
 handle_step(#state{steps = [{part, Partition0, Time} | Rem],
                    nodes = Nodes} = State) ->
+    %% first we need to always heal
+    heal(State#state.nodes),
     Partitions = {lists:usort(Partition0), Nodes -- Partition0},
     _ = erlang:send_after(Time, self(), next_step),
     ok = partition(Partitions),
