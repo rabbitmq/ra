@@ -412,17 +412,10 @@ leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
-    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
-    Metrics = {_, _, _, _, _, LW, _} = ra_server:metrics(ServerState),
-    _ = ets:insert(ra_metrics, Metrics),
-    %% only force gc collect if the log has had changes
-    case LW > State#state.force_gc_index of
-        true ->
-            true = erlang:garbage_collect();
-        false ->
-            ok
-    end,
-    {keep_state, State#state{force_gc_index = LW},
+    {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
+
+    State = handle_tick_metrics(State2),
+    {keep_state, State,
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->
@@ -497,8 +490,7 @@ candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
-    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
-    {keep_state, State, set_tick_timer(State, [])};
+    {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
@@ -546,8 +538,7 @@ pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
-    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
-    {keep_state, State, set_tick_timer(State, [])};
+    {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 pre_vote(EventType, Msg, State0) ->
@@ -671,9 +662,9 @@ follower(info, {node_event, Node, up}, State) ->
             {keep_state, State}
     end;
 follower(_, tick_timeout, State) ->
-    true = erlang:garbage_collect(),
-    _ = ets:insert(ra_metrics, ra_server:metrics(State#state.server_state)),
-    {keep_state, State, set_tick_timer(State, [])};
+    {keep_state,
+     handle_tick_metrics(State),
+     set_tick_timer(State, [])};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, State0) ->
@@ -1495,3 +1486,16 @@ get_node({_, Node}) ->
     Node;
 get_node(Proc) when is_atom(Proc) ->
     node().
+
+handle_tick_metrics(State) ->
+    ServerState = State#state.server_state,
+    Metrics = {_, _, _, LA, _, _, _} = ra_server:metrics(ServerState),
+    _ = ets:insert(ra_metrics, Metrics),
+    %% only force gc collect if the state machine has changed
+    case LA > State#state.force_gc_index of
+        true ->
+            true = erlang:garbage_collect();
+        false ->
+            ok
+    end,
+    State#state{force_gc_index = LA}.
