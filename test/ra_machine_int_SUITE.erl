@@ -295,7 +295,8 @@ machine_state_enter_effects(Config) ->
                 end),
     meck:expect(Mod, state_enter,
                 fun (RaftState, _State) ->
-                        [{send_msg, Self, {state_enter, RaftState}, ra_event}]
+                        [{mod_call, erlang, send,
+                          [Self, {state_enter, RaftState}]}]
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     ra:delete_cluster([ServerId]),
@@ -400,7 +401,7 @@ log_effect(Config) ->
 
 validate_state_enters(States) ->
     lists:foreach(fun (S) ->
-                          receive {ra_event, _, {machine, {state_enter, S}}} -> ok
+                          receive {state_enter, S} -> ok
                           after 250 ->
                                     flush(),
                                     ct:pal("S ~w", [S]),

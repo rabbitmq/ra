@@ -3,7 +3,6 @@
 
 -behaviour(supervisor).
 
-
 %% API functions
 -export([start_server/1,
          restart_server/1,

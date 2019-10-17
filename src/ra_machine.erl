@@ -98,11 +98,13 @@
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
--type send_msg_opt() :: [ra_event | cast] | ra_event | cast.
+-type send_msg_opt() :: [ra_event | cast | local] | ra_event | cast | local.
 %% ra_event: the message will be wrapped up and sent as a ra event
 %% e.g: `{ra_event, ra_server_id(), Msg}'
 %%
 %% cast: the message will be wrapped as a gen cast: ``{'$cast', Msg}''
+%% local: the messasge will be sent by the local member if there is one
+%% configured
 
 -type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
 -type locator() :: pid() | atom() | {atom(), node()}.
@@ -111,6 +113,9 @@
 
 -type effect() ::
     {send_msg, To :: locator(), Msg :: term()} |
+    %% TODO: with local deliveries is it theoretically possible for a follower
+    %% to apply entries but not know who the current leader is? If so,
+    %% the `To` needs to be locator() | undefined
     {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {mod_call, module(), Function :: atom(), [term()]} |
     {monitor, process, pid()} |

@@ -1374,6 +1374,11 @@ filter_follower_effects(Effects) ->
                             [C | Acc];
                         ({delete_snapshot, _} = C, Acc) ->
                             [C | Acc];
+                        ({send_msg, _, _, _Opts} = C, Acc) ->
+                            %% send_msg effects _may_ have the local option
+                            %% and will be evaluated properly during
+                            %% effect processing
+                            [C | Acc];
                         ({monitor, process, Comp, _} = C, Acc)
                           when Comp =/= machine ->
                             %% only machine monitors should not be emitted
@@ -1748,8 +1753,12 @@ peers_not_sending_snapshots(State) ->
                 end, peers(State)).
 
 % peers that could need an update
-stale_peers(#{commit_index := CommitIndex} = State) ->
-    maps:filter(fun (_, #{status := {sending_snapshot, _}}) ->
+stale_peers(#{commit_index := CommitIndex,
+              id := {ThisId, _, _},
+              cluster := Cluster}) ->
+    maps:filter(fun (Id , _) when Id == ThisId ->
+                        false;
+                    (_, #{status := {sending_snapshot, _}}) ->
                         false;
                     (_, #{next_index := NI,
                           match_index := MI})
@@ -1762,7 +1771,7 @@ stale_peers(#{commit_index := CommitIndex} = State) ->
                         true;
                     (_, _Peer) ->
                         false
-                end, peers(State)).
+                end, Cluster).
 
 peer_ids(State) ->
     maps:keys(peers(State)).
