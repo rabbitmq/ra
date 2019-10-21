@@ -413,7 +413,6 @@ leader(_, tick_timeout, State0) ->
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
     {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
-
     State = handle_tick_metrics(State2),
     {keep_state, State,
      set_tick_timer(State, Actions)};
@@ -1489,13 +1488,6 @@ get_node(Proc) when is_atom(Proc) ->
 
 handle_tick_metrics(State) ->
     ServerState = State#state.server_state,
-    Metrics = {_, _, _, LA, _, _, _} = ra_server:metrics(ServerState),
+    Metrics = ra_server:metrics(ServerState),
     _ = ets:insert(ra_metrics, Metrics),
-    %% only force gc collect if the state machine has changed
-    case LA > State#state.force_gc_index of
-        true ->
-            true = erlang:garbage_collect();
-        false ->
-            ok
-    end,
-    State#state{force_gc_index = LA}.
+    State.
