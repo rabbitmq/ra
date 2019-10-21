@@ -986,36 +986,52 @@ handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
 handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
               _, State, Actions) ->
     ToNode = get_node(To),
-    case {has_local_opt(Options), RaftState} of
-        {true, follower} when ToNode == node() ->
-            %% We are a follower.
-            %% Check if we should deliver this (potentially local) effect.
-            %% TODO: handle other options
-            send_msg(Eff, leader_id(State), State);
-        {_, follower} ->
-            %% ...else we leave it for the leader to handle.
-            ok;
-        {true, leader} when ToNode =/= node() ->
-            Members  = do_state_query(members, State#state.server_state),
-            %% We need to evaluate whether to send the message.
-            %% Only send if there isn't a local node for the target pid.
-            case lists:any(fun ({_, N}) -> N == ToNode end, Members) of
+    case has_local_opt(Options) of
+        true ->
+            case can_execute_locally(RaftState, ToNode, State) of
                 true ->
-                    %% There is a local member so don't send the message
-                    %% as it will be sent by the local follower.
-                    ok;
+                    send_msg(Eff, State);
                 false ->
-                    %% There is no local member so the leader needs to send it.
-                    send_msg(Eff, id(State), State)
+                    ok
             end;
-        {_, leader} ->
-            %% Send it anyway.
-            send_msg(Eff, id(State), State);
-        _ ->
-            %% Any other state cannot use send_msg.
-           ok
+        false when RaftState == leader ->
+            %% the effect got here so we can execute
+            send_msg(Eff, State);
+        false ->
+            ok
     end,
     {State, Actions};
+handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
+              State, Actions) ->
+    case can_execute_locally(RaftState, Node, State) of
+        true ->
+            handle_effect(RaftState, {log, Idxs, Fun}, EvtType, State, Actions);
+        false ->
+            {State, Actions}
+    end;
+handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
+              State = #state{server_state = SS0}, Actions) when is_list(Idxs) ->
+    %% Useful to implement a batch send of data obtained from the log.
+    %% 1) Retrieve all data from the list of indexes
+    {Data, SS} = lists:foldl(fun(Idx, {Data0, Acc0}) ->
+                                     case ra_server:read_at(Idx, Acc0) of
+                                         {ok, D, Acc} ->
+                                             {[D | Data0], Acc};
+                                         {error, _} ->
+                                             %% this is unrecoverable
+                                             exit({failed_to_read_index_for_log_effect,
+                                                   Idx})
+                                     end
+                             end, {[], SS0}, Idxs),
+    %% 2) Apply the fun to the list of data as a whole and deal with any effects
+    case Fun(lists:reverse(Data)) of
+        [] ->
+            {State#state{server_state = SS}, Actions};
+        Effects ->
+            %% recurse with the new effects
+            handle_effects(RaftState, Effects, EvtType,
+                           State#state{server_state = SS}, Actions)
+    end;
 handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
     %% TODO: thread through state
     {_, ServerState, []} = ra_server:handle_aux(RaftState, cast, Cmd,
@@ -1165,29 +1181,6 @@ handle_effect(_, {incr_metrics, Table, Ops}, _,
     {State, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
-handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions) when is_list(Idxs) ->
-    %% Useful to implement a batch send of data obtained from the log.
-    %% 1) Retrieve all data from the list of indexes
-    {Data, SS} = lists:foldl(fun(Idx, {Data0, Acc0}) ->
-                                     case ra_server:read_at(Idx, Acc0) of
-                                         {ok, D, Acc} ->
-                                             {[D | Data0], Acc};
-                                         {error, _} ->
-                                             %% this is unrecoverable
-                                             exit({failed_to_read_index_for_log_effect,
-                                                   Idx})
-                                     end
-                             end, {[], SS0}, Idxs),
-    %% 2) Apply the fun to the list of data as a whole and deal with any effects
-    case Fun(lists:reverse(Data)) of
-        [] ->
-            {State#state{server_state = SS}, Actions};
-        Effects ->
-            %% recurse with the new effects
-            handle_effects(RaftState, Effects, EvtType,
-                           State#state{server_state = SS}, Actions)
-    end;
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     _ = erlang:apply(Mod, Fun, Args),
@@ -1460,12 +1453,12 @@ next_state(Next, State, Actions) ->
     %% to set our own state tracking to false here
     {next_state, Next, State#state{election_timeout_set = false}, Actions}.
 
-send_msg({send_msg, To, Msg, Options}, LeaderId, State) ->
+send_msg({send_msg, To, Msg, Options}, State) ->
     case parse_send_msg_options(Options) of
         {true, true} ->
-            gen_cast(To, wrap_ra_event(State, LeaderId, machine, Msg));
+            gen_cast(To, wrap_ra_event(State, leader_id(State), machine, Msg));
         {true, false} ->
-            send(To, wrap_ra_event(State, LeaderId, machine, Msg));
+            send(To, wrap_ra_event(State, leader_id(State), machine, Msg));
         {false, true} ->
             gen_cast(To, Msg);
         {false, false} ->
@@ -1491,3 +1484,18 @@ handle_tick_metrics(State) ->
     Metrics = ra_server:metrics(ServerState),
     _ = ets:insert(ra_metrics, Metrics),
     State.
+
+can_execute_locally(RaftState, TargetNode, State) ->
+    case RaftState of
+        follower ->
+            TargetNode == node();
+        leader when TargetNode =/= node() ->
+            %% We need to evaluate whether to send the message.
+            %% Only send if there isn't a local node for the target pid.
+            Members = do_state_query(members, State#state.server_state),
+            not lists:any(fun ({_, N}) -> N == TargetNode end, Members);
+        leader ->
+            true;
+        _ ->
+            false
+    end.
