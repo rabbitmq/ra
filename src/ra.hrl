@@ -27,9 +27,10 @@
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
-%% Identifies a ra server in a ra cluster
-%% NB: ra servers need to be registered as need to be reachable under the old
-%% name after restarts. Pids won't do.
+%% Identifies a Ra server (node) in a Ra cluster.
+%%
+%% Ra servers need to be registered stable names (names that are reachable
+%% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
 
 -type ra_peer_status() :: normal | {sending_snapshot, pid()}.
