@@ -292,7 +292,7 @@ send_local_msg(Config) ->
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast, ra_event]),
-    %% test the same but for alocal pid (non-member)
+    %% test the same but for a local pid (non-member)
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
@@ -317,7 +317,7 @@ local_log_effect(Config) ->
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast, ra_event]),
-    %% test the same but for alocal pid (non-member)
+    %% test the same but for a local pid (non-member)
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
