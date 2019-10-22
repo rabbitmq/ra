@@ -87,7 +87,7 @@ end_per_testcase(_TestCase, Config) ->
 single_server_processes_command(Config) ->
     ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
-    N1 = nn(Config, 1),
+    N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     % index is 2 as leaders commit a noop entry on becoming leaders
@@ -97,7 +97,7 @@ single_server_processes_command(Config) ->
 
 pipeline_commands(Config) ->
     Name = ?config(test_name, Config),
-    N1 = nn(Config, 1),
+    N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
@@ -111,7 +111,7 @@ pipeline_commands(Config) ->
 
 stop_server_idemp(Config) ->
     Name = ?config(test_name, Config),
-    N1 = nn(Config, 1),
+    N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     timer:sleep(100),
@@ -122,9 +122,9 @@ stop_server_idemp(Config) ->
     ok.
 
 leader_steps_down_after_replicating_new_cluster(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     Leader = issue_op(N1, 5),
@@ -149,8 +149,8 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
 
 
 start_and_join_then_leave_and_terminate(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
     % safe server removal
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
@@ -165,9 +165,9 @@ start_and_join_then_leave_and_terminate(Config) ->
     ok.
 
 ramp_up_and_ramp_down(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     _ = issue_op(N1, 5),
@@ -205,9 +205,9 @@ ramp_up_and_ramp_down(Config) ->
 
 minority(Config) ->
     Name = ?config(test_name, Config),
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     ok = ra:start_server(Name, N1, add_machine(), [{N2, node()}, {N3, node()}]),
     ok = ra:trigger_election(N1),
     {timeout, _} = ra:process_command({N1, node()}, 5, 100),
@@ -216,9 +216,9 @@ minority(Config) ->
 start_servers(Config) ->
     Name = ?config(test_name, Config),
     % suite unique server names
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     % start the first server and wait a bit
     ok = ra:start_server(Name, {N1, node()}, add_machine(),
                        [{N2, node()}, {N3, node()}]),
@@ -252,9 +252,9 @@ start_servers(Config) ->
 
 
 server_recovery(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
 
     Name = ?config(test_name, Config),
     % start the first server and wait a bit
@@ -401,7 +401,7 @@ consistent_query_stale(Config) ->
 all_metrics_are_integers(Config) ->
     ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
-    N1 = nn(Config, 1),
+    N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     {ok, 5, _} = ra:process_command({N1, node()}, 5, 2000),
@@ -449,9 +449,9 @@ add_member(Config) ->
     terminate_cluster([C | Cluster]).
 
 server_catches_up(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     Name = ?config(test_name, Config),
     InitialNodes = [{N1, node()}, {N2, node()}],
     %%TODO look into cluster changes WITH INVALID NAMES!!!
@@ -478,9 +478,9 @@ server_catches_up(Config) ->
     terminate_cluster([N3 | InitialNodes]).
 
 snapshot_installation(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     Name = ?config(test_name, Config),
     Servers = [{N1, node()}, {N2, node()}, {N3, node()}],
     Mac = {module, ra_queue, #{}},
@@ -539,9 +539,9 @@ snapshot_installation(Config) ->
     ok.
 
 snapshot_installation_with_call_crash(Config) ->
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
-    N3 = nn(Config, 3),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
     Name = ?config(test_name, Config),
     Servers = [{N1, node()}, {N2, node()}, {N3, node()}],
     Mac = {module, ra_queue, #{}},
@@ -650,8 +650,8 @@ follower_catchup(Config) ->
                 end),
     Name = ?config(test_name, Config),
     % suite unique server names
-    N1 = {nn(Config, 1), node()},
-    N2 = {nn(Config, 2), node()},
+    N1 = {nth_server_name(Config, 1), node()},
+    N2 = {nth_server_name(Config, 2), node()},
     % start the first server and wait a bit
     Conf = fun (NodeId, NodeIds, UId) ->
                #{cluster_name => Name,
@@ -719,8 +719,8 @@ post_partition_liveness(Config) ->
     meck:new(ra_server_proc, [passthrough]),
     Name = ?config(test_name, Config),
     % suite unique servef names
-    N1 = nn(Config, 1),
-    N2 = nn(Config, 2),
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
     {ok, [_, _], _}  = ra:start_cluster(Name, add_machine(), [N1, N2]),
     {ok, _, Leader}  = ra:members({N1, node()}),
 
@@ -847,7 +847,7 @@ dump(T) ->
     ct:pal("DUMP: ~p~n", [T]),
     T.
 
-nn(Config, N) when is_integer(N) ->
+nth_server_name(Config, N) when is_integer(N) ->
     ra_server:name(?config(test_name, Config), erlang:integer_to_list(N)).
 
 add_machine() ->
