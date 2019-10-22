@@ -32,6 +32,7 @@
          update_release_cursor/3,
          persist_last_applied/1,
          update_peer_status/3,
+         clear_leader_id/1,
          handle_down/5,
          terminate/2,
          log_fold/3,
@@ -858,7 +859,7 @@ handle_follower(#append_entries_rpc{term = Term,
   when Term >= CurTerm ->
     %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
-    State0 = update_term(Term, State00),
+    State0 = update_term(Term, State00#{leader_id => LeaderId}),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
             % filter entries already seen
@@ -882,8 +883,7 @@ handle_follower(#append_entries_rpc{term = Term,
                     % and the leader commit
                     {Idx, _} = ra_log:last_index_term(Log2),
                     State1 = State0#{commit_index => min(Idx, LeaderCommit),
-                                     log => Log2,
-                                     leader_id => LeaderId},
+                                     log => Log2},
                     % evaluate commit index as we may have received an updated
                     % commit index for previously written entries
                     evaluate_commit_index_follower(State1, Effects0);
@@ -896,8 +896,7 @@ handle_follower(#append_entries_rpc{term = Term,
                     % anything at this point.
                     % last_applied will be incremented when the written event is
                     % processed
-                    State = State1#{commit_index => min(LeaderCommit, LastIdx),
-                                    leader_id => LeaderId},
+                    State = State1#{commit_index => min(LeaderCommit, LastIdx)},
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
                             {follower, State#{log => Log}, Effects0};
@@ -917,8 +916,7 @@ handle_follower(#append_entries_rpc{term = Term,
                    Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State0#{leader_id => LeaderId,
-                     log => Log0,
+             State0#{log => Log0,
                      condition => follower_catchup_cond_fun(missing),
                      % repeat reply effect on condition timeout
                      condition_timeout_changes => #{effects => Effects,
@@ -943,8 +941,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{leader_id => LeaderId,
-                    log => Log0,
+             State#{log => Log0,
                     condition => follower_catchup_cond_fun(term_mismatch),
                     % repeat reply effect on condition timeout
                     condition_timeout_changes => #{effects => Effects,
@@ -1000,14 +997,15 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                 #{current_term := CurTerm,
                   id := {_, _, LogId}} = State0)
   when Term >= CurTerm ->
-    State = update_term(Term, State0),
-    LastIdxTerm = last_idx_term(State),
+    State1 = update_term(Term, State0),
+    LastIdxTerm = last_idx_term(State1),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true ->
             ?INFO("~s: granting vote for ~w with last indexterm ~w"
                   " for term ~b previous term was ~b~n",
                   [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
+            State = update_term_and_voted_for(Term, Cand, State1),
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
         false ->
@@ -1016,7 +1014,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                   " last log entry idxterm seen was: ~w~n",
                   [LogId, Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
-            {follower, State#{current_term => Term}, [{reply, Reply}]}
+            {follower, State1#{current_term => Term}, [{reply, Reply}]}
     end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
                 State = #{current_term := CurTerm,
@@ -1551,6 +1549,10 @@ persist_last_applied(#{last_applied := LastApplied,
 update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
     Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
     State#{cluster => maps:put(PeerId, Peer, Peers)}.
+
+-spec clear_leader_id(ra_server_state()) -> ra_server_state().
+clear_leader_id(State) ->
+    maps:remove([leader_id], State).
 
 peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =

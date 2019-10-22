@@ -611,7 +611,8 @@ follower({call, From}, trigger_election, State) ->
 follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
-         #state{leader_monitor = MRef} = State0) ->
+         #state{leader_monitor = MRef,
+                server_state = ServerState0} = State0) ->
     ?INFO("~s: Leader monitor down with ~W, setting election timeout~n",
           [log_id(State0), Info, 8]),
     TimeoutLen = case Info of
@@ -622,8 +623,10 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
                          %% set the shortest timeout
                          really_short
                  end,
+    ServerState = ra_server:clear_leader_id(ServerState0),
     {State, Actions} = maybe_set_election_timeout(TimeoutLen, State0, []),
-    {keep_state, State#state{leader_monitor = undefined}, Actions};
+    {keep_state, State#state{leader_monitor = undefined,
+                             server_state = ServerState}, Actions};
 follower(info, {'DOWN', MRef, process, Pid, Info},
          #state{monitors = Monitors0, server_state = ServerState0} = State0) ->
     case maps:take(Pid, Monitors0) of
