@@ -128,20 +128,21 @@
     {aux, term()} |
     garbage_collection.
 
-%% Effects are data structure that can be returned by {@link apply/3} to ask
-%% ra to realise a side-effect in the real works, such as sending
-%% a message to a process.
+%% Effects are data structures that can be returned by {@link apply/3} to ask
+%% ra to realise a side-effect in the "real world", such as sending
+%% a message to a process, monitoring a process, calling a function or
+%% forcing a GC run.
 %%
-%% Although both leaders and followers will process the same commands effects
-%% are typically only applied on the leader. The only exceptions to this are
-%% the `release_cursor' effect that is realised on all effects as it is part
-%% of the ra implementation log truncation mechanism and the `garbage_collect'
-%% effects that is used to explicitly triggering a garbage collection in the
-%% ra servers's process.
+%% Although both leaders and followers will process the same commands, effects
+%% are typically only applied on the leader. The only exception to this is
+%% the `release_cursor' and `garbage_collect' effects. The former is realised on all
+%% nodes as it is a part of the Ra implementation log truncation mechanism.
+%% The `garbage_collect' effects that is used to explicitly triggering a GC run
+%% in the Ra servers' process.
 %%
-%% When leaders change and when clusters are restarted there is a small chance
-%% that effects are issued multiple times so designing effects to be idempotent
-%% is a good idea.
+%% When the leader changes and when the cluster is restarted, there is a small chance
+%% that effects are issued multiple times so designing effects with idempotency
+%% in mind is a good idea.
 %%
 %%
 %% <dl>
