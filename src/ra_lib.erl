@@ -280,6 +280,8 @@ retry(Func, Attempt, Sleep) ->
     case catch Func() of
         ok ->
             ok;
+        true ->
+            ok;
         _ ->
             retry(Func, Attempt - 1)
     end.

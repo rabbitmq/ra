@@ -166,7 +166,9 @@ validate_sequential_reads(Config) ->
                          max_open_segments => 100}),
     % write a few entries
     Log1 = append_and_roll(1, 500, 1, Log0),
-    Log = append_and_roll(500, 1001, 1, Log1),
+    Log2 = append_and_roll(500, 1001, 1, Log1),
+    %% need to ensure the segments are delivered
+    Log = deliver_all_log_events(Log2, 200),
     _ = erlang:statistics(exact_reductions),
     {ColdTaken, {ColdReds, FinLog}} =
         timer:tc(fun () ->
@@ -285,8 +287,8 @@ updated_segment_can_be_read(Config) ->
     Log0 = ra_log:init(#{uid => UId,
                          snapshot_interval => 1}),
     %% append a few entrie
-    Log1 = append_and_roll(1, 5, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 200),
+    Log2 = append_and_roll(1, 5, 1, Log0),
+    % Log2 = deliver_all_log_events(Log1, 200),
     %% read some, this will open the segment with the an index of entries
     %% 1 - 4
     {Entries, Log3} = ra_log:take(1, 25, Log2),
@@ -315,20 +317,25 @@ last_written_overwrite(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
-    {4, 1} = ra_log:last_written(Log2),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {4, 1} == ra_log:last_written(L)
+                                   end),
     % write an event for a prior index
     {ok, Log3} = ra_log:write([{3, 2, <<3:64/integer>>}], Log2),
-    Log4 = deliver_all_log_events(Log3, 200),
-    {3, 2} = ra_log:last_written(Log4),
+    Log4 = assert_log_events(Log3, fun (L) ->
+                                           {3, 2} == ra_log:last_written(L)
+                                   end),
+    ra_log:close(Log4),
     ok.
 
 last_index_reset(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = write_n(1, 5, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
-    {4, 1} = ra_log:last_written(Log2),
+    Pred = fun (L) ->
+                   {4, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
     5 = ra_log:next_index(Log2),
     {4, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index
@@ -354,8 +361,9 @@ last_index_reset_before_written(Config) ->
     {3, 1} = ra_log:last_index_term(Log2),
     %% deliver written events should not allow the last_written to go higher
     %% than the reset
-    Log3 = deliver_all_log_events(Log2, 500),
-    {0, 0} = ra_log:last_written(Log3),
+    Log3 = assert_log_events(Log2, fun (L) ->
+                                           {0, 0} == ra_log:last_written(L)
+                                   end),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
     ok.
@@ -370,8 +378,11 @@ recovery(Config) ->
     {14, 2} = ra_log:last_index_term(Log2),
     Log3 = write_n(15, 21, 3, Log2),
     {20, 3} = ra_log:last_index_term(Log3),
-    Log4 = deliver_all_log_events(Log3, 200),
-    {20, 3} = ra_log:last_index_term(Log4),
+    % Log4 = deliver_all_log_events(Log3, 200),
+    Pred = fun (L) ->
+                   {20, 3} =:= ra_log:last_index_term(L)
+           end,
+    Log4 = assert_log_events(Log3, Pred, 2000),
     ra_log:close(Log4),
     application:stop(ra),
     application:ensure_all_started(ra),
@@ -389,10 +400,12 @@ recover_bigly(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = write_n(1, 10000, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
-    {9999, 1} = ra_log:last_index_term(Log2),
-    {9999, 1} = ra_log:last_written(Log2),
-    % ra_log:close(Log1),
+    Pred = fun (L) ->
+                   {9999, 1} =:= ra_log:last_index_term(L) andalso
+                   {9999, 1} =:= ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
+    ra_log:close(Log2),
     application:stop(ra),
     application:ensure_all_started(ra),
     % ra_log_segment_writer:await(),
@@ -404,6 +417,7 @@ recover_bigly(Config) ->
 
 
 resend_write(Config) ->
+    % logger:set_primary_config(level, debug),
     % simulate lost messages requiring the ra server to resend in flight
     % writes
     meck:new(ra_log_wal, [passthrough]),
@@ -415,28 +429,37 @@ resend_write(Config) ->
     timer:sleep(100),
     Log0 = ra_log:init(#{uid => UId}),
     {0, 0} = ra_log:last_index_term(Log0),
+    %% write 1..9
     Log1 = append_n(1, 10, 2, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
     % fake missing entry
+    %% write 10 which will be dropped by meck interception
     Log2b = append_n(10, 11, 2, Log2),
+    %% write 11..12 which should trigger resend
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
+                   %% unload mock so that write of index 10 can go through
+                   meck:unload(ra_log_wal),
                    element(1, ra_log:handle_event(Evt, Log3))
            after 500 ->
                      throw(resend_write_timeout)
            end,
     Log5 = ra_log:append({13, 2, banana}, Log4),
-    Log6 = deliver_all_log_events(Log5, 500),
+    Log6 = assert_log_events(Log5, fun (L) ->
+                                           {13, 2} == ra_log:last_written(L)
+                                   end),
     {[_, _, _, _, _], _} = ra_log:take(9, 5, Log6),
+    ra_log:close(Log6),
 
-    meck:unload(ra_log_wal),
     ok.
 
 wal_crash_recover(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId,
-                              resend_window => 1}),
+                         resend_window => 1}),
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
     ok = proc_lib:stop(ra_log_segment_writer),
@@ -445,10 +468,15 @@ wal_crash_recover(Config) ->
     Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
     ok = proc_lib:stop(ra_log_segment_writer),
     Log3 = write_n(75, 100, 2, Log2),
-    Log4 = deliver_all_log_events(Log3, 250),
+    % Log4 = assert_log_events(Log3, fun (L) ->
+    %                                        {99, 2} == ra_log:last_written(L)
+    %                                end),
     % wait long enough for the resend window to pass
     timer:sleep(2000),
-    Log = deliver_all_log_events(write_n(100, 101, 2,  Log4), 500),
+    Log = assert_log_events(write_n(100, 101, 2,  Log3),
+                            fun (L) ->
+                                    {100, 2} == ra_log:last_written(L)
+                            end),
     {100, 2} = ra_log:last_written(Log),
     validate_read(1, 100, 2, Log),
     ok.
@@ -457,7 +485,9 @@ wal_down_read_availability(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = append_n(1, 10, 2, Log0),
-    Log2 = deliver_all_log_events(Log1, 200),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
     {Entries, _} = ra_log:take(0, 10, Log2),
     ?assert(length(Entries) =:= 10),
@@ -486,8 +516,10 @@ detect_lost_written_range(Config) ->
     meck:new(ra_log_wal, [passthrough]),
     {0, 0} = ra_log:last_index_term(Log0),
     % write some entries
-    Log1 = append_and_roll(1, 10, 2, Log0),
-    Log2 = deliver_all_log_events(Log1, 500),
+    Log1 = append_and_roll_no_deliver(1, 10, 2, Log0),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
     % WAL rolls over and WAL file is deleted
     % simulate wal outage
     meck:expect(ra_log_wal, write, fun (_, _, _, _, _) -> ok end),
@@ -505,10 +537,9 @@ detect_lost_written_range(Config) ->
 
     % append some more stuff
     Log4 = append_n(15, 20, 2, Log3),
-    Log5 = deliver_all_log_events(Log4, 2000),
-
-    {19, 2} = ra_log:last_written(Log5),
-
+    Log5 = assert_log_events(Log4, fun (L) ->
+                                           {19, 2} == ra_log:last_written(L)
+                                   end),
     % validate no writes were lost and can be recovered
     {Entries, _} = ra_log:take(0, 20, Log5),
     ra_log:close(Log5),
@@ -557,8 +588,9 @@ snapshot_installation(Config) ->
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
     Log3 = write_n(16, 20, 2, Log2b),
-    Log = deliver_all_log_events(Log3, 500),
-    {19, 2} = ra_log:last_index_term(Log),
+    Log = assert_log_events(Log3, fun (L) ->
+                                          {19, 2} == ra_log:last_written(L)
+                                  end),
     {[], _} = ra_log:take(1, 9, Log),
     {[_, _], _} = ra_log:take(16, 2, Log),
     ok.
@@ -568,7 +600,16 @@ update_release_cursor(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     % beyond 128 limit - should create two segments
-    Log1 = append_and_roll(1, 150, 2, Log0),
+    % Log1 = append_and_roll_no_deliver(1, 150, 2, Log0),
+    Log1 = assert_log_events(append_and_roll_no_deliver(1, 150, 2, Log0),
+                             fun (L) ->
+                                     case ra_log:overview(L) of
+                                         #{num_segments := 2} ->
+                                             true;
+                                         _ ->
+                                             false
+                                     end
+                             end),
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
@@ -576,28 +617,44 @@ update_release_cursor(Config) ->
                                                     n2 => new_peer()},
                                              1, initial_state, Log1),
 
-    Log3 = deliver_all_log_events(Log2, 500),
+    Log3 = assert_log_events(Log2,
+                             fun (L) ->
+                                     {127, 2} == ra_log:snapshot_index_term(L)
+                             end),
+    % Log3 = deliver_all_log_events(Log2, 500),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
     [{UId, 127}] = ets:lookup(ra_log_snapshot_state, UId),
     % this should delete a single segment
-    [_] = find_segments(Config),
+    ra_lib:retry(fun () ->
+                         1 == length(find_segments(Config))
+                 end, 10, 100),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
     {Log4, _} = ra_log:update_release_cursor(149, #{n1 => new_peer(),
                                                     n2 => new_peer()},
                                              1, initial_state, Log3b),
-    Log5 = deliver_all_log_events(Log4, 500),
+    Log5 = assert_log_events(Log4,
+                             fun (L) ->
+                                     {149, 2} == ra_log:snapshot_index_term(L)
+                             end),
+    % Log5 = deliver_all_log_events(Log4, 500),
 
     [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
 
     % only one segment should remain as the segment writer always keeps
     % at least one segment for each
-    [_] =  find_segments(Config),
+    ra_lib:retry(fun () ->
+                         1 == length(find_segments(Config))
+                 end, 10, 100),
 
     % append a few more items
-    Log6 = append_and_roll(150, 155, 2, Log5),
-    Log = deliver_all_log_events(Log6, 500),
+    Log = assert_log_events(append_and_roll_no_deliver(150, 155, 2, Log5),
+                             fun (L) ->
+                                     {154, 2} == ra_log:last_written(L)
+                             end),
+    % Log6 = append_and_roll(150, 155, 2, Log5),
+    % Log = deliver_all_log_events(Log6, 500),
     validate_read(150, 155, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
@@ -608,9 +665,11 @@ update_release_cursor(Config) ->
 update_release_cursor_with_machine_version(Config) ->
     % ra_log should initiate shapshot if segments can be released
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{uid => UId}),
+    Log0 = ra_log:init(#{uid => UId,
+                         snapshot_interval => 64}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
+    timer:sleep(300),
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
@@ -619,7 +678,10 @@ update_release_cursor_with_machine_version(Config) ->
                                                     n2 => new_peer()},
                                              MacVer,
                                              initial_state, Log1),
-    Log = deliver_all_log_events(Log2, 500),
+    Log = assert_log_events(Log2,
+                            fun (L) ->
+                                    {127, 2} == ra_log:snapshot_index_term(L)
+                            end),
     SnapState = ra_log:snapshot_state(Log),
     %% assert the version is in the snapshot state meta data
     CurrentDir = ra_snapshot:current_snapshot_dir(SnapState),
@@ -630,12 +692,17 @@ update_release_cursor_with_machine_version(Config) ->
 missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % ra_log should initiate shapshot if segments can be released
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{uid => UId}),
+    Log00 = ra_log:init(#{uid => UId}),
     % assert there are no segments at this point
     [] = find_segments(Config),
 
     % create a segment
-    Log1 = deliver_all_log_events(append_and_roll(1, 130, 2, Log0), 500),
+    Log0 = append_and_roll(1, 130, 2, Log00),
+    Log1 = assert_log_events(Log0,
+                             fun (L) ->
+                                     #{num_segments := Segs} = ra_log:overview(L),
+                                     Segs > 0
+                             end),
     % and another but don't notify ra_server
     Log2 = append_and_roll_no_deliver(130, 150, 2, Log1),
     % deliver only written events
@@ -648,7 +715,7 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % then deliver all log events
 
     % append and roll some more entries
-    Log4 = append_and_roll(150, 155, 2, Log3),
+    Log4 = deliver_all_log_events(append_and_roll(150, 155, 2, Log3), 200),
 
     % the missed closed mem table should have been cleaned up at the same
     % time as the next one.
@@ -719,7 +786,10 @@ validate_read(From, To, Term, Log0) ->
 append_and_roll(From, To, Term, Log0) ->
     Log1 = append_n(From, To, Term, Log0),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    deliver_all_log_events(Log1, 200).
+    assert_log_events(Log1, fun(L) ->
+                                    ra_log:last_written(L) == {To-1, Term}
+
+                            end).
 
 append_and_roll_no_deliver(From, To, Term, Log0) ->
     Log1 = append_n(From, To, Term, Log0),
@@ -739,7 +809,7 @@ write_and_roll_no_deliver(From, To, Term, Log0) ->
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     Log1.
 
-% not inclusivw
+% not inclusive
 append_n(To, To, _Term, Log) ->
     Log;
 append_n(From, To, Term, Log0) ->
@@ -762,6 +832,24 @@ deliver_all_log_events(Log0, Timeout) ->
             deliver_all_log_events(Log, Timeout)
     after Timeout ->
               Log0
+    end.
+
+assert_log_events(Log0, AssertPred) ->
+    assert_log_events(Log0, AssertPred, 2000).
+
+assert_log_events(Log0, AssertPred, Timeout) ->
+    receive
+        {ra_log_event, Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            {Log, _} = ra_log:handle_event(Evt, Log0),
+            case AssertPred(Log) of
+                true ->
+                    Log;
+                false ->
+                    assert_log_events(Log, AssertPred, Timeout)
+            end
+    after Timeout ->
+              exit(assert_log_events_timeout)
     end.
 
 wait_for_segments(Log0, Timeout) ->
