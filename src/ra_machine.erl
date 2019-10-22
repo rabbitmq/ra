@@ -148,19 +148,19 @@
 %% <dl>
 %% <dt><b>send_msg</b></dt>
 %% <dd> send a message to a pid or registered process
-%% NB: this is sent using `noconnect' and `nosuspend' in order to avoid
-%% blocking the ra process during failures. It can optionally be wrapped up as
+%% NB: this is sent using `noconnect' and `nosuspend' options in order to avoid
+%% blocking the ra process on connectivity failures. It can optionally be wrapped up as
 %% a `ra_event' and/or as a gen cast message (``{'$cast', Msg}'')
 %% </dd>
 %% <dt><b>mod_call</b></dt>
-%% <dd> Call an arbitrary Module:Function with the supplied arguments </dd>
+%% <dd> Call an arbitrary Module:Function with the supplied arguments</dd>
 %% <dt><b>monitor</b></dt>
-%% <dd> monitor a process or erlang node </dd>
+%% <dd> monitor a process or erlang node</dd>
 %% <dt><b>demonitor</b></dt>
-%% <dd> demonitor a process or erlang node </dd>
+%% <dd> demonitor a process or erlang node</dd>
 %% <dt><b>release_cursor</b></dt>
-%% <dd> indicate to Ra that none of the preceeding entries contribute to the
-%% current machine state </dd>
+%% <dd> indicate to Ra that none of the preceding entries contribute to the
+%% current machine state</dd>
 %% </dl>
 
 -type effects() :: [effect()].
