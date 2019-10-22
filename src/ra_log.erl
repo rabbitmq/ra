@@ -248,7 +248,7 @@ take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
                           last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx ->
     % 0. Check that the request isn't outside of first_index and last_index
-    % 1. Check the local cache for any unflushed entries, carry reminders
+    % 1. Check the local cache for any unflushed entries, carry remainders
     % 2. Check ra_log_open_mem_tables
     % 3. Check ra_log_closed_mem_tables in turn
     % 4. Check on disk segments in turn
