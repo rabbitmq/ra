@@ -427,10 +427,11 @@ remove_member(ServerLoc, ServerId, Timeout) ->
                            {'$ra_leave', ServerId, after_log_append},
                            Timeout).
 
-%% @doc Causes the server to entre the pre-vote and attempt become leader
+%% @doc Makes the server to enter a pre-vote state and attempt to become the leader.
 %% It is necessary to call this function when starting a new cluster as a
-%% branch new ra server will not automatically enter pre-vote by itself.
-%% Previously started servers will however.
+%% brand new Ra server (node) will not automatically enter the pre-vote state.
+%% This does not apply to recovering (previously started) servers: they will
+%% enter the pre-vote state and proceed to participate in an election on boot.
 %%
 %% @param ServerId the ra server id of the server to trigger the election on.
 -spec trigger_election(ra_server_id()) -> ok.

@@ -90,7 +90,7 @@ single_server_processes_command(Config) ->
     N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
-    % index is 2 as leaders commit a noop entry on becoming leaders
+    % index is 2 as leaders commit a no-op entry on becoming leaders
     {ok, 5, _} = ra:process_command({N1, node()}, 5, 2000),
     {ok, 10, _} = ra:process_command({N1, node()}, 5, 2000),
     terminate_cluster([N1]).
@@ -103,7 +103,7 @@ pipeline_commands(Config) ->
     _ = ra:members(N1),
     C1 = make_ref(),
     C2 = make_ref(),
-    % index is 2 as leaders commit a noop entry on becoming leaders
+    % index is 2 as leaders commit a no-op entry on becoming leaders
     ok = ra:pipeline_command({N1, node()}, 5, C1, normal),
     ok = ra:pipeline_command({N1, node()}, 5, C2, normal),
     [{C1, 5}, {C2, 10}] = gather_applied([], 125),
