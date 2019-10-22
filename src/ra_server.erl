@@ -673,14 +673,16 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{current_term := Term,
                    votes := Votes,
                    machine := Mac,
+                   id := {Id, _, _},
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
-            {State, Effects} = make_all_rpcs(initialise_peers(State0)),
+            {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
             Noop = {noop, #{ts => os:system_time(millisecond)},
                     ra_machine:version(Mac)},
-            {leader, maps:without([votes, leader_id], State),
+            State = State1#{leader_id => Id},
+            {leader, maps:without([votes], State),
              [{next_event, cast, {command, Noop}} | Effects]};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
@@ -1378,6 +1380,8 @@ filter_follower_effects(Effects) ->
                             %% send_msg effects _may_ have the local option
                             %% and will be evaluated properly during
                             %% effect processing
+                            [C | Acc];
+                        ({log, _, _, _Opts} = C, Acc) ->
                             [C | Acc];
                         ({monitor, process, Comp, _} = C, Acc)
                           when Comp =/= machine ->

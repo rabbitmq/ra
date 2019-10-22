@@ -31,7 +31,8 @@ all_tests() ->
      delete_three_server_cluster_parallel,
      start_cluster_majority,
      start_cluster_minority,
-     local_send_msg
+     send_local_msg,
+     local_log_effect
     ].
 
 groups() ->
@@ -270,7 +271,7 @@ start_cluster_minority(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
     ok.
 
-local_send_msg(Config) ->
+send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
@@ -282,20 +283,45 @@ local_send_msg(Config) ->
     {ok, _, Leader} = ra:members(hd(NodeIds)),
     %% select a non-leader node to spawn on
     [{_, N} | _] = lists:delete(Leader, NodeIds),
-    test_local_msg(Leader, N, N, local),
-    test_local_msg(Leader, N, N, [local, ra_event]),
-    test_local_msg(Leader, N, N, [local, cast]),
-    test_local_msg(Leader, N, N, [local, cast, ra_event]),
+    test_local_msg(Leader, N, N, send_local_msg, local),
+    test_local_msg(Leader, N, N, send_local_msg, [local, ra_event]),
+    test_local_msg(Leader, N, N, send_local_msg, [local, cast]),
+    test_local_msg(Leader, N, N, send_local_msg, [local, cast, ra_event]),
     {_, LeaderNode} = Leader,
-    test_local_msg(Leader, node(), LeaderNode, local),
-    test_local_msg(Leader, node(), LeaderNode, [local, ra_event]),
-    test_local_msg(Leader, node(), LeaderNode, [local, cast]),
-    test_local_msg(Leader, node(), LeaderNode, [local, cast, ra_event]),
-    %% test the same but for alocal pid (non-member)
+    test_local_msg(Leader, node(), LeaderNode, send_local_msg, local),
+    test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, ra_event]),
+    test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast]),
+    test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast, ra_event]),
+    %% test the same but for a local pid (non-member)
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
-test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, Opts0) ->
+local_log_effect(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
+    % assert all were said to be started
+    [] = Started -- NodeIds,
+    %% spawn a receiver process on one node
+    {ok, _, Leader} = ra:members(hd(NodeIds)),
+    %% select a non-leader node to spawn on
+    [{_, N} | _] = lists:delete(Leader, NodeIds),
+    test_local_msg(Leader, N, N, do_local_log, local),
+    test_local_msg(Leader, N, N, do_local_log, [local, ra_event]),
+    test_local_msg(Leader, N, N, do_local_log, [local, cast]),
+    test_local_msg(Leader, N, N, do_local_log, [local, cast, ra_event]),
+    {_, LeaderNode} = Leader,
+    test_local_msg(Leader, node(), LeaderNode, do_local_log, local),
+    test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, ra_event]),
+    test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast]),
+    test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast, ra_event]),
+    %% test the same but for a local pid (non-member)
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, CmdTag, Opts0) ->
     Opts = case Opts0 of
                local -> [local];
                _ -> lists:sort(Opts0)
@@ -326,7 +352,7 @@ test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, Opts0) ->
                          end
                  end,
     ReceivePid = spawn(ReceiverNode, ReceiveFun),
-    ra:pipeline_command(Leader, {send_local_msg, ReceivePid, Opts0}),
+    ra:pipeline_command(Leader, {CmdTag, ReceivePid, Opts0}),
     %% the leader should send local deliveries if there is no local member
     receive
         {got_it, ExpectedSenderNode} -> ok
@@ -401,6 +427,13 @@ init(_) ->
 
 apply(_Meta, {send_local_msg, Pid, Opts}, State) ->
     {State, ok, [{send_msg, Pid, {local_msg, node()}, Opts}]};
+apply(#{index := Idx}, {do_local_log, SenderPid, Opts}, State) ->
+    Eff = {log, [Idx],
+           fun([{do_local_log, Pid, _}]) ->
+                   [{send_msg, Pid, {local_msg, node()}, Opts}]
+           end,
+           {local, node(SenderPid)}},
+    {State, ok, [Eff]};
 apply(_Meta, _Cmd, State) ->
     {State, []}.
 
