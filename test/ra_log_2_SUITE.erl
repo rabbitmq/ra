@@ -389,7 +389,7 @@ recover_bigly(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = write_n(1, 10000, 1, Log0),
-    Log2 = deliver_all_log_events(Log1, 50),
+    Log2 = deliver_all_log_events(Log1, 500),
     {9999, 1} = ra_log:last_index_term(Log2),
     {9999, 1} = ra_log:last_written(Log2),
     % ra_log:close(Log1),
