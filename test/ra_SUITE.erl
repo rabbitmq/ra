@@ -128,13 +128,13 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     Leader = issue_op(N1, 5),
-    validate(Leader, 5),
+    validate_state_on_node(Leader, 5),
     ok = start_and_join(N1, N2),
     Leader = issue_op(Leader, 5),
-    validate(N1, 10),
+    validate_state_on_node(N1, 10),
     ok = start_and_join(Leader, N3),
     Leader = issue_op(Leader, 5),
-    validate(Leader, 15),
+    validate_state_on_node(Leader, 15),
     % allow N3 some time to catch up
     timer:sleep(100),
     % remove leader server
@@ -144,7 +144,7 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
     timer:sleep(500),
     {error, noproc} = ra:process_command(Leader, 5, 2000),
     _ = issue_op(N2, 5),
-    validate(N2, 20),
+    validate_state_on_node(N2, 20),
     terminate_cluster([N2, N3]).
 
 
@@ -155,12 +155,12 @@ start_and_join_then_leave_and_terminate(Config) ->
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     _ = issue_op(N1, 5),
-    validate(N1, 5),
+    validate_state_on_node(N1, 5),
     ok = start_and_join(N1, N2),
     _ = issue_op(N2, 5),
-    validate(N2, 10),
+    validate_state_on_node(N2, 10),
     ok = ra:leave_and_terminate({N1, node()}, {N2, node()}),
-    validate(N1, 10),
+    validate_state_on_node(N1, 10),
     terminate_cluster([N1]),
     ok.
 
@@ -171,19 +171,19 @@ ramp_up_and_ramp_down(Config) ->
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     _ = issue_op(N1, 5),
-    validate(N1, 5),
+    validate_state_on_node(N1, 5),
 
     ok = start_and_join(N1, N2),
     _ = issue_op(N2, 5),
-    validate(N2, 10),
+    validate_state_on_node(N2, 10),
 
     ok = start_and_join(N1, N3),
     _ = issue_op(N3, 5),
-    validate(N3, 15),
+    validate_state_on_node(N3, 15),
 
     ok = ra:leave_and_terminate({N3, node()}),
     _ = issue_op(N2, 5),
-    validate(N2, 20),
+    validate_state_on_node(N2, 20),
 
     % this is dangerous territory
     % we need a quorum from the server that is to be removed for the cluster
@@ -195,12 +195,12 @@ ramp_up_and_ramp_down(Config) ->
     timer:sleep(1000),
     ok = stop_server(N2),
     _ = issue_op(N1, 5),
-    validate(N1, 25),
+    validate_state_on_node(N1, 25),
     %% stop and restart cluster to ensure membership changes can be recovered
     ok = stop_server(N1),
     ok = ra:restart_server({N1, node()}),
     _ = issue_op(N1, 5),
-    validate(N1, 30),
+    validate_state_on_node(N1, 30),
     terminate_cluster([N1]).
 
 minority(Config) ->
@@ -618,7 +618,7 @@ queue_example(Config) ->
 
     {ok, _, Leader} = ra:process_command(A, {enq, test_msg}),
     {ok, _, _} = ra:process_command(Leader, {deq, Self}),
-    waitfor(test_msg, apply_timeout),
+    await_msg_or_fail(test_msg, apply_timeout),
     % check that the message isn't delivered multiple times
     receive
         {ra_queue, _, test_msg} ->
@@ -794,7 +794,7 @@ queue_apply({dequeue, For},
     end.
 
 
-waitfor(Msg, ExitWith) ->
+await_msg_or_fail(Msg, ExitWith) ->
     receive
         Msg -> ok
     after 3000 ->
@@ -839,7 +839,7 @@ issue_op(Name, Op) ->
     {ok, _, Leader} = ra:process_command(Name, Op, 2000),
     Leader.
 
-validate(Name, Expected) ->
+validate_state_on_node(Name, Expected) ->
     {ok, Expected, _} = ra:consistent_query({Name, node()},
                                             fun(X) -> X end).
 
