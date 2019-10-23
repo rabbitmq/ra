@@ -1401,9 +1401,7 @@ receive_snapshot_timeout() ->
                         ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
 
 send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
-    {ok,
-     Meta,
-     ReadState} = ra_snapshot:begin_read(SnapState),
+    {ok, Meta, ReadState} = ra_snapshot:begin_read(SnapState),
 
     RPC = #install_snapshot_rpc{term = Term,
                                 leader_id = Id,

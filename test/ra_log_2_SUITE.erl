@@ -36,6 +36,7 @@ all_tests() ->
      detect_lost_written_range,
      % snapshot_recovery,
      snapshot_installation,
+     append_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
      missed_closed_tables_are_deleted_at_next_opportunity,
@@ -362,10 +363,11 @@ last_index_reset_before_written(Config) ->
     %% deliver written events should not allow the last_written to go higher
     %% than the reset
     Log3 = assert_log_events(Log2, fun (L) ->
-                                           {0, 0} == ra_log:last_written(L)
+                                           {3, 1} == ra_log:last_written(L)
                                    end),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
+    #{cache_size := 0} = ra_log:overview(Log3),
     ok.
 
 recovery(Config) ->
@@ -552,42 +554,85 @@ detect_lost_written_range(Config) ->
     ok.
 
 snapshot_installation(Config) ->
+    logger:set_primary_config(level, all),
     % write a few entries
     % simulate outage/ message loss
     % write snapshot for entry not seen
     % then write entries
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}), {0, 0} = ra_log:last_index_term(Log0),
-    Log1 = write_n(1, 10, 2, Log0),
+    % Log1 = write_n(1, 10, 2, Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     {9, 2} == ra_log:last_written(L)
+                             end),
+    Log2 = write_n(10, 20, 2, Log1),
+    %% cache all log events
+    DelayedEvt = receive
+                     {ra_log_event, E} ->
+                         ct:pal("cached log evt: ~p", [E]),
+                         E
+                 after 1000 ->
+                           exit(log_event_timeout)
+                 end,
 
-
-    OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
-    ok = ra_lib:make_dir(OthDir),
-    Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
-                           OthDir),
+    %% create snapshot chunk
     Meta = meta(15, 2, [n1]),
-    MacRef = <<"9">>,
-    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
-    Sn2 =
-        receive
-            {ra_log_event, {snapshot_written, {15, 2} = IdxTerm}} ->
-                ra_snapshot:complete_snapshot(IdxTerm, Sn1)
-        after 1000 ->
-                  exit(snapshot_timeout)
-        end,
-    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2),
-    {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, 1000000000, Sn2),
+    Chunk = create_snapshot_chunk(Config, Meta),
 
-    SnapState0 = ra_log:snapshot_state(Log1),
+    SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
 
-    Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),
-    {Log2b, _} = ra_log:handle_event({snapshot_written, {15,2}}, Log2),
+    Log3 = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    #{cache_size := 0} = ra_log:overview(Log3),
+    {Log4, _} = ra_log:handle_event(DelayedEvt, Log3),
+    {15, _} = ra_log:last_index_term(Log4),
+    {15, _} = ra_log:last_written(Log4),
+    #{cache_size := 0} = ra_log:overview(Log4),
+
+    flush(),
 
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
-    Log3 = write_n(16, 20, 2, Log2b),
+    Log5 = write_n(16, 20, 2, Log4),
+    Log = assert_log_events(Log5, fun (L) ->
+                                          {19, 2} == ra_log:last_written(L)
+                                  end),
+    {[], _} = ra_log:take(1, 9, Log),
+    {[_, _], _} = ra_log:take(16, 2, Log),
+    ok.
+
+append_after_snapshot_installation(Config) ->
+    logger:set_primary_config(level, all),
+    %% simulates scenario where a node becomes leader after receiving a
+    %% snapshot
+    % write a few entries
+    % simulate outage/ message loss
+    % write snapshot for entry not seen
+    % then write entries
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{uid => UId}), {0, 0} = ra_log:last_index_term(Log0),
+    % Log1 = write_n(1, 10, 2, Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     {9, 2} == ra_log:last_written(L)
+                             end),
+    %% do snapshot
+    Meta = meta(15, 2, [n1]),
+    Chunk = create_snapshot_chunk(Config, Meta),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),
+    {15, _} = ra_log:last_index_term(Log2),
+    {15, _} = ra_log:last_written(Log2),
+
+    % after a snapshot we need a "truncating write" that ignores missing
+    % indexes
+    Log3 = append_n(16, 20, 2, Log2),
     Log = assert_log_events(Log3, fun (L) ->
                                           {19, 2} == ra_log:last_written(L)
                                   end),
@@ -600,7 +645,6 @@ update_release_cursor(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log:init(#{uid => UId}),
     % beyond 128 limit - should create two segments
-    % Log1 = append_and_roll_no_deliver(1, 150, 2, Log0),
     Log1 = assert_log_events(append_and_roll_no_deliver(1, 150, 2, Log0),
                              fun (L) ->
                                      case ra_log:overview(L) of
@@ -956,3 +1000,21 @@ meta(Idx, Term, Cluster) ->
       term => Term,
       cluster => Cluster,
       machine_version => 1}.
+
+create_snapshot_chunk(Config, Meta) ->
+    OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
+    ok = ra_lib:make_dir(OthDir),
+    Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
+                           OthDir),
+    MacRef = <<"9">>,
+    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
+    Sn2 =
+        receive
+            {ra_log_event, {snapshot_written, {15, 2} = IdxTerm}} ->
+                ra_snapshot:complete_snapshot(IdxTerm, Sn1)
+        after 1000 ->
+                  exit(snapshot_timeout)
+        end,
+    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2),
+    {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, 1000000000, Sn2),
+    Chunk.

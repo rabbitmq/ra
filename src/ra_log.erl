@@ -207,9 +207,19 @@ close(#?MODULE{uid = UId,
 
 -spec append(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
-append(Entry, #?MODULE{last_index = LastIdx} = State0)
-      when element(1, Entry) =:= LastIdx + 1 ->
-    wal_write(State0, Entry);
+append({Idx, _, _} = Entry,
+       #?MODULE{last_index = LastIdx,
+                snapshot_state = SnapState} = State0)
+      when Idx =:= LastIdx + 1 ->
+    case ra_snapshot:current(SnapState) of
+        {SnapIdx, _} when Idx =:= SnapIdx + 1 ->
+            % it is the next entry after a snapshot
+            % we need to tell the wal to truncate as we
+            % are not going to receive any entries prior to the snapshot
+            wal_truncate_write(State0, Entry);
+        _ ->
+            wal_write(State0, Entry)
+    end;
 append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
     Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b",
                                       [Idx, LastIdx+1])),
@@ -308,9 +318,17 @@ set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
 
 -spec handle_event(event_body(), state()) ->
     {state(), [effect()]}.
-handle_event({written, {FromIdx, ToIdx, Term}},
+handle_event({written, {FromIdx, _ToIdx, _Term}},
+             #?MODULE{last_index = LastIdx} = State)
+  when FromIdx > LastIdx ->
+    %% we must have reverted back, either by explicit reset or by a snapshot
+    %% installation taking place whilst the WAL was processing the write
+    %% Just drop the event in this case as it is stale
+    {State, []};
+handle_event({written, {FromIdx, ToIdx0, Term}},
              #?MODULE{last_written_index_term = {LastWrittenIdx0,
                                                  LastWrittenTerm0},
+                      last_index = LastIdx,
                       snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
     MaybeCurrent = ra_snapshot:current(SnapState),
@@ -318,6 +336,9 @@ handle_event({written, {FromIdx, ToIdx, Term}},
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
     % been fully flushed
+    %
+    % last written cannot even go larger than last_index
+    ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
             % this case truncation shouldn't be too expensive as the cache
@@ -326,7 +347,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
             truncate_cache(FromIdx, ToIdx,
                            State#?MODULE{last_written_index_term = {ToIdx, Term}},
                            []);
-        {undefined, State} when FromIdx =< element(1, MaybeCurrent ) ->
+        {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -341,7 +362,7 @@ handle_event({written, {FromIdx, ToIdx, Term}},
                    [State#?MODULE.log_id, Term, ToIdx, _X]),
             {State, []}
     end;
-handle_event({written, {FromIdx, _, _}}, %% ToIdx, Term
+handle_event({written, {FromIdx, _, _}},
              #?MODULE{log_id = LogId,
                       last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
@@ -454,9 +475,12 @@ set_snapshot_state(SnapState, State) ->
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) -> state().
 install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
     State = delete_segments(Idx, State0),
+    %% TODO: truncate cache?
     State#?MODULE{snapshot_state = SnapState,
                   first_index = Idx + 1,
                   last_index = Idx,
+                  %% cache can go
+                  cache = #{},
                   last_written_index_term = IdxTerm}.
 
 -spec recover_snapshot(State :: state()) ->
@@ -571,19 +595,23 @@ exists({Idx, Term}, Log0) ->
 
 -spec overview(state()) -> map().
 overview(#?MODULE{last_index = LastIndex,
+                  first_index = FirstIndex,
                   last_written_index_term = LWIT,
                   segment_refs = Segs,
                   snapshot_state = SnapshotState,
-                  open_segments = OpenSegs}) ->
+                  open_segments = OpenSegs,
+                  cache = Cache}) ->
     #{type => ?MODULE,
       last_index => LastIndex,
+      first_index => FirstIndex,
       last_written_index_term => LWIT,
       num_segments => length(Segs),
       open_segments => ra_flru:size(OpenSegs),
       snapshot_index => case ra_snapshot:current(SnapshotState) of
                             undefined -> undefined;
                             {I, _} -> I
-                        end
+                        end,
+      cache_size => maps:size(Cache)
      }.
 
 -spec write_config(ra_server:config(), state()) -> ok.
