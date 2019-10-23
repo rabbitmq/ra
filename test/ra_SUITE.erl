@@ -137,12 +137,14 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
     validate_state_on_node(Leader, 15),
     % allow N3 some time to catch up
     timer:sleep(100),
-    % remove leader server
-    % the leader should here replicate the new cluster config
-    % then step down + shut itself down
+    % Remove the leader node.
+    % The leader should replicate the new cluster config
+    % before stepping down, then shut itself down.
     ok = remove_member(Leader),
     timer:sleep(500),
+    % we no longer can issue any new commands to this decommissioned leader
     {error, noproc} = ra:process_command(Leader, 5, 2000),
+    % but we can do that to the remaining cluster members
     _ = issue_op(N2, 5),
     validate_state_on_node(N2, 20),
     terminate_cluster([N2, N3]).
@@ -151,7 +153,7 @@ leader_steps_down_after_replicating_new_cluster(Config) ->
 start_and_join_then_leave_and_terminate(Config) ->
     N1 = nth_server_name(Config, 1),
     N2 = nth_server_name(Config, 2),
-    % safe server removal
+    % form a cluster
     ok = new_server(N1, Config),
     ok = ra:trigger_election(N1),
     _ = issue_op(N1, 5),
@@ -159,6 +161,7 @@ start_and_join_then_leave_and_terminate(Config) ->
     ok = start_and_join(N1, N2),
     _ = issue_op(N2, 5),
     validate_state_on_node(N2, 10),
+    % safe server removal
     ok = ra:leave_and_terminate({N1, node()}, {N2, node()}),
     validate_state_on_node(N1, 10),
     terminate_cluster([N1]),
@@ -185,18 +188,18 @@ ramp_up_and_ramp_down(Config) ->
     _ = issue_op(N2, 5),
     validate_state_on_node(N2, 20),
 
-    % this is dangerous territory
-    % we need a quorum from the server that is to be removed for the cluster
-    % change. if we stop the server before removing it from the cluster
-    % configuration the cluster becomes non-functional
+    % This is dangerous territory.
+    % For the cluster change, we need a quorum from the server that is to be removed.
+    % if we stop the server before removing it from the cluster
+    % configuration this cluster becomes non-functional.
     ok = remove_member(N2),
-    % a longish sleep here simulates a server that has been removed but not
-    % shut down and thus may start issuing request_vote_rpcs
+    % A longish sleep here simulates a server that has been removed but not
+    % shut down and thus may start issuing request_vote_rpcs.
     timer:sleep(1000),
     ok = stop_server(N2),
     _ = issue_op(N1, 5),
     validate_state_on_node(N1, 25),
-    %% stop and restart cluster to ensure membership changes can be recovered
+    %% Stop and restart to ensure membership changes can be recovered.
     ok = stop_server(N1),
     ok = ra:restart_server({N1, node()}),
     _ = issue_op(N1, 5),
