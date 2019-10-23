@@ -472,16 +472,16 @@ add_member(ServerLoc, ServerId, Timeout) ->
 %% @end
 -spec remove_member(ra_server_id() | [ra_server_id()], ra_server_id()) ->
     ra_cmd_ret().
-remove_member(ServerLoc, ServerId) ->
-    remove_member(ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
+remove_member(ServerRef, ServerId) ->
+    remove_member(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `remove_member/2' but also accepts a timeout.
 %% @see remove_member/2
 %% @end
 -spec remove_member(ra_server_id() | [ra_server_id()],
                     ra_server_id(), timeout()) -> ra_cmd_ret().
-remove_member(ServerLoc, ServerId, Timeout) ->
-    ra_server_proc:command(ServerLoc,
+remove_member(ServerRef, ServerId, Timeout) ->
+    ra_server_proc:command(ServerRef,
                            {'$ra_leave', ServerId, after_log_append},
                            Timeout).
 
@@ -570,8 +570,8 @@ leave_and_delete_server(ServerId) ->
 -spec leave_and_delete_server(ra_server_id() | [ra_server_id()],
                                ra_server_id()) ->
     ok | timeout | {error, noproc}.
-leave_and_delete_server(ServerId, ServerId) ->
-    leave_and_delete_server(ServerId, ServerId, ?DEFAULT_TIMEOUT).
+leave_and_delete_server(ServerRef, ServerId) ->
+    leave_and_delete_server(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leave_and_delete_server/2' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
@@ -582,8 +582,8 @@ leave_and_delete_server(ServerId, ServerId) ->
 -spec leave_and_delete_server(ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
-leave_and_delete_server(ServerId, ServerId, Timeout) ->
-    LeaveCmd = {'$ra_leave', ServerId, await_consensus},
+leave_and_delete_server(ServerRef, ServerId, Timeout) ->
+    LeaveCmd = {'$ra_leave', ServerRef, await_consensus},
     case ra_server_proc:command(ServerId, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
