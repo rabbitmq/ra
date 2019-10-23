@@ -388,10 +388,14 @@ delete_cluster(ServerIds, Timeout) ->
     end.
 
 
-%% @doc Add a ra server id to a ra cluster's membership configuration
+%% @doc Add a ra server id to a ra cluster's membership configuration.
 %% This commits a join command to the leader log. After this has been replicated
 %% the leader will start replicating entries to the new server.
 %% This function returns after appending the command to the log.
+%% New node does not have to be running at the time of addition but it is expected
+%% to come online in a reasonable amount of time. A new member that's been
+%% announced to its new cluster but taking a long time to start will
+%% affect said cluster's availability characteristics (by increasing quorum node count).
 %%
 %% @param ServerLoc the ra server or servers to try to send the command to
 %% @param ServerId the ra server id of the new server
