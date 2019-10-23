@@ -522,8 +522,8 @@ leave_and_terminate(ServerId) ->
 %% @end
 -spec leave_and_terminate(ra_server_id(), ra_server_id()) ->
     ok | timeout | {error, noproc}.
-leave_and_terminate(ServerId, ServerId) ->
-    leave_and_terminate(ServerId, ServerId, ?DEFAULT_TIMEOUT).
+leave_and_terminate(ServerRef, ServerId) ->
+    leave_and_terminate(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leave_and_terminate/2' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
@@ -533,9 +533,9 @@ leave_and_terminate(ServerId, ServerId) ->
 %% @end
 -spec leave_and_terminate(ra_server_id(), ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
-leave_and_terminate(ServerId, ServerId, Timeout) ->
+leave_and_terminate(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
-    case ra_server_proc:command(ServerId, LeaveCmd, Timeout) of
+    case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
             timeout;
