@@ -546,42 +546,44 @@ process_command(ServerLoc, Command) ->
 %% an optional process scoped term as correlation identifier.
 %% A correlation id can be included
 %% to implement reliable async interactions with the ra system. The calling
-%% process can retain a map of command that have not yet been applied to the
-%% state machine successfully and resend them if a notification is not receied
+%% process can retain a map of commands that have not yet been applied to the
+%% state machine successfully and resend them if a notification is not received
 %% withing some time window.
-%% When the command is applied to the state machine the ra server will send
+%% When the submitted command(s) is applied to the state machine, the ra server will send
 %% the calling process a ra_event of the following structure:
 %%
 %% `{ra_event, CurrentLeader, {applied, [{Correlation, Reply}]}}'
 %%
-%% Not that ra will batch notification and thus return a list of correlation
+%% Ra will batch notification and thus return a list of correlation
 %% and result tuples.
 %%
-%% If the receving ra server isn't a leader a ra event of the following
+%% If the receiving ra server is not the cluster leader, a ra event of the following
 %% structure will be returned informing the caller that it cannot process the
-%% message including the current leader, if known:
+%% message. The message will include the current cluster leader, if one is known:
 %%
 %% `{ra_event, CurrentLeader, {rejected, {not_leader, Leader, Correlation}}}'
-%% The caller can then redirect the command for the correlation identifier to
-%% the correct ra server.
 %%
-%% If insteads the atom `no_correlation' is used the calling process will not
-%% receive any notification of command processing success or otherwise.
-%% This is the
-%% least reliable way to interact with a ra system and should only be used
-%% if the command is of little importance.
+%% The caller must then redirect the command for the correlation identifier to
+%% the correct ra server: the leader.
+%%
+%% If instead the atom `no_correlation' is passed for the correlation argument,
+%% the calling process will not receive any notification of command processing
+%% success or otherwise.
+%%
+%% This is the least reliable way to interact with a ra system ("fire and forget")
+%% and should only be used if the command is of little importance to the application.
 %%
 %% @param ServerId the ra server id to send the command to
 %% @param Command an arbitrary term that the state machine can handle
 %% @param Correlation a correlation identifier to be included to receive an
 %% async notification after the command is applied to the state machine. If the
-%% Correlation is `no_correlation' no notifications will be sent.
+%% Correlation is set to `no_correlation' then no notifications will be sent.
 %% @param Priority command priority. `low' priority commands will be held back
 %% and appended to the Raft log in batches. NB: A `normal' priority command sent
 %% from the same process can overtake a low priority command that was
 %% sent before. There is no high priority.
-%% Only use pritory level `low' for commands where
-%% total ordering does not matter.
+%% Only use priority level of `low' with commands that
+%% do not rely on total execution ordering.
 -spec pipeline_command(ServerId :: ra_server_id(), Command :: term(),
                        Correlation :: ra_server:command_correlation() |
                                       no_correlation,
@@ -606,18 +608,19 @@ pipeline_command(ServerId, Command, Correlation) ->
 %% @doc Sends a command to the ra server using a gen_statem:cast.
 %% Effectively the same as
 %% `ra:pipeline_command(ServerId, Command, low, no_correlation)'
-%% This is the least reliable way to interact with a ra system and should only
-%% be used for commands that are of little importance and where waiting for
-%% a response is prohibitively slow.
+%% This is the least reliable way to interact with a ra system ("fire and forget")
+%% and should only be used for commands that are of little importance
+%% and/or where waiting for a response is prohibitively slow.
 -spec pipeline_command(ServerId :: ra_server_id(),
                        Command :: term()) -> ok.
 pipeline_command(ServerId, Command) ->
     pipeline_command(ServerId, Command, no_correlation, low).
 
-%% @doc Query the machine state on any server
+%% @doc Query the machine state on any available server.
 %% This allows you to run the QueryFun over the server machine state and
-%% return the result. Any ra server can be addressed.
-%% This can return infinitely stale results.
+%% return the result. Any ra server can be addressed and will returns its local
+%% state at the time of querying.
+%% This can return stale results, including infinitely stale ones.
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
@@ -632,10 +635,10 @@ local_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, local, Timeout).
 
 
-%% @doc Query the current leader state
+%% @doc Query the machine state on the current leader node.
 %% This function works like local_query, but redirects to the current
 %% leader node.
-%% The leader state may be more up-to-date compared to local.
+%% The leader state may be more up-to-date compared to local state of some followers.
 %% This function may still return stale results as it reads the current state
 %% and does not wait for commands to be applied.
 -spec leader_query(ServerId :: ra_server_id(),
@@ -651,8 +654,8 @@ leader_query(ServerRef, QueryFun) ->
 leader_query(ServerRef, QueryFun, Timeout) ->
     ra_server_proc:query(ServerRef, QueryFun, leader, Timeout).
 
-%% @doc Query the state machine
-%% This allows a caller to query the state machine on the leader node with
+%% @doc Query the state machine with a consistency guarantee.
+%% This allows the caller to query the state machine on the leader node with
 %% an additional heartbeat to check that the node is still the leader.
 %% Consistency guarantee is that the query will return result containing
 %% at least all changes, committed before this query is issued.
@@ -670,7 +673,7 @@ consistent_query(Server, QueryFun) ->
 consistent_query(Server, QueryFun, Timeout) ->
     ra_server_proc:query(Server, QueryFun, consistent, Timeout).
 
-%% @doc Query the members of a cluster
+%% @doc Returns a list of cluster members
 -spec members(ra_server_id()) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerRef) ->
@@ -681,6 +684,8 @@ members(ServerRef) ->
 members(ServerRef, Timeout) ->
     ra_server_proc:state_query(ServerRef, members, Timeout).
 
+%% @doc Transfers leadership from the leader to a follower.
+%% Returns `already_leader' if the transfer targer is already the leader.
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
     ok | already_leader.
 transfer_leadership(ServerId, TargetServerId) ->
