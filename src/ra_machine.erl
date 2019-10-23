@@ -8,14 +8,14 @@
 %%
 %% Initialize a new machine state.
 %%
-%%<br></br>
+%% <br></br>
 %% <code>-callback apply(Meta :: command_meta_data(),
 %%                       {@link command()}, State) ->
 %%    {State, {@link reply()}, {@link effects()}} | {State, {@link reply()}}</code>
 %%
 %% Applies each entry to the state machine.
 %%
-%%<br></br>
+%% <br></br>
 %% <code>
 %% -callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 %% </code>
@@ -103,7 +103,7 @@
 %% e.g: `{ra_event, ra_server_id(), Msg}'
 %%
 %% cast: the message will be wrapped as a gen cast: ``{'$cast', Msg}''
-%% local: the messasge will be sent by the local member if there is one
+%% local: the message will be sent by the local member if there is one
 %% configured
 
 -type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
@@ -113,9 +113,9 @@
 
 -type effect() ::
     {send_msg, To :: locator(), Msg :: term()} |
-    %% TODO: with local deliveries is it theoretically possible for a follower
-    %% to apply entries but not know who the current leader is? If so,
-    %% the `To` needs to be locator() | undefined
+    %% @TODO: with local deliveries is it theoretically possible for a follower
+    %%        to apply entries but not know who the current leader is?
+    %%        If so, `To' must also include undefined
     {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {mod_call, module(), Function :: atom(), [term()]} |
     {monitor, process, pid()} |
