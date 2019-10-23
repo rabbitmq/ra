@@ -588,8 +588,10 @@ handle_leader(#heartbeat_rpc{term = Term},
     ?ERR("~s: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!~n", [LogId, Term]),
     exit(leader_saw_heartbeat_rpc_in_same_term);
-handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex, term = Term}},
-              #{current_term := CurTerm, id := {_, _, LogId}} = State0) ->
+handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
+                                        term = Term}},
+              #{current_term := CurTerm,
+                id := {_, _, LogId}} = State0) ->
     case {CurTerm, Term} of
         {Same, Same} ->
             %% Heartbeat confirmed
@@ -2200,12 +2202,24 @@ increment_commit_index(State = #{current_term := CurrentTerm}) ->
             State#{log => Log}
     end.
 
-
-match_indexes(#{log := Log} = State) ->
-    {LWIdx, _} = ra_log:last_written(Log),
-    maps:fold(fun(_K, #{match_index := Idx}, Acc) ->
+query_indexes(#{id := {Id, _, _},
+                cluster := Cluster,
+                query_index := QueryIndex}) ->
+    maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
+                      Acc;
+                  (_K, #{query_index := Idx}, Acc) ->
                       [Idx | Acc]
-              end, [LWIdx], peers(State)).
+              end, [QueryIndex], Cluster).
+
+match_indexes(#{id := {Id, _, _},
+                cluster := Cluster,
+                log := Log}) ->
+    {LWIdx, _} = ra_log:last_written(Log),
+    maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
+                      Acc;
+                  (_K, #{match_index := Idx}, Acc) ->
+                      [Idx | Acc]
+              end, [LWIdx], Cluster).
 
 -spec agreed_commit(list()) -> ra_index().
 agreed_commit(Indexes) ->
@@ -2298,24 +2312,21 @@ make_heartbeat_rpc_effects(QueryRef,
             {State#{queries_waiting_heartbeats => Waiting1}, Effects}
     end.
 
-update_query_index(#{cluster := Cluster, id := {Id, _, _}} = State, NewQueryIndex) ->
-    Self = maps:get(Id, Cluster),
-    State#{cluster => Cluster#{Id => Self#{query_index => NewQueryIndex}},
-           query_index => NewQueryIndex}.
+update_query_index(State, NewQueryIndex) ->
+    State#{query_index => NewQueryIndex}.
 
 reset_query_index(#{cluster := Cluster} = State) ->
-    State#{
-        cluster =>
+    State#{cluster =>
             maps:map(fun(_PeerId, Peer) -> Peer#{query_index => 0} end,
-                     Cluster)
-    }.
+                     Cluster)}.
 
 
 heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
     lists:filtermap(fun({PeerId, Peer}) ->
-        heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex)
-    end,
-    maps:to_list(Peers)).
+                            heartbeat_rpc_effect_for_peer(PeerId, Peer, Id,
+                                                          Term, QueryIndex)
+                    end,
+                    maps:to_list(Peers)).
 
 heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
     case maps:get(query_index, Peer, 0) < QueryIndex of
@@ -2328,25 +2339,27 @@ heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
             false
     end.
 
-heartbeat_rpc_quorum(NewQueryIndex, PeerId, #{queries_waiting_heartbeats := Waiting0} = State) ->
+heartbeat_rpc_quorum(NewQueryIndex, PeerId,
+                     #{queries_waiting_heartbeats := Waiting0} = State) ->
     State1 = update_peer_query_index(PeerId, NewQueryIndex, State),
     ConsensusQueryIndex = get_current_query_quorum(State1),
     {QueryRefs, Waiting1} = take_from_queue_while(
-        fun({QueryIndex, QueryRef}) ->
-            case QueryIndex > ConsensusQueryIndex of
-                true  -> false;
-                false -> {true, QueryRef}
-            end
-        end,
-        Waiting0),
+                              fun({QueryIndex, QueryRef}) ->
+                                      case QueryIndex > ConsensusQueryIndex of
+                                          true  -> false;
+                                          false -> {true, QueryRef}
+                                      end
+                              end,
+                              Waiting0),
     case QueryRefs of
         [] -> {[], State1};
         _  -> {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
     end.
 
 update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
-    case maps:get(PeerId, Cluster, none) of
-        none -> State0;
+    case maps:get(PeerId, Cluster, undefined) of
+        undefined ->
+            State0;
         #{query_index := PeerQueryIndex} = Peer ->
             case QueryIndex > PeerQueryIndex of
                 true  ->
@@ -2358,17 +2371,8 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
             end
     end.
 
-get_current_query_quorum(#{cluster := Cluster}) ->
-    SortedQueryIndexes =
-        lists:sort(
-            fun erlang:'>'/2,
-            lists:map(
-                fun(#{query_index := PeerQueryIndex}) ->
-                    PeerQueryIndex
-                end,
-                maps:values(Cluster))),
-
-    lists:nth(maps:size(Cluster) div 2 + 1, SortedQueryIndexes).
+get_current_query_quorum(State) ->
+    agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false), queue:queue(El)) ->
     {[Res], queue:queue(El)}.
@@ -2380,7 +2384,8 @@ take_from_queue_while(Fun, Queue, Result) ->
         {value, El} ->
             case Fun(El) of
                 {true, ResVal} ->
-                    take_from_queue_while(Fun, queue:drop(Queue), [ResVal | Result]);
+                    take_from_queue_while(Fun, queue:drop(Queue),
+                                          [ResVal | Result]);
                 false ->
                     {Result, Queue}
             end;
@@ -2388,14 +2393,15 @@ take_from_queue_while(Fun, Queue, Result) ->
             {Result, Queue}
     end.
 
--spec apply_consistent_queries_effects([consistent_query_ref()], ra_server_state()) ->
+-spec apply_consistent_queries_effects([consistent_query_ref()],
+                                       ra_server_state()) ->
     ra_effects().
-apply_consistent_queries_effects(QueryRefs, #{last_applied := ApplyIndex} = State) ->
+apply_consistent_queries_effects(QueryRefs,
+                                 #{last_applied := LastApplied} = State) ->
     lists:map(fun({_, _, ReadCommitIndex} = QueryRef) ->
-        true = ApplyIndex >= ReadCommitIndex,
-        consistent_query_reply(QueryRef, State)
-    end,
-    QueryRefs).
+                      true = LastApplied >= ReadCommitIndex,
+                      consistent_query_reply(QueryRef, State)
+              end, QueryRefs).
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> ra_effect().
 consistent_query_reply({From, QueryFun, _ReadCommitIndex},
