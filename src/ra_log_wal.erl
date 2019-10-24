@@ -62,12 +62,13 @@
 -record(wal, {fd :: maybe(file:io_device()),
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
-              max_size = ?MAX_SIZE_BYTES :: non_neg_integer(),
-              file_size = 0 :: non_neg_integer()}).
+              max_size = ?MAX_SIZE_BYTES :: non_neg_integer()
+              }).
 
 -record(state, {conf = #conf{},
                 file_num = 0 :: non_neg_integer(),
                 wal :: #wal{} | undefined,
+                file_size = 0 :: non_neg_integer(),
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
                 % No further writes are allowed until the missing
@@ -213,8 +214,8 @@ format_status(#state{conf = #conf{write_strategy = Strat,
                                   compute_checksums = Cs,
                                   max_size_bytes = MaxSize},
                      writers = Writers,
-                     wal = #wal{file_size = FSize,
-                                filename = Fn}}) ->
+                     file_size = FSize,
+                     wal = #wal{filename = Fn}}) ->
     #{write_strategy => Strat,
       compute_checksums => Cs,
       writers => maps:size(Writers),
@@ -305,8 +306,8 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
 
 write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
-                  wal = #wal{file_size = FileSize,
-                             max_size = MaxWalSize,
+                  file_size = FileSize,
+                  wal = #wal{max_size = MaxWalSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
@@ -364,13 +365,13 @@ handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
 handle_msg(rollover, State) ->
     roll_over(State).
 
-append_data(#state{wal = #wal{file_size = FileSize} = Wal,
+append_data(#state{file_size = FileSize,
                    batch = Batch,
                    writers = Writers} = State,
             {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
     true = update_mem_table(ra_log_open_mem_tables, UId, Idx, Term, Entry,
                             Truncate),
-    State#state{wal = Wal#wal{file_size = FileSize + DataSize},
+    State#state{file_size = FileSize + DataSize,
                 batch = incr_batch(Batch, Pid, {Idx, Term}, Data),
                 writers = Writers#{UId => {in_seq, Idx}} }.
 
@@ -431,7 +432,10 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                            MaxBytes
                    end,
     {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
-    State0#state{conf = Conf, wal = Wal, file_num = Num}.
+    State0#state{conf = Conf,
+                 wal = Wal,
+                 file_size = 0,
+                 file_num = Num}.
 
 open_wal(File, Max, #conf{write_strategy = o_sync,
                           file_modes = Modes0} = Conf) ->

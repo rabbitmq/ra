@@ -110,6 +110,11 @@ Indicate whether the wal should compute and validate checksums. Default: true
     need the additional `fsync(2)` system call. If it fails to open the file with this
     flag this mode falls back to `default`
 
+* `wal_max_batch_size`:
+
+Controls the internal max batch size that the WAL will accept. Higher numbers may
+result in higher memory use. Default: 32768.
+
 
 * `logger_module`:
 

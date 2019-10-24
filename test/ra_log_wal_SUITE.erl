@@ -17,6 +17,7 @@ all_tests() ->
      same_uid_different_process,
      write_to_unavailable_wal_returns_error,
      write_many,
+     write_many_by_many,
      overwrite,
      truncate_write,
      out_of_seq_writes,
@@ -160,6 +161,74 @@ write_many(Config) ->
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
+    % stop_profile(Config),
+    Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
+                    V =/= undefined],
+    ct:pal("Metrics: ~p~n", [Metrics]),
+    proc_lib:stop(WalPid),
+    ok.
+
+write_many_by_many(Config) ->
+    NumWrites = 100,
+    NumWriters = 100,
+    Conf = ?config(wal_conf, Config),
+    {_UId, _} = WriterId = ?config(writer_id, Config),
+    {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false}, []),
+    Data = crypto:strong_rand_bytes(1024),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
+    timer:sleep(5),
+    % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
+    Writes = lists:seq(1, NumWrites),
+    {_, GarbBefore} = erlang:process_info(WalPid, garbage_collection),
+    {_, MemBefore} = erlang:process_info(WalPid, memory),
+    {_, BinBefore} = erlang:process_info(WalPid, binary),
+    {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
+
+    Before = os:system_time(millisecond),
+    Self = self(),
+    [spawn_link(fun () ->
+                        WId = {term_to_binary(I), self()},
+                        put(wid, WId),
+                        [ok = ra_log_wal:write(WId, ra_log_wal, Idx, 1,
+                                               {data, Data}) || Idx <- Writes],
+                        receive
+                            {ra_log_event, {written, {_, NumWrites, 1}}} ->
+                                Self ! wal_write_done,
+                                ok
+                        after 200000 ->
+                                  throw(written_timeout)
+                        end
+                end) || I <- lists:seq(1, NumWriters)],
+    [begin
+         receive
+             wal_write_done ->
+                 ok
+         after 200000 ->
+                   exit(wal_write_timeout)
+         end
+     end || _ <- lists:seq(1, NumWriters)],
+
+    After = os:system_time(millisecond),
+    timer:sleep(5), % give the gc some time
+    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
+    {_, BinAfter} = erlang:process_info(WalPid, binary),
+    {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
+    {_, MemAfter} = erlang:process_info(WalPid, memory),
+
+    ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
+    ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),
+    ct:pal("Memory:~n~w~n~w~n", [MemBefore, MemAfter]),
+
+    Reds = RedsAfter - RedsBefore,
+    ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
+           "Reductions: ~b",
+           [NumWrites * NumWriters, After - Before, Reds]),
+
+    % assert memory use after isn't absurdly larger than before
+    % ?assert(MemAfter < (MemBefore * 2)),
+
+    % % assert we aren't regressing on reductions used
+    % ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
     Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
                     V =/= undefined],
