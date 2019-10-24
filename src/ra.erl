@@ -583,8 +583,8 @@ leave_and_delete_server(ServerRef, ServerId) ->
                               ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
 leave_and_delete_server(ServerRef, ServerId, Timeout) ->
-    LeaveCmd = {'$ra_leave', ServerRef, await_consensus},
-    case ra_server_proc:command(ServerId, LeaveCmd, Timeout) of
+    LeaveCmd = {'$ra_leave', ServerId, await_consensus},
+    case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
             timeout;

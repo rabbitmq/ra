@@ -430,8 +430,14 @@ handle_leader({command, Cmd}, State00 = #{id := {_, _, LogId}}) ->
     case append_log_leader(Cmd, State00) of
         {not_appended, State = #{cluster_change_permitted := CCP}} ->
             ?WARN("~s command ~W NOT appended to log, "
-                  "cluster_change_permitted ~w~n", [LogId, Cmd, 5, CCP]),
-            {leader, State, []};
+                  "cluster_change_permitted ~w~n", [LogId, Cmd, 10, CCP]),
+            Effects = case Cmd of
+                          {_, #{from := From}, _, _} ->
+                              [{reply, From, {error, not_appended}}];
+                          _ ->
+                              []
+                      end,
+            {leader, State, Effects};
         {ok, Idx, Term, State0} ->
             {State, _, Effects0} = make_pipelined_rpc_effects(State0, []),
             % check if a reply is required.
@@ -2101,13 +2107,17 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
             Cluster = OldCluster#{JoiningNode => new_peer()},
             append_cluster_change(Cluster, From, ReplyMode, State)
     end;
-append_log_leader({'$ra_leave', From, LeavingNode, ReplyMode},
-                  State = #{cluster := OldCluster}) ->
+append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
+                  State = #{id := {_, _, LogId},
+                            cluster := OldCluster}) ->
     case OldCluster of
-        #{LeavingNode := _} ->
-            Cluster = maps:remove(LeavingNode, OldCluster),
+        #{LeavingServer := _} ->
+            Cluster = maps:remove(LeavingServer, OldCluster),
             append_cluster_change(Cluster, From, ReplyMode, State);
         _ ->
+            ?DEBUG("~s: member ~w requested to leave but was not a member. "
+                   "Members: ~w",
+                   [LogId, LeavingServer, maps:keys(OldCluster)]),
             % not a member - do nothing
             {not_appended, State}
     end;

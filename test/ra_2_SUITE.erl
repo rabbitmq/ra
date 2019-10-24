@@ -20,6 +20,7 @@ all_tests() ->
      start_stopped_server,
      server_is_force_deleted,
      force_deleted_server_mem_tables_are_cleaned_up,
+     leave_and_delete_server,
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
@@ -146,6 +147,20 @@ force_deleted_server_mem_tables_are_cleaned_up(Config) ->
 
     ok.
 
+leave_and_delete_server(Config) ->
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Peers = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, Peers),
+    % ra:members(Peers),
+    ?assert(undefined =/= whereis(element(1, ServerId2))),
+    ok = ra:leave_and_delete_server(Peers, ServerId2, 2000),
+    ?assertEqual(undefined, whereis(element(1, ServerId2))),
+    {ok, _} = ra:delete_cluster(Peers),
+    ok.
 
 cluster_is_deleted(Config) ->
     ClusterName = ?config(cluster_name, Config),
