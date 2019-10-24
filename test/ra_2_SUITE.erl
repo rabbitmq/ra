@@ -155,7 +155,7 @@ leave_and_delete_server(Config) ->
     ServerId3 = ?config(server_id3, Config),
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
-    ra:members(Peers),
+    ra:members(ServerId1),
     ?assert(undefined =/= whereis(element(1, ServerId2))),
     ok = ra:leave_and_delete_server(Peers, ServerId2, 2000),
     ?assertEqual(undefined, whereis(element(1, ServerId2))),
