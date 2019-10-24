@@ -35,6 +35,7 @@ groups() ->
     ].
 
 init_per_group(Group, Config) ->
+    ok = logger:set_primary_config(level, all),
     application:ensure_all_started(sasl),
     application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
@@ -114,7 +115,7 @@ write_to_unavailable_wal_returns_error(Config) ->
     ok.
 
 write_many(Config) ->
-    NumWrites = 10000,
+    NumWrites = 100000,
     Conf = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false},
