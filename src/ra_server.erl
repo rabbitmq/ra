@@ -32,7 +32,6 @@
          update_release_cursor/3,
          persist_last_applied/1,
          update_peer_status/3,
-         clear_leader_id/1,
          handle_down/5,
          terminate/2,
          log_fold/3,
@@ -1557,10 +1556,6 @@ persist_last_applied(#{last_applied := LastApplied,
 update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
     Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
     State#{cluster => maps:put(PeerId, Peer, Peers)}.
-
--spec clear_leader_id(ra_server_state()) -> ra_server_state().
-clear_leader_id(State) ->
-    maps:remove([leader_id], State).
 
 peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =
