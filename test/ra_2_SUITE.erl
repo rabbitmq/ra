@@ -156,7 +156,7 @@ leave_and_delete_server(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     %% due to timing it is possible that cluster changes
-    %% are not yet allowed and thus will time out. Safest to sync process
+    %% are not yet allowed and thus will time out. Safest to synchronously process
     %% a command first
     {ok, ok, _Leader} = ra:process_command(ServerId1, {enq, msg1}),
     ?assert(undefined =/= whereis(element(1, ServerId2))),
