@@ -29,18 +29,19 @@ replay_log(WalFile, Module, InitialState) ->
   Fun :: fun((State :: term(), Effects :: term()) -> term()).
 replay_log(WalFile, Module, InitialState, Func) ->
   Wal = lists:reverse(ra_log_wal:wal2list(WalFile)),
-  WalFunc = fun({Index, {'$usr', Metadata, Command, _}}, Acc) ->
-                  Metadata1 = Metadata#{index => Index},
-                  case Module:apply(Metadata1, Command, Acc) of
-                    {NewAcc, _Reply} ->
-                      Func(NewAcc, undefined),
-                      NewAcc;
-                    {NewAcc, _Reply, Effects} ->
-                      Func(NewAcc, Effects),
-                      NewAcc
-                  end;
-                (_, Acc) ->
-                  Acc
-                end,
+  WalFunc = fun({Index, Term, {'$usr', Metadata, Command, _}}, Acc) ->
+                    Metadata1 = Metadata#{index => Index,
+                                          term => Term},
+                    case Module:apply(Metadata1, Command, Acc) of
+                        {NewAcc, _Reply} ->
+                            Func(NewAcc, undefined),
+                            NewAcc;
+                        {NewAcc, _Reply, Effects} ->
+                            Func(NewAcc, Effects),
+                            NewAcc
+                    end;
+               (_, Acc) ->
+                    Acc
+            end,
   lists:foldl(WalFunc, InitialState, Wal).
 
