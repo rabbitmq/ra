@@ -1596,7 +1596,11 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {RaftState, State#{log => Log}, []}.
+    {RaftState, State#{log => Log}, []};
+handle_down(RaftState, Type, Pid, Info, #{id := {_, _, LogId}} = State) ->
+    ?DEBUG("~s: handle_down: unexpected ~w ~w exited with ~W~n",
+          [LogId, Type, Pid, Info, 10]),
+    {RaftState, State, []}.
 
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.

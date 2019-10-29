@@ -71,7 +71,9 @@ all() ->
      await_condition_heartbeat_dropped,
      await_condition_heartbeat_reply_dropped,
      receive_snapshot_heartbeat_dropped,
-     receive_snapshot_heartbeat_reply_dropped
+     receive_snapshot_heartbeat_reply_dropped,
+
+     handle_down
     ].
 
 -define(MACFUN, fun (E, _) -> E end).
@@ -2150,12 +2152,12 @@ receive_snapshot_heartbeat_dropped(_Config) ->
         ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term - 1},
                                           State).
 
-receive_snapshot_heartbeat_reply_dropped(_Config) ->
+receive_snapshot_heartbeat_reply_dropped(_config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       query_index := QueryIndex} = State,
 
-    HeartbeatReply = #heartbeat_reply{term = Term,
+    HeartbeatReply = #heartbeat_reply{term = term,
                                       query_index = QueryIndex},
     {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply, State),
@@ -2166,6 +2168,19 @@ receive_snapshot_heartbeat_reply_dropped(_Config) ->
     {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term - 1},
                                           State).
+
+handle_down(_config) ->
+    State0 = base_state(3, ?FUNCTION_NAME),
+    %% this should commit a command
+    {leader, #{log := Log} =  State, _} =
+        ra_server:handle_down(leader, machine, self(), noproc, State0),
+    ?assertEqual({4, 5}, ra_log:last_index_term(Log)),
+    %% this should be ignored as may happen if state machine doesn't demonitor
+    %% on state changes
+    {follower, State, []} =
+        ra_server:handle_down(follower, machine, self(), noproc, State),
+
+    ok.
 
 set_peer_query_index(State, PeerId, QueryIndex) ->
     #{cluster := Cluster} = State,
