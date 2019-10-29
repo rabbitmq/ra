@@ -2157,7 +2157,7 @@ receive_snapshot_heartbeat_reply_dropped(_config) ->
     #{current_term := Term,
       query_index := QueryIndex} = State,
 
-    HeartbeatReply = #heartbeat_reply{term = term,
+    HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},
     {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply, State),
