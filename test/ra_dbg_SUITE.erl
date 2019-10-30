@@ -47,7 +47,7 @@ filter_entry_duplicate(_Config) ->
 
   WalInReverseOrder = ra_log_wal:wal2list(WalFile),
   Wal = lists:reverse(WalInReverseOrder),
-  Wal = ra_dbg:filter_entries_duplicates(lists:append(WalInReverseOrder, WalInReverseOrder)),
+  Wal = ra_dbg:filter_duplicate_entries(lists:append(WalInReverseOrder, WalInReverseOrder)),
   ok.
 
 execute_state_machine() ->

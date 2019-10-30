@@ -6,7 +6,7 @@
 -export([replay_log/3, replay_log/4]).
 
 %% exported for tests
--export([filter_entries_duplicates/1]).
+-export([filter_duplicate_entries/1]).
 
 %% @doc Replays log file for a given state machine module with an initial state.
 %%
@@ -31,7 +31,7 @@ replay_log(WalFile, Module, InitialState) ->
 -spec replay_log(string(), module(), term(), Fun) -> term() when
   Fun :: fun((State :: term(), Effects :: term()) -> term()).
 replay_log(WalFile, Module, InitialState, Func) ->
-  Wal = filter_entries_duplicates(ra_log_wal:wal2list(WalFile)),
+  Wal = filter_duplicate_entries(ra_log_wal:wal2list(WalFile)),
   WalFunc = fun({Index, Term, {'$usr', Metadata, Command, _}}, Acc) ->
                     Metadata1 = Metadata#{index => Index,
                                           term => Term},
@@ -48,7 +48,7 @@ replay_log(WalFile, Module, InitialState, Func) ->
             end,
   lists:foldl(WalFunc, InitialState, Wal).
 
-filter_entries_duplicates(WalInReverseOrder) ->
+filter_duplicate_entries(WalInReverseOrder) ->
   {_IndexRegistry, OrderedAndFilteredWal} = lists:foldl(fun({Index, _Term, _Command} = Entry, {IndexRegistry, WalAcc}) ->
       case maps:is_key(Index, IndexRegistry) of
         true ->
