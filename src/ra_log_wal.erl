@@ -16,6 +16,7 @@
 -export([wal2list/1]).
 
 -compile([inline_list_funcs]).
+-compile(inline).
 
 -include("ra.hrl").
 
@@ -56,7 +57,8 @@
                segment_writer = ra_log_segment_writer :: atom(),
                compute_checksums = false :: boolean(),
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
-               write_strategy = default :: wal_write_strategy()
+               write_strategy = default :: wal_write_strategy(),
+               sync_method = datasync :: sync | datasync
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -90,7 +92,8 @@
                       max_size_bytes => non_neg_integer(),
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
-                      write_strategy => wal_write_strategy()}.
+                      write_strategy => wal_write_strategy(),
+                      sync_method => sync | datasync}.
 
 -export_type([wal_conf/0,
               wal_write_strategy/0]).
@@ -164,7 +167,8 @@ force_roll_over(Wal) ->
 
 -spec start_link(Config :: wal_conf(), Options :: list()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
-start_link(Config, Options) ->
+start_link(Config, Options0) when is_list(Options0) ->
+    Options = [{reversed_batch, true} | Options0],
     gen_batch_server:start_link({local, ?MODULE}, ?MODULE, Config, Options).
 
 %%% Callbacks
@@ -174,7 +178,8 @@ init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
-      write_strategy := WriteStrategy} = merge_conf_defaults(Conf0),
+      write_strategy := WriteStrategy,
+      sync_method := SyncMethod} = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
     % TODO: test that off_heap is actuall beneficial
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
@@ -196,13 +201,14 @@ init(#{dir := Dir} = Conf0) ->
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = MaxWalSize,
-                 write_strategy = WriteStrategy},
+                 write_strategy = WriteStrategy,
+                 sync_method = SyncMethod},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
 handle_batch(Ops, State0) ->
-    State = lists:foldl(fun handle_op/2, start_batch(State0), Ops),
+    State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
     complete_batch(State).
 
@@ -375,8 +381,22 @@ append_data(#state{file_size = FileSize,
                 batch = incr_batch(Batch, Pid, {Idx, Term}, Data),
                 writers = Writers#{UId => {in_seq, Idx}} }.
 
+incr_batch(#batch{writes = Writes,
+                  waiting = Waiting0,
+                  pending = Pend} = Batch, Pid, {Idx, Term}, Data) ->
+    Waiting = case Waiting0 of
+                  #{Pid := {From, _, _}} ->
+                      Waiting0#{Pid => {min(Idx, From), Idx, Term}};
+                  _ ->
+                      Waiting0#{Pid => {Idx, Idx, Term}}
+              end,
+
+    Batch#batch{writes = Writes + 1,
+                waiting = Waiting,
+                pending = [Pend | Data]}.
+
 update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
-    % TODO: if Idx =< First we could truncate the entire table and safe
+    % TODO: if Idx =< First we could truncate the entire table and save
     % some disk space when it later is flushed to disk
     case ets:lookup(OpnMemTbl, UId) of
         [{_UId, From0, _To, Tid}] ->
@@ -519,14 +539,15 @@ start_batch(State) ->
 
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend} = Batch,
-                     conf = Conf} = State0) ->
-    case Conf#conf.write_strategy of
+                     conf =  #conf{write_strategy = WriteStrategy,
+                                   sync_method = SyncMeth}} = State0) ->
+    case WriteStrategy of
         default ->
-            ok = ra_file_handle:write(Fd, lists:reverse(Pend)),
-            ok = ra_file_handle:sync(Fd),
+            ok = ra_file_handle:write(Fd, Pend),
+            ok = ra_file_handle:SyncMeth(Fd),
             ok;
         o_sync ->
-            ok = ra_file_handle:write(Fd, lists:reverse(Pend))
+            ok = ra_file_handle:write(Fd, Pend)
     end,
     State0#state{batch = Batch#batch{pending = []}}.
 
@@ -553,20 +574,6 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          ok
                  end, Waiting),
     {ok, [garbage_collect], State}.
-
-incr_batch(#batch{writes = Writes,
-                  waiting = Waiting0,
-                  pending = Pend} = Batch, Pid, {Idx, Term}, Data) ->
-    Waiting = case Waiting0 of
-                  #{Pid := {From, _, _}} ->
-                      Waiting0#{Pid => {min(Idx, From), Idx, Term}};
-                  _ ->
-                      Waiting0#{Pid => {Idx, Idx, Term}}
-              end,
-
-    Batch#batch{writes = Writes + 1,
-                waiting = Waiting,
-                pending = [Data | Pend]}.
 
 wal2list(File) ->
     Data = open_existing(File),
@@ -659,7 +666,8 @@ merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
                  max_size_bytes => ?WAL_MAX_SIZE_BYTES,
                  compute_checksums => true,
-                 write_strategy => default}, Conf).
+                 write_strategy => default,
+                 sync_method => datasync}, Conf).
 
 to_binary(Term) ->
     term_to_binary(Term).

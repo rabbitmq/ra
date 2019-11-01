@@ -7,6 +7,7 @@
 all() ->
     [
      {group, default},
+     {group, fsync},
      {group, o_sync}
     ].
 
@@ -31,6 +32,8 @@ all_tests() ->
 groups() ->
     [
      {default, [], all_tests()},
+     %% uses fsync instead of the default fdatasync
+     {fsync, [], all_tests()},
      {o_sync, [], all_tests()}
     ].
 
@@ -41,7 +44,12 @@ init_per_group(Group, Config) ->
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     ra_directory:init(?config(priv_dir, Config)),
     % application:ensure_all_started(lg),
-    [{write_strategy, Group} | Config].
+    {SyncMethod, WriteStrat} = case Group of
+                                   fsync -> {sync, default};
+                                   _ -> {datasync, Group}
+                               end,
+    [{write_strategy, WriteStrat},
+     {sync_method,  SyncMethod} | Config].
 
 end_per_group(_, Config) ->
     Config.
@@ -49,7 +57,8 @@ end_per_group(_, Config) ->
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     G = ?config(write_strategy, Config),
-    Dir = filename:join([PrivDir, G, TestCase]),
+    M = ?config(sync_method, Config),
+    Dir = filename:join([PrivDir, G, M, TestCase]),
     {ok, Ets} = ra_log_ets:start_link(PrivDir),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
