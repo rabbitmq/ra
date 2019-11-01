@@ -115,12 +115,34 @@ write_to_unavailable_wal_returns_error(Config) ->
     ok.
 
 write_many(Config) ->
-    NumWrites = 100000,
-    Conf = ?config(wal_conf, Config),
+    Tests = [
+             {"10k/8k",   10000,  false, 8000,  1024},
+             {"100k/8k",  100000, false, 8000,  1024},
+             {"200k/4k",  200000, false, 4000,  1024},
+             {"200k/8k",  200000, false, 8000,  1024},
+             {"200k/16k", 200000, false, 16000, 1024},
+             {"200k/32k", 200000, false, 32000, 1024},
+             {"200k/64k", 200000, false, 64000, 1024}
+            ],
+    Results = [begin
+                   {Time, Reductions} = test_write_many(Name, Num, Check,
+                                                        Batch, Data, Config),
+                   io_lib:format("Scenario ~s took ~bms using ~b "
+                                 "reductions for ~b writes @ ~b bytes, "
+                                 "batch size ~b~n",
+                                 [Name, Time, Reductions, Num, Data, Batch])
+               end || {Name, Num, Check, Batch, Data} <- Tests],
+    ct:pal("~s", [Results]),
+    ok.
+
+test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) ->
+    Conf0 = #{dir := Dir0} = ?config(wal_conf, Config),
+    Dir = filename:join(Dir0, Name),
+    Conf = Conf0#{dir => Dir},
     WriterId = ?config(writer_id, Config),
-    {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false},
-                                         []),
-    Data = crypto:strong_rand_bytes(1024),
+    {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => ComputeChecksums},
+                                         [{max_batch_size, BatchSize}]),
+    Data = crypto:strong_rand_bytes(DataSize),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
@@ -142,32 +164,33 @@ write_many(Config) ->
                             throw(written_timeout)
                   end
           end),
-    timer:sleep(5), % give the gc some time
-    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
+    timer:sleep(100),
     {_, BinAfter} = erlang:process_info(WalPid, binary),
     {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
     {_, MemAfter} = erlang:process_info(WalPid, memory),
+    erlang:garbage_collect(WalPid),
+    {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
     ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
     ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),
     ct:pal("Memory:~n~w~n~w~n", [MemBefore, MemAfter]),
 
     Reds = RedsAfter - RedsBefore,
-    ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
-           "Reductions: ~b",
-           [NumWrites, Taken / 1000, Reds]),
+    % ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
+    %        "Reductions: ~b",
+    %        [NumWrites, Taken / 1000, Reds]),
 
     % assert memory use after isn't absurdly larger than before
-    ?assert(MemAfter < (MemBefore * 2)),
+    ?assert(MemAfter < (MemBefore * 3)),
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
-    % stop_profile(Config),
-    Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
-                    V =/= undefined],
-    ct:pal("Metrics: ~p~n", [Metrics]),
+    % stop_profile(Cofig),
+    % Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
+    %                 V =/= undefined],
+    % ct:pal("Metrics: ~p~n", [Metrics]),
     proc_lib:stop(WalPid),
-    ok.
+    {Taken div 1000, Reds}.
 
 write_many_by_many(Config) ->
     NumWrites = 100,
