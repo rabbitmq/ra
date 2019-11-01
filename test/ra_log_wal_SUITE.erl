@@ -78,6 +78,7 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 basic_log_writes(Config) ->
+    ok = logger:set_primary_config(level, all),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf, []),
@@ -194,7 +195,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
-    % stop_profile(Cofig),
+    % stop_profile(Config),
     % Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
     %                 V =/= undefined],
     % ct:pal("Metrics: ~p~n", [Metrics]),
@@ -518,7 +519,6 @@ await_written({UId, _} = Id, {From, To, Term} = Written) ->
         {ra_log_event, {written, Written}} ->
             mem_tbl_read(UId, To);
         {ra_log_event, {written, {From, T, _}}} ->
-            ct:pal("received partial written event ~w~n", [Written]),
             await_written(Id, {T+1, To, Term})
     after 5000 ->
               throw({written_timeout, To})
