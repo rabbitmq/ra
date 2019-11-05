@@ -333,6 +333,13 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             ok
     end,
     {keep_state, State0#state{delayed_commands = queue:in(Cmd, Delayed)}, []};
+leader(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
+                                                     Cmd, State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               server_state = ServerState0,
@@ -604,6 +611,13 @@ follower({call, From}, {local_query, QueryFun},
              end,
     Reply = perform_local_query(QueryFun, Leader, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
+follower(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 follower({call, From}, trigger_election, State) ->
     ?DEBUG("~s: election triggered by ~w", [log_id(State), element(1, From)]),
     {keep_state, State, [{reply, From, ok},
@@ -763,6 +777,13 @@ await_condition({call, From}, {local_query, QueryFun},
                 #state{server_state = ServerState} = State) ->
     Reply = perform_local_query(QueryFun, follower, ServerState),
     {keep_state, State, [{reply, From, Reply}]};
+await_condition(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
+                                                     Cmd, State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
 await_condition({call, From}, trigger_election, State) ->

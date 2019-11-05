@@ -31,7 +31,8 @@ all_tests() ->
      machine_state_enter_effects,
      meta_data,
      timer_effect,
-     log_effect
+     log_effect,
+     aux_command
     ].
 
 groups() ->
@@ -400,6 +401,49 @@ log_effect(Config) ->
               exit(data_timeout)
     end,
     ok.
+
+aux_command(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (RaftState, {call, _From}, emit, AuxState, Log, _MacState) ->
+                        %% emits aux state
+                        {reply, {RaftState, AuxState}, AuxState, Log};
+                    (_RaftState, cast, NewState, _AuxState, Log, _MacState) ->
+                        %% replaces aux state
+                        {no_reply, NewState, Log}
+
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    ok = ra:cast_aux_command(Leader, banana),
+    {leader, banana} = ra:aux_command(Leader, emit),
+    [ServerId2, ServerId3] = Cluster -- [Leader],
+    {follower, undefined} = ra:aux_command(ServerId2, emit),
+    ok = ra:cast_aux_command(ServerId2, apple),
+    {follower, apple} = ra:aux_command(ServerId2, emit),
+    {follower, undefined} = ra:aux_command(ServerId3, emit),
+    ok = ra:cast_aux_command(ServerId3, orange),
+    {follower, orange} = ra:aux_command(ServerId3, emit),
+    ra:delete_cluster(Cluster),
+    ok.
+
 %% Utility
 
 validate_state_enters(States) ->

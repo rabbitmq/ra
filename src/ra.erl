@@ -56,7 +56,9 @@
          %% helpers
          new_uid/1,
          %% rebalancing
-         transfer_leadership/2
+         transfer_leadership/2,
+         aux_command/2,
+         cast_aux_command/2
         ]).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
@@ -851,6 +853,14 @@ members(ServerId, Timeout) ->
     ok | already_leader.
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
+
+-spec aux_command(ra_server_id(), term()) -> term().
+aux_command(ServerRef, Cmd) ->
+    gen_statem:call(ServerRef, {aux_command, Cmd}).
+
+-spec cast_aux_command(ra_server_id(), term()) -> ok.
+cast_aux_command(ServerRef, Cmd) ->
+    gen_statem:cast(ServerRef, {aux_command, Cmd}).
 
 %% internal
 
