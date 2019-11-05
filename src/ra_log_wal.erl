@@ -16,6 +16,7 @@
 -export([wal2list/1]).
 
 -compile([inline_list_funcs]).
+-compile(inline).
 
 -include("ra.hrl").
 
@@ -33,10 +34,18 @@
 % tables and segment notification
 -type writer_id() :: {binary(), pid()}.
 
+-record(batch_writer, {tbl_start :: ra_index(),
+                       uid :: term(),
+                       tid :: term(), %% TODO
+                       from :: ra_index(),
+                       to :: ra_index(),
+                       term :: ra_term(),
+                       inserts = [] :: list()}).
+
 -record(batch, {writes = 0 :: non_neg_integer(),
-                waiting = #{} :: #{pid() =>
-                                   {From :: ra_index(), To :: ra_index(),
-                                    Term :: ra_term()}},
+                waiting = #{} :: #{pid() => #batch_writer{}},
+                                   % {From :: ra_index(), To :: ra_index(),
+                                   %  Term :: ra_term()}},
                 start_time :: maybe(integer()),
                 pending = [] :: iolist()
                }).
@@ -56,7 +65,8 @@
                segment_writer = ra_log_segment_writer :: atom(),
                compute_checksums = false :: boolean(),
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
-               write_strategy = default :: wal_write_strategy()
+               write_strategy = default :: wal_write_strategy(),
+               sync_method = datasync :: sync | datasync
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -90,7 +100,8 @@
                       max_size_bytes => non_neg_integer(),
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
-                      write_strategy => wal_write_strategy()}.
+                      write_strategy => wal_write_strategy(),
+                      sync_method => sync | datasync}.
 
 -export_type([wal_conf/0,
               wal_write_strategy/0]).
@@ -164,7 +175,8 @@ force_roll_over(Wal) ->
 
 -spec start_link(Config :: wal_conf(), Options :: list()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
-start_link(Config, Options) ->
+start_link(Config, Options0) when is_list(Options0) ->
+    Options = [{reversed_batch, true} | Options0],
     gen_batch_server:start_link({local, ?MODULE}, ?MODULE, Config, Options).
 
 %%% Callbacks
@@ -174,7 +186,8 @@ init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
-      write_strategy := WriteStrategy} = merge_conf_defaults(Conf0),
+      write_strategy := WriteStrategy,
+      sync_method := SyncMethod} = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
     % TODO: test that off_heap is actuall beneficial
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
@@ -196,15 +209,16 @@ init(#{dir := Dir} = Conf0) ->
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = MaxWalSize,
-                 write_strategy = WriteStrategy},
+                 write_strategy = WriteStrategy,
+                 sync_method = SyncMethod},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
 handle_batch(Ops, State0) ->
-    State = lists:foldl(fun handle_op/2, start_batch(State0), Ops),
+    State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
-    complete_batch(State).
+    {ok, [garbage_collect], complete_batch(State)}.
 
 terminate(_Reason, State) ->
     _ = cleanup(State),
@@ -366,17 +380,78 @@ handle_msg(rollover, State) ->
     roll_over(State).
 
 append_data(#state{file_size = FileSize,
-                   batch = Batch,
+                   batch = Batch0,
                    writers = Writers} = State,
             {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
-    true = update_mem_table(ra_log_open_mem_tables, UId, Idx, Term, Entry,
-                            Truncate),
+    Batch = incr_batch(ra_log_open_mem_tables, Batch0, UId, Pid,
+                       {Idx, Term}, Data, Entry, Truncate),
     State#state{file_size = FileSize + DataSize,
-                batch = incr_batch(Batch, Pid, {Idx, Term}, Data),
+                batch = Batch,
                 writers = Writers#{UId => {in_seq, Idx}} }.
 
+incr_batch(OpnMemTbl, #batch{writes = Writes,
+                             waiting = Waiting0,
+                             pending = Pend} = Batch,
+           UId, Pid, {Idx, Term}, Data, Entry, Truncate) ->
+    Waiting = case Waiting0 of
+                  #{Pid := #batch_writer{tbl_start = TblStart0,
+                                         tid = _Tid,
+                                         from = From,
+                                         inserts = Inserts0} = W} ->
+                      % ct:pal("insertingf ~w ~w", [Tid, Idx]),
+                      % true = ets:insert(Tid, {Idx, Term, Entry}),
+                      TblStart = case Truncate of
+                                     true ->
+                                         Idx;
+                                     false ->
+                                         % take the min of the First item in
+                                         % case we are overwriting before
+                                         % the previously first seen entry
+                                         min(TblStart0, Idx)
+                                 end,
+                      Inserts = [{Idx, Term, Entry} | Inserts0],
+                      Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
+                                                      tbl_start = TblStart,
+                                                      to = Idx,
+                                                      term = Term,
+                                                      inserts = Inserts}};
+                  _ ->
+                      %% no batch_writer
+                      {Tid, TblStart} = case ets:lookup(OpnMemTbl, UId) of
+                                            [{_UId, TblStart0, _To, T}] ->
+                                                {T, case Truncate of
+                                                        true ->
+                                                            Idx;
+                                                        false ->
+                                                            min(TblStart0, Idx)
+                                                    end};
+                                            _ ->
+                                                %% there is no table so need
+                                                %% to open one
+                                                T = open_mem_table(UId),
+                                                true = ets:insert_new(
+                                                         OpnMemTbl,
+                                                         {UId, Idx, Idx, T}),
+                                                {T, Idx}
+                                        end,
+                      % ct:pal("inserting ~w ~w", [Tid, Idx]),
+                      % true = ets:insert(Tid, {Idx, Term, Entry}),
+                      Writer = #batch_writer{tbl_start = TblStart,
+                                             from = Idx,
+                                             to = Idx,
+                                             tid = Tid,
+                                             uid = UId,
+                                             term = Term,
+                                             inserts = [{Idx, Term, Entry}]},
+                      Waiting0#{Pid => Writer}
+              end,
+
+    Batch#batch{writes = Writes + 1,
+                waiting = Waiting,
+                pending = [Pend | Data]}.
+
 update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
-    % TODO: if Idx =< First we could truncate the entire table and safe
+    % TODO: if Idx =< First we could truncate the entire table and save
     % some disk space when it later is flushed to disk
     case ets:lookup(OpnMemTbl, UId) of
         [{_UId, From0, _To, Tid}] ->
@@ -406,8 +481,8 @@ update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
     end.
 
 roll_over(State0) ->
-    State = flush_pending(State0),
-    roll_over(ra_log_open_mem_tables, State).
+    State = complete_batch(State0),
+    roll_over(ra_log_open_mem_tables, start_batch(State)).
 
 roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                              conf = #conf{dir = Dir,
@@ -519,14 +594,15 @@ start_batch(State) ->
 
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend} = Batch,
-                     conf = Conf} = State0) ->
-    case Conf#conf.write_strategy of
+                     conf =  #conf{write_strategy = WriteStrategy,
+                                   sync_method = SyncMeth}} = State0) ->
+    case WriteStrategy of
         default ->
-            ok = ra_file_handle:write(Fd, lists:reverse(Pend)),
-            ok = ra_file_handle:sync(Fd),
+            ok = ra_file_handle:write(Fd, Pend),
+            ok = ra_file_handle:SyncMeth(Fd),
             ok;
         o_sync ->
-            ok = ra_file_handle:write(Fd, lists:reverse(Pend))
+            ok = ra_file_handle:write(Fd, Pend)
     end,
     State0#state{batch = Batch#batch{pending = []}}.
 
@@ -546,27 +622,21 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     State = State0#state{metrics_cursor = NextCursor,
                          batch = undefined},
 
-
-    %% notify writers
-    _ = maps:map(fun (Pid, WrittenInfo) ->
-                         Pid ! {ra_log_event, {written, WrittenInfo}},
+    %% process writers
+    _ = maps:map(fun (Pid, #batch_writer{tbl_start = TblStart,
+                                         uid = UId,
+                                         from = From,
+                                         to = To,
+                                         term = Term,
+                                         inserts = Inserts,
+                                         tid = Tid}) ->
+                         true = ets:insert(Tid, Inserts),
+                         true = ets:update_element(ra_log_open_mem_tables, UId,
+                                                   [{2, TblStart}, {3, To}]),
+                         Pid ! {ra_log_event, {written, {From, To, Term}}},
                          ok
                  end, Waiting),
-    {ok, [garbage_collect], State}.
-
-incr_batch(#batch{writes = Writes,
-                  waiting = Waiting0,
-                  pending = Pend} = Batch, Pid, {Idx, Term}, Data) ->
-    Waiting = case Waiting0 of
-                  #{Pid := {From, _, _}} ->
-                      Waiting0#{Pid => {min(Idx, From), Idx, Term}};
-                  _ ->
-                      Waiting0#{Pid => {Idx, Idx, Term}}
-              end,
-
-    Batch#batch{writes = Writes + 1,
-                waiting = Waiting,
-                pending = [Data | Pend]}.
+    State.
 
 wal2list(File) ->
     Data = open_existing(File),
@@ -659,7 +729,8 @@ merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
                  max_size_bytes => ?WAL_MAX_SIZE_BYTES,
                  compute_checksums => true,
-                 write_strategy => default}, Conf).
+                 write_strategy => default,
+                 sync_method => datasync}, Conf).
 
 to_binary(Term) ->
     term_to_binary(Term).

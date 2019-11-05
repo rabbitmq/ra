@@ -178,7 +178,7 @@ leader_monitors(Config) ->
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
     meck:expect(Mod, apply, fun (_, {monitor_me, Pid}, State) ->
-                                    {[Pid | State], ok,  {monitor, process, Pid}}
+                                    {[Pid | State], ok, {monitor, process, Pid}}
                             end),
     meck:expect(Mod, state_enter,
                 fun (leader, State) ->
@@ -188,6 +188,9 @@ leader_monitors(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, ServerId} = ra:process_command(ServerId, {monitor_me, self()}),
+    %% it is possible we get a reply before the process has finished setting up the
+    %% monitor. A round trip through the state machine should make it more likely
+    _ = ra:members(ServerId),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
     ra:stop_server(ServerId),

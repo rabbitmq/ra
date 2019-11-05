@@ -110,6 +110,18 @@ Indicate whether the wal should compute and validate checksums. Default: true
     need the additional `fsync(2)` system call. If it fails to open the file with this
     flag this mode falls back to `default`
 
+* `wal_sync_method`:
+    - `datasync`:
+
+    The default. Uses the fdatasync system call after each batch. This avoids flushing
+    file meta-data after each write batch and thus may be slightly faster than
+    `sync` on some system. NB: not all systems support fdatasync. Please consult system
+    documentation and configure it to use sync instead if it is not supported.
+
+    - `sync`:
+
+    Uses the fsync system call after each batch.
+
 * `wal_max_batch_size`:
 
 Controls the internal max batch size that the WAL will accept. Higher numbers may
