@@ -338,7 +338,8 @@ parse_index_data(<<Idx:64/unsigned, Term:64/unsigned,
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
     {ok, 0} = ra_file_handle:position(Fd, 0),
-    ok = ra_file_handle:write(Fd, Header).
+    ok = ra_file_handle:write(Fd, Header),
+    ok = ra_file_handle:sync(Fd).
 
 read_header(Fd) ->
     {ok, 0} = ra_file_handle:position(Fd, 0),
