@@ -198,7 +198,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
 
     case open_file(Dir, SegConf) of
         enoent ->
-            ?INFO("segment_writer: skipping segment as directory ~s does "
+            ?WARN("segment_writer: skipping segment as directory ~s does "
                    "not exist~n", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
@@ -208,8 +208,8 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                    Segment0, SegConf) of
                 undefined ->
-                    ?DEBUG("segment_writer: skipping segments for ~w as
-                            directory ~s disappeared whilst writing~n",
+                    ?WARN("segment_writer: skipping segments for ~w as
+                           directory ~s disappeared whilst writing~n",
                            [ServerUId, Dir]),
                     State;
                 {Segment1, Closed0} ->
