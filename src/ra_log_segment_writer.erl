@@ -196,51 +196,41 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                   segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
-    case filelib:is_dir(Dir) of
-        true ->
-            %% check that the directory exists -
-            %% if it does not exist the server has
-            %% never been started or has been deleted
-            %% and we should just continue
-            Segment0 = open_file(Dir, SegConf),
-            case Segment0 of
-                undefined ->
-                    State;
-                _ ->
-                    case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
-                                           Segment0, SegConf) of
-                        undefined ->
-                            ?DEBUG("segment_writer: skipping segments for ~w as
-                                   directory ~s disappeared whilst writing~n",
-                                   [ServerUId, Dir]),
-                            State;
-                        {Segment1, Closed0} ->
-                            % fsync
-                            {ok, Segment} = ra_log_segment:sync(Segment1),
-
-                            % notify writerid of new segment update
-                            % includes the full range of the segment
-                            ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0],
-                            SegRefs = case ra_log_segment:segref(Segment) of
-                                          undefined ->
-                                              ClosedSegRefs;
-                                          SRef ->
-                                              [SRef | ClosedSegRefs]
-                                      end,
-
-                            _ = ra_log_segment:close(Segment),
-
-                            ok = send_segments(ServerUId, Tid, SegRefs),
-                            State
-                    end
-            end;
-        false ->
-            ?DEBUG("segment_writer: skipping segment as directory ~s does "
+    case open_file(Dir, SegConf) of
+        enoent ->
+            ?WARN("segment_writer: skipping segment as directory ~s does "
                    "not exist~n", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(ServerUId, Tid),
-            State
+            State;
+        Segment0 ->
+            case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
+                                   Segment0, SegConf) of
+                undefined ->
+                    ?WARN("segment_writer: skipping segments for ~w as
+                           directory ~s disappeared whilst writing~n",
+                           [ServerUId, Dir]),
+                    State;
+                {Segment1, Closed0} ->
+                    % fsync
+                    {ok, Segment} = ra_log_segment:sync(Segment1),
+
+                    % notify writerid of new segment update
+                    % includes the full range of the segment
+                    ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0],
+                    SegRefs = case ra_log_segment:segref(Segment) of
+                                  undefined ->
+                                      ClosedSegRefs;
+                                  SRef ->
+                                      [SRef | ClosedSegRefs]
+                              end,
+
+                    _ = ra_log_segment:close(Segment),
+
+                    ok = send_segments(ServerUId, Tid, SegRefs),
+                    State
+            end
     end.
 
 start_index(ServerUId, StartIdx0) ->
@@ -331,28 +321,31 @@ open_file(Dir, SegConf) ->
     File = case find_segment_files(Dir) of
                [] ->
                    F = ra_lib:zpad_filename("", "segment", 1),
-                   % Checking the directory below with filelib:ensure_dir
-                   _ = ra_lib:make_dir(Dir),
                    filename:join(Dir, F);
                [F | _] ->
                    F
            end,
-    %% The above call to ra_lib:make_dir should ensure that the target directory
-    %% is created.
-    %% There is a small chance we'll get here without the target directory
-    %% existing which could happen during server deletion
-    case filelib:ensure_dir(File) of
-        ok ->
-            case ra_log_segment:open(File, SegConf#{mode => append}) of
-                {ok, Segment} ->
-                    Segment;
-                Err ->
-                    ?WARN("segment_writer: failed to open segment file ~w"
-                          "error: ~W", [File, Err]),
-                    undefined
-            end;
-        {error, Err} ->
-            ?WARN("segment_writer: failed to create directory ~w, Err: ~w~n",
-                  [File, Err]),
-              undefined
+    %% There is a chance we'll get here without the target directory
+    %% existing which could happen after server deletion
+    case ra_log_segment:open(File, SegConf#{mode => append}) of
+        {ok, Segment} ->
+            Segment;
+        {error, missing_segment_header} ->
+            %% a file was created by the segment header had not been
+            %% synced. In this case it is typically safe to just delete
+            %% and retry.
+            ?WARN("segment_writer: missing header in segment file ~s"
+                  "deleting file and retrying recovery", [File]),
+            _ = file:delete(File),
+            open_file(Dir, SegConf);
+        {error, enoent} ->
+            ?WARN("segment_writer: failed to open segment file ~s"
+                  "error: enoent", [File]),
+            enoent;
+        Err ->
+            %% Any other error should be considered a hard error or else
+            %% we'd risk data loss
+            ?WARN("segment_writer: failed to open segment files~w"
+                  "error: ~W. Exiting", [File, Err, 10]),
+            exit(Err)
     end.
