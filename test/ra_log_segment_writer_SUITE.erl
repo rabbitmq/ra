@@ -20,6 +20,8 @@ all_tests() ->
      accept_mem_tables_overwrite,
      accept_mem_tables_rollover,
      accept_mem_tables_for_down_server,
+     accept_mem_tables_with_corrupt_segment,
+     accept_mem_tables_with_delete_server,
      truncate_segments,
      truncate_segments_with_pending_update,
      truncate_segments_with_pending_overwrite,
@@ -40,6 +42,7 @@ end_per_group(tests, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    logger:set_primary_config(level, all),
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     ra_directory:init(PrivDir),
@@ -428,6 +431,107 @@ accept_mem_tables_for_down_server(Config) ->
     ok = gen_server:stop(TblWriterPid),
     ok.
 
+accept_mem_tables_with_corrupt_segment(Config) ->
+    %% fake a closed mem table
+    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    % FakeUId = <<"not_self">>,
+    % ok = ra_lib:make_dir(filename:join(Dir, FakeUId)),
+    application:start(sasl),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{data_dir => Dir}),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    % Tid = make_mem_table(FakeUId, Entries),
+    Tid2 = make_mem_table(UId, Entries),
+    MemTables = [{UId, 1, 3, Tid2}],
+    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
+    WalFile = filename:join(Dir, "00001.wal"),
+    ok = file:write_file(WalFile, <<"waldata">>),
+    %% write an empty file to simulate corrupt segment
+    %% this can happen if a segment is opened but is interrupted before syncing
+    %% the header
+    file:write_file(filename:join(?config(server_dir, Config), "0000001.segment"), <<>>),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    receive
+        {ra_log_event, {segments, Tid2, [{1, 3, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert Entries have been fully transferred
+            Entries = [{I, T, binary_to_term(B)}
+                       || {I, T, B} <- ra_log_segment:read(Seg, 1, 3)]
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+
+    %% if the server is down at the time the segment writer send the segments
+    %% the segment writer should clear up the ETS mem tables
+    %% This is safe as the server synchronises through the segment writer
+    %% on start.
+    %% check the fake tid is removed
+    % undefined = ets:info(Tid),
+    [] = ets:tab2list(ra_log_closed_mem_tables),
+
+    % assert wal file has been deleted.
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_with_delete_server(Config) ->
+    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    application:start(sasl),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{data_dir => Dir}),
+    % fake up a mem segment for Self
+    Tid = make_mem_table(UId, [{1, 42, a}, {2, 42, b}, {3, 42, c}]),
+    Tid2 = make_mem_table(UId, [{4, 42, d}]),
+    MemTables = [{UId, 1, 3, Tid}],
+    MemTables2 = [{UId, 4, 4, Tid2}],
+    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
+    WalFile = filename:join(Dir, "00001.wal"),
+    ok = file:write_file(WalFile, <<"waldata">>),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables, WalFile),
+    receive
+        {ra_log_event, {segments, Tid, [{1, 3, _Fn}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+
+    %% delete server directory to simulate server deletion
+    ServerDir = ?config(server_dir, Config),
+    ra_lib:recursive_delete(ServerDir),
+    ?assert(filelib:is_dir(ServerDir) == false),
+    ok = ra_log_segment_writer:accept_mem_tables(MemTables2, WalFile),
+    receive
+        {ra_log_event, {segments, Tid2, _}} ->
+            exit(unexpected_log_event)
+    after 1000 ->
+              ok
+    end,
+    %% if the server is down at the time the segment writer send the segments
+    %% the segment writer should clear up the ETS mem tables
+    %% This is safe as the server synchronises through the segment writer
+    %% on start.
+    %% check the fake tid is removed
+    % undefined = ets:info(Tid),
+    [] = ets:tab2list(ra_log_closed_mem_tables),
+
+    % assert wal file has been deleted.
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
 %%% Internal
 
 fake_mem_table(UId, Dir, Entries) ->
