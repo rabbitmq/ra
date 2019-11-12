@@ -15,9 +15,10 @@ start_link(DataDir) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [DataDir]).
 
 init([DataDir]) ->
+    PreInit = #{id => ra_log_pre_init,
+                start => {ra_log_pre_init, start_link, [DataDir]}},
     Meta = #{id => ra_log_meta,
              start => {ra_log_meta, start_link, [DataDir]}},
-
     SegmentMaxEntries = application:get_env(ra, segment_max_entries, 4096),
     SegWriterConf = #{data_dir => DataDir,
                       segment_conf => #{max_count => SegmentMaxEntries}},
@@ -29,4 +30,4 @@ init([DataDir]) ->
     WalSup = #{id => ra_log_wal_sup,
                type => supervisor,
                start => {ra_log_wal_sup, start_link, [WalConf]}},
-    {ok, {SupFlags, [Meta, SegWriter, WalSup]}}.
+    {ok, {SupFlags, [PreInit, Meta, SegWriter, WalSup]}}.

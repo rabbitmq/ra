@@ -3,7 +3,8 @@
 
 -compile([inline_list_funcs]).
 
--export([init/1,
+-export([pre_init/1,
+         init/1,
          close/1,
          append/2,
          write/2,
@@ -107,6 +108,17 @@
               event_body/0,
               effect/0
              ]).
+
+pre_init(#{uid := UId} = Conf) ->
+    Dir = case Conf of
+              #{data_dir := D} -> D;
+              _ ->
+                  ra_env:server_data_dir(UId)
+          end,
+    SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
+    SnapshotsDir = filename:join(Dir, "snapshots"),
+    _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
+    ok.
 
 -spec init(ra_log_init_args()) -> state().
 init(#{uid := UId} = Conf) ->
