@@ -229,7 +229,11 @@
                      LogState,
                      MacState :: state()) ->
     {reply, Reply :: term(), AuxState, LogState} |
-    {no_reply, AuxState, LogState}
+    {reply, Reply :: term(), AuxState, LogState,
+     [{monitor, process, aux, pid()}]} |
+    {no_reply, AuxState, LogState} |
+    {no_reply, AuxState, LogState,
+     [{monitor, process, aux, pid()}]}
       when AuxState :: term(),
            LogState :: ra_log:state().
 
@@ -287,13 +291,20 @@ which_module({machine, Mod, _}, Version) ->
 init_aux(Mod, Name) ->
     ?OPT_CALL(Mod:init_aux(Name), undefined).
 
--spec handle_aux(module(), ra_server:ra_state(),
+-spec handle_aux(module(),
+                 ra_server:ra_state(),
                  {call, From :: from()} | cast,
-                 Command :: term(), AuxState,
-                 LogState, MacState :: state()) ->
+                 Command :: term(),
+                 AuxState,
+                 LogState,
+                 MacState :: state()) ->
+    undefined |
     {reply, Reply :: term(), AuxState, LogState} |
+    {reply, Reply :: term(), AuxState, LogState,
+     [{monitor, process, aux, pid()}]} |
     {no_reply, AuxState, LogState} |
-    undefined
+    {no_reply, AuxState, LogState,
+     [{monitor, process, aux, pid()}]}
       when AuxState :: term(),
            LogState :: ra_log:state().
 handle_aux(Mod, RaftState, Type, Cmd, Aux, Log, MacState) ->

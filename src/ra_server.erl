@@ -1253,8 +1253,13 @@ handle_aux(RaftState, Type, Cmd, #{aux_state := Aux0, log := Log0,
         {reply, Reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux},
              [{reply, Reply}]};
+        {reply, Reply, Aux, Log, Effects} ->
+            {RaftState, State0#{log => Log, aux_state => Aux},
+             [{reply, Reply} | Effects]};
         {no_reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux}, []};
+        {no_reply, Aux, Log, Effects} ->
+            {RaftState, State0#{log => Log, aux_state => Aux}, Effects};
         undefined ->
             {RaftState, State0, []}
     end.
@@ -1597,6 +1602,8 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
     SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
     {RaftState, State#{log => Log}, []};
+handle_down(RaftState, aux, Pid, Info, State) ->
+    handle_aux(RaftState, cast, {down, Pid, Info}, State);
 handle_down(RaftState, Type, Pid, Info, #{id := {_, _, LogId}} = State) ->
     ?DEBUG("~s: handle_down: unexpected ~w ~w exited with ~W~n",
           [LogId, Type, Pid, Info, 10]),

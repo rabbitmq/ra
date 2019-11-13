@@ -1053,12 +1053,14 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
             handle_effects(RaftState, Effects, EvtType,
                            State#state{server_state = SS}, Actions)
     end;
-handle_effect(RaftState, {aux, Cmd}, _, State, Actions) ->
+handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions) ->
     %% TODO: thread through state
-    {_, ServerState, []} = ra_server:handle_aux(RaftState, cast, Cmd,
-                                                State#state.server_state),
-
-    {State#state{server_state = ServerState}, Actions};
+    {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {State, Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     %% should only be done by leader
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
