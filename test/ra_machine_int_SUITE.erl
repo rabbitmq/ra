@@ -32,7 +32,8 @@ all_tests() ->
      meta_data,
      timer_effect,
      log_effect,
-     aux_command
+     aux_command,
+     aux_monitor_effect
     ].
 
 groups() ->
@@ -442,6 +443,52 @@ aux_command(Config) ->
     ok = ra:cast_aux_command(ServerId3, orange),
     {follower, orange} = ra:aux_command(ServerId3, emit),
     ra:delete_cluster(Cluster),
+    ok.
+
+aux_monitor_effect(Config) ->
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
+                        %% monitors a process
+                        {no_reply, AuxState, Log, [{monitor, process, aux, Pid}]};
+                    (_RaftState, _, {down, Pid, _Info}, AuxState, Log, _MacState) ->
+                        %% replaces aux state
+                        Self ! {down_received, Pid},
+                        {no_reply, AuxState, Log}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+
+    P = spawn(fun () ->
+                      receive
+                          pls_exit -> ok
+                      end
+              end),
+    ok = ra:cast_aux_command(Leader, {monitor, P}),
+    P ! pls_exit,
+    receive
+        {down_received, P} ->
+            ok
+    after 2500 ->
+              flush(),
+              exit(down_recieved_timeout)
+    end,
     ok.
 
 %% Utility
