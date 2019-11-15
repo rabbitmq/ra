@@ -55,8 +55,7 @@
                                  ToTerm :: ra_term()}} |
                       {segments, ets:tid(), [segment_ref()]} |
                       {resend_write, ra_index()} |
-                      {snapshot_written,
-                       ra_idxterm()}.
+                      {snapshot_written, ra_idxterm()}.
 
 -type event() :: {ra_log_event, event_body()}.
 
