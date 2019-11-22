@@ -108,8 +108,6 @@
               ra_event/0,
               ra_event_body/0]).
 
--type monitors() ::
-    #{pid() | node() => {machine | snapshot_sender, maybe(reference())}}.
 %% the ra server proc keeps monitors on behalf of different components
 %% the state machine, log and server code. The tag is used to determine
 %% which component to dispatch the down to
@@ -125,7 +123,7 @@
 
 -record(state, {conf :: #conf{},
                 server_state :: ra_server:ra_server_state(),
-                monitors = #{} :: monitors(),
+                monitors = ra_monitors:init() :: ra_monitors:state(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 leader_last_seen :: integer() | undefined,
@@ -263,7 +261,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 ra_event_formatter = RaEventFormatterMFA,
                                 flush_commands_size = FlushCommandsSize},
                    server_state = ServerState},
-    ok = net_kernel:monitor_nodes(true),
+    ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     {ok, recover, State, [{next_event, cast, go}]}.
 
 %% callback mode
@@ -381,40 +379,11 @@ leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State, []};
-leader(info, {'DOWN', MRef, process, Pid, Info},
-       #state{monitors = Monitors0,
-              server_state = ServerState0} = State0) ->
-    case maps:take(Pid, Monitors0) of
-        {{Comp, MRef}, Monitors} ->
-            {_, ServerState, Effects} =
-                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
-                                      ServerState0),
-            {State, Actions} =
-                ?HANDLE_EFFECTS(Effects, cast,
-                                State0#state{server_state = ServerState,
-                                             monitors = Monitors}),
-            {keep_state, State, Actions};
-        error ->
-            {keep_state, State0, []}
-    end;
-leader(info, {NodeEvt, Node},
-       #state{monitors = Monitors0,
-              server_state = ServerState0} = State0)
-  when NodeEvt =:= nodedown orelse NodeEvt =:= nodeup ->
-    case Monitors0 of
-        #{Node := _} ->
-            % there is a monitor for the node
-            Cmd = make_command('$usr', cast,
-                               {NodeEvt, Node}, noreply),
-            {leader, ServerState, Effects} =
-                ra_server:handle_leader({command, Cmd}, ServerState0),
-            {State, Actions} =
-                ?HANDLE_EFFECTS(Effects, cast,
-                                State0#state{server_state = ServerState}),
-            {keep_state, State, Actions};
-        _ ->
-            {keep_state, State0, []}
-    end;
+leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
+    handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
+leader(info, {Status, Node, InfoList}, State0)
+  when Status =:= nodedown orelse Status =:= nodeup ->
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
@@ -443,18 +412,9 @@ leader(EventType, Msg, State0) ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             {keep_state, State, Actions};
         {follower, State1, Effects1} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects1,
-                                               EventType,
-                                               State1),
-            % demonitor when stepping down
-            ok = lists:foreach(fun ({_, Ref}) when is_reference(Ref) ->
-                                       erlang:demonitor(Ref);
-                                   (_) ->
-                                       %% the monitor is a node
-                                       %% all nodes are always monitored
-                                       ok
-                               end, maps:values(State#state.monitors)),
-            next_state(follower, State#state{monitors = #{}}, Actions);
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
+            Monitors = ra_monitors:remove_all(machine, State#state.monitors),
+            next_state(follower, State#state{monitors = Monitors}, Actions);
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
@@ -542,6 +502,11 @@ pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
 pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
+pre_vote(info, {Status, Node, InfoList}, State0)
+  when Status =:= nodedown orelse Status =:= nodeup ->
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+pre_vote(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
+    handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
     {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
@@ -638,21 +603,8 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
                  end,
     {State, Actions} = maybe_set_election_timeout(TimeoutLen, State0, []),
     {keep_state, State#state{leader_monitor = undefined}, Actions};
-follower(info, {'DOWN', MRef, process, Pid, Info},
-         #state{monitors = Monitors0, server_state = ServerState0} = State0) ->
-    case maps:take(Pid, Monitors0) of
-        {{Comp, MRef}, Monitors} ->
-            {_, ServerState, Effects} =
-                ra_server:handle_down(?FUNCTION_NAME, Comp, Pid, Info,
-                                      ServerState0),
-            {State, Actions} =
-                ?HANDLE_EFFECTS(Effects, cast,
-                                State0#state{server_state = ServerState,
-                                             monitors = Monitors}),
-            {keep_state, State, Actions};
-        error ->
-            {keep_state, State0, []}
-    end;
+follower(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
+    handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 follower(info, {node_event, Node, down}, State0) ->
     case leader_id(State0) of
         {_, Node} ->
@@ -674,6 +626,9 @@ follower(info, {node_event, Node, up}, State) ->
         _ ->
             {keep_state, State}
     end;
+follower(info, {Status, Node, InfoList}, State0)
+  when Status =:= nodedown orelse Status =:= nodeup ->
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 follower(_, tick_timeout, State) ->
     {keep_state,
      handle_tick_metrics(State),
@@ -794,6 +749,8 @@ await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
     ?INFO("~s: await_condition - Leader monitor down. Entering follower state.",
           [log_id(State)]),
     next_state(follower, State#state{leader_monitor = undefined}, []);
+await_condition(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
+    handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 await_condition(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
         {_, Node} ->
@@ -804,6 +761,9 @@ await_condition(info, {node_event, Node, down}, State) ->
         _ ->
             {keep_state, State}
     end;
+await_condition(info, {Status, Node, InfoList}, State0)
+  when Status =:= nodedown orelse Status =:= nodeup ->
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 await_condition(enter, OldState, #state{conf = Conf} = State0) ->
     {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
     Actions = [{state_timeout, Conf#conf.await_condition_timeout,
@@ -1031,21 +991,23 @@ handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
             {State, Actions}
     end;
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions) when is_list(Idxs) ->
+              State = #state{server_state = SS0}, Actions)
+  when is_list(Idxs) ->
     %% Useful to implement a batch send of data obtained from the log.
     %% 1) Retrieve all data from the list of indexes
-    {Data, SS} = lists:foldl(fun(Idx, {Data0, Acc0}) ->
-                                     case ra_server:read_at(Idx, Acc0) of
-                                         {ok, D, Acc} ->
-                                             {[D | Data0], Acc};
-                                         {error, _} ->
-                                             %% this is unrecoverable
-                                             exit({failed_to_read_index_for_log_effect,
-                                                   Idx})
-                                     end
-                             end, {[], SS0}, Idxs),
+    {Data, SS} = lists:foldr(
+                   fun(Idx, {Data0, Acc0}) ->
+                           case ra_server:read_at(Idx, Acc0) of
+                               {ok, D, Acc} ->
+                                   {[D | Data0], Acc};
+                               {error, _} ->
+                                   %% this is unrecoverable
+                                   exit({failed_to_read_index_for_log_effect,
+                                         Idx})
+                           end
+                   end, {[], SS0}, Idxs),
     %% 2) Apply the fun to the list of data as a whole and deal with any effects
-    case Fun(lists:reverse(Data)) of
+    case Fun(Data) of
         [] ->
             {State#state{server_state = SS}, Actions};
         Effects ->
@@ -1053,14 +1015,13 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
             handle_effects(RaftState, Effects, EvtType,
                            State#state{server_state = SS}, Actions)
     end;
-handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions) ->
-    %% TODO: thread through state
+handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
                                                      State0#state.server_state),
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {State, Actions};
+    {State, Actions0 ++ Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     %% should only be done by leader
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
@@ -1102,12 +1063,11 @@ handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
                                 erlang:raise(C, E, S)
                         end
                 end),
-    MRef = erlang:monitor(process, Pid),
     %% update the peer state so that no pipelined entries are sent during
     %% the snapshot sending phase
     SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
     {State0#state{server_state = SS,
-                  monitors = Monitors#{Pid => {snapshot_sender, MRef}}},
+                  monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
                   Actions};
 handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
@@ -1135,73 +1095,22 @@ handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     {State, Actions};
-handle_effect(_, {monitor, process, Pid}, _,
-              #state{monitors = Monitors} = State, Actions) ->
-    case Monitors of
-        #{Pid := _} ->
-            % monitor is already in place - do nothing
-            {State, Actions};
-        _ ->
-            MRef = erlang:monitor(process, Pid),
-            {State#state{monitors = Monitors#{Pid => {machine, MRef}}},
-             Actions}
-    end;
-handle_effect(_, {monitor, process, Component, Pid}, _,
-              #state{monitors = Monitors} = State, Actions) ->
-    case Monitors of
-        #{Pid := _} ->
-            % monitor is already in place - do nothing
-            {State, Actions};
-        _ ->
-            MRef = erlang:monitor(process, Pid),
-            {State#state{monitors = Monitors#{Pid => {Component, MRef}}},
-             Actions}
-    end;
-handle_effect(_, {monitor, node, Node}, _,
+handle_effect(_, {monitor, _ProcOrNode, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->
-    case Monitors of
-        #{Node := _} ->
-            % monitor is already in place - do nothing
-            {State, Actions0};
-        _ ->
-            %% no need to actually monitor anything as we've always monitoring
-            %% all visible nodes
-            %% Fake a node event if the node is already connected so that the machine
-            %% can discover the current status
-            case lists:member(Node, nodes()) of
-                true ->
-                    %% as effects get evaluated on state enter we cannot use
-                    %% next_events
-                    self() ! {nodeup, Node},
-                    ok;
-                false ->
-                    self() ! {nodedown, Node},
-                    ok
-            end,
-            {State#state{monitors = Monitors#{Node => undefined}}, Actions0}
-    end;
-handle_effect(_, {demonitor, process, Pid}, _,
+    {State#state{monitors = ra_monitors:add(PidOrNode, machine, Monitors)},
+     Actions0};
+handle_effect(_, {monitor, _ProcOrNode, Component, PidOrNode}, _,
+              #state{monitors = Monitors} = State, Actions0) ->
+    {State#state{monitors = ra_monitors:add(PidOrNode, Component, Monitors)},
+     Actions0};
+handle_effect(_, {demonitor, _ProcOrNode, PidOrNode}, _,
               #state{monitors = Monitors0} = State, Actions) ->
-    case maps:take(Pid, Monitors0) of
-        {{_, MRef}, Monitors} ->
-            true = erlang:demonitor(MRef),
-            {State#state{monitors = Monitors}, Actions};
-        error ->
-            % ref not known - do nothing
-            {State, Actions}
-    end;
-handle_effect(_, {demonitor, node, Node}, _,
+    Monitors = ra_monitors:remove(PidOrNode, machine, Monitors0),
+    {State#state{monitors = Monitors}, Actions};
+handle_effect(_, {demonitor, _ProcOrNode, Component, PidOrNode}, _,
               #state{monitors = Monitors0} = State, Actions) ->
-    case maps:take(Node, Monitors0) of
-        {_, Monitors} ->
-            {State#state{monitors = Monitors}, Actions};
-        error ->
-            {State, Actions}
-    end;
-handle_effect(_, {incr_metrics, Table, Ops}, _,
-              State = #state{conf = #conf{name = Key}}, Actions) ->
-    _ = ets:update_counter(Table, Key, Ops),
-    {State, Actions};
+    Monitors = ra_monitors:remove(PidOrNode, Component, Monitors0),
+    {State#state{monitors = Monitors}, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
@@ -1520,3 +1429,38 @@ can_execute_locally(RaftState, TargetNode, State) ->
         _ ->
             false
     end.
+
+handle_node_status_change(Node, Status, InfoList, RaftState,
+                          #state{monitors = Monitors0,
+                                 server_state = ServerState0} = State0) ->
+    {Comps, Monitors} = ra_monitors:handle_down(Node, Monitors0),
+    {_, ServerState, Effects} =
+        lists:foldl(
+          fun (Comp, {R, S0, E0}) ->
+                  {R, S, E} = ra_server:handle_node_status(R, Comp, Node,
+                                                           Status, InfoList,
+                                                           S0),
+                  {R, S, E0 ++ E}
+          end, {RaftState, ServerState0, []}, Comps),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
+                                       State0#state{server_state = ServerState,
+                                                    monitors = Monitors}),
+    {keep_state, State, Actions}.
+
+handle_process_down(Pid, Info, RaftState,
+                    #state{monitors = Monitors0,
+                           server_state = ServerState0} = State0) ->
+    {Comps, Monitors} = ra_monitors:handle_down(Pid, Monitors0),
+    {ServerState, Effects} =
+    lists:foldl(
+      fun(Comp, {S0, E0}) ->
+              {_, S, E} = ra_server:handle_down(RaftState, Comp,
+                                                Pid, Info, S0),
+              {S, E0 ++ E}
+      end, {ServerState0, []}, Comps),
+
+    {State, Actions} =
+    ?HANDLE_EFFECTS(Effects, cast,
+                    State0#state{server_state = ServerState,
+                                 monitors = Monitors}),
+    {keep_state, State, Actions}.

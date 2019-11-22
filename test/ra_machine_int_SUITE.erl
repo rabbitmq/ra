@@ -33,7 +33,10 @@ all_tests() ->
      timer_effect,
      log_effect,
      aux_command,
-     aux_monitor_effect
+     aux_monitor_effect,
+     aux_and_machine_monitor_same_process,
+     aux_and_machine_monitor_same_node,
+     aux_and_machine_monitor_leader_change
     ].
 
 groups() ->
@@ -491,6 +494,181 @@ aux_monitor_effect(Config) ->
     end,
     ok.
 
+aux_and_machine_monitor_same_process(Config) ->
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, {down, P, _} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok, {send_msg, Self, {got_down, machine, P}}};
+                    (_, {monitor, P} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok, {monitor, process, P}}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
+                        %% monitors a process
+                        {no_reply, AuxState, Log,
+                         [{monitor, process, aux, Pid}]};
+                    (_RaftState, _, {down, P, _Info}, AuxState, Log, _MacState) ->
+                        %% replaces aux state
+                        Self ! {got_down, aux, P},
+                        {no_reply, AuxState, Log}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    [Follower1, _Follower2] = Cluster -- [Leader],
+
+    P = spawn(fun () ->
+                      receive
+                          pls_exit -> ok
+                      end
+              end),
+    {ok, _, _} = ra:process_command(Leader, {monitor, P}),
+    ok = ra:cast_aux_command(Follower1, {monitor, P}),
+    P ! pls_exit,
+    receive
+        {got_down, machine, P} ->
+            receive
+                {got_down, aux, P} ->
+                    ok
+            after 2500 ->
+                      flush(),
+                      exit(got_down_aux)
+            end
+    after 2500 ->
+              flush(),
+              exit(got_down_machine)
+    end,
+    ok.
+
+aux_and_machine_monitor_same_node(Config) ->
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, {nodedown, Node} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        Self ! {got_down, machine, Node},
+                        {State, ok};
+                    (_, {monitor, P} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok, {monitor, node, P}}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, {monitor, Node}, AuxState, Log, _MacState) ->
+                        %% monitors a process
+                        {no_reply, AuxState, Log,
+                         [{monitor, node, aux, Node}]};
+                    (_RaftState, _, {nodedown, Node}, AuxState, Log, _MacState) ->
+                        %% replaces aux state
+                        Self ! {got_down, aux, Node},
+                        {no_reply, AuxState, Log}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    Node = fake_node@banana,
+    {ok, _, _} = ra:process_command(Leader, {monitor, Node}),
+    ok = ra:cast_aux_command(Leader, {monitor, Node}),
+    %% as the fake node isn't connected it should generate a node down immediately
+    receive
+        {got_down, machine, Node} ->
+            receive
+                {got_down, aux, Node} ->
+                    ok
+            after 2500 ->
+                      flush(),
+                      exit(got_down_aux)
+            end
+    after 2500 ->
+              flush(),
+              exit(got_down_machine)
+    end,
+    ok.
+
+aux_and_machine_monitor_leader_change(Config) ->
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, {down, P, _} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok, {send_msg, Self, {got_down, machine, P}}};
+                    (_, {monitor, P} = Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok, {monitor, process, P}}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
+                        %% monitors a process
+                        {no_reply, AuxState, Log,
+                         [{monitor, process, aux, Pid}]};
+                    (_RaftState, _, {down, P, _Info}, AuxState, Log, _MacState) ->
+                        %% replaces aux state
+                        Self ! {got_down, aux, P},
+                        {no_reply, AuxState, Log}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    [Follower1, _Follower2] = Cluster -- [Leader],
+
+    P = spawn(fun () ->
+                      receive
+                          pls_exit -> ok
+                      end
+              end),
+    {ok, _, _} = ra:process_command(Leader, {monitor, P}),
+    ok = ra:cast_aux_command(Leader, {monitor, P}),
+    ok = ra:cast_aux_command(Follower1, {monitor, P}),
+    ra:transfer_leadership(Leader, Follower1),
+    P ! pls_exit,
+    %% assert both aux nodes have retained their monitors
+    %% but the new leader has not
+    receive
+        {got_down, aux, P} ->
+            receive
+                {got_down, aux, P} ->
+                    ok
+            after 2500 ->
+                      exit(got_down_aux)
+            end
+    after 2500 ->
+              exit(got_down_aux_2)
+    end,
+    assert_flush(),
+    ok.
+
 %% Utility
 
 validate_state_enters(States) ->
@@ -524,6 +702,15 @@ flush() ->
         Any ->
             ct:pal("flush ~p", [Any]),
             flush()
+    after 0 ->
+              ok
+    end.
+
+assert_flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            exit({flush_expected_no_messages, Any})
     after 0 ->
               ok
     end.

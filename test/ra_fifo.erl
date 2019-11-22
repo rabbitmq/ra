@@ -848,7 +848,7 @@ update_or_remove_sub(CustomerId, #customer{lifetime = once,
         0 ->
             % we're done with this customer
             {maps:remove(CustomerId, Custs), ServiceQueue,
-             [{demonitor, process, CustomerId} | Effects]};
+             [{demonitor, process, element(2, CustomerId)} | Effects]};
         _ ->
             % there are unsettled items so need to keep around
             {maps:put(CustomerId, Cust, Custs), ServiceQueue, Effects}

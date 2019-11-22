@@ -33,6 +33,7 @@
          persist_last_applied/1,
          update_peer_status/3,
          handle_down/5,
+         handle_node_status/6,
          terminate/2,
          log_fold/3,
          read_at/2,
@@ -137,8 +138,6 @@
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
     {notify, pid(), reference()} |
-    {incr_metrics, Table :: atom(),
-     [{Pos :: non_neg_integer(), Incr :: integer()}]} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout.
@@ -332,13 +331,13 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
-                RpcEffects = case More of
-                                 true ->
-                                     [{next_event, info, pipeline_rpcs} |
-                                      RpcEffects0];
-                                 false ->
-                                     RpcEffects0
-                             end,
+            RpcEffects = case More of
+                             true ->
+                                 [{next_event, info, pipeline_rpcs} |
+                                  RpcEffects0];
+                             false ->
+                                 RpcEffects0
+                         end,
             Effects = Effects1 ++ RpcEffects,
             case State of
                 #{id := {Id, _, _}, cluster := #{Id := _}} ->
@@ -1375,39 +1374,36 @@ evaluate_commit_index_follower(State, Effects) ->
     {follower, State, Effects}.
 
 filter_follower_effects(Effects) ->
-    lists:reverse(lists:foldl(
-                    fun ({release_cursor, _, _} = C, Acc) ->
-                            [C | Acc];
-                        ({incr_metrics, _, _} = C, Acc) ->
-                            [C | Acc];
-                        ({aux, _} = C, Acc) ->
-                            [C | Acc];
-                        (garbage_collection = C, Acc) ->
-                            [C | Acc];
-                        ({delete_snapshot, _} = C, Acc) ->
-                            [C | Acc];
-                        ({send_msg, _, _, _Opts} = C, Acc) ->
-                            %% send_msg effects _may_ have the local option
-                            %% and will be evaluated properly during
-                            %% effect processing
-                            [C | Acc];
-                        ({log, _, _, _Opts} = C, Acc) ->
-                            [C | Acc];
-                        ({monitor, process, Comp, _} = C, Acc)
-                          when Comp =/= machine ->
-                            %% only machine monitors should not be emitted
-                            %% by followers
-                            [C | Acc];
-                        (L, Acc) when is_list(L) ->
-                            %% nested case - recurse
-                            case filter_follower_effects(L) of
-                                [] -> Acc;
-                                Filtered ->
-                                    [Filtered | Acc]
-                            end;
-                        (_, Acc) ->
-                            Acc
-                    end, [], Effects)).
+    lists:foldr(fun ({release_cursor, _, _} = C, Acc) ->
+                        [C | Acc];
+                    ({aux, _} = C, Acc) ->
+                        [C | Acc];
+                    (garbage_collection = C, Acc) ->
+                        [C | Acc];
+                    ({delete_snapshot, _} = C, Acc) ->
+                        [C | Acc];
+                    ({send_msg, _, _, _Opts} = C, Acc) ->
+                        %% send_msg effects _may_ have the local option
+                        %% and will be evaluated properly during
+                        %% effect processing
+                        [C | Acc];
+                    ({log, _, _, _Opts} = C, Acc) ->
+                        [C | Acc];
+                    ({monitor, _ProcOrNode, Comp, _} = C, Acc)
+                      when Comp =/= machine ->
+                        %% only machine monitors should not be emitted
+                        %% by followers
+                        [C | Acc];
+                    (L, Acc) when is_list(L) ->
+                        %% nested case - recurse
+                        case filter_follower_effects(L) of
+                            [] -> Acc;
+                            Filtered ->
+                                [Filtered | Acc]
+                        end;
+                    (_, Acc) ->
+                        Acc
+                end, [], Effects).
 
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
@@ -1577,20 +1573,25 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
              State
      end.
 
--spec handle_down(ra_state(), machine | snapshot_sender | snapshot_writer,
+-spec handle_down(ra_state(),
+                  machine | snapshot_sender | snapshot_writer | aux,
                   pid(), term(), ra_server_state()) ->
     {ra_state(), ra_server_state(), ra_effects()}.
-handle_down(leader, machine, Pid, Info, State) ->
+handle_down(leader, machine, Pid, Info, State)
+  when is_pid(Pid) ->
     %% commit command to be processed by state machine
     handle_leader({command, {'$usr', #{ts => os:system_time(millisecond)},
                             {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info, #{id := {_, _, LogId}} = State) ->
+handle_down(leader, snapshot_sender, Pid, Info,
+            #{id := {_, _, LogId}} = State)
+  when is_pid(Pid) ->
     ?DEBUG("~s: Snapshot sender process ~w exited with ~W~n",
           [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
-            #{id := {_, _, LogId}, log := Log0} = State) ->
+            #{id := {_, _, LogId}, log := Log0} = State)
+  when is_pid(Pid) ->
     case Info of
         noproc -> ok;
         normal -> ok;
@@ -1602,13 +1603,33 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
     SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
     {RaftState, State#{log => Log}, []};
-handle_down(RaftState, aux, Pid, Info, State) ->
+handle_down(RaftState, aux, Pid, Info, State)
+  when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
 handle_down(RaftState, Type, Pid, Info, #{id := {_, _, LogId}} = State) ->
     ?DEBUG("~s: handle_down: unexpected ~w ~w exited with ~W~n",
           [LogId, Type, Pid, Info, 10]),
     {RaftState, State, []}.
 
+-spec handle_node_status(ra_state(), machine | aux,
+                         node(), nodeup | nodedown,
+                         term(), ra_server_state()) ->
+    {ra_state(), ra_server_state(), ra_effects()}.
+handle_node_status(leader, machine, Node, Status, _Infos, State)
+  when is_atom(Node) ->
+    %% commit command to be processed by state machine
+    %% TODO: provide an option where the machine or aux can be provided with
+    %% the node down reason
+    Meta = #{ts => os:system_time(millisecond)},
+    handle_leader({command, {'$usr', Meta, {Status, Node}, noreply}}, State);
+handle_node_status(RaftState, aux, Node, Status, _Infos, State)
+  when is_atom(Node) ->
+    handle_aux(RaftState, cast, {Status, Node}, State);
+handle_node_status(RaftState, Type, Node, Status, _Info,
+                   #{id := {_, _, LogId}} = State) ->
+    ?DEBUG("~s: handle_node_status: unexpected ~w ~w status change ~w~n",
+          [LogId, Type, Node, Status]),
+    {RaftState, State, []}.
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log,
