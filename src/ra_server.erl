@@ -331,13 +331,13 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             % rpcs need to be issued _AFTER_ machine effects or there is
             % a chance that effects will never be issued if the leader crashes
             % after sending rpcs but before actioning the machine effects
-                RpcEffects = case More of
-                                 true ->
-                                     [{next_event, info, pipeline_rpcs} |
-                                      RpcEffects0];
-                                 false ->
-                                     RpcEffects0
-                             end,
+            RpcEffects = case More of
+                             true ->
+                                 [{next_event, info, pipeline_rpcs} |
+                                  RpcEffects0];
+                             false ->
+                                 RpcEffects0
+                         end,
             Effects = Effects1 ++ RpcEffects,
             case State of
                 #{id := {Id, _, _}, cluster := #{Id := _}} ->

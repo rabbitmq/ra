@@ -267,7 +267,7 @@ write([{Idx, _, _} | _], #?MODULE{uid = UId, last_index = LastIdx}) ->
     {[log_entry()], state()}.
 take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
                           last_index = LastIdx} = State)
-  when Start >= FirstIdx andalso Start =< LastIdx ->
+  when Start >= FirstIdx andalso Start =< LastIdx andalso Num > 0 ->
     % 0. Check that the request isn't outside of first_index and last_index
     % 1. Check the local cache for any unflushed entries, carry remainders
     % 2. Check ra_log_open_mem_tables

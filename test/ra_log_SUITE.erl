@@ -222,6 +222,8 @@ take(Config) ->
     {[], Log5} = ra_log:take(11, 3, Log4),
     % take all
     {Taken, _} = ra_log:take(1, 10, Log5),
+    %% take 0
+    {[], _} = ra_log:take(5, 0, Log5),
     ?assertEqual(10, length(Taken)),
     ok.
 

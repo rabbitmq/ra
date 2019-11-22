@@ -991,21 +991,23 @@ handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
             {State, Actions}
     end;
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions) when is_list(Idxs) ->
+              State = #state{server_state = SS0}, Actions)
+  when is_list(Idxs) ->
     %% Useful to implement a batch send of data obtained from the log.
     %% 1) Retrieve all data from the list of indexes
-    {Data, SS} = lists:foldl(fun(Idx, {Data0, Acc0}) ->
-                                     case ra_server:read_at(Idx, Acc0) of
-                                         {ok, D, Acc} ->
-                                             {[D | Data0], Acc};
-                                         {error, _} ->
-                                             %% this is unrecoverable
-                                             exit({failed_to_read_index_for_log_effect,
-                                                   Idx})
-                                     end
-                             end, {[], SS0}, Idxs),
+    {Data, SS} = lists:foldr(
+                   fun(Idx, {Data0, Acc0}) ->
+                           case ra_server:read_at(Idx, Acc0) of
+                               {ok, D, Acc} ->
+                                   {[D | Data0], Acc};
+                               {error, _} ->
+                                   %% this is unrecoverable
+                                   exit({failed_to_read_index_for_log_effect,
+                                         Idx})
+                           end
+                   end, {[], SS0}, Idxs),
     %% 2) Apply the fun to the list of data as a whole and deal with any effects
-    case Fun(lists:reverse(Data)) of
+    case Fun(Data) of
         [] ->
             {State#state{server_state = SS}, Actions};
         Effects ->
@@ -1013,14 +1015,13 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
             handle_effects(RaftState, Effects, EvtType,
                            State#state{server_state = SS}, Actions)
     end;
-handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions) ->
-    %% TODO: thread through state
+handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
                                                      State0#state.server_state),
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {State, Actions};
+    {State, Actions0 ++ Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     %% should only be done by leader
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
