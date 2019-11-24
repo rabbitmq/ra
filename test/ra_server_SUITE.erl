@@ -297,8 +297,9 @@ follower_aer_1(_Config) ->
                                prev_log_term = 1, leader_commit = 1,
                                entries = [entry(2, 1, two)]},
     {follower, State2 = #{leader_id := n1, current_term := 1,
-                          commit_index := 1, last_applied := 0,
-                          machine_state := {simple, _, <<>>}},
+                          commit_index := 1, last_applied := 1,
+                          %% validate entry was applied to machine
+                          machine_state := {simple, _, one}},
      _} = ra_server:handle_follower(AER2, State1),
 
     % {written, 1} -> last_applied: 1 - replies with last_index = 1, next_index = 3
@@ -315,19 +316,20 @@ follower_aer_1(_Config) ->
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
     {follower, State4 = #{leader_id := n1, current_term := 1,
-                          commit_index := 3, last_applied := 1,
-                          machine_state := {simple, _, one}},
+                          commit_index := 3, last_applied := 3,
+                          machine_state := {simple, _, tre}},
      _} = ra_server:handle_follower(AER3, State3),
 
-    % {written, 2} -> last_applied: 2, commit_index = 3 reply = 2, next_index = 4
+    % {written, 2} -> last_applied: 3, commit_index = 3 reply = 2, next_index = 4
     {follower, State5 = #{leader_id := n1, current_term := 1,
-                          commit_index := 3, last_applied := 2,
-                          machine_state := {_, _, two}},
+                          commit_index := 3, last_applied := 3,
+                          machine_state := {_, _, tre}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {2, 2, 1}}}, State4),
 
+    ok = logger:set_primary_config(level, all),
     % AER with index [] -> last_applied: 2 - replies with last_index = 2,
         % next_index = 4
     % empty AER before {written, 3} is received
@@ -335,8 +337,8 @@ follower_aer_1(_Config) ->
                                prev_log_term = 1, leader_commit = 3,
                                entries = []},
     {follower, State6 = #{leader_id := n1, current_term := 1,
-                          commit_index := 3, last_applied := 2,
-                          machine_state := {simple, _, two}},
+                          commit_index := 3, last_applied := 3,
+                          machine_state := {simple, _, tre}},
      [{cast, n1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}} | _]}
@@ -391,7 +393,7 @@ follower_aer_3(_Config) ->
                                prev_log_term = 0, leader_commit = 1,
                                entries = [entry(1, 1, one)]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
-                          commit_index := 1, last_applied := 0},
+                          commit_index := 1, last_applied := 1},
      _} = ra_server:handle_follower(AER1, Init),
     % {written, 1} -> last_applied: 1 - reply: last_index = 1, next_index = 2
     {follower, State2 = #{leader_id := n1, current_term := 1,
@@ -401,12 +403,13 @@ follower_aer_3(_Config) ->
                                             last_term = 1,
                                             last_index = 1}}}]}
         = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State1),
-    % AER with index [3] -> last_applied = 1 - reply(false): last_index, 1, next_index = 2
+    % AER with index [3] -> last_applied = 1 - reply(false):
+    % last_index, 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 2,
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
     {await_condition, State3 = #{leader_id := n1, current_term := 1,
-                          commit_index := 1, last_applied := 1},
+                                 commit_index := 3, last_applied := 1},
      [{cast, n1, {n2, #append_entries_reply{next_index = 2,
                                             success = false,
                                             last_term = 1,
@@ -422,7 +425,7 @@ follower_aer_3(_Config) ->
                                           entry(4, 1, for)
                                          ]},
     {follower, State4 = #{leader_id := n1, current_term := 1,
-                          commit_index := 3, last_applied := 1}, _}
+                          commit_index := 3, last_applied := 3}, _}
     = ra_server:handle_follower(AER3, State3),
     % {written, 4} -> last_applied: 3 - reply: last_index = 4, next_index = 5
     {follower, State5 = #{leader_id := n1, current_term := 1,
@@ -453,7 +456,8 @@ follower_aer_3(_Config) ->
 
 follower_aer_4(_Config) ->
     % Scenario 4 - commit index
-    % AER with index [1,2,3,4], commit_index = 10 -> commit_index = 4, last_applied = 0
+    % AER with index [1,2,3,4], commit_index = 10 -> commit_index = 4,
+    % last_applied = 4
     % follower catching up scenario
     Init = empty_state(3, n2),
     AER1 = #append_entries_rpc{term = 1, leader_id = n1, prev_log_index = 0,
@@ -465,11 +469,11 @@ follower_aer_4(_Config) ->
                                           entry(4, 1, for)
                                          ]},
     {follower, State1 = #{leader_id := n1, current_term := 1,
-                          commit_index := 4, last_applied := 0},
+                          commit_index := 10, last_applied := 4},
      _} = ra_server:handle_follower(AER1, Init),
     % {written, 4} -> last_applied = 4, commit_index = 4
     {follower, _State2 = #{leader_id := n1, current_term := 1,
-                           commit_index := 4, last_applied := 4,
+                           commit_index := 10, last_applied := 4,
                            machine_state := {_, _, for}},
      [{cast, n1, {n2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
@@ -521,7 +525,7 @@ follower_aer_term_mismatch(_Config) ->
                              leader_commit = 3},
 
     % term mismatch scenario follower has index 3 but for different term
-    % rewinds back to commit index + 1 as next index and entres await condition
+    % rewinds back to commit index + 1 as next index and enters await condition
     {await_condition, #{condition := _},
      [{_, _, {_, Reply}} | _]} = ra_server:handle_follower(AE, State),
     ?assertMatch(#append_entries_reply{term = 6,
@@ -546,11 +550,12 @@ follower_handles_append_entries_rpc(_Config) ->
 
     % success case when leader term is higher
     % reply term should be updated
-    {follower, #{leader_id := n1, current_term := 6},
-     [{cast, n1, {n1, #append_entries_reply{term = 6, success = true,
-                                            next_index = 4, last_index = 3,
-                                            last_term = 5}}} | _]}
-          = ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
+    % replies for empty rpcs are sent immediately
+   {follower, #{leader_id := n1, current_term := 6} = _State1,
+        [{cast, n1, {n1, #append_entries_reply{term = 6, success = true,
+                                               next_index = 4, last_index = 3,
+                                               last_term = 5}}} | _]}
+       = ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 6}, State),
 
     % reply false if term < current_term (5.1)
     {follower, _, [{cast, n1, {n1, #append_entries_reply{term = 5, success = false}}}]}
@@ -593,7 +598,7 @@ follower_handles_append_entries_rpc(_Config) ->
     % if leader_commit > the last entry received ensure last_applied does not
     % match commit_index
     % ExpectedLogEntry = usr(<<"hi4">>),
-    {follower, #{commit_index := 4, last_applied := 4,
+    {follower, #{commit_index := 5, last_applied := 4,
                  machine_state := <<"hi4">>},
      [{cast, n1, {n1, #append_entries_reply{term = 5, success = true,
                                             last_index = 4,
@@ -1079,7 +1084,7 @@ follower_machine_version(_Config) ->
                               prev_log_term = 5,
                               leader_commit = 5},
     {follower, #{machine_version := 0,
-                 effective_machine_version := 0,
+                 effective_machine_version := 1,
                  last_applied := 3,
                  commit_index := 5} = State0, _} =
         ra_server:handle_follower(Aer, State00),

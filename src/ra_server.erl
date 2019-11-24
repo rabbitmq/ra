@@ -885,9 +885,15 @@ handle_follower(#append_entries_rpc{term = Term,
                                _ ->
                                    Log1
                            end,
+                    %% if nothing was appended we need to send a reply here
+                    State1 = State0#{log => Log2},
                     % evaluate commit index as we may have received an updated
                     % commit_index for previously written entries
-                    evaluate_commit_index_follower(State0#{log => Log2}, Effects0);
+                    {NextState, State, Effects} =
+                         evaluate_commit_index_follower(State1, Effects0),
+                    Reply = append_entries_reply(Term, true, State),
+                    {NextState, State,
+                    [cast_reply(Id, LeaderId, Reply) | Effects]};
                 [{FirstIdx, _, _} | _] -> % FirstTerm
                     {_LastIdx, State} = lists:foldl(
                                           fun pre_append_log_follower/2,
@@ -920,7 +926,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                                     transition_to => follower}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
-            CommitIndex = maps:get(commit_index, State0),
+            %% NB: this is the commit index before update
+            CommitIndex = maps:get(commit_index, State00),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
                   "Asking leader ~w to resend from ~b~n",
@@ -1369,6 +1376,8 @@ evaluate_commit_index_follower(State, Effects) ->
 
 filter_follower_effects(Effects) ->
     lists:foldr(fun ({release_cursor, _, _} = C, Acc) ->
+                        [C | Acc];
+                    ({record_leader_msg, _} = C, Acc) ->
                         [C | Acc];
                     ({aux, _} = C, Acc) ->
                         [C | Acc];
