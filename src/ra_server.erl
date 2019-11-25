@@ -1196,6 +1196,7 @@ handle_state_enter(RaftState, #{effective_machine_module := MacMod,
 
 -spec overview(ra_server_state()) -> map().
 overview(#{log := Log, effective_machine_module := MacMod,
+           aux_state := Aux,
            machine_state := MacState} = State) ->
     O = maps:with([uid, current_term, commit_index, last_applied,
                    cluster, leader_id, voted_for,
@@ -1203,6 +1204,7 @@ overview(#{log := Log, effective_machine_module := MacMod,
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
     O#{log => LogOverview,
+       aux => Aux,
        machine => MacOverview}.
 
 -spec metrics(ra_server_state()) ->
