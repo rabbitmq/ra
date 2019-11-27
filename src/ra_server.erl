@@ -196,7 +196,7 @@
 
 -define(AER_CHUNK_SIZE, 25).
 -define(FOLD_LOG_BATCH_SIZE, 25).
-% TODO: test what is a good defult here
+% TODO: test what is a good default here
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
 
