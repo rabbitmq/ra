@@ -196,7 +196,7 @@
 
 -define(AER_CHUNK_SIZE, 25).
 -define(FOLD_LOG_BATCH_SIZE, 25).
-% TODO: test what is a good defult here
+% TODO: test what is a good default here
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
 
@@ -865,7 +865,8 @@ handle_follower(#append_entries_rpc{term = Term,
   when Term >= CurTerm ->
     %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
-    State0 = update_term(Term, State00#{leader_id => LeaderId}),
+    State0 = update_term(Term, State00#{leader_id => LeaderId,
+                                        commit_index => LeaderCommit}),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
             % filter entries already seen
@@ -884,31 +885,27 @@ handle_follower(#append_entries_rpc{term = Term,
                                _ ->
                                    Log1
                            end,
-                    % update commit index to be the min of the last
-                    % entry seen (but not necessarily written)
-                    % and the leader commit
-                    {Idx, _} = ra_log:last_index_term(Log2),
-                    State1 = State0#{commit_index => min(Idx, LeaderCommit),
-                                     log => Log2},
+                    %% if nothing was appended we need to send a reply here
+                    State1 = State0#{log => Log2},
                     % evaluate commit index as we may have received an updated
-                    % commit index for previously written entries
-                    evaluate_commit_index_follower(State1, Effects0);
+                    % commit_index for previously written entries
+                    {NextState, State, Effects} =
+                         evaluate_commit_index_follower(State1, Effects0),
+                    Reply = append_entries_reply(Term, true, State),
+                    {NextState, State,
+                    [cast_reply(Id, LeaderId, Reply) | Effects]};
                 [{FirstIdx, _, _} | _] -> % FirstTerm
-
-                    {LastIdx, State1} = lists:foldl(
+                    {_LastIdx, State} = lists:foldl(
                                           fun pre_append_log_follower/2,
                                           {FirstIdx, State0}, Entries),
-                    % Increment only commit_index here as we are not applying
-                    % anything at this point.
-                    % last_applied will be incremented when the written event is
-                    % processed
-                    State = State1#{commit_index => min(LeaderCommit, LastIdx)},
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
-                            {follower, State#{log => Log}, Effects0};
+                            evaluate_commit_index_follower(State#{log => Log},
+                                                           Effects0);
                         {error, wal_down} ->
                             {await_condition,
-                             State#{condition => fun wal_down_condition/2},
+                             State#{log => Log1,
+                                    condition => fun wal_down_condition/2},
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -929,7 +926,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                                     transition_to => follower}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
-            CommitIndex = maps:get(commit_index, State0),
+            %% NB: this is the commit index before update
+            CommitIndex = maps:get(commit_index, State00),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
                   "Asking leader ~w to resend from ~b~n",
@@ -978,10 +976,14 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
-                State0 = #{log := Log0}) ->
+                State0 = #{log := Log0,
+                           id := {Id, _, _},
+                           leader_id := LeaderId,
+                           current_term := Term}) ->
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
-    evaluate_commit_index_follower(State, Effects);
+    Reply = append_entries_reply(Term, true, State),
+    {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -1349,14 +1351,15 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  current_term := Term,
                                  log := Log} = State0, Effects0)
   when LeaderId =/= undefined ->
-    % as writes are async we can't use the index of the last available entry
-    % in the log as they may not have been fully persisted yet
-    % Take the smaller of the two values as commit index may be higher
-    % than the last entry received
-    {Idx, _} = ra_log:last_written(Log),
-    EffectiveCommitIndex = min(Idx, CommitIndex),
-    % neet catch termination throw
-    case catch apply_to(EffectiveCommitIndex, State0, Effects0) of
+    %% take the minimum of the last index seen and the commit index
+    %% This may mean we apply entries that have not yet been fsynced locally.
+    %% This is ok as the append_entries_rpc with the updated commit index would
+    %% ensure no uncommitted entries from a previous term have been truncated
+    %% from the log
+    {Idx, _} = ra_log:last_index_term(Log),
+    ApplyTo = min(Idx, CommitIndex),
+    % need to catch a termination throw
+    case catch apply_to(ApplyTo, State0, Effects0) of
         {delete_and_terminate, State1, Effects} ->
             Reply = append_entries_reply(Term, true, State1),
             {delete_and_terminate, State1,
@@ -1365,9 +1368,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
         {State, Effects1} ->
             % filter the effects that should be applied on a follower
             Effects = filter_follower_effects(Effects1),
-            Reply = append_entries_reply(Term, true, State),
-
-            {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]}
+            {follower, State, Effects}
     end;
 evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
@@ -1375,6 +1376,8 @@ evaluate_commit_index_follower(State, Effects) ->
 
 filter_follower_effects(Effects) ->
     lists:foldr(fun ({release_cursor, _, _} = C, Acc) ->
+                        [C | Acc];
+                    ({record_leader_msg, _} = C, Acc) ->
                         [C | Acc];
                     ({aux, _} = C, Acc) ->
                         [C | Acc];
@@ -2210,14 +2213,15 @@ mismatch_append_entries_reply(Term, CommitIndex, State = #{log := Log0}) ->
      State#{log => Log}}.
 
 append_entries_reply(Term, Success, State = #{log := Log}) ->
-    % ah - we can't use the the last received idx
+    % we can't use the the last received idx
     % as it may not have been persisted yet
     % also we can't use the last writted Idx as then
     % the follower may resent items that are currently waiting to
     % be written.
     {LWIdx, LWTerm} = ra_log:last_written(Log),
     {LastIdx, _} = last_idx_term(State),
-    #append_entries_reply{term = Term, success = Success,
+    #append_entries_reply{term = Term,
+                          success = Success,
                           next_index = LastIdx + 1,
                           last_index = LWIdx,
                           last_term = LWTerm}.

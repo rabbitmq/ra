@@ -638,6 +638,8 @@ contains(Match, Entries) ->
               end, Entries).
 
 follower_catchup(Config) ->
+
+    ok = logger:set_primary_config(level, all),
     meck:new(ra_server_proc, [passthrough]),
     meck:expect(ra_server_proc, send_rpc,
                 fun(P, #append_entries_rpc{entries = Entries} = T) ->
