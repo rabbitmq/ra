@@ -1358,7 +1358,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
     %% from the log
     {Idx, _} = ra_log:last_index_term(Log),
     ApplyTo = min(Idx, CommitIndex),
-    % neet catch termination throw
+    % need to catch a termination throw
     case catch apply_to(ApplyTo, State0, Effects0) of
         {delete_and_terminate, State1, Effects} ->
             Reply = append_entries_reply(Term, true, State1),
