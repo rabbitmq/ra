@@ -517,7 +517,8 @@ follower_aer_5(_Config) ->
 
 
 follower_aer_term_mismatch(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 2},
+    State = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
+                                             commit_index => 3},
     AE = #append_entries_rpc{term = 6,
                              leader_id = n1,
                              prev_log_index = 3,
@@ -525,7 +526,7 @@ follower_aer_term_mismatch(_Config) ->
                              leader_commit = 3},
 
     % term mismatch scenario follower has index 3 but for different term
-    % rewinds back to commit index + 1 as next index and enters await condition
+    % rewinds back to last_applied + 1 as next index and enters await condition
     {await_condition, #{condition := _},
      [{_, _, {_, Reply}} | _]} = ra_server:handle_follower(AE, State),
     ?assertMatch(#append_entries_reply{term = 6,

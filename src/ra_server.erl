@@ -927,11 +927,11 @@ handle_follower(#append_entries_rpc{term = Term,
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
             %% NB: this is the commit index before update
-            CommitIndex = maps:get(commit_index, State00),
+            LastApplied = maps:get(last_applied, State00),
             ?INFO("~s: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
                   "Asking leader ~w to resend from ~b~n",
-                  [LogId, PLIdx, OtherTerm, PLTerm, LeaderId, CommitIndex + 1]),
+                  [LogId, PLIdx, OtherTerm, PLTerm, LeaderId, LastApplied + 1]),
             % This situation arises when a minority leader replicates entries
             % that it cannot commit then gets replaced by a majority leader
             % that also has made progress
@@ -941,7 +941,7 @@ handle_follower(#append_entries_rpc{term = Term,
             % and commit_index + 1 as the next expected.
             % This _may_ overwrite some valid entries but is probably the
             % simplest way to proceed
-            {Reply, State} = mismatch_append_entries_reply(Term, CommitIndex,
+            {Reply, State} = mismatch_append_entries_reply(Term, LastApplied,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
