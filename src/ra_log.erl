@@ -715,16 +715,18 @@ wal_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
     end.
 
 wal_write_batch(#?MODULE{uid = UId, cache = Cache0, wal = Wal} = State,
-                Entries) ->
+                [{FstIdx, FstTerm, _} | _] = Entries) ->
     WriterId = {UId, self()},
-    {WalCommands, Cache} =
-        lists:foldl(fun ({Idx, Term, Data}, {WC, C0}) ->
-                            WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], C0#{Idx => {Term, Data}}}
-                    end, {[], Cache0}, Entries),
+    {WalCommands, Cache, LastIdx, LastTerm} =
+        lists:foldr(fun ({Idx, Term, Data}, {WC, C0, I, T}) ->
+                            WalC = {append, WriterId, Idx, Term,
+                                    Data, term_to_binary(Data)},
+                            {[WalC | WC],
+                             C0#{Idx => {Term, Data}},
+                             max(I, Idx), max(T, Term)}
+                    end, {[], Cache0, FstIdx, FstTerm}, Entries),
 
-    [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
-    case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
+    case ra_log_wal:write_batch(Wal, WalCommands) of
         ok ->
             State#?MODULE{last_index = LastIdx,
                           last_term = LastTerm,

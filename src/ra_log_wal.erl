@@ -107,20 +107,20 @@
               wal_write_strategy/0]).
 
 -type wal_command() ::
-    {append | truncate, writer_id(), ra_index(), ra_term(), term()}.
+    {append | truncate, writer_id(), ra_index(), ra_term(), term(), binary()}.
 
--type wal_op() :: {cast, wal_command()} |
+-type wal_op() :: {cast | info, wal_command()} |
                   {call, from(), wal_command()}.
 
 -spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
 write(From, Wal, Idx, Term, Entry) ->
-    named_cast(Wal, {append, From, Idx, Term, Entry}).
+    safe_send(Wal, {append, From, Idx, Term, Entry, to_binary(Entry)}).
 
 -spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
 truncate_write(From, Wal, Idx, Term, Entry) ->
-   named_cast(Wal, {truncate, From, Idx, Term, Entry}).
+   safe_send(Wal, {truncate, From, Idx, Term, Entry, to_binary(Entry)}).
 
 -spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
     ok | {error, wal_down}.
@@ -134,14 +134,12 @@ write_batch(Wal, WalCommands) when is_atom(Wal) ->
             write_batch(Pid, WalCommands)
     end.
 
-named_cast(To, Msg) when is_pid(To) ->
-    gen_batch_server:cast(To, Msg);
-named_cast(Wal, Msg) ->
-    case whereis(Wal) of
-        undefined ->
-            {error, wal_down};
-        Pid ->
-            named_cast(Pid, Msg)
+safe_send(To, Msg) ->
+    try To ! Msg of
+        _ -> ok
+    catch
+        _:badarg ->
+            {error, wal_down}
     end.
 
 % force a wal file to roll over to a new file
@@ -239,7 +237,7 @@ format_status(#state{conf = #conf{write_strategy = Strat,
 
 %% Internal
 
-handle_op({cast, WalCmd}, State) ->
+handle_op({_, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
 recover_wal(Dir, #conf{segment_writer = TblWriter} = Conf) ->
@@ -318,17 +316,16 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
              {Next + 1, Cache#{UId => BinId}}}
     end.
 
-write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
+write_data({UId, _} = Id, Idx, Term, EntryTerm, EntryBin, Trunc,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
                   file_size = FileSize,
                   wal = #wal{max_size = MaxWalSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
-    EntryData = to_binary(Data0),
-    EntryDataLen = byte_size(EntryData),
+    EntryBinSize = byte_size(EntryBin),
     {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
     % fixed overhead =
     % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
-    DataSize = HeaderLen + 24 + EntryDataLen,
+    DataSize = HeaderLen + 24 + EntryBinSize,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case FileSize + DataSize > MaxWalSize of
@@ -337,30 +334,30 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             % TODO: there is some redundant computation performed by
             % recursing here it probably doesn't matter as it only happens
             % when a wal file fills up
-            write_data(Id, Idx, Term, Data0, Trunc, State);
+            write_data(Id, Idx, Term, EntryTerm, EntryBin, Trunc, State);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
-            Entry = [<<Idx:64/unsigned,
-                       Term:64/unsigned>>,
-                     EntryData],
+            EntryData = [<<Idx:64/unsigned,
+                           Term:64/unsigned>>,
+                         EntryBin],
             Checksum = case ComputeChecksum of
-                           true -> erlang:adler32(Entry);
+                           true -> erlang:adler32(EntryData);
                            false -> 0
                        end,
             Record = [HeaderData,
-                      <<Checksum:32/integer, EntryDataLen:32/unsigned>>,
-                      Entry],
-            append_data(State0, Id, Idx, Term, Data0,
+                      <<Checksum:32/integer, EntryBinSize:32/unsigned>>,
+                      EntryData],
+            append_data(State0, Id, Idx, Term, EntryTerm,
                         DataSize, Record, Trunc)
     end.
 
-handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
+handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry, EntryBin},
            #state{writers = Writers} = State0) ->
     case maps:find(UId, Writers) of
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, EntryBin, false, State0);
         error ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, EntryBin, false, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes
@@ -374,8 +371,8 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
-handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
-    write_data(Id, Idx, Term, Entry, true, State0);
+handle_msg({truncate, Id, Idx, Term, Entry, EntryBin}, State0) ->
+    write_data(Id, Idx, Term, Entry, EntryBin, true, State0);
 handle_msg(rollover, State) ->
     roll_over(State).
 
@@ -398,8 +395,6 @@ incr_batch(OpnMemTbl, #batch{writes = Writes,
                                          tid = _Tid,
                                          from = From,
                                          inserts = Inserts0} = W} ->
-                      % ct:pal("insertingf ~w ~w", [Tid, Idx]),
-                      % true = ets:insert(Tid, {Idx, Term, Entry}),
                       TblStart = case Truncate of
                                      true ->
                                          Idx;
@@ -417,25 +412,24 @@ incr_batch(OpnMemTbl, #batch{writes = Writes,
                                                       inserts = Inserts}};
                   _ ->
                       %% no batch_writer
-                      {Tid, TblStart} = case ets:lookup(OpnMemTbl, UId) of
-                                            [{_UId, TblStart0, _To, T}] ->
-                                                {T, case Truncate of
-                                                        true ->
-                                                            Idx;
-                                                        false ->
-                                                            min(TblStart0, Idx)
-                                                    end};
-                                            _ ->
-                                                %% there is no table so need
-                                                %% to open one
-                                                T = open_mem_table(UId),
-                                                true = ets:insert_new(
-                                                         OpnMemTbl,
-                                                         {UId, Idx, Idx, T}),
-                                                {T, Idx}
-                                        end,
-                      % ct:pal("inserting ~w ~w", [Tid, Idx]),
-                      % true = ets:insert(Tid, {Idx, Term, Entry}),
+                      {Tid, TblStart} =
+                          case ets:lookup(OpnMemTbl, UId) of
+                              [{_UId, TblStart0, _To, T}] ->
+                                  {T, case Truncate of
+                                          true ->
+                                              Idx;
+                                          false ->
+                                              min(TblStart0, Idx)
+                                      end};
+                              _ ->
+                                  %% there is no table so need
+                                  %% to open one
+                                  T = open_mem_table(UId),
+                                  true = ets:insert_new(
+                                           OpnMemTbl,
+                                           {UId, Idx, Idx, T}),
+                                  {T, Idx}
+                          end,
                       Writer = #batch_writer{tbl_start = TblStart,
                                              from = Idx,
                                              to = Idx,
@@ -450,6 +444,8 @@ incr_batch(OpnMemTbl, #batch{writes = Writes,
                 waiting = Waiting,
                 pending = [Pend | Data]}.
 
+%% this is only used during recovery
+%% TODO: refactor to use same build ETS insert approach as main code
 update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table and save
     % some disk space when it later is flushed to disk
@@ -466,11 +462,6 @@ update_mem_table(OpnMemTbl, UId, Idx, Term, Entry, Truncate) ->
                    end,
             % update Last idx for current tbl
             % this is how followers overwrite previously seen entries
-            % TODO: OPTIMISATION
-            % Writers don't need this updated for every entry. As they keep
-            % a local cache of unflushed entries it is sufficient to update
-            % ra_log_open_mem_tables before completing the batch.
-            % Instead the `From` and `To` could be kept in the batch.
             _ = ets:update_element(OpnMemTbl, UId,
                                    [{2, From}, {3, Idx}]);
         [] ->
