@@ -119,7 +119,7 @@
                await_condition_timeout :: non_neg_integer(),
                ra_event_formatter :: undefined | {module(), atom(), [term()]},
                flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer(),
-               chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
+               snapshot_chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
                receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer()
               }).
 
@@ -256,7 +256,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
     FlushCommandsSize = maps:get(low_priority_commands_flush_size, Config,
                                   ?FLUSH_COMMANDS_SIZE),
-    ChunkSize = application:get_env(ra, snapshot_chunk_size,
+    SnapshotChunkSize = application:get_env(ra, snapshot_chunk_size,
                                     ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
     ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
                                                  ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
@@ -266,7 +266,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 await_condition_timeout = AwaitCondTimeout,
                                 ra_event_formatter = RaEventFormatterMFA,
                                 flush_commands_size = FlushCommandsSize,
-                                chunk_size = ChunkSize,
+                                snapshot_chunk_size = SnapshotChunkSize,
                                 receive_snapshot_timeout = ReceiveSnapshotTimeout},
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
@@ -1052,7 +1052,7 @@ handle_effect(_, {reply, Reply}, EvtType, _, _) ->
 handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
-                     conf = #conf{chunk_size = ChunkSize}} = State0, Actions) ->
+                     conf = #conf{snapshot_chunk_size = ChunkSize}} = State0, Actions) ->
     %% leader effect only
     Me = self(),
     Pid = spawn(fun () ->
