@@ -118,7 +118,9 @@
                tick_timeout :: non_neg_integer(),
                await_condition_timeout :: non_neg_integer(),
                ra_event_formatter :: undefined | {module(), atom(), [term()]},
-               flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer()
+               flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer(),
+               snapshot_chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
+               receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer()
               }).
 
 -record(state, {conf :: #conf{},
@@ -254,12 +256,18 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
     FlushCommandsSize = maps:get(low_priority_commands_flush_size, Config,
                                   ?FLUSH_COMMANDS_SIZE),
+    SnapshotChunkSize = application:get_env(ra, snapshot_chunk_size,
+                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+    ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
+                                                 ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     State = #state{conf = #conf{log_id = LogId,
                                 name = Key,
                                 tick_timeout = TickTime,
                                 await_condition_timeout = AwaitCondTimeout,
                                 ra_event_formatter = RaEventFormatterMFA,
-                                flush_commands_size = FlushCommandsSize},
+                                flush_commands_size = FlushCommandsSize,
+                                snapshot_chunk_size = SnapshotChunkSize,
+                                receive_snapshot_timeout = ReceiveSnapshotTimeout},
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -657,19 +665,21 @@ follower(EventType, Msg, State0) ->
     end.
 
 %% TODO: handle leader down abort snapshot and revert to follower
-receive_snapshot(enter, OldState, State0) ->
+receive_snapshot(enter, OldState, State0 = #state{conf = Conf}) ->
+    #conf{receive_snapshot_timeout = ReceiveSnapshotTimeout} = Conf,
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State,
-     [{state_timeout, receive_snapshot_timeout(), receive_snapshot_timeout}
+     [{state_timeout, ReceiveSnapshotTimeout, receive_snapshot_timeout}
       | Actions]};
 receive_snapshot(_, tick_timeout, State0) ->
     {keep_state, State0, set_tick_timer(State0, [])};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {#state{conf = Conf} = State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            #conf{receive_snapshot_timeout = ReceiveSnapshotTimeout} = Conf,
             {keep_state, State,
-             [{state_timeout, receive_snapshot_timeout(),
+             [{state_timeout, ReceiveSnapshotTimeout,
                receive_snapshot_timeout} | Actions]};
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -1041,9 +1051,8 @@ handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
 handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
-                     monitors = Monitors} = State0, Actions) ->
-    ChunkSize = application:get_env(ra, snapshot_chunk_size,
-                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+                     monitors = Monitors,
+                     conf = #conf{snapshot_chunk_size = ChunkSize}} = State0, Actions) ->
     %% leader effect only
     Me = self(),
     Pid = spawn(fun () ->
@@ -1324,10 +1333,6 @@ fold_log(From, Fun, Term, State) ->
             {keep_state, State#state{server_state = ServerState},
              [{reply, From, {error, Reason}}]}
     end.
-
-receive_snapshot_timeout() ->
-    application:get_env(ra, receive_snapshot_timeout,
-                        ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT).
 
 send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
     {ok, Meta, ReadState} = ra_snapshot:begin_read(SnapState),
