@@ -438,7 +438,7 @@ handle_aux(_, cast, Cmd, {Name, Use0}, Log, _) ->
     Use = case Cmd of
               _ when Cmd == active orelse Cmd == inactive ->
                   update_use(Use0, Cmd);
-              emit ->
+              _ ->
                   true = ets:insert(ra_fifo_usage,
                                     {Name, utilisation(Use0)}),
                   Use0
