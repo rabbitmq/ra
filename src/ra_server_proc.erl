@@ -396,9 +396,9 @@ leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
-    {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects, cast, State1),
-    State = handle_tick_metrics(State2),
-    {keep_state, State,
+    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
+                                        cast, State1),
+    {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0} = State0) ->
@@ -637,10 +637,10 @@ follower(info, {node_event, Node, up}, State) ->
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-follower(_, tick_timeout, State) ->
-    {keep_state,
-     handle_tick_metrics(State),
-     set_tick_timer(State, [])};
+follower(_, tick_timeout, State0) ->
+    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
+    {keep_state, handle_tick_metrics(State),
+     set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, State0) ->
@@ -780,7 +780,8 @@ await_condition(enter, OldState, #state{conf = Conf} = State0) ->
                 await_condition_timeout} | Actions0],
     {keep_state, State, Actions};
 await_condition(_, tick_timeout, State0) ->
-    {keep_state, State0, set_tick_timer(State0, [])};
+    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
+    {keep_state, State, set_tick_timer(State, Actions)};
 await_condition(EventType, Msg, State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->

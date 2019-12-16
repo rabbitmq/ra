@@ -1196,6 +1196,7 @@ handle_state_enter(RaftState, #{effective_machine_module := MacMod,
 
 -spec overview(ra_server_state()) -> map().
 overview(#{log := Log, effective_machine_module := MacMod,
+           aux_state := Aux,
            machine_state := MacState} = State) ->
     O = maps:with([uid, current_term, commit_index, last_applied,
                    cluster, leader_id, voted_for,
@@ -1203,6 +1204,7 @@ overview(#{log := Log, effective_machine_module := MacMod,
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
     O#{log => LogOverview,
+       aux => Aux,
        machine => MacOverview}.
 
 -spec metrics(ra_server_state()) ->
@@ -1348,6 +1350,7 @@ transfer_leadership_condition(_Msg, State) ->
 evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  id := {Id, _, _},
                                  leader_id := LeaderId,
+                                 last_applied := LastApplied0,
                                  current_term := Term,
                                  log := Log} = State0, Effects0)
   when LeaderId =/= undefined ->
@@ -1358,6 +1361,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
     %% from the log
     {Idx, _} = ra_log:last_index_term(Log),
     ApplyTo = min(Idx, CommitIndex),
+
     % need to catch a termination throw
     case catch apply_to(ApplyTo, State0, Effects0) of
         {delete_and_terminate, State1, Effects} ->
@@ -1365,10 +1369,16 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) |
               filter_follower_effects(Effects)]};
-        {State, Effects1} ->
-            % filter the effects that should be applied on a follower
+        {#{last_applied := LastApplied} = State, Effects1} ->
             Effects = filter_follower_effects(Effects1),
-            {follower, State, Effects}
+            case LastApplied > LastApplied0 of
+                true ->
+                    %% entries were applied, append eval_aux effect
+                    {follower, State, [{aux, eval} | Effects]};
+                false ->
+                    %% no entries were applied
+                    {follower, State, Effects}
+            end
     end;
 evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
@@ -2226,9 +2236,16 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           last_index = LWIdx,
                           last_term = LWTerm}.
 
-evaluate_quorum(State0, Effects) ->
+evaluate_quorum(#{commit_index := CI0} = State0, Effects0) ->
     % TODO: shortcut function if commit index was not incremented
     State = #{commit_index := CI} = increment_commit_index(State0),
+
+    Effects = case CI > CI0 of
+                  true ->
+                      [{aux, eval} | Effects0];
+                  false ->
+                      Effects0
+              end,
     apply_to(CI, State, Effects).
 
 increment_commit_index(State = #{current_term := CurrentTerm}) ->

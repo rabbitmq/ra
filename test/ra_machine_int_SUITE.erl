@@ -32,6 +32,8 @@ all_tests() ->
      meta_data,
      timer_effect,
      log_effect,
+     aux_eval,
+     aux_tick,
      aux_command,
      aux_monitor_effect,
      aux_and_machine_monitor_same_process,
@@ -429,6 +431,9 @@ aux_command(Config) ->
                     (RaftState, {call, _From}, emit, AuxState, Log, _MacState) ->
                         %% emits aux state
                         {reply, {RaftState, AuxState}, AuxState, Log};
+                    (_RaftState, cast, eval, _AuxState, Log, MacState) ->
+                        %% replaces aux state
+                        {no_reply, MacState, Log};
                     (_RaftState, cast, NewState, _AuxState, Log, _MacState) ->
                         %% replaces aux state
                         {no_reply, NewState, Log}
@@ -445,6 +450,109 @@ aux_command(Config) ->
     {follower, undefined} = ra:aux_command(ServerId3, emit),
     ok = ra:cast_aux_command(ServerId3, orange),
     {follower, orange} = ra:aux_command(ServerId3, emit),
+    ra:delete_cluster(Cluster),
+    ok.
+
+aux_eval(Config) ->
+    %% aux handle is automatically passed an eval command after new entries
+    %% have been applied
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        %% monitors a process
+                        Self ! got_eval,
+                        {no_reply, AuxState, Log, []}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+
+    ok = ra:pipeline_command(Leader, dummy),
+    receive
+        got_eval -> ok
+    after 2500 ->
+              flush(),
+              exit(got_eval_1)
+    end,
+    receive
+        got_eval -> ok
+    after 2500 ->
+              flush(),
+              exit(got_eval_2)
+    end,
+    receive
+        got_eval -> ok
+    after 2500 ->
+              flush(),
+              exit(got_eval_3)
+    end,
+    ra:delete_cluster(Cluster),
+    ok.
+
+aux_tick(Config) ->
+    %% aux handle is automatically passed an eval command after new entries
+    %% have been applied
+    ok = logger:set_primary_config(level, all),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        {State, ok}
+                end),
+    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, tick, AuxState, Log, _MacState) ->
+                        Self ! got_tick,
+                        {no_reply, AuxState, Log, []};
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log, []}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+
+    ok = ra:pipeline_command(Leader, dummy),
+    receive
+        got_tick -> ok
+    after 2500 ->
+              flush(),
+              exit(got_tick_1)
+    end,
+    receive
+        got_tick -> ok
+    after 2500 ->
+              flush(),
+              exit(got_tick_2)
+    end,
+    receive
+        got_tick -> ok
+    after 2500 ->
+              flush(),
+              exit(got_tick_3)
+    end,
     ra:delete_cluster(Cluster),
     ok.
 
@@ -467,6 +575,10 @@ aux_monitor_effect(Config) ->
     meck:expect(Mod, aux_init, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
+                    (_RaftState, _, tick, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
                     (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
                         %% monitors a process
                         {no_reply, AuxState, Log, [{monitor, process, aux, Pid}]};
@@ -517,6 +629,10 @@ aux_and_machine_monitor_same_process(Config) ->
     meck:expect(Mod, aux_init, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
+                    (_RaftState, _, tick, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
                     (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
                         %% monitors a process
                         {no_reply, AuxState, Log,
@@ -577,6 +693,10 @@ aux_and_machine_monitor_same_node(Config) ->
     meck:expect(Mod, aux_init, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
+                    (_RaftState, _, tick, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
                     (_RaftState, _, {monitor, Node}, AuxState, Log, _MacState) ->
                         %% monitors a process
                         {no_reply, AuxState, Log,
@@ -630,6 +750,10 @@ aux_and_machine_monitor_leader_change(Config) ->
     meck:expect(Mod, aux_init, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
+                    (_RaftState, _, eval, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
+                    (_RaftState, _, tick, AuxState, Log, _MacState) ->
+                        {no_reply, AuxState, Log};
                     (_RaftState, _, {monitor, Pid}, AuxState, Log, _MacState) ->
                         %% monitors a process
                         {no_reply, AuxState, Log,
