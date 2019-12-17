@@ -103,7 +103,7 @@ never be issued or reach their recipients. Ra makes no allowance for this.
 
 It is worth taking this into account when implementing a state machine.
 
-The [Automatic Repeat Query (ARQ)][3] protocol
+The [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request) protocol
 can be used to implement reliable communication (Erlang message delivery) given the
 above limitations.
 
@@ -118,7 +118,8 @@ to the specified `pid`.
 options which is the least reliable way of doing it. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
 
-To ensure message reliability, [Automatic Repeat Query (ARQ)][3]-like protocols between the state machine and the receiver should be implemented
+To ensure message reliability, [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)-like
+protocols between the state machine and the receiver should be implemented
 if needed.
 
 ### Monitoring
@@ -181,7 +182,7 @@ effect can be used to give Ra cluster members a hint to trigger a snapshot.
 This effect, when emitted, is evaluated on all nodes and not just the leader.
 
 It is not guaranteed that a snapshot will be taken. A decision to take
-a snapshot or delay it is taken using a number of internal Ra state factors.
+a snapshot or delay is taken using a number of internal Ra state factors.
 The goal is to minimise disk I/O activity when possible.
 
 ### State Machine Versioning
@@ -276,7 +277,7 @@ As cluster membership is persisted in Ra logs, newly added nodes will be discove
 
 ### Dynamically Joining Nodes
 
-With this appraoch there has to be a "preconfigired" or "seed" nodes that other nodes
+With this approach there has to be a "preconfigured" or "seed" nodes that other nodes
 will join. Nodes that join the seed later **will discard all their state** before joining.
 
 Ra API supports two options: the joining node can either have existing state
@@ -298,7 +299,7 @@ A cluster name in Ra is defined as `binary() | string() | atom()`.
 
 The cluster name is mostly a "human-friendly" name for a Ra cluster.
 Something that identifies the entity the cluster is meant to represent.
-The cluster name isn't strictly part of a clusters identity.
+The cluster name isn't strictly part of a cluster's identity.
 
 For example, in RabbitMQ's quorum queues case cluster names are derived from queue's identity.
 
@@ -370,8 +371,8 @@ Config = #{cluster_name => <<"ra-cluster-1">>,
 ## Group Membership
 
 Ra implements the single server cluster membership change strategy
-covered in [Consensus: Bridging Theory and Practice][1]. In practice that
-means that join and leave requests are processed sequentially one by one.
+covered in [Consensus: Bridging Theory and Practice][https://raft.github.io/raft.pdf].
+In practice that means that join and leave requests are processed sequentially one by one.
 
 The function that manage cluster members, `ra:add_member/2` and `ra:remove_member/2`, respectively,
 will return as soon as the membership change state transition has been written to the log and the leader
@@ -429,21 +430,21 @@ facilities as it can. Process or node failure scenario are handled using
 Erlang monitors. Followers monitor the currently elected leader and if they receive a
 'DOWN' message as they would in the case of a crash or sustained
 network partition where Erlang distribution detects a node isn't
-replying the follower _then_ sets a short, randomised election
+replying, the follower _then_ sets a short, randomised election
 timeout.
 
 This only works well in crash-stop scenarios. For network partition
 scenarios Ra could rely on Erlang distribution's net ticks mechanism to detect the partition
 but this could easily take 30-60 seconds by default to happen which is too slow.
 
-This is why the `ra` application uses [Aten][2], a separate node failure
+This is why the `ra` application uses [Aten](https://github.com/rabbitmq/aten), a separate node failure
 detection library developed alongside it.
 
 Aten monitors Erlang nodes. When it suspects an Erlang node is down
 it notifies local `ra` servers of this. If this Erlang node hosts the currently
 known `ra` leader the follower will start an election.
 
-Ra implements a ["pre-vote" member state][1]
+Ra implements a ["pre-vote" member state](https://raft.github.io/raft.pdf)
 that sits between the "follower" and "candidate" states.
 This avoids cluster disruptions due to leader failure false positives.
 
@@ -459,7 +460,8 @@ parallel calls to `fsync(1)` and thus need to funnel all log entry writes
 through a common file, named the write ahead log
 (although strictly speaking there is no "ahead" in this sense).
 
-All messages are sent asynchronously to maximise throughput with [ARQ][3] like
+All messages are sent asynchronously to maximise throughput with
+[ARQ](https://en.wikipedia.org/wiki/Automatic_repeat_request)-like
 protocols where needed.
 
 There are several processes involved in the Ra log implementation.
@@ -486,7 +488,8 @@ After each batch it notifies each Ra server that had a write in
 that batch so that it can consider the entry written.
 
 The WAL writes each entry to a per-Ra-server ETS table (similar to
-Cassandra and RocksDB MemTables, see [Log Structured Storage][4])
+Cassandra and RocksDB MemTables, see
+[Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/)))
 which the Ra server uses to read data from its log.
 
 The WAL tries to adapt to load by dynamically increasing the max number of
@@ -509,7 +512,7 @@ log entries.
 When the segment writer has finished flushing all the mem tables for all the
 Ra servers that wrote to the WAL file it deletes the WAL file.
 
-The segment writes keeps track of the most recent snapshot index for each
+The segment writer keeps track of the most recent snapshot index for each
 Ra server; it then uses that information to avoid performing writes for entries
 that potentially have been truncated.
 
@@ -533,9 +536,3 @@ A simplified view of the lifetime of a single write.
 ## Snapshotting
 
 TBD: currently undergoing changes
-
-
-1. https://ramcloud.stanford.edu/~ongaro/thesis.pdf
-2. https://github.com/rabbitmq/aten
-3. https://en.wikipedia.org/wiki/Automatic_repeat_request
-4. https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/
