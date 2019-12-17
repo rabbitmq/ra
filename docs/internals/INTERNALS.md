@@ -489,7 +489,7 @@ that batch so that it can consider the entry written.
 
 The WAL writes each entry to a per-Ra-server ETS table (similar to
 Cassandra and RocksDB MemTables, see
-[Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/)))
+[Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/))
 which the Ra server uses to read data from its log.
 
 The WAL tries to adapt to load by dynamically increasing the max number of
@@ -528,7 +528,7 @@ segments that only contain entries with a lower index than the snapshot.
 A simplified view of the lifetime of a single write.
 
 
-![blah](log_write.svg)
+![Simplified view of the lifetime of a single write](log_write.svg)
 
 
 
