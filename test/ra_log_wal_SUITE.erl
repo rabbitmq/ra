@@ -43,6 +43,7 @@ init_per_group(Group, Config) ->
     application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     ra_directory:init(?config(priv_dir, Config)),
+    ra_counters:init(),
     % application:ensure_all_started(lg),
     {SyncMethod, WriteStrat} = case Group of
                                    fsync -> {sync, default};
@@ -196,8 +197,6 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
-    % Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
-    %                 V =/= undefined],
     % ct:pal("Metrics: ~p~n", [Metrics]),
     proc_lib:stop(WalPid),
     {Taken div 1000, Reds}.
@@ -264,9 +263,6 @@ write_many_by_many(Config) ->
     % % assert we aren't regressing on reductions used
     % ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
-    Metrics = [M || {_, V} = M <- lists:sort(ets:tab2list(ra_log_wal_metrics)),
-                    V =/= undefined],
-    ct:pal("Metrics: ~p~n", [Metrics]),
     proc_lib:stop(WalPid),
     ok.
 

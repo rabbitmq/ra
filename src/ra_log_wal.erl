@@ -44,9 +44,6 @@
 
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{pid() => #batch_writer{}},
-                                   % {From :: ra_index(), To :: ra_index(),
-                                   %  Term :: ra_term()}},
-                start_time :: maybe(integer()),
                 pending = [] :: iolist()
                }).
 
@@ -66,7 +63,8 @@
                compute_checksums = false :: boolean(),
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
-               sync_method = datasync :: sync | datasync
+               sync_method = datasync :: sync | datasync,
+               counter :: counters:counters_ref()
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -194,23 +192,21 @@ init(#{dir := Dir} = Conf0) ->
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
-    _ = ets:new(ra_log_wal_metrics,
-                [set, named_table, {read_concurrency, true}, protected]),
+    CRef = ra_counters:new(?MODULE, 3),
     % seed metrics table with data
-    [true = ets:insert(ra_log_wal_metrics, {I, undefined})
-     || I <- lists:seq(0, ?METRICS_WINDOW_SIZE-1)],
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
     %% rather than crash
-    FileModes = [raw, append, binary],
+    FileModes = [raw, write, binary],
     Conf = #conf{file_modes = FileModes,
                  dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = MaxWalSize,
                  write_strategy = WriteStrategy,
-                 sync_method = SyncMethod},
+                 sync_method = SyncMethod,
+                 counter = CRef},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -489,6 +485,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                                           max_size_bytes = MaxBytes,
                                           segment_writer = SegWriter} = Conf0}
           = State0) ->
+    counters:add(Conf0#conf.counter, 3, 1),
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
@@ -520,7 +517,6 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
                 ok = write_header(Fd),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
-                ok = ra_file_handle:sync(Fd),
                 {Conf, #wal{fd = Fd,
                             max_size = Max,
                             filename = File}};
@@ -532,6 +528,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
 open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
     ok = write_header(Fd),
+    ok = ra_file_handle:sync(Fd),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
@@ -588,8 +585,9 @@ open_mem_table(UId) ->
     true = ra_log_ets:give_away(Tid),
     Tid.
 
-start_batch(State) ->
-    State#state{batch = #batch{start_time = os:system_time(microsecond)}}.
+start_batch(#state{conf = #conf{counter = CRef}} = State) ->
+    ok = counters:add(CRef, 2, 1),
+    State#state{batch = #batch{}}.
 
 
 flush_pending(#state{wal = #wal{fd = Fd},
@@ -609,15 +607,14 @@ flush_pending(#state{wal = #wal{fd = Fd},
 complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
-                                     writes = NumWrites,
-                                     start_time = ST},
-                      metrics_cursor = Cursor
+                                     writes = NumWrites},
+                      metrics_cursor = Cursor,
+                      conf = Cfg
                       } = State00) ->
-    TS = os:system_time(microsecond),
+    % TS = os:system_time(microsecond),
     State0 = flush_pending(State00),
-    SyncTS = os:system_time(microsecond),
-    _ = ets:update_element(ra_log_wal_metrics, Cursor,
-                           {2, {NumWrites, TS-ST, SyncTS-TS}}),
+    % SyncTS = os:system_time(microsecond),
+    counters:add(Cfg#conf.counter, 1, NumWrites),
     NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
     State = State0#state{metrics_cursor = NextCursor,
                          batch = undefined},

@@ -431,9 +431,9 @@ aux_command(Config) ->
                     (RaftState, {call, _From}, emit, AuxState, Log, _MacState) ->
                         %% emits aux state
                         {reply, {RaftState, AuxState}, AuxState, Log};
-                    (_RaftState, cast, eval, _AuxState, Log, MacState) ->
+                    (_RaftState, cast, eval, AuxState, Log, _MacState) ->
                         %% replaces aux state
-                        {no_reply, MacState, Log};
+                        {no_reply, AuxState, Log};
                     (_RaftState, cast, NewState, _AuxState, Log, _MacState) ->
                         %% replaces aux state
                         {no_reply, NewState, Log}

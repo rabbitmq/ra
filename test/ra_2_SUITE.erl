@@ -31,7 +31,8 @@ all_tests() ->
      recover_after_kill,
      start_server_uid_validation,
      custom_ra_event_formatter,
-     segment_writer_handles_server_deletion
+     segment_writer_handles_server_deletion,
+     external_reader
     ].
 
 groups() ->
@@ -446,6 +447,33 @@ segment_writer_handles_server_deletion(Config) ->
               ok
     end,
     ok.
+
+external_reader(Config) ->
+    ServerId = ?config(server_id, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ok = start_cluster(ClusterName, [ServerId]),
+    ra:members(ServerId),
+    ok = enqueue(ServerId, msg1),
+    [begin
+         _ = ra:pipeline_command(ServerId, {enq, N}, no_correlation, normal)
+     end || N <- lists:seq(1, 1023)],
+    _ = enqueue(ServerId, final),
+    R0 = ra:register_external_log_reader(ServerId),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    receive
+        {ra_event, _, {machine, {ra_log_update, _, _, _} = E}} ->
+            R1 = ra_log_reader:handle_log_update(E, R0),
+            {Entries, Metrics, _R2} = ra_log_reader:read(0, 1026, R1),
+            ct:pal("read ~w ~w ~w", [length(Entries), Metrics, lists:last(Entries)]),
+            %% read all entries
+            ok
+    after 3000 ->
+              flush(),
+              exit(ra_log_update_timeout)
+    end,
+    ra:delete_cluster([ServerId]),
+    ok.
+
 
 format_ra_event(SrvId, Evt, my_arg) ->
     {custom_event, SrvId, Evt}.
