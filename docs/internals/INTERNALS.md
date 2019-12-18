@@ -538,6 +538,23 @@ The segment writer keeps track of the most recent snapshot index for each
 Ra server; it then uses that information to avoid performing writes for entries
 that potentially have been truncated.
 
+#### Segment Writing and WAL's ETS tables
+
+Ra distinguishes between open and closed WAL's ETS tables. A Ra server
+can have only 1 (or none) open ETS table at a time. This open ETS table
+contains the entry that are in the current WAL file.
+
+During WAL rollover, open ETS tables become closed because they won't be appended
+to anymore. Closed ETS tables only exist while the segment writer is flushing
+them to disk. Once their content is on disk (in segments), they are deleted.
+
+Because the segment writer may have a backlog, there can be many closed ETS tables,
+but typically there are none.
+
+So to read from an (open) ETS table, there are at least 2 ETS lookups:
+one on the `ra_log_open_mem_tables` table to get the current range of the
+open tables and then another one to get the actual entry from the table itself.
+
 ### The Snapshot Writer
 
 Ra servers offload the work of persisting snapshots to the snapshot writer
