@@ -515,16 +515,22 @@ Cassandra and RocksDB MemTables, see
 [Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/))
 which the Ra server uses to read data from its log.
 
-The ETS table are used by Ra servers once entries have been replicated and got consensus. Ra servers look up confirmed
-entries with their index and apply them to their state machine.
+So the ETS tables are a way to access entries, but they are not the only place
+where entries are stored though (more on this later).
 
-> This is not exactly true but it at least justifies the existence
-> of the ETS table in the WAL. Ra servers actually keep a cache of entries
-> before they are confirmed and they use this cache to look up entries
-> and apply them once they are confirmed. This is faster than a ETS lookup.
-> This first level cache is pruned as entries are confirmed written by the wal.
-> If a leader doesn't have a majority it will still append to the log but it can’t apply,
-> so it will use the ETS tables later to look up entries.
+The ETS tables are typically used by Ra servers once entries have been replicated and got consensus.
+Ra servers look up confirmed entries with their index and apply them to their state machine.
+
+> Ra servers maintain also a short-lived cache of their entries which can be
+> used whenever an entry needs to be looked up. This cache is pruned when
+> an entry is confirmed by the WAL (meaning, fully written to disk). Depending
+> on the timing, an entry can be looked up from this cache if it is there
+> (the fastest) or from an ETS table. An example of the usage of this cache
+> is when the leader gets a consensus for an entry before the confirmation of its
+> own WAL, the entry is looked up from the cache and applied to the state machine.
+> We'll see later that entries can be stored in yet another place, segment files.
+> So whenever an entry is needed, Ra will go through these
+> 3 storage mechanisms to look it up: cache, ETS tables, segment files.
 
 ### The Segment Writer
 
@@ -561,6 +567,17 @@ but typically there are none.
 So to read from an (open) ETS table, there are at least 2 ETS lookups:
 one on the `ra_log_open_mem_tables` table to get the current range of the
 open tables and then another one to get the actual entry from the table itself.
+
+Ra servers are in charge of the deletion of closed ETS tables. The reason
+for this is that a Ra server may be between a range lookup and a table read,
+so another process like the segment writer cannot delete the table meanwhile.
+
+So after a flush, the segment writer sends information to Ra servers, like
+the list of the new and updated segments, and which ETS tables were used
+for the update. The Ra server can then delete these tables safely.
+
+If entries from this closed and deleted tables are needed later, they will
+be read from segments directly.
 
 ### The Snapshot Writer
 
