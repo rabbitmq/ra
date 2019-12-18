@@ -19,4 +19,6 @@ rabbitmq_rtopic_exchange.d
 *.plt
 *.d
 
+*.jar
+
 
