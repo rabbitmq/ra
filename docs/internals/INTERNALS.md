@@ -570,7 +570,18 @@ A simplified view of the lifetime of a single write.
 ![Simplified view of the lifetime of a single write](log_write.svg)
 
 
+## Recovery
 
+Recovery is the process of restarting after the system has stopped (normally or abruptly).
+
+When the WAL starts up, it scans its directory for WAL files. It reads each WAL file
+from start to finish to rebuild the ETS tables that would have existed and then pass them to the segment writer
+to flush them. It does this to make sure all entries are in their respective server segments.
+
+If the system crashed while flushing to segments this does mean some entries may be re-written into segments,
+but this is better than losing them. Those duplicated entries will be de-duplicated later on anyway.
+
+Then Ra servers read their respective segments and re-apply entries to get to the last state of their state machine.
 
 ## Snapshotting
 
