@@ -457,7 +457,7 @@ As all data needs to be safely persisted and fsync-ed to disk before it can be
 actioned it is not practical or performant to have each server write log entries
 to their own log files. Ra's log design instead is optimised to avoid
 parallel calls to `fsync(1)` and thus need to funnel all log entry writes
-through a common file, named the write ahead log
+through a common component, named the *write ahead log*
 (although strictly speaking there is no "ahead" in this sense).
 
 All messages are sent asynchronously to maximise throughput with
@@ -472,13 +472,19 @@ The Ra server initiates all write operations and coordinates all notifications
 received from the other processes. It is the only process that reads from
 the log.
 
-Under normal operations reads from the log are done from in memory ETS tables but it may
+Under normal operations reads from the log are done from in-memory ETS tables but it may
 occasionally read from log segments on disk, particularly when recovering
-after a restart.
+after a restart. These ETS tables are maintained by the write ahead log component.
 
 ### The Write Ahead Log (WAL)
 
 This is the process that's first to accept all write operations.
+
+The storage of the WAL is made of 2 parts:
+ * a file where the entries of all Ra servers are written.
+ * in-memory ETS tables that contain and will serve the entries for individual Ra servers.
+
+#### WAL's file
 
 The WAL appends entries from all Ra servers running on the current Erlang node to a single file
 and calls `fsync(1)` after a certain number of writes have been performed _or_ there are no further
@@ -487,11 +493,6 @@ write operations pending in its mailbox.
 After each batch it notifies each Ra server that had a write in
 that batch so that it can consider the entry written.
 
-The WAL writes each entry to a per-Ra-server ETS table (similar to
-Cassandra and RocksDB MemTables, see
-[Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/))
-which the Ra server uses to read data from its log.
-
 The WAL tries to adapt to load by dynamically increasing the max number of
 writes per batch, trading latency for throughput.
 
@@ -499,6 +500,27 @@ Depending on the system a call to `fsync(1)` can block for several milliseconds.
 Typically the size of a WAL batch is tuned to the number of messages received
 during the `fsync(1)` call. The WAL then quickly writes all pending entries to
 disk, calls `fsync(1)` which will accumulate further writes and so on.
+
+The WAL file is optimised for writing because it is only read on recovery (when the system has stopped or crashed
+and the last known state of Ra servers need to be restored.)
+
+#### WAL's ETS tables
+
+The WAL writes each entry to a per-Ra-server ETS table (similar to
+Cassandra and RocksDB MemTables, see
+[Log Structured Storage](https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/))
+which the Ra server uses to read data from its log.
+
+The ETS table are used by Ra servers once entries have been replicated and got consensus. Ra servers look up confirmed
+entries with their index and apply them to their state machine.
+
+> This is not exactly true but it at least justifies the existence
+> of the ETS table in the WAL. Ra servers actually keep a cache of entries
+> before they are confirmed and they use this cache to look up entries
+> and apply them once they are confirmed. This is faster than a ETS lookup.
+> This first level cache is pruned as entries are confirmed written by the wal.
+> If a leader doesn't have a majority it will still append to the log but it can’t apply,
+> so it will use the ETS tables later to look up entries.
 
 ### The Segment Writer
 
