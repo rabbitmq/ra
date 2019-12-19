@@ -58,7 +58,8 @@
          %% rebalancing
          transfer_leadership/2,
          aux_command/2,
-         cast_aux_command/2
+         cast_aux_command/2,
+         register_external_log_reader/1
         ]).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
@@ -612,9 +613,8 @@ new_uid(Source) when is_binary(Source) ->
 overview() ->
     #{node => node(),
       servers => ra_directory:overview(),
-      wal => #{max_batch_size =>
-               lists:max([X || {X, _} <- ets:tab2list(ra_log_wal_metrics)]),
-               status => lists:nth(5, element(4, sys:get_status(ra_log_wal))),
+      counters => ra_counters:overview(),
+      wal => #{status => lists:nth(5, element(4, sys:get_status(ra_log_wal))),
                open_mem_tables => ets:info(ra_log_open_mem_tables, size),
                closed_mem_tables => ets:info(ra_log_closed_mem_tables, size)},
       segment_writer => ra_log_segment_writer:overview()
@@ -861,6 +861,17 @@ aux_command(ServerRef, Cmd) ->
 -spec cast_aux_command(ra_server_id(), term()) -> ok.
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).
+
+%% @doc Registers an external log reader. ServerId needs to be local to the node.
+%% Returns an initiated ra_log_reader:state() state.
+%% @end
+-spec register_external_log_reader(ra_server_id()) ->
+    ra_log_reader:state().
+register_external_log_reader({_, Node} = ServerId)
+ when Node =:= node() ->
+    {ok, UId, Idx, SegRefs} = gen_statem:call(ServerId,
+                                              {register_external_log_reader, self()}),
+    ra_log_reader:init(UId, Idx, 1, SegRefs).
 
 %% internal
 

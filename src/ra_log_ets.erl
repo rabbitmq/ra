@@ -49,6 +49,8 @@ init([DataDir]) ->
     _ = ets:new(ra_log_open_mem_tables, [set | TableFlags]),
     _ = ets:new(ra_log_closed_mem_tables, [bag | TableFlags]),
 
+    _ = ra_counters:init(),
+
     %% Table for ra processes to record their current snapshot index so that
     %% other processes such as the segment writer can use this value to skip
     %% stale records and avoid flushing unnecessary data to disk.
