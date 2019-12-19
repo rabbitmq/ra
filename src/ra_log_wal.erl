@@ -44,8 +44,6 @@
 
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{pid() => #batch_writer{}},
-                                   % {From :: ra_index(), To :: ra_index(),
-                                   %  Term :: ra_term()}},
                 start_time :: maybe(integer()),
                 pending = [] :: iolist()
                }).
@@ -203,7 +201,7 @@ init(#{dir := Dir} = Conf0) ->
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
     %% rather than crash
-    FileModes = [raw, append, binary],
+    FileModes = [raw, write, binary],
     Conf = #conf{file_modes = FileModes,
                  dir = Dir,
                  segment_writer = SegWriter,
@@ -517,6 +515,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         Modes = [sync | Modes0],
         case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
+                ok = pre_allocate(Fd, Max),
                 ok = write_header(Fd),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
@@ -531,10 +530,20 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         end;
 open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
+    %% extend wal file
+    ok = pre_allocate(Fd, Max),
     ok = write_header(Fd),
+    ok = ra_file_handle:sync(Fd),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
+
+pre_allocate(Fd, Max) ->
+    ok = file:allocate(Fd, 0, Max),
+    {ok, Max} = file:position(Fd, Max),
+    ok = file:truncate(Fd),
+    {ok, 0} = file:position(Fd, 0),
+    ok.
 
 write_header(Fd) ->
     ok = ra_file_handle:write(Fd, <<?MAGIC>>),
