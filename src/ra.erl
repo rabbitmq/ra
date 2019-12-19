@@ -862,7 +862,7 @@ aux_command(ServerRef, Cmd) ->
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).
 
-%% @doc Registers an external log reader. ServerId needs to be local
+%% @doc Registers an external log reader. ServerId needs to be local to the node.
 %% Returns an initiated ra_log_reader:state() state.
 %% @end
 -spec register_external_log_reader(ra_server_id()) ->
