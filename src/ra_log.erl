@@ -406,7 +406,7 @@ handle_event({segments, Tid, NewSegs},
 
     case Readers of
         [] ->
-            %% delete immedately
+            %% delete immediately
             DeleteFun(),
             {State, []};
         _ ->
