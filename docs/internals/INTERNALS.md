@@ -471,8 +471,8 @@ There are several processes involved in the Ra log implementation.
 ### The Ra Server
 
 The Ra server initiates all write operations and coordinates all notifications
-received from the other processes. It is the only process that reads from
-the log.
+received from the other processes. It is usually the only process that reads from
+the log, even if it is possible to attach [external readers](#external-log-readers) to the log.
 
 Under normal operations reads from the log are done from in-memory ETS tables but it may
 occasionally read from log segments on disk, particularly when recovering
@@ -593,6 +593,17 @@ A simplified view of the lifetime of a single write.
 
 ![Simplified view of the lifetime of a single write](log_write.svg)
 
+### External Log Readers
+
+Any process can register to be notified about log events (new segments, lower bound),
+it can then perform some queries for its own needs, typically reading entries.
+
+One potential use case of external log readers is to offload some busy processes (e.g. AMQP queues)
+and let other processes (e.g. AMQP channels) re-read entries, to avoid slowing down
+critical processes too much.
+
+External log readers can also be used to implement multi-DC log replication. Those
+readers could even only read and replicate committed entries.
 
 ## Recovery
 
