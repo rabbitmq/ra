@@ -1983,7 +1983,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                                 undefined ->
                                     0;
                                 _ when is_integer(LastTs) ->
-                                    os:system_time(microsecond) - LastTs
+                                    os:system_time(millisecond) - LastTs
                             end,
             %% due to machine versioning all entries may not have been applied
             apply_to(ApplyTo, ApplyFun, Notifys, Effects,
