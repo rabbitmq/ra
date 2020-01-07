@@ -308,7 +308,9 @@ recover(#{id := {_, _, LogId},
                  end,
                  State0, []),
     Log = ra_log:release_resources(1, Log0),
-    State#{log => Log}.
+    State#{log => Log,
+           %% reset commit latency as recovery may calculate a very old value
+           commit_latency => 0}.
 
 -spec handle_leader(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
@@ -1245,7 +1247,7 @@ metrics(#{metrics_key := Key,
              #{commit_latency := L} ->
                  L;
              _ ->
-                 -1
+                 0
          end,
     {LW, _} = ra_log:last_index_term(Log),
     {Key, CT, SnapIdx, LA, CI, LW, CL}.
@@ -1979,9 +1981,9 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                             Entries),
             CommitLatency = case LastTs of
                                 undefined ->
-                                    -1;
+                                    0;
                                 _ when is_integer(LastTs) ->
-                                    os:system_time(millisecond) - LastTs
+                                    os:system_time(microsecond) - LastTs
                             end,
             %% due to machine versioning all entries may not have been applied
             apply_to(ApplyTo, ApplyFun, Notifys, Effects,
