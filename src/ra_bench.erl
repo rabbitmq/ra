@@ -1,5 +1,5 @@
 %% @hidden
--module(noop).
+-module(ra_bench).
 
 -behaviour(ra_machine).
 
@@ -14,14 +14,12 @@
          init/1,
          apply/3,
 
-         start/1,
-         spawn_client/1,
-         print_metrics/1,
-
          % profile/0,
          % stop_profile/0
 
-         prepare/0
+         prepare/0,
+         run/1,
+         run/0
 
         ]).
 
@@ -39,22 +37,61 @@ apply(#{index := I}, {noop, _}, State) ->
             {State, ok}
     end.
 
+run() ->
+    run(#{name => noop,
+          seconds => 10,
+          target => 50000,
+          degree => 5,
+          nodes => [node() | nodes()]}).
 
-start(Nodes) ->
-    ServerIds = [{noop, N} || N <- Nodes],
+
+run(#{name := Name,
+      seconds := Secs,
+      target := Target,
+      nodes := Nodes,
+      degree := Degree}) ->
+
+    io:format("starting nodes ~w~n", [Nodes]),
+    {ok, ServerIds, []} = start(Name, Nodes),
+    {ok,_, Leader} = ra:members(hd(ServerIds)),
+    TotalOps = Secs * Target,
+    Each = TotalOps div Degree,
+    Start = os:system_time(millisecond),
+    Pids =  [spawn_client(self(), Leader, Each) || _ <- lists:seq(1, Degree)],
+    %% wait for each pid
+    Wait = ((Secs * 1000) * 4),
+    [begin
+         receive
+             {done, P} ->
+                 io:format("~w is done ~n", [P]),
+                 ok
+         after  Wait ->
+                   exit({timeout, P})
+         end
+     end || P <- Pids],
+    End = os:system_time(millisecond),
+    Taken = End - Start,
+    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
+              [TotalOps, Taken, TotalOps div (Taken div 1000)]),
+    ra:delete_cluster(ServerIds),
+    print_metrics(atom_to_binary(Name, utf8)),
+    ok.
+
+start(Name, Nodes) when is_atom(Name) ->
+    ServerIds = [{Name, N} || N <- Nodes],
     Configs = [begin
                    rpc:call(N, ?MODULE, prepare, []),
-                   Id = {noop, N},
-                   UId = ra:new_uid(ra_lib:to_binary(noop)),
+                   Id = {Name, N},
+                   UId = ra:new_uid(ra_lib:to_binary(Name)),
                    #{id => Id,
                      uid => UId,
-                     cluster_name => noop,
-                     metrics_key => "the noop",
+                     cluster_name => Name,
+                     metrics_key => atom_to_binary(Name, utf8),
                      log_init_args => #{uid => UId},
                      initial_members => ServerIds,
                      machine => {module, ?MODULE, #{}}}
                end || N <- Nodes],
-    {ra:start_cluster(Configs), ServerIds}.
+    ra:start_cluster(Configs).
 
 prepare() ->
     _ = application:ensure_all_started(ra),
@@ -67,40 +104,36 @@ send_n(Leader, N) ->
     send_n(Leader, N-1).
 
 
-client_loop(Leader) ->
+client_loop(0, 0, _Leader) ->
+    ok;
+client_loop(Num, Sent, _Leader) ->
     receive
         {ra_event, Leader, {applied, Applied}} ->
             N = length(Applied),
-            send_n(Leader, N),
-            client_loop(Leader);
+            ToSend = min(Sent, N),
+            send_n(Leader, ToSend),
+            client_loop(Num - N, Sent - ToSend, Leader);
         {ra_event, _, {rejected, {not_leader, NewLeader, _}}} ->
             io:format("new leader ~w~n", [NewLeader]),
             send_n(NewLeader, 1),
-            client_loop(NewLeader);
+            client_loop(Num, Sent, NewLeader);
         {ra_event, Leader, Evt} ->
             io:format("unexpected ra_event ~w~n", [Evt]),
-
-            client_loop(Leader)
+            client_loop(Num, Sent,Leader)
     end.
 
-spawn_client(Servers) ->
+spawn_client(Parent, Leader, Num) when Num >= 1000 ->
     spawn_link(
       fun () ->
               %% first send one 1000 noop commands
               %% then top up as they are applied
-              {ok, _, Leader} = ra:members(hd(Servers)),
               send_n(Leader, 1000),
-              client_loop(Leader)
+              ok = client_loop(Num, Num - 1000, Leader),
+              Parent ! {done, self()}
       end).
 
-print_metrics(undefined) ->
-    print_metrics(hd(ets:lookup(ra_metrics, noop)));
-print_metrics({noop, _, A0, _, B0, _}) ->
-    timer:sleep(1000),
-    [{noop, _, A, _, B, _} = X] = ets:lookup(ra_metrics, noop),
-    io:format("metrics ~b ~b per second~n",
-              [A-A0, B-B0]),
-    print_metrics(X).
+print_metrics(Name) ->
+    io:format("metrics ~p", [ets:lookup(ra_metrics, Name)]).
 
 
 % profile() ->
