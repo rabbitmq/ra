@@ -1,8 +1,8 @@
 {"1.1.0",
-[{<<"aten">>,{pkg,<<"aten">>,<<"0.5.2">>},0},
- {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.8.0">>},0}]}.
+[{<<"aten">>,{pkg,<<"aten">>,<<"0.5.3">>},0},
+ {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.8.2">>},0}]}.
 [
 {pkg_hash,[
- {<<"aten">>, <<"2B4D31261D36C0A11CD6D04AE3F96C8951EB32106E9D2013A5B33BA14F7875AE">>},
- {<<"gen_batch_server">>, <<"88DCEBF05036335C2163A1ED4BAAE6C10AD0E97FCC617CEA8A0223E3404F05A1">>}]}
+ {<<"aten">>, <<"C23747FB01C6A1248B2624EE2EAAD7B57ACAF2B5451B14DF4ACDF26CECDD91A7">>},
+ {<<"gen_batch_server">>, <<"547F5656937AB36F1FB7921263F2F3E82D685AE99F32BCE06B803719AAE5D829">>}]}
 ].

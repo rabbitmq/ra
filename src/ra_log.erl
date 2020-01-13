@@ -33,7 +33,11 @@
          read_config/1,
 
          delete_everything/1,
-         release_resources/2
+         release_resources/2,
+
+         % external reader
+         register_reader/2,
+         readers/1
         ]).
 
 -include("ra.hrl").
@@ -55,16 +59,21 @@
                                  ToTerm :: ra_term()}} |
                       {segments, ets:tid(), [segment_ref()]} |
                       {resend_write, ra_index()} |
-                      {snapshot_written, ra_idxterm()}.
+                      {snapshot_written, ra_idxterm()} |
+                      {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
 
--type effect() :: {delete_snapshot, Dir :: file:filename(), ra_idxterm()}.
+-type effect() ::
+    {delete_snapshot, Dir :: file:filename(), ra_idxterm()} |
+    {monitor, process, log, pid()} |
+    ra_snapshot:effect() |
+    ra_server:effect().
 %% logs can have effects too so that they can be coordinated with other state
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
 
--type effects() :: [effect() | ra_snapshot:effect()].
+-type effects() :: [effect()].
 
 -record(?MODULE,
         {uid :: ra_uid(),
@@ -79,14 +88,15 @@
          last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
-         segment_refs = [] :: [segment_ref()],
-         open_segments = ra_flru:new(5, fun flru_handler/1) :: ra_flru:state(),
          snapshot_state :: ra_snapshot:state(),
          % if this is set a snapshot write is in progress for the
          % index specified
-         cache = #{} :: #{ra_index() => {ra_term(), log_entry()}},
-         last_resend_time :: maybe(integer())
+         cache = #{} :: #{ra_index() => {ra_index(), ra_term(), log_entry()}},
+         last_resend_time :: maybe(integer()),
+         reader :: ra_log_reader:state(),
+         readers = [] :: [pid()]
         }).
+
 
 -opaque state() :: #?MODULE{}.
 
@@ -100,6 +110,7 @@
                               snapshot_module => module()}.
 
 -export_type([state/0,
+              % reader/0,
               ra_log_init_args/0,
               ra_meta_key/0,
               segment_ref/0,
@@ -156,6 +167,7 @@ init(#{uid := UId} = Conf) ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
+    Reader = ra_log_reader:init(UId, FirstIdx, MaxOpen, SegRefs),
     % recover last snapshot file
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -170,12 +182,10 @@ init(#{uid := UId} = Conf) ->
                         log_id = LogId,
                         first_index = max(SnapIdx + 1, FirstIdx),
                         last_index = max(SnapIdx, LastIdx0),
-                        segment_refs = SegRefs,
+                        reader = Reader,
                         snapshot_state = SnapshotState,
                         snapshot_interval = SnapInterval,
                         wal = Wal,
-                        open_segments = ra_flru:new(MaxOpen,
-                                                    fun flru_handler/1),
                         resend_window_seconds = ResendWindow,
                         snapshot_module = SnapModule},
 
@@ -201,14 +211,14 @@ init(#{uid := UId} = Conf) ->
            [State#?MODULE.log_id,
             last_index_term(State),
             State#?MODULE.first_index]),
-    delete_segments(SnapIdx, State).
+    element(1, delete_segments(SnapIdx, State)).
 
 -spec close(state()) -> ok.
 close(#?MODULE{uid = UId,
-               open_segments = OpenSegs}) ->
+               reader = Reader}) ->
     % deliberately ignoring return value
     % close all open segments
-    _ = ra_flru:evict_all(OpenSegs),
+    _ = ra_log_reader:close(Reader),
     %% delete ra_log_metrics record
     catch ets:delete(ra_log_metrics, UId),
     %% inserted in ra_snapshot but it doesn't havea terminate callback so
@@ -266,6 +276,7 @@ write([{Idx, _, _} | _], #?MODULE{uid = UId, last_index = LastIdx}) ->
 -spec take(ra_index(), non_neg_integer(), state()) ->
     {[log_entry()], state()}.
 take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
+                          reader = Reader0,
                           last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx andalso Num > 0 ->
     % 0. Check that the request isn't outside of first_index and last_index
@@ -277,27 +288,11 @@ take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
         {Entries, MetricOps0, undefined} ->
             ok = update_metrics(UId, MetricOps0),
             {Entries, State};
-        {Entries0, MetricOps0, Rem0} ->
-            case open_mem_tbl_take(UId, Rem0, MetricOps0, Entries0) of
-                {Entries1, MetricOps, undefined} ->
-                    ok = update_metrics(UId, MetricOps),
-                    {Entries1, State};
-                {Entries1, MetricOps1, Rem1} ->
-                    case closed_mem_tbl_take(UId, Rem1, MetricOps1, Entries1) of
-                        {Entries2, MetricOps, undefined} ->
-                            ok = update_metrics(UId, MetricOps),
-                            {Entries2, State};
-                        {Entries2, MetricOps2, {S, E} = Rem2} ->
-                            case catch segment_take(State, Rem2, Entries2) of
-                                {Open, undefined, Entries} ->
-                                    MOp = {?METRICS_SEGMENT_POS, E - S + 1},
-                                    ok = update_metrics(UId,
-                                                        [MOp | MetricOps2]),
-                                    {Entries,
-                                     State#?MODULE{open_segments = Open}}
-                            end
-                    end
-            end
+        {Entries0, MetricOps0, {S, F}} ->
+            {Entries, Metr, Reader} = ra_log_reader:read(S, F, Reader0),
+            ok = update_metrics(UId, MetricOps0 ++ Metr),
+            %% TODO: avoid concat
+            {Entries ++ Entries0, State#?MODULE{reader = Reader}}
     end;
 take(_, _, State) ->
     {[], State}.
@@ -384,41 +379,51 @@ handle_event({written, {FromIdx, _, _}},
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
              #?MODULE{uid = UId,
-                      open_segments = Open0,
-                      segment_refs = SegmentRefs} = State0) ->
+                      reader = Reader0,
+                      readers = Readers} = State0) ->
     ClosedTables = closed_mem_tables(UId),
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
+    Reader = ra_log_reader:update_segments(NewSegs, Reader0),
+    % compact seg ref list so that only the latest range for a segment
+    % file has an entry
+    State = State0#?MODULE{reader = Reader},
     % not fast but we rarely should have more than one or two closed tables
     % at any time
     Obsolete = ClosedTables -- Active,
 
-    TidsToDelete = [begin
-                        %% first delete the entry in the closed table lookup
-                        true = ets:delete_object(ra_log_closed_mem_tables,
-                                                 ClosedTbl),
-                        T
-                    end || {_, _, _, _, T} = ClosedTbl  <- Obsolete],
-    ok = ra_log_ets:delete_tables(TidsToDelete),
+    DeleteFun =
+    fun () ->
+            TidsToDelete = [begin
+                                %% first delete the entry in the
+                                %% closed table lookup
+                                true = ets:delete_object(ra_log_closed_mem_tables,
+                                                         ClosedTbl),
+                                T
+                            end || {_, _, _, _, T} = ClosedTbl <- Obsolete],
+            ok = ra_log_ets:delete_tables(TidsToDelete)
+    end,
 
-    %% check if any of the updated segrefs refer to open segments
-    %% we close these segments so that they can be re-opened with updated
-    %% indexes if needed
-    Open = lists:foldl(fun ({_, _, F}, Acc0) ->
-                               case ra_flru:evict(F, Acc0) of
-                                   {_, Acc} -> Acc;
-                                   error -> Acc0
-                               end
-                       end, Open0, SegmentRefs),
-
-    % compact seg ref list so that only the latest range for a segment
-    % file has an entry
-    {State0#?MODULE{segment_refs = compact_seg_refs(NewSegs ++ SegmentRefs),
-                    open_segments = Open}, []};
+    case Readers of
+        [] ->
+            %% delete immediately
+            DeleteFun(),
+            {State, []};
+        _ ->
+            %% HACK
+            %% TODO: replace with reader coordination
+            %% delay deletion until all readers confirmed they have received
+            %% the update
+            Pid = spawn(fun () ->
+                          ok = log_update_wait_n(length(Readers)),
+                          DeleteFun()
+                  end),
+            {State, log_update_effects(Readers, Pid, State)}
+    end;
 handle_event({snapshot_written, {Idx, _} = Snap},
              #?MODULE{snapshot_state = SnapState0} = State0) ->
     % delete any segments outside of first_index
-    State = delete_segments(Idx, State0),
+    {State, Effects0} = delete_segments(Idx, State0),
     SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
     %% delete old snapshot files
     %% This is done as an effect
@@ -426,7 +431,7 @@ handle_event({snapshot_written, {Idx, _} = Snap},
     %% the cleanup can be delayed until it is safe
     Effects = [{delete_snapshot,
                 ra_snapshot:directory(SnapState),
-                ra_snapshot:current(SnapState0)}],
+                ra_snapshot:current(SnapState0)} | Effects0],
     %% do not set last written index here as the snapshot may
     %% be for a past index
     {State#?MODULE{first_index = Idx + 1,
@@ -434,7 +439,11 @@ handle_event({snapshot_written, {Idx, _} = Snap},
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
-    {resend_from(Idx, State), []}.
+    {resend_from(Idx, State), []};
+handle_event({down, Pid, _Info},
+             #?MODULE{readers = Readers} =
+             State) ->
+    {State#?MODULE{readers = lists:delete(Pid, Readers)}, []}.
 
 -spec next_index(state()) -> ra_index().
 next_index(#?MODULE{last_index = LastIdx}) ->
@@ -456,23 +465,13 @@ fetch_term(Idx, #?MODULE{last_index = LastIdx,
                          first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
-fetch_term(Idx, #?MODULE{cache = Cache, uid = UId} = State0) ->
+fetch_term(Idx, #?MODULE{cache = Cache, reader = Reader0} = State0) ->
     case Cache of
-        #{Idx := {Term, _}} ->
+        #{Idx := {Idx, Term, _}} ->
             {Term, State0};
         _ ->
-            case ets:lookup(ra_log_open_mem_tables, UId) of
-                [{_, From, To, Tid}] when Idx >= From andalso Idx =< To ->
-                    Term = ets:lookup_element(Tid, Idx, 2),
-                    {Term, State0};
-                _ ->
-                    case closed_mem_table_term_query(Idx, UId) of
-                        undefined ->
-                            segment_term_query(Idx, State0);
-                        Term ->
-                            {Term, State0}
-                    end
-            end
+            {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
+            {Term, State0#?MODULE{reader = Reader}}
     end.
 
 -spec snapshot_state(State :: state()) -> ra_snapshot:state().
@@ -483,16 +482,18 @@ snapshot_state(State) ->
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) -> state().
+-spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
+    {state(), effects()}.
 install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
-    State = delete_segments(Idx, State0),
-    %% TODO: truncate cache?
-    State#?MODULE{snapshot_state = SnapState,
+    {State, Effs} = delete_segments(Idx, State0),
+    {State#?MODULE{snapshot_state = SnapState,
                   first_index = Idx + 1,
                   last_index = Idx,
+                  %% TODO: update last_term too?
                   %% cache can go
                   cache = #{},
-                  last_written_index_term = IdxTerm}.
+                  last_written_index_term = IdxTerm},
+     Effs}.
 
 -spec recover_snapshot(State :: state()) ->
     maybe({ra_snapshot:meta(), term()}).
@@ -523,7 +524,7 @@ update_release_cursor(Idx, Cluster, MacVersion, MacState,
     end.
 
 update_release_cursor0(Idx, Cluster, MacVersion, MacState,
-                       #?MODULE{segment_refs = SegRefs,
+                       #?MODULE{reader = Reader,
                                 snapshot_state = SnapState,
                                 snapshot_interval = SnapInter} = State0) ->
     ClusterServerIds = maps:keys(Cluster),
@@ -537,8 +538,8 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.
     % Check here if any segments can be release.
-    case lists:any(fun({_, To, _}) when To =< Idx -> true;
-                      (_) -> false end, SegRefs) of
+    case lists:any(fun({_, To, _}) -> To =< Idx end,
+                   ra_log_reader:segment_refs(Reader)) of
         true ->
             % segments can be cleared up
             % take a snapshot at the release_cursor
@@ -560,7 +561,7 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
                     write_snapshot(Meta#{term => Term}, MacState, State)
             end;
         false when Idx > SnapLimit ->
-            %% periodically take snapshots event if segments cannot be cleared
+            %% periodically take snapshots even if segments cannot be cleared
             %% up
             case fetch_term(Idx, State0) of
                 {undefined, State} ->
@@ -608,16 +609,16 @@ exists({Idx, Term}, Log0) ->
 overview(#?MODULE{last_index = LastIndex,
                   first_index = FirstIndex,
                   last_written_index_term = LWIT,
-                  segment_refs = Segs,
                   snapshot_state = SnapshotState,
-                  open_segments = OpenSegs,
+                  reader = Reader,
                   cache = Cache}) ->
     #{type => ?MODULE,
       last_index => LastIndex,
       first_index => FirstIndex,
       last_written_index_term => LWIT,
-      num_segments => length(Segs),
-      open_segments => ra_flru:size(OpenSegs),
+      num_segments => length(ra_log_reader:segment_refs(Reader)),
+      %%TODO: re-introduce open segment count
+      open_segments => ra_log_reader:num_open_segments(Reader),
       snapshot_index => case ra_snapshot:current(SnapshotState) of
                             undefined -> undefined;
                             {I, _} -> I
@@ -658,41 +659,61 @@ delete_everything(#?MODULE{directory = Dir} = Log) ->
 
 -spec release_resources(non_neg_integer(), state()) -> state().
 release_resources(MaxOpenSegments,
-                  #?MODULE{open_segments = OpenSegs} = State) ->
+                  #?MODULE{uid = UId,
+                           first_index = FstIdx,
+                           reader = Reader} = State) ->
+    ActiveSegs = ra_log_reader:segment_refs(Reader),
     % close all open segments
     % deliberately ignoring return value
-    _ = ra_flru:evict_all(OpenSegs),
+    _ = ra_log_reader:close(Reader),
     %% open a new segment with the new max open segment value
-    State#?MODULE{open_segments = ra_flru:new(MaxOpenSegments,
-                                              fun flru_handler/1)}.
+    State#?MODULE{reader = ra_log_reader:init(UId, FstIdx, MaxOpenSegments,
+                                              ActiveSegs)}.
+
+-spec register_reader(pid(), state()) ->
+    {state(), effects()}.
+register_reader(Pid, #?MODULE{uid = UId,
+                              first_index = Idx,
+                              reader = Reader,
+                              readers = Readers} = State) ->
+    SegRefs = ra_log_reader:segment_refs(Reader),
+    {State#?MODULE{readers = [Pid | Readers]},
+     [{reply, {ok, UId, Idx, SegRefs}},
+      {monitor, process, log, Pid}]}.
+
+readers(#?MODULE{readers = Readers}) ->
+    Readers.
+
 
 %%% Local functions
+
+log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
+                                            reader = Reader}) ->
+    SegRefs = ra_log_reader:segment_refs(Reader),
+    [{send_msg, P, {ra_log_update, ReplyPid, Idx, SegRefs},
+      [ra_event, local]} || P <- Pids].
+
 
 %% deletes all segments where the last index is lower or equal to
 %% the Idx argumement
 delete_segments(Idx, #?MODULE{log_id = LogId,
                               uid = UId,
-                              open_segments = OpenSegs0,
-                              segment_refs = SegRefs0} = State0) ->
-    case lists:partition(fun({_, To, _}) when To > Idx -> true;
-                            (_) -> false
-                         end, SegRefs0) of
-        {_, []} ->
-            State0;
-        {Active, [Pivot | _] = Obsolete} ->
-            ObsoleteKeys = [element(3, O) || O <- Obsolete],
-            % close any open segments
-            OpenSegs = lists:foldl(fun (K, OS0) ->
-                                           case ra_flru:evict(K, OS0) of
-                                               {_, OS} -> OS;
-                                               error -> OS0
-                                           end
-                                   end, OpenSegs0, ObsoleteKeys),
-            ok = ra_log_segment_writer:truncate_segments(UId, Pivot),
+                              readers = Readers,
+                              reader = Reader0} = State0) ->
+    case ra_log_reader:update_first_index(Idx, Reader0) of
+        {Reader, []} ->
+            State = State0#?MODULE{reader = Reader},
+            {State, log_update_effects(Readers, undefined, State)};
+        {Reader, [Pivot | _] = Obsolete} ->
+            Pid = spawn(fun () ->
+                          ok = log_update_wait_n(length(Readers)),
+                          ok = ra_log_segment_writer:truncate_segments(UId, Pivot)
+                  end),
+            Active = ra_log_reader:segment_refs(Reader),
             ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
-                   [LogId, length(ObsoleteKeys), Idx, length(Active)]),
-            State0#?MODULE{open_segments = OpenSegs,
-                           segment_refs = Active}
+                   [LogId, length(Obsolete), Idx, length(Active)]),
+            State = State0#?MODULE{reader = Reader},
+            {State, log_update_effects(Readers, Pid, State)}
     end.
 
 wal_truncate_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
@@ -702,14 +723,14 @@ wal_truncate_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
     % and that prior entries should be considered stale
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
     State#?MODULE{last_index = Idx, last_term = Term,
-                  cache = Cache#{Idx => {Term, Data}}}.
+                  cache = Cache#{Idx => {Idx, Term, Data}}}.
 
 wal_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
           {Idx, Term, Data}) ->
     case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Data) of
         ok ->
             State#?MODULE{last_index = Idx, last_term = Term,
-                          cache = Cache#{Idx => {Term, Data}}};
+                          cache = Cache#{Idx => {Idx, Term, Data}}};
         {error, wal_down} ->
             exit(wal_down)
     end.
@@ -720,7 +741,7 @@ wal_write_batch(#?MODULE{uid = UId, cache = Cache0, wal = Wal} = State,
     {WalCommands, Cache} =
         lists:foldl(fun ({Idx, Term, Data}, {WC, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], C0#{Idx => {Term, Data}}}
+                            {[WalC | WC], C0#{Idx => {Idx, Term, Data}}}
                     end, {[], Cache0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
@@ -765,149 +786,6 @@ update_metrics(Id, Ops) ->
     _ = ets:update_counter(ra_log_metrics, Id, Ops),
     ok.
 
-open_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
-    case ets:lookup(ra_log_open_mem_tables, Id) of
-        [{_, TStart, TEnd, Tid}] ->
-            {Entries, Count, Rem} = mem_tbl_take({Start0, End}, TStart, TEnd,
-                                                 Tid, 0, Acc0),
-            {Entries, [{?METRICS_OPEN_MEM_TBL_POS, Count} | MetricOps], Rem};
-        [] ->
-            {Acc0, MetricOps, {Start0, End}}
-    end.
-
-closed_mem_tbl_take(Id, {Start0, End}, MetricOps, Acc0) ->
-    case closed_mem_tables(Id) of
-        [] ->
-            {Acc0, MetricOps, {Start0, End}};
-        Tables ->
-            {Entries, Count, Rem} =
-            lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
-                                mem_tbl_take(Range, TblSt, TblEnd,
-                                             Tid, Count, Ac)
-                        end, {Acc0, 0, {Start0, End}}, Tables),
-            {Entries, [{?METRICS_CLOSED_MEM_TBL_POS, Count} | MetricOps], Rem}
-    end.
-
-closed_mem_table_term_query(Idx, Id) ->
-    case closed_mem_tables(Id) of
-        [] ->
-            undefined;
-        Tables ->
-            closed_mem_table_term_query0(Idx, Tables)
-    end.
-
-closed_mem_table_term_query0(_Idx, []) ->
-    undefined;
-closed_mem_table_term_query0(Idx, [{_, _, From, To, Tid} | _Tail])
-  when Idx >= From andalso Idx =< To ->
-    ets:lookup_element(Tid, Idx, 2);
-closed_mem_table_term_query0(Idx, [_ | Tail]) ->
-    closed_mem_table_term_query0(Idx, Tail).
-
-closed_mem_tables(Id) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
-        [] ->
-            [];
-        Tables ->
-            lists:sort(fun (A, B) ->
-                               element(2, A) > element(2, B)
-                       end, Tables)
-    end.
-
-mem_tbl_take(undefined, _TblStart, _TblEnd, _Tid, Count, Acc0) ->
-    {Acc0, Count, undefined};
-mem_tbl_take({_Start0, End} = Range, TblStart, _TblEnd, _Tid, Count, Acc0)
-  when TblStart > End ->
-    % optimisation to bypass request that has no overlap
-    {Acc0, Count, Range};
-mem_tbl_take({Start0, End}, TblStart, TblEnd, Tid, Count, Acc0)
-  when TblEnd >= End ->
-    Start = max(TblStart, Start0),
-    Entries = lookup_range(Tid, Start, End, Acc0),
-    Remainder = case Start =:= Start0 of
-                    true ->
-                        % the range was fully covered by the mem table
-                        undefined;
-                    false ->
-                        {Start0, Start-1}
-                end,
-    {Entries, Count + (End - Start + 1), Remainder}.
-
-lookup_range(Tid, Start, Start, Acc) ->
-    [Entry] = ets:lookup(Tid, Start),
-    [Entry | Acc];
-lookup_range(Tid, Start, End, Acc) when End > Start ->
-    [Entry] = ets:lookup(Tid, End),
-    lookup_range(Tid, Start, End-1, [Entry | Acc]).
-
-
-segment_take(#?MODULE{segment_refs = SegRefs,
-                      open_segments = OpenSegs,
-                      directory = Dir},
-             Range, Entries0) ->
-    lists:foldl(
-      fun(_, {_, undefined, _} = Acc) ->
-              %% we're done reading
-              throw(Acc);
-         ({From, _, _}, {_, {_, End}, _} = Acc)
-           when From > End ->
-              Acc;
-         ({From, To, Fn}, {Open0, {Start0, End}, E0})
-           when To >= End ->
-              {Seg, Open} =
-                  case ra_flru:fetch(Fn, Open0) of
-                      {ok, S, Open1} ->
-                          {S, Open1};
-                      error ->
-                          AbsFn = filename:join(Dir, Fn),
-                          case ra_log_segment:open(AbsFn, #{mode => read}) of
-                              {ok, S} ->
-                                  {S, ra_flru:insert(Fn, S, Open0)};
-                              {error, Err} ->
-                                  exit({ra_log_failed_to_open_segment, Err,
-                                        AbsFn})
-                          end
-                  end,
-
-              % actual start point cannot be prior to first segment
-              % index
-              Start = max(Start0, From),
-              Num = End - Start + 1,
-              Entries = ra_log_segment:read_cons(Seg, Start, Num,
-                                                 fun binary_to_term/1,
-                                                 E0),
-              Rem = case Start of
-                        Start0 -> undefined;
-                        _ ->
-                            {Start0, Start-1}
-                    end,
-              {Open, Rem, Entries}
-      end, {OpenSegs, Range, Entries0}, SegRefs).
-
-segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
-                                 directory = Dir,
-                                 open_segments = OpenSegs} = State) ->
-    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Dir),
-    {Result, State#?MODULE{open_segments = Open}}.
-
-segment_term_query0(Idx, [{From, To, Filename} | _], Open0, Dir)
-  when Idx >= From andalso Idx =< To ->
-    case ra_flru:fetch(Filename, Open0) of
-        {ok, Seg, Open} ->
-            Term = ra_log_segment:term_query(Seg, Idx),
-            {Term, Open};
-        error ->
-            AbsFn = filename:join(Dir, Filename),
-            {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read}),
-            Term = ra_log_segment:term_query(Seg, Idx),
-            {Term, ra_flru:insert(Filename, Seg, Open0)}
-    end;
-segment_term_query0(Idx, [_ | Tail], Open, Dir) ->
-    segment_term_query0(Idx, Tail, Open, Dir);
-segment_term_query0(_Idx, [], Open, _) ->
-    {undefined, Open}.
-
-
 cache_take(Start, Num, #?MODULE{cache = Cache, last_index = LastIdx}) ->
     Highest = min(LastIdx, Start + Num - 1),
     % cache needs to be queried in reverse to ensure
@@ -930,8 +808,7 @@ cache_take0(Next, Last, _Cache, Acc)
 cache_take0(Next, Last, Cache, Acc) ->
     case Cache of
         #{Next := Entry} ->
-            cache_take0(Next-1, Last, Cache,
-                        [erlang:insert_element(1, Entry, Next) | Acc]);
+            cache_take0(Next-1, Last, Cache, [Entry | Acc]);
         _ ->
             Acc
     end.
@@ -961,8 +838,7 @@ resend_from0(Idx, #?MODULE{last_index = LastIdx,
     ?DEBUG("~s: ra_log: resending from ~b to ~b",
            [State#?MODULE.log_id, Idx, LastIdx]),
     lists:foldl(fun (I, Acc) ->
-                        X = maps:get(I, Cache),
-                        wal_write(Acc, erlang:insert_element(1, X, I))
+                        wal_write(Acc, maps:get(I, Cache))
                 end,
                 State#?MODULE{last_resend_time = erlang:system_time(seconds)},
                 % TODO: replace with recursive function
@@ -977,19 +853,6 @@ resend_from0(Idx, #?MODULE{last_resend_time = LastResend,
         false ->
             State
     end.
-
-
-compact_seg_refs(SegRefs) ->
-    lists:reverse(
-      lists:foldl(fun ({_, _, File} = S, Acc) ->
-                          case lists:any(fun({_, _, F}) when F =:= File ->
-                                                 true;
-                                            (_) -> false
-                                         end, Acc) of
-                              true -> Acc;
-                              false -> [S | Acc]
-                          end
-                  end, [], SegRefs)).
 
 verify_entries(_, []) ->
     ok;
@@ -1021,10 +884,6 @@ write_snapshot(Meta, MacRef,
                #?MODULE{snapshot_state = SnapState0} = State) ->
     {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
-
-flru_handler({_, Seg}) ->
-    _ = ra_log_segment:close(Seg),
-    ok.
 
 recover_range(UId, _SnapIdx) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
@@ -1081,70 +940,44 @@ await_written_idx(Idx, Term, Log0) ->
               throw(ra_log_append_timeout)
     end.
 
+closed_mem_tables(Id) ->
+    case ets:lookup(ra_log_closed_mem_tables, Id) of
+        [] ->
+            [];
+        Tables ->
+            lists:sort(fun (A, B) ->
+                               element(2, A) > element(2, B)
+                       end, Tables)
+    end.
+
+
+log_update_wait_n(0) ->
+    ok;
+log_update_wait_n(N) ->
+    receive
+        ra_log_update_processed ->
+            log_update_wait_n(N - 1)
+    after 1500 ->
+              %% just go ahead anyway
+              ok
+    end.
 
 %%%% TESTS
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-compact_seg_refs_test() ->
-    % {From, To, File}
-    Refs = [{10, 100, "2"}, {10, 75, "2"}, {10, 50, "2"}, {1, 9, "1"}],
-    [{10, 100, "2"}, {1, 9, "1"}] = compact_seg_refs(Refs),
-    ok.
-
 cache_take0_test() ->
-    Cache = #{1 => {a}, 2 => {b}, 3 => {c}},
+    Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},
     State = #?MODULE{cache = Cache, last_index = 3, first_index = 1},
     % no remainder
-    {[{2, b}], _, undefined} = cache_take(2, 1, State),
-    {[{2, b}, {3, c}], _,  undefined} = cache_take(2, 2, State),
-    {[{1, a}, {2, b}, {3, c}], _, undefined} = cache_take(1, 3, State),
+    {[{2, 9, b}], _, undefined} = cache_take(2, 1, State),
+    {[{2, 9, b}, {3, 9, c}], _,  undefined} = cache_take(2, 2, State),
+    {[{1, 9, a}, {2, 9, b}, {3, 9, c}], _, undefined} = cache_take(1, 3, State),
     % small remainder
-    {[{3, c}], _, {1, 2}} = cache_take(1, 3, State#?MODULE{cache = #{3 => {c}}}),
-    {[], _, {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {d}}}),
-    ok.
-
-open_mem_tbl_take_test() ->
-    _ = ets:new(ra_log_open_mem_tables, [named_table]),
-    Tid = ets:new(test_id, []),
-    true = ets:insert(ra_log_open_mem_tables, {test_id, 3, 7, Tid}),
-    Entries = [{3, 2, "3"}, {4, 2, "4"},
-               {5, 2, "5"}, {6, 2, "6"},
-               {7, 2, "7"}],
-    % seed the mem table
-    [ets:insert(Tid, E) || E <- Entries],
-
-    {Entries, _, undefined} = open_mem_tbl_take(test_id, {3, 7}, [], []),
-    EntriesPlus8 = Entries ++ [{8, 2, "8"}],
-    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(test_id, {1, 7}, [],
-                                                  [{8, 2, "8"}]),
-    {[{6, 2, "6"}], _, undefined} = open_mem_tbl_take(test_id, {6, 6}, [], []),
-    {[], _, {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, [], []),
-
-    ets:delete(Tid),
-    ets:delete(ra_log_open_mem_tables),
-
-    ok.
-
-closed_mem_tbl_take_test() ->
-    _ = ets:new(ra_log_closed_mem_tables, [named_table, bag]),
-    Tid1 = ets:new(test_id, []),
-    Tid2 = ets:new(test_id, []),
-    M1 = erlang:unique_integer([monotonic, positive]),
-    M2 = erlang:unique_integer([monotonic, positive]),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, M1, 5, 7, Tid1}),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, M2, 8, 10, Tid2}),
-    Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
-    Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
-    % seed the mem tables
-    [ets:insert(Tid1, E) || E <- Entries1],
-    [ets:insert(Tid2, E) || E <- Entries2],
-
-    {Entries1, _, undefined} = closed_mem_tbl_take(test_id, {5, 7}, [], []),
-    {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, [], []),
-    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9},
-                                                        [], []),
+    {[{3, 9, c}], _, {1, 2}} = cache_take(1, 3,
+                                             State#?MODULE{cache = #{3 => {3, 9, c}}}),
+    {[], _, {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {4, 9, d}}}),
     ok.
 
 pick_range_test() ->

@@ -88,9 +88,14 @@ A number of examples can be found in a [separate repository](https://github.com/
 
 A directory name where `ra` will store it's data.
 
+* `wal_data_dir`:
+
+A directory name where `ra` will store it's WAL (Write Ahead Log) data. If
+unspecified, `data_dir` is used.
+
 * `wal_max_size_bytes`:
 
-The maximum size of the WAL (Write Ahead Log) in bytes. Default: 512Mb.
+The maximum size of the WAL in bytes. Default: 512Mb.
 
 * `wal_compute_checksums`:
 
@@ -155,7 +160,7 @@ of low priority commands that are added to the log each flush cycle. Default: 25
 
 ## Copyright and License
 
-(c) 2017-2019, Pivotal Software Inc.
+(c) 2017-2020, Pivotal Software Inc.
 
 Double licensed under the ASL2 and MPL1.1.
 See [LICENSE](./LICENSE) for details.

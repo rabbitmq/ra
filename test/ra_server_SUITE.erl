@@ -131,7 +131,7 @@ setup_log() ->
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
     meck:expect(ra_log, snapshot_state, fun (_) -> snap_state end),
     meck:expect(ra_log, set_snapshot_state, fun (_, Log) -> Log end),
-    meck:expect(ra_log, install_snapshot, fun (_, _, Log) -> Log end),
+    meck:expect(ra_log, install_snapshot, fun (_, _, Log) -> {Log, []} end),
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory: snapshot_index_term/1),
     meck:expect(ra_log, take, fun ra_log_memory:take/3),

@@ -37,6 +37,7 @@ all_tests() ->
      % snapshot_recovery,
      snapshot_installation,
      append_after_snapshot_installation,
+     written_event_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
      missed_closed_tables_are_deleted_at_next_opportunity,
@@ -44,7 +45,8 @@ all_tests() ->
      read_opt,
      written_event_after_snapshot,
      updated_segment_can_be_read,
-     open_segments_limit
+     open_segments_limit,
+     external_reader
     ].
 
 groups() ->
@@ -584,7 +586,7 @@ snapshot_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
 
-    Log3 = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
     #{cache_size := 0} = ra_log:overview(Log3),
@@ -626,7 +628,7 @@ append_after_snapshot_installation(Config) ->
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    Log2 = ra_log:install_snapshot({15, 2}, SnapState, Log1),
+    {Log2, _} = ra_log:install_snapshot({15, 2}, SnapState, Log1),
     {15, _} = ra_log:last_index_term(Log2),
     {15, _} = ra_log:last_written(Log2),
 
@@ -638,6 +640,44 @@ append_after_snapshot_installation(Config) ->
                                   end),
     {[], _} = ra_log:take(1, 9, Log),
     {[_, _], _} = ra_log:take(16, 2, Log),
+    ok.
+
+written_event_after_snapshot_installation(Config) ->
+    logger:set_primary_config(level, all),
+    %% simulates scenario where a server receives a written event from the wal
+    %% immediately after a snapshot has been installed and the written event
+    %% is for a past index.
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{uid => UId}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 10 entries
+    %% but only process events for 9
+    Log1 = write_n(1, 10, 2, Log0),
+    SnapIdx = 10,
+    %% do snapshot in 
+    Meta = meta(SnapIdx, 2, [n1]),
+    Chunk = create_snapshot_chunk(Config, Meta),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {Log2, _} = ra_log:install_snapshot({SnapIdx, 2}, SnapState, Log1),
+    {SnapIdx, _} = ra_log:last_index_term(Log2),
+    {SnapIdx, _} = ra_log:last_written(Log2),
+    NextIdx = SnapIdx + 1,
+    NextIdx = ra_log:next_index(Log2),
+    {undefined, _} = ra_log:fetch_term(SnapIdx, Log2),
+    {SnapIdx, 2} = ra_log:snapshot_index_term(Log2),
+
+    %% process "old" written events
+    Log3 = assert_log_events(Log2,
+                             fun (L) ->
+                                     {SnapIdx, 2} == ra_log:last_written(L)
+                             end),
+    {SnapIdx, _} = ra_log:last_index_term(Log3),
+    {SnapIdx, _} = ra_log:last_written(Log3),
+    NextIdx = ra_log:next_index(Log3),
+    {undefined, _} = ra_log:fetch_term(SnapIdx, Log3),
+    {SnapIdx, 2} = ra_log:snapshot_index_term(Log3),
     ok.
 
 update_release_cursor(Config) ->
@@ -815,6 +855,71 @@ open_segments_limit(Config) ->
     ?assert(Open =< Max),
     ok.
 
+external_reader(Config) ->
+    %% external readers should be notified of all new segments
+    %% and the lower bound of the log
+    %% The upper bound needs to be discovered by querying
+    logger:set_primary_config(level, all),
+    UId = ?config(uid, Config),
+    Log0 = ra_log:init(#{uid => UId}), {0, 0} = ra_log:last_index_term(Log0),
+
+    Log1 = write_n(200, 220, 2,
+                   write_and_roll(1, 200, 2, Log0)),
+
+    timer:sleep(1000),
+
+    Self = self(),
+    Pid = spawn(
+            fun () ->
+                    receive
+                        {ra_log_reader_state, R1} = Evt ->
+                            {Es, _, R2} = ra_log_reader:read(0, 220, R1),
+                            Len1 = length(Es),
+                            ct:pal("Es ~w", [Len1]),
+                            Self ! {got, Evt, Es},
+                            receive
+                                {ra_log_update, _, F, _} = Evt2 ->
+                                    %% reader before update has been processed
+                                    %% should work
+                                    {Stale, _, _} = ra_log_reader:read(F, 220, R2),
+                                    ?assertEqual(Len1, length(Stale)),
+                                    R3 = ra_log_reader:handle_log_update(Evt2, R2),
+                                    {Es2, _, _R4} = ra_log_reader:read(F, 220, R3),
+                                    ct:pal("Es2 ~w", [length(Es2)]),
+                                    ?assertEqual(Len1, length(Es2)),
+                                    Self ! {got, Evt2, Es2}
+                            end
+                    end
+            end),
+    {Log2, [{reply, {ok, UId, FstIdx, Segs}} | _]} =
+    ra_log:register_reader(Pid, Log1),
+    Pid ! {ra_log_reader_state, ra_log_reader:init(UId, FstIdx, 1, Segs)},
+    %% TODO: validate there is monitor effect
+    receive
+        {got, Evt, Entries} ->
+            ct:pal("got segs: ~w ~w", [Evt, length(Entries)]),
+            ok
+    after 2000 ->
+              flush(),
+              exit(got_timeout)
+    end,
+    ra_log_wal:force_roll_over(ra_log_wal),
+
+    _Log3 = deliver_all_log_events(Log2, 500),
+
+    %% this should result in a segment update
+    receive
+        {got, Evt2, Entries1} ->
+            ct:pal("got segs: ~w ~w", [Evt2, length(Entries1)]),
+            ok
+    after 2000 ->
+              flush(),
+              exit(got_timeout_2)
+    end,
+    timer:sleep(2000),
+    flush(),
+    ok.
+
 validate_read(To, To, _Term, Log0) ->
     Log0;
 validate_read(From, To, Term, Log0) ->
@@ -872,7 +977,9 @@ deliver_all_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            {Log, _} = ra_log:handle_event(Evt, Log0),
+            {Log, Effs} = ra_log:handle_event(Evt, Log0),
+            [P ! E || {send_msg, P, E, _} <- Effs],
+            % ct:pal("log evt effs: ~p", [Effs]),
             deliver_all_log_events(Log, Timeout)
     after Timeout ->
               Log0
@@ -1001,7 +1108,7 @@ meta(Idx, Term, Cluster) ->
       cluster => Cluster,
       machine_version => 1}.
 
-create_snapshot_chunk(Config, Meta) ->
+create_snapshot_chunk(Config, #{index := Idx} =  Meta) ->
     OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
     ok = ra_lib:make_dir(OthDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
@@ -1010,7 +1117,7 @@ create_snapshot_chunk(Config, Meta) ->
     {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {15, 2} = IdxTerm}} ->
+            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm}} ->
                 ra_snapshot:complete_snapshot(IdxTerm, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
