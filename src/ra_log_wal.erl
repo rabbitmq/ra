@@ -44,7 +44,6 @@
 
 -record(batch, {writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{pid() => #batch_writer{}},
-                start_time :: maybe(integer()),
                 pending = [] :: iolist()
                }).
 
