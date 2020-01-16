@@ -132,6 +132,11 @@ Indicate whether the wal should compute and validate checksums. Default: true
 Controls the internal max batch size that the WAL will accept. Higher numbers may
 result in higher memory use. Default: 32768.
 
+* `wal_pre_allocate`:
+
+Boolean. When enabled each new WAL file will be extended to it's maximum size on creation. 
+Only likely to be useful if `wal_sync_method` is set to `datasync`. Default: false.
+
 
 * `logger_module`:
 
