@@ -64,7 +64,8 @@
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
-               counter :: counters:counters_ref()
+               counter :: counters:counters_ref(),
+               pre_allocate :: boolean()
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -206,7 +207,8 @@ init(#{dir := Dir} = Conf0) ->
                  max_size_bytes = MaxWalSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
-                 counter = CRef},
+                 counter = CRef,
+                 pre_allocate = ra_env:wal_pre_allocate()},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -514,6 +516,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         Modes = [sync | Modes0],
         case ra_file_handle:open(File, Modes) of
             {ok, Fd} ->
+                maybe_pre_allocate(Conf, Fd, Max),
                 ok = write_header(Fd),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
@@ -527,11 +530,24 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         end;
 open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
     {ok, Fd} = ra_file_handle:open(File, Modes),
+    maybe_pre_allocate(Conf, Fd, Max),
     ok = write_header(Fd),
     ok = ra_file_handle:sync(Fd),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
+
+maybe_pre_allocate(#conf{pre_allocate = true}, Fd, Max) ->
+    ok = pre_allocate(Fd, Max);
+maybe_pre_allocate(_Conf, _Fd, _Max) ->
+    ok.
+
+pre_allocate(Fd, Max) ->
+    ok = file:allocate(Fd, 0, Max),
+    {ok, Max} = file:position(Fd, Max),
+    ok = file:truncate(Fd),
+    {ok, 0} = file:position(Fd, 0),
+    ok.
 
 write_header(Fd) ->
     ok = ra_file_handle:write(Fd, <<?MAGIC>>),
@@ -649,6 +665,14 @@ open_existing(File) ->
     end.
 
 
+dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
+               IdDataLen:16/unsigned, _:IdDataLen/binary,
+               _:32/integer,
+               0:32/unsigned,
+               _Idx:64/unsigned, _Term:64/unsigned,
+               _EntryData:0/binary,
+               _Rest/binary>>, Entries) ->
+    Entries;
 dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
                IdDataLen:16/unsigned, _:IdDataLen/binary,
                _:32/integer,
