@@ -665,9 +665,14 @@ handle_leader(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {leader, State, []};
 handle_leader({transfer_leadership, Leader},
-              State = #{id := {Leader, _, _}}) ->
+              State = #{id := {Leader, _, LogId}}) ->
+    ?DEBUG("~s: transfer leadership requested but already leader",
+           [LogId]),
     {leader, State, [{reply, already_leader}]};
-handle_leader({transfer_leadership, ServerId}, State) ->
+handle_leader({transfer_leadership, ServerId},
+              #{id := {_, _, LogId}} = State) ->
+    ?DEBUG("~s: transfer leadership to ~w requested",
+           [LogId, ServerId]),
     %% TODO find a timeout
     gen_statem:cast(ServerId, try_become_leader),
     {await_condition,
