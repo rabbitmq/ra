@@ -380,6 +380,24 @@ The function that manage cluster members, `ra:add_member/2` and `ra:remove_membe
 will return as soon as the membership change state transition has been written to the log and the leader
 has switched to the new configuration.
 
+## Client Leader Tracking
+
+To interact with a Ra cluster client processes need to first discover and subsequently
+track the leader of the cluster.
+
+Synchronous commands such as `ra:process_command/2`, `ra:members/1` always redirect
+to the current leader (if known) and returns the leader's server id as
+as the 3rd item in success response. The client process can then use this return
+value to avoid the redirection overhead for future calls.
+
+When using the asynchronous API such as `ra:pipeline_command/2|3|4` it is best if
+the client first uses a synchronous call such as `ra:members/1` to discover the current
+leader and direct asynchronous commands to this member.
+
+Alternatively clients can use the `ra_leaderboard:lookup_leader/2` function to lookup
+the locally known current leader of the cluster by its cluster name. If there is
+no local member of the Ra cluster or the leader is not known this function returns
+`undefined`. In this case the client process should fall back to synchronous discovery.
 
 ## Raft Extensions and Deviations
 

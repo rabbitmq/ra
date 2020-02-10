@@ -51,24 +51,8 @@
 <p><pre>config() = <a href="#type-ra_server_config">ra_server_config()</a></pre></p>
 
 
-<h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
-<p><pre>machine_conf() = 
-    {module, module(), InitConfig :: map()} |
-    {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState :: term()}</pre></p>
-<p>  The machine configuration.
-  This is how ra knows which module to use to invoke the ra_machine callbacks
-  and the config to pass to the <a href="ra_machine.html#init-1"><code>ra_machine:init/1</code></a> implementation.
-  The simple machine config is version that can only be used for simple state
-  machines that cannot access any of the advanced features.</p>
-
-<h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
-<p><pre>ra_await_condition_fun() = 
-    fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-            {boolean(), <a href="#type-ra_server_state">ra_server_state()</a>})</pre></p>
-
-
-<h3 class="typedecl"><a name="type-ra_effect">ra_effect()</a></h3>
-<p><pre>ra_effect() = 
+<h3 class="typedecl"><a name="type-effect">effect()</a></h3>
+<p><pre>effect() = 
     <a href="ra_machine.html#type-effect">ra_machine:effect()</a> |
     <a href="ra_log.html#type-effect">ra_log:effect()</a> |
     {reply, <a href="#type-ra_reply_body">ra_reply_body()</a>} |
@@ -86,15 +70,28 @@
     {next_event, <a href="#type-ra_msg">ra_msg()</a>} |
     {next_event, cast, <a href="#type-ra_msg">ra_msg()</a>} |
     {notify, pid(), reference()} |
-    {incr_metrics,
-     Table :: atom(),
-     [{Pos :: non_neg_integer(), Incr :: integer()}]} |
     {record_leader_msg, <a href="#type-ra_server_id">ra_server_id()</a>} |
     start_election_timeout</pre></p>
 
 
-<h3 class="typedecl"><a name="type-ra_effects">ra_effects()</a></h3>
-<p><pre>ra_effects() = [<a href="#type-ra_effect">ra_effect()</a>]</pre></p>
+<h3 class="typedecl"><a name="type-effects">effects()</a></h3>
+<p><pre>effects() = [<a href="#type-effect">effect()</a>]</pre></p>
+
+
+<h3 class="typedecl"><a name="type-machine_conf">machine_conf()</a></h3>
+<p><pre>machine_conf() = 
+    {module, module(), InitConfig :: map()} |
+    {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState :: term()}</pre></p>
+<p>  The machine configuration.
+  This is how ra knows which module to use to invoke the ra_machine callbacks
+  and the config to pass to the <a href="ra_machine.html#init-1"><code>ra_machine:init/1</code></a> implementation.
+  The simple machine config is version that can only be used for simple state
+  machines that cannot access any of the advanced features.</p>
+
+<h3 class="typedecl"><a name="type-ra_await_condition_fun">ra_await_condition_fun()</a></h3>
+<p><pre>ra_await_condition_fun() = 
+    fun((<a href="#type-ra_msg">ra_msg()</a>, <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+            {boolean(), <a href="#type-ra_server_state">ra_server_state()</a>})</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_event_formatter_fun">ra_event_formatter_fun()</a></h3>
@@ -174,7 +171,7 @@
       aux_state =&gt; term(),
       condition =&gt; <a href="#type-ra_await_condition_fun">ra_await_condition_fun()</a>,
       condition_timeout_changes =&gt;
-          #{transition_to := <a href="#type-ra_state">ra_state()</a>, effects := [<a href="#type-ra_effect">ra_effect()</a>]},
+          #{transition_to := <a href="#type-ra_state">ra_state()</a>, effects := [<a href="#type-effect">effect()</a>]},
       pre_vote_token =&gt; reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats :=
@@ -222,7 +219,9 @@
 <tr><td valign="top"><a href="#update_release_cursor-3">update_release_cursor/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#persist_last_applied-1">persist_last_applied/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_peer_status-3">update_peer_status/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#register_external_log_reader-2">register_external_log_reader/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_down-5">handle_down/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_node_status-6">handle_node_status/6</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#log_fold-3">log_fold/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_at-2">read_at/2</a></td><td></td></tr>
@@ -250,7 +249,7 @@
 <div class="spec">
 <p><pre>handle_leader(Install_snapshot_rpc :: <a href="#type-ra_msg">ra_msg()</a>,
               State0 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                 {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                 {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="handle_candidate-2">handle_candidate/2</a></h3>
@@ -258,21 +257,21 @@
 <p><pre>handle_candidate(Request_vote_result ::
                      <a href="#type-ra_msg">ra_msg()</a> | election_timeout,
                  State0 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                    {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                    {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="handle_pre_vote-2">handle_pre_vote/2</a></h3>
 <div class="spec">
 <p><pre>handle_pre_vote(Append_entries_rpc :: <a href="#type-ra_msg">ra_msg()</a>,
                 State0 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                   {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                   {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="handle_follower-2">handle_follower/2</a></h3>
 <div class="spec">
 <p><pre>handle_follower(Append_entries_rpc :: <a href="#type-ra_msg">ra_msg()</a>,
                 State00 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                   {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                   {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="handle_receive_snapshot-2">handle_receive_snapshot/2</a></h3>
@@ -286,7 +285,7 @@
                        State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
                           {<a href="#type-ra_state">ra_state()</a>,
                            <a href="#type-ra_server_state">ra_server_state()</a>,
-                           <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                           <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="process_new_leader_queries-1">process_new_leader_queries/1</a></h3>
@@ -297,14 +296,14 @@
 
 <h3 class="function"><a name="tick-1">tick/1</a></h3>
 <div class="spec">
-<p><pre>tick(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-ra_effects">ra_effects()</a></pre></p>
+<p><pre>tick(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-effects">effects()</a></pre></p>
 </div>
 
 <h3 class="function"><a name="handle_state_enter-2">handle_state_enter/2</a></h3>
 <div class="spec">
 <p><pre>handle_state_enter(RaftState :: <a href="#type-ra_state">ra_state()</a> | eol,
                    State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                      {<a href="#type-ra_server_state">ra_server_state()</a> | eol, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                      {<a href="#type-ra_server_state">ra_server_state()</a> | eol, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
@@ -374,7 +373,7 @@
 <p><pre>update_release_cursor(Index :: <a href="#type-ra_index">ra_index()</a>,
                       MacState :: term(),
                       State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                         {<a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+                         {<a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="persist_last_applied-1">persist_last_applied/1</a></h3>
@@ -391,14 +390,33 @@
                       <a href="#type-ra_server_state">ra_server_state()</a></pre></p>
 </div>
 
+<h3 class="function"><a name="register_external_log_reader-2">register_external_log_reader/2</a></h3>
+<div class="spec">
+<p><pre>register_external_log_reader(Pid :: pid(),
+                             State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+                                {<a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
+</div>
+
 <h3 class="function"><a name="handle_down-5">handle_down/5</a></h3>
 <div class="spec">
 <p><pre>handle_down(RaftState :: <a href="#type-ra_state">ra_state()</a>,
-            X2 :: machine | snapshot_sender | snapshot_writer,
+            Type ::
+                machine | snapshot_sender | snapshot_writer | aux,
             Pid :: pid(),
             Info :: term(),
             State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-               {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-ra_effects">ra_effects()</a>}</pre></p>
+               {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
+</div>
+
+<h3 class="function"><a name="handle_node_status-6">handle_node_status/6</a></h3>
+<div class="spec">
+<p><pre>handle_node_status(RaftState :: <a href="#type-ra_state">ra_state()</a>,
+                   Type :: machine | aux,
+                   Node :: node(),
+                   Status :: nodeup | nodedown,
+                   Infos :: term(),
+                   State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+                      {<a href="#type-ra_state">ra_state()</a>, <a href="#type-ra_server_state">ra_server_state()</a>, <a href="#type-effects">effects()</a>}</pre></p>
 </div>
 
 <h3 class="function"><a name="terminate-2">terminate/2</a></h3>

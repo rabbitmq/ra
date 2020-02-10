@@ -23,14 +23,14 @@
  
   <p>Initialize a new machine state.</p>
  
- <p><br>
+  <p><br>
   <code>-callback apply(Meta :: command_meta_data(),
                         <a href="#type-command"><code>command()</code></a>, State) -&gt;
      {State, <a href="#type-reply"><code>reply()</code></a>, <a href="#type-effects"><code>effects()</code></a>} | {State, <a href="#type-reply"><code>reply()</code></a>}</code></p>
  
   <p>Applies each entry to the state machine.</p>
  
- <p><br>
+  <p><br>
   <code>
   -callback state_enter(ra_server:ra_state() | eol, state()) -&gt; effects().
   </code></p>
@@ -133,11 +133,14 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   <a href="ra.html#process_command-3"><code>ra:process_command/3</code></a></p>
 
 <h3 class="typedecl"><a name="type-send_msg_opt">send_msg_opt()</a></h3>
-<p><pre>send_msg_opt() = [ra_event | cast] | ra_event | cast</pre></p>
+<p><pre>send_msg_opt() = 
+    [ra_event | cast | local] | ra_event | cast | local</pre></p>
 <p><p>  ra_event: the message will be wrapped up and sent as a ra event
   e.g: <code>{ra_event, ra_server_id(), Msg}</code></p>
  
-  cast: the message will be wrapped as a gen cast: <code>{'$cast', Msg}</code></p>
+  cast: the message will be wrapped as a gen cast: <code>{'$cast', Msg}</code>
+  local: the message will be sent by the local member if there is one
+  configured</p>
 
 <h3 class="typedecl"><a name="type-send_msg_opts">send_msg_opts()</a></h3>
 <p><pre>send_msg_opts() = <a href="#type-send_msg_opt">send_msg_opt()</a> | [<a href="#type-send_msg_opt">send_msg_opt()</a>]</pre></p>
@@ -240,9 +243,15 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
            Command :: term(),
            AuxState, LogState,
            MacState :: <a href="#type-state">state()</a>) -&gt;
+              undefined |
               {reply, Reply :: term(), AuxState, LogState} |
+              {reply,
+               Reply :: term(),
+               AuxState, LogState,
+               [{monitor, process, aux, pid()}]} |
               {no_reply, AuxState, LogState} |
-              undefined</pre>
+              {no_reply, AuxState, LogState,
+               [{monitor, process, aux, pid()}]}</pre>
 <ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state">ra_log:state()</a></pre></li></ul></p>
 </div>
 

@@ -32,7 +32,8 @@ all_tests() ->
      start_cluster_majority,
      start_cluster_minority,
      send_local_msg,
-     local_log_effect
+     local_log_effect,
+     leaderboard
     ].
 
 groups() ->
@@ -318,6 +319,37 @@ local_log_effect(Config) ->
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast, ra_event]),
     %% test the same but for a local pid (non-member)
+    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    ok.
+
+leaderboard(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
+    % assert all were said to be started
+    [] = Started -- NodeIds,
+    %% synchronously get leader
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    %% assert leaderboard has correct leader on all nodes
+    [begin
+         L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
+         ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
+         ?assertEqual(Leader, L)
+     end || {_, N} <- NodeIds],
+
+    NewLeader = hd(lists:delete(Leader, Started)),
+    ok = ra:transfer_leadership(Leader, NewLeader),
+
+    timer:sleep(500),
+    [begin
+         L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
+         ct:pal("~w has ~w as leader expected ~w", [N, L, NewLeader]),
+         ?assertEqual(NewLeader, L)
+     end || {_, N} <- NodeIds],
+
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 

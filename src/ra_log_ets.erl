@@ -50,6 +50,7 @@ init([DataDir]) ->
     _ = ets:new(ra_log_closed_mem_tables, [bag | TableFlags]),
 
     _ = ra_counters:init(),
+    _ = ra_leaderboard:init(),
 
     %% Table for ra processes to record their current snapshot index so that
     %% other processes such as the segment writer can use this value to skip
