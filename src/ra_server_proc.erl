@@ -114,6 +114,7 @@
 
 -record(conf, {log_id :: unicode:chardata(),
                name :: atom(),
+               cluster_name :: term(),
                broadcast_time = ?DEFAULT_BROADCAST_TIME :: non_neg_integer(),
                tick_timeout :: non_neg_integer(),
                await_condition_timeout :: non_neg_integer(),
@@ -236,10 +237,10 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     #{id := {_, UId, LogId},
       cluster := Cluster} = ServerState = ra_server:init(Config),
     Key = ra_lib:ra_server_id_to_local_name(Id),
-						% ensure ra_directory has the new pid
+    % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(),
                                      maps:get(parent, Config, undefined), Key,
-				     ClusterName),
+                                     ClusterName),
 
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
@@ -261,6 +262,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
                                                  ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     State = #state{conf = #conf{log_id = LogId,
+                                cluster_name = ClusterName,
                                 name = Key,
                                 tick_timeout = TickTime,
                                 await_condition_timeout = AwaitCondTimeout,
@@ -304,6 +306,7 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
 
 leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
+    ok = record_leader_change(id(State0), State0),
     {keep_state, State#state{leader_last_seen = undefined,
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
@@ -1234,6 +1237,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             ok = aten_register(LeaderNode),
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
             ok = aten:unregister(OldLeaderNode),
+            ok = record_leader_change(NewLeader, New),
             % leader has either changed or just been set
             ?INFO("~s: detected a new leader ~w in term ~b~n",
                   [log_id(New), NewLeader, current_term(New)]),
@@ -1470,3 +1474,9 @@ handle_process_down(Pid, Info, RaftState,
                        State0#state{server_state = ServerState,
                                     monitors = Monitors}),
     {keep_state, State, Actions}.
+
+record_leader_change(Leader, #state{conf = #conf{cluster_name = ClusterName},
+                            server_state = ServerState}) ->
+    Members = do_state_query(members, ServerState),
+    ok = ra_leaderboard:record(ClusterName, Leader, Members),
+    ok.

@@ -42,7 +42,8 @@ ErlangNodes = [ra@node1, ra@node2, ra@node3]
 ServerIds = [{quick_start, N} || N <- ErlangNodes]
 
 %% start a simple distributed addition state machine with an initial state of 0
-{ok, ServersStarted, ServersNotStarted} = ra:start_cluster(quick_start, {simple, fun erlang:'+'/2, 0}, ServerIds),
+ClusterName = quick_start,
+{ok, ServersStarted, ServersNotStarted} = ra:start_cluster(ClusterName, {simple, fun erlang:'+'/2, 0}, ServerIds),
 
 %% Add a number to the state machine
 %% Simple state machines always return the full state after each operation
