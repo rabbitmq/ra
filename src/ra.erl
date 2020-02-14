@@ -17,6 +17,8 @@
          %% queries
          members/1,
          members/2,
+         initial_members/1,
+         initial_members/2,
          local_query/2,
          local_query/3,
          leader_query/2,
@@ -856,6 +858,16 @@ members(ServerId) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
+
+-spec initial_members(ra_server_id()) ->
+    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+initial_members(ServerId) ->
+    initial_members(ServerId, ?DEFAULT_TIMEOUT).
+
+-spec initial_members(ra_server_id(), timeout()) ->
+    ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
+initial_members(ServerId, Timeout) ->
+    ra_server_proc:state_query(ServerId, initial_members, Timeout).
 
 %% @doc Transfers leadership from the leader to a follower.
 %% Returns `already_leader' if the transfer targer is already the leader.

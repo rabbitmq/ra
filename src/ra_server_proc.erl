@@ -175,7 +175,11 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
     gen_statem:call(ServerId, {log_fold, Fun, InitialState}, Timeout).
 
 %% used to query the raft state rather than the machine state
--spec state_query(server_loc(), all | members | machine, timeout()) ->
+-spec state_query(server_loc(),
+                  all |
+                  members |
+                  initial_members |
+                  machine, timeout()) ->
     ra_leader_call_ret(term()).
 state_query(ServerLoc, Spec, Timeout) ->
     leader_call(ServerLoc, {state_query, Spec}, Timeout).
@@ -1281,7 +1285,14 @@ do_state_query(all, State) -> State;
 do_state_query(machine, #{machine_state := MacState}) ->
     MacState;
 do_state_query(members, #{cluster := Cluster}) ->
-    maps:keys(Cluster).
+    maps:keys(Cluster);
+do_state_query(initial_members, #{log := Log}) ->
+    case ra_log:read_config(Log) of
+        {ok, #{initial_members := InitialMembers}} ->
+            InitialMembers;
+        _ ->
+            error
+    end.
 
 config_defaults() ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,

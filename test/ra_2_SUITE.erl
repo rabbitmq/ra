@@ -33,7 +33,8 @@ all_tests() ->
      custom_ra_event_formatter,
      segment_writer_handles_server_deletion,
      external_reader,
-     add_member_without_quorum
+     add_member_without_quorum,
+     initial_members_query
     ].
 
 groups() ->
@@ -510,6 +511,31 @@ add_member_without_quorum(Config) ->
     {error, not_member} = ra:remove_member(Leader, ServerId5),
     %%
     % timer:sleep(5000),
+    ok.
+
+initial_members_query(Config) ->
+    ok = logger:set_primary_config(level, all),
+    %% ra:start_server should fail if the node already exists
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    InitialCluster = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, InitialCluster),
+    %% stop followers
+    {ok, Members, Leader} = ra:members(hd(InitialCluster)),
+    {ok, InitialMembers, _} = ra:initial_members(Leader),
+    ?assertEqual(lists:sort(Members),
+                 lists:sort(InitialMembers)),
+    ServerId4 = ?config(server_id4, Config),
+    UId4 = ?config(uid4, Config),
+    Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, InitialCluster),
+    ok = ra:start_server(Conf4),
+    {ok, _, _} = ra:add_member(Leader, ServerId4),
+    {ok, InitialMembers2, _} = ra:initial_members(Leader),
+    ?assertEqual(lists:sort(Members),
+                 lists:sort(InitialMembers2)),
     ok.
 
 format_ra_event(SrvId, Evt, my_arg) ->

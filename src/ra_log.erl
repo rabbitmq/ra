@@ -635,6 +635,8 @@ write_config(Config0, #?MODULE{directory = Dir}) ->
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
+read_config(#?MODULE{directory = Dir}) ->
+    read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
     case filelib:is_file(ConfigPath) of
