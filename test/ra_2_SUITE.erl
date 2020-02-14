@@ -32,7 +32,8 @@ all_tests() ->
      start_server_uid_validation,
      custom_ra_event_formatter,
      segment_writer_handles_server_deletion,
-     external_reader
+     external_reader,
+     add_member_without_quorum
     ].
 
 groups() ->
@@ -55,6 +56,7 @@ init_per_testcase(TestCase, Config) ->
     ra_server_sup_sup:remove_all(),
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
+    ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
     [
      {modname, TestCase},
      {cluster_name, TestCase},
@@ -63,7 +65,9 @@ init_per_testcase(TestCase, Config) ->
      {uid2, atom_to_binary(ServerName2, utf8)},
      {server_id2, {ServerName2, node()}},
      {uid3, atom_to_binary(ServerName3, utf8)},
-     {server_id3, {ServerName3, node()}}
+     {server_id3, {ServerName3, node()}},
+     {uid4, atom_to_binary(ServerName4, utf8)},
+     {server_id4, {ServerName4, node()}}
      | Config].
 
 enqueue(Server, Msg) ->
@@ -474,6 +478,39 @@ external_reader(Config) ->
     ra:delete_cluster([ServerId]),
     ok.
 
+add_member_without_quorum(Config) ->
+    ok = logger:set_primary_config(level, all),
+    %% ra:start_server should fail if the node already exists
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    InitialCluster = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, InitialCluster),
+    %% stop followers
+    {ok, _, Leader} = ra:members(hd(InitialCluster)),
+    ok = enqueue(Leader, msg1),
+    Followers = lists:delete(Leader, InitialCluster),
+    [ra:stop_server(F) || F <- Followers],
+    ServerId4 = ?config(server_id4, Config),
+    UId4 = ?config(uid4, Config),
+    Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, InitialCluster),
+    ok = ra:start_server(Conf4),
+    {ok, _, _} = ra:add_member(Leader, ServerId4),
+    ServerId5 = ?config(server_id5, Config),
+    {error, cluster_change_not_permitted} = ra:add_member(Leader, ServerId5),
+    {error, cluster_change_not_permitted} = ra:remove_member(Leader, ServerId1),
+    %% start one follower
+    timer:sleep(1000),
+    ok = ra:restart_server(hd(Followers)),
+    timer:sleep(1000),
+    ok = enqueue(Leader, msg1),
+    {error, already_member} = ra:add_member(Leader, ServerId4),
+    {error, not_member} = ra:remove_member(Leader, ServerId5),
+    %%
+    % timer:sleep(5000),
+    ok.
 
 format_ra_event(SrvId, Evt, my_arg) ->
     {custom_event, SrvId, Evt}.
