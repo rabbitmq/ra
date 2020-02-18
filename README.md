@@ -41,8 +41,8 @@ ra:start(),
 
 %% All servers in a Ra cluster are named processes.
 %% Create some Server Ids to pass to the configuration
-ErlangNodes = [ra@node1, ra@node2, ra@node3]
-ServerIds = [{quick_start, N} || N <- ErlangNodes]
+ErlangNodes = [ra@node1, ra@node2, ra@node3],
+ServerIds = [{quick_start, N} || N <- ErlangNodes],
 
 %% start a simple distributed addition state machine with an initial state of 0
 ClusterName = quick_start,
@@ -53,8 +53,7 @@ ClusterName = quick_start,
 {ok, StateMachineResult, LeaderId} = ra:process_command(hd(ServersStarted), 5),
 
 %% use the leader id from the last command result for the next
-{ok, 12, LeaderId1} = ra:process_command(LeaderId, 7),
-
+{ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
 "Simple" state machines like the above can only take you so far. See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
