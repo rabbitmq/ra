@@ -36,6 +36,9 @@ because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Hi
 ## Quick start
 
 ```erlang
+%% First we have to start the Ra application
+ra:start(),
+
 %% All servers in a Ra cluster are named processes.
 %% Create some Server Ids to pass to the configuration
 ErlangNodes = [ra@node1, ra@node2, ra@node3]
