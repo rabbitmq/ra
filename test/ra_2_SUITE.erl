@@ -498,8 +498,11 @@ add_member_without_quorum(Config) ->
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, InitialCluster),
     ok = ra:start_server(Conf4),
+    %% this works because the leader is still up to append a cluster change to its log
+    %% the change won't be applied/replicated though, because there's no quorum
     {ok, _, _} = ra:add_member(Leader, ServerId4),
     ServerId5 = ?config(server_id5, Config),
+    %% the previous cluster change could not be applied, so cluster changes are not permitted
     {error, cluster_change_not_permitted} = ra:add_member(Leader, ServerId5),
     {error, cluster_change_not_permitted} = ra:remove_member(Leader, ServerId1),
     %% start one follower
@@ -523,7 +526,6 @@ initial_members_query(Config) ->
     ServerId3 = ?config(server_id3, Config),
     InitialCluster = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, InitialCluster),
-    %% stop followers
     {ok, Members, Leader} = ra:members(hd(InitialCluster)),
     {ok, InitialMembers, _} = ra:initial_members(Leader),
     ?assertEqual(lists:sort(Members),

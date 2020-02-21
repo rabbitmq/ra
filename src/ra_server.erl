@@ -2157,8 +2157,6 @@ append_log_leader({CmdTag, _, _, _},
                   State = #{cluster_change_permitted := false})
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
-    % cluster change is in progress or leader has not yet committed anything
-    % in this term - stash the request
     {not_appended, cluster_change_not_permitted, State};
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
                   State = #{cluster := OldCluster}) ->
