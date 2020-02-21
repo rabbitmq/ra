@@ -1239,17 +1239,18 @@ leader_applies_new_cluster(_Config) ->
                cluster := #{n1 := _, n2 := _,
                             n3 := _, n4 := _} } = State1, _} =
         ra_server:handle_leader(Command, State),
-    {leader, State1b, _} =
+    {leader, State2, _} =
         ra_server:handle_leader(written_evt({4, 4, 5}), State1),
 
-    Command2 = {command, {'$ra_join', meta(), n5, await_consensus}},
-    % additional cluster change commands are not applied whilst
-    % cluster change is being committed
-    {leader, #{cluster_index_term := {4, 5},
-               cluster := #{n1 := _, n2 := _,
-                            n3 := _, n4 := _},
-               pending_cluster_changes := [_]} = State2, _} =
-        ra_server:handle_leader(Command2, State1b),
+    ?assert(not maps:get(cluster_change_permitted, State2)),
+
+    % Command2 = {command, {'$ra_join', meta(), n5, await_consensus}},
+    % % additional cluster change commands are not applied whilst
+    % % cluster change is being committed
+    % {leader, #{cluster_index_term := {4, 5},
+    %            cluster := #{n1 := _, n2 := _,
+    %                         n3 := _, n4 := _}} = State2, _} =
+    %     ra_server:handle_leader(Command2, State1b),
 
 
     % replies coming in
@@ -1258,6 +1259,8 @@ leader_applies_new_cluster(_Config) ->
                                     last_index = 4, last_term = 5},
     % leader does not yet have consensus as will need at least 3 votes
     {leader, State3 = #{commit_index := 3,
+
+                        cluster_change_permitted := false,
                         cluster_index_term := {4, 5},
                         cluster := #{n2 := #{next_index := 5,
                                              match_index := 4}}},
@@ -1265,17 +1268,10 @@ leader_applies_new_cluster(_Config) ->
 
     % leader has consensus
     {leader, _State4 = #{commit_index := 4,
+                         cluster_change_permitted := true,
                          cluster := #{n3 := #{next_index := 5,
                                               match_index := 4}}},
-     Effects} = ra_server:handle_leader({n3, AEReply}, State3),
-
-    % the pending cluster change can now be processed as the
-    % next event
-    ?assert(lists:any(fun({next_event, {call, _}, {command, _} = C2}) ->
-                              C2 =:= Command2;
-                         (_) -> false
-                      end, Effects)),
-
+     _Effects} = ra_server:handle_leader({n3, AEReply}, State3),
     ok.
 
 leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
@@ -1629,8 +1625,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 machine_state => [{4,apple}],
                 query_index => 0,
                 queries_waiting_heartbeats => queue:new(),
-                pending_consistent_queries => [],
-                pending_cluster_changes => []},
+                pending_consistent_queries => []},
     AER = #append_entries_reply{success = false,
                                 term = Term,
                                 next_index = 3,
@@ -1677,8 +1672,7 @@ leader_receives_install_snapshot_result(_Config) ->
                effective_machine_module => ra_machine_simple,
                query_index => 0,
                queries_waiting_heartbeats => queue:new(),
-               pending_consistent_queries => [],
-               pending_cluster_changes => []},
+               pending_consistent_queries => []},
     ISR = #install_snapshot_result{term = Term,
                                    last_index = 2,
                                    last_term = 1},
@@ -2047,7 +2041,6 @@ leader_consistent_query_delay(_Config) ->
 
     %% Send heartbeats as soon as cluster changes permitted
     {leader, #{cluster_change_permitted := true,
-               pending_cluster_changes := [],
                queries_waiting_heartbeats := WaitingQueries,
                query_index := QueryIndex2},
     %% There can be more effects.
@@ -2281,7 +2274,6 @@ base_state(NumServers, MacMod) ->
       cluster => Servers,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
-      pending_cluster_changes => [],
       current_term => 5,
       commit_index => 3,
       last_applied => 3,

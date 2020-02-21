@@ -50,7 +50,6 @@
       cluster := ra_cluster(),
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
-      pending_cluster_changes := [term()],
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term := ra_term(),
       log := term(),
@@ -270,7 +269,6 @@ init(#{id := Id,
       % commands that can't be applied.
       cluster_change_permitted => false,
       cluster_index_term => SnapshotIndexTerm,
-      pending_cluster_changes => [],
       current_term => CurrentTerm,
       voted_for => VotedFor,
       commit_index => CommitIndex,
@@ -431,12 +429,12 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     {leader, State, Effects};
 handle_leader({command, Cmd}, State00 = #{id := {_, _, LogId}}) ->
     case append_log_leader(Cmd, State00) of
-        {not_appended, State = #{cluster_change_permitted := CCP}} ->
-            ?WARN("~s command ~W NOT appended to log, "
-                  "cluster_change_permitted ~w~n", [LogId, Cmd, 10, CCP]),
+        {not_appended, Reason, State} ->
+            ?WARN("~s command ~W NOT appended to log. Reason ~w",
+                  [LogId, Cmd, 10, Reason]),
             Effects = case Cmd of
                           {_, #{from := From}, _, _} ->
-                              [{reply, From, {error, not_appended}}];
+                              [{reply, From, {error, Reason}}];
                           _ ->
                               []
                       end,
@@ -2054,9 +2052,7 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
                     %% else just enable further cluster changes again
                     State0#{cluster_change_permitted => true}
             end,
-    % add pending cluster change as next event
-    {Effects1, State1} = add_next_cluster_change(Effects, State),
-    {Mod, Idx, State1, MacSt, Effects1, Notifys, LastTs};
+    {Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
 apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
            {CurModule, LastAppliedIdx,
             #{current_term := CurrentTerm,
@@ -2137,14 +2133,6 @@ augment_command_meta(Idx, Term, MacVer, CmdMeta) ->
                      term => Term},
               CmdMeta).
 
-add_next_cluster_change(Effects,
-                        #{pending_cluster_changes := [C | Rest]} = State) ->
-    {_, #{from := From} , _, _} = C,
-    {[{next_event, {call, From}, {command, C}} | Effects],
-     State#{pending_cluster_changes => Rest}};
-add_next_cluster_change(Effects, State) ->
-    {Effects, State}.
-
 add_reply(_, '$ra_no_reply', _, Effects, Notifys) ->
     {Effects, Notifys};
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
@@ -2165,21 +2153,20 @@ add_reply(_, _, _, % From, Reply, Mode
           Effects, Notifys) ->
     {Effects, Notifys}.
 
-append_log_leader({CmdTag, _, _, _} = Cmd,
-                  State = #{cluster_change_permitted := false,
-                            pending_cluster_changes := Pending})
+append_log_leader({CmdTag, _, _, _},
+                  State = #{cluster_change_permitted := false})
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
     % cluster change is in progress or leader has not yet committed anything
     % in this term - stash the request
-    {not_appended, State#{pending_cluster_changes => Pending ++ [Cmd]}};
+    {not_appended, cluster_change_not_permitted, State};
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
                   State = #{cluster := OldCluster}) ->
     case OldCluster of
         #{JoiningNode := _} ->
             % already a member do nothing
             % TODO: reply? If we don't reply the caller may block until timeout
-            {not_appended, State};
+            {not_appended, already_member, State};
         _ ->
             Cluster = OldCluster#{JoiningNode => new_peer()},
             append_cluster_change(Cluster, From, ReplyMode, State)
@@ -2196,7 +2183,7 @@ append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
                    "Members: ~w",
                    [LogId, LeavingServer, maps:keys(OldCluster)]),
             % not a member - do nothing
-            {not_appended, State}
+            {not_appended, not_member, State}
     end;
 append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     NextIdx = ra_log:next_index(Log0),

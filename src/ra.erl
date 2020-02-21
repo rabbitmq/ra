@@ -17,6 +17,8 @@
          %% queries
          members/1,
          members/2,
+         initial_members/1,
+         initial_members/2,
          local_query/2,
          local_query/3,
          leader_query/2,
@@ -445,7 +447,9 @@ delete_cluster(ServerIds, Timeout) ->
 %% @param ServerId the ra server id of the new server.
 %% @end
 -spec add_member(ra_server_id() | [ra_server_id()], ra_server_id()) ->
-    ra_cmd_ret().
+    ra_cmd_ret() |
+    {error, already_member} |
+    {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId) ->
     add_member(ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -453,7 +457,10 @@ add_member(ServerLoc, ServerId) ->
 %% @see add_member/2
 %% @end
 -spec add_member(ra_server_id() | [ra_server_id()],
-                 ra_server_id(), timeout()) -> ra_cmd_ret().
+                 ra_server_id(), timeout()) ->
+    ra_cmd_ret() |
+    {error, already_member} |
+    {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
                            {'$ra_join', ServerId, after_log_append},
@@ -475,7 +482,9 @@ add_member(ServerLoc, ServerId, Timeout) ->
 %% @see remove_member/3
 %% @end
 -spec remove_member(ra_server_id() | [ra_server_id()], ra_server_id()) ->
-    ra_cmd_ret().
+    ra_cmd_ret() |
+    {error, not_member} |
+    {error, cluster_change_not_permitted}.
 remove_member(ServerRef, ServerId) ->
     remove_member(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -483,7 +492,10 @@ remove_member(ServerRef, ServerId) ->
 %% @see remove_member/2
 %% @end
 -spec remove_member(ra_server_id() | [ra_server_id()],
-                    ra_server_id(), timeout()) -> ra_cmd_ret().
+                    ra_server_id(), timeout()) ->
+    ra_cmd_ret() |
+    {error, not_member} |
+    {error, cluster_change_not_permitted}.
 remove_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef,
                            {'$ra_leave', ServerId, after_log_append},
@@ -595,7 +607,7 @@ leave_and_delete_server(ServerRef, ServerId, Timeout) ->
         {error, _} = Err ->
             Err;
         {ok, _, _} ->
-            ?INFO("Ra node ~w has succesfully left the cluster.", [ServerId]),
+            ?INFO("Ra node ~w has successfully left the cluster.", [ServerId]),
             force_delete_server(ServerId)
     end.
 
@@ -846,6 +858,16 @@ members(ServerId) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
+
+-spec initial_members(ra_server_id()) ->
+    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+initial_members(ServerId) ->
+    initial_members(ServerId, ?DEFAULT_TIMEOUT).
+
+-spec initial_members(ra_server_id(), timeout()) ->
+    ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
+initial_members(ServerId, Timeout) ->
+    ra_server_proc:state_query(ServerId, initial_members, Timeout).
 
 %% @doc Transfers leadership from the leader to a follower.
 %% Returns `already_leader' if the transfer targer is already the leader.
