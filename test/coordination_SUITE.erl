@@ -333,6 +333,7 @@ leaderboard(Config) ->
     %% synchronously get leader
     {ok, _, Leader} = ra:members(hd(Started)),
 
+    timer:sleep(500),
     %% assert leaderboard has correct leader on all nodes
     [begin
          L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),

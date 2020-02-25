@@ -24,6 +24,11 @@
 -define(METRICS_WINDOW_SIZE, 100).
 -define(CURRENT_VERSION, 1).
 -define(MAGIC, "RAWA").
+-define(HEADER_SIZE, 5).
+%% define a minimum allowable wal size. If anyone tries to set a really small
+%% size that is smaller than the logical block size the pre-allocation code may
+%% fail
+-define(MIN_WAL_SIZE, 65536).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -199,12 +204,12 @@ init(#{dir := Dir} = Conf0) ->
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
     %% rather than crash
-    FileModes = [raw, write, binary],
+    FileModes = [raw, write, read, binary],
     Conf = #conf{file_modes = FileModes,
                  dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
-                 max_size_bytes = MaxWalSize,
+                 max_size_bytes = max(?MIN_WAL_SIZE, MaxWalSize),
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
                  counter = CRef,
@@ -491,7 +496,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?DEBUG("wal: opening new file ~p~n", [Fn]),
+    ?DEBUG("wal: opening new file ~s~n", [Fn]),
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelyhood that each erlang node will
     %% flush mem tables at the same time
@@ -514,10 +519,9 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
 open_wal(File, Max, #conf{write_strategy = o_sync,
                           file_modes = Modes0} = Conf) ->
         Modes = [sync | Modes0],
-        case ra_file_handle:open(File, Modes) of
+        case prepare_file(File, Modes) of
             {ok, Fd} ->
                 maybe_pre_allocate(Conf, Fd, Max),
-                ok = write_header(Fd),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
                 {Conf, #wal{fd = Fd,
@@ -529,29 +533,49 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
                 open_wal(File, Max, Conf#conf{write_strategy = default})
         end;
 open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
-    {ok, Fd} = ra_file_handle:open(File, Modes),
+    {ok, Fd} = prepare_file(File, Modes),
     maybe_pre_allocate(Conf, Fd, Max),
-    ok = write_header(Fd),
-    ok = ra_file_handle:sync(Fd),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
 
-maybe_pre_allocate(#conf{pre_allocate = true}, Fd, Max) ->
+prepare_file(File, Modes) ->
+    Tmp = make_tmp(File),
+    %% rename is atomic-ish so we will never accidentally write an empty wal file
+    %% using prim_file here as file:rename/2 uses the file server
+    ok = prim_file:rename(Tmp, File),
+    case ra_file_handle:open(File, Modes) of
+        {ok, Fd2} ->
+            {ok, ?HEADER_SIZE} = file:position(Fd2, ?HEADER_SIZE),
+            {ok, Fd2};
+        {error, _} = Err ->
+            Err
+    end.
+
+make_tmp(File) ->
+    Tmp = filename:rootname(File) ++ ".tmp",
+    {ok, Fd} = file:open(Tmp, [write, binary, raw]),
+    ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
+    ok = file:sync(Fd),
+    ok = file:close(Fd),
+    Tmp.
+
+maybe_pre_allocate(#conf{sync_method = datasync,
+                         pre_allocate = true}, Fd, Max) ->
+    %% only pre allocate if requested and sync method is data sync,
+    %% anything else does not benefit
     ok = pre_allocate(Fd, Max);
 maybe_pre_allocate(_Conf, _Fd, _Max) ->
     ok.
 
-pre_allocate(Fd, Max) ->
-    ok = file:allocate(Fd, 0, Max),
+pre_allocate(Fd, Max0) when is_integer(Max0) ->
+    Max = Max0 - ?HEADER_SIZE,
+    ok = file:allocate(Fd, ?HEADER_SIZE, Max),
     {ok, Max} = file:position(Fd, Max),
     ok = file:truncate(Fd),
-    {ok, 0} = file:position(Fd, 0),
+    {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+    ok = file:sync(Fd),
     ok.
-
-write_header(Fd) ->
-    ok = ra_file_handle:write(Fd, <<?MAGIC>>),
-    ok = ra_file_handle:write(Fd, <<?CURRENT_VERSION:8/unsigned>>).
 
 close_file(undefined) ->
     ok;
@@ -660,7 +684,7 @@ open_existing(File) ->
         {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned, Data/binary>>} ->
             %% the only version currently supported
             Data;
-        {ok, <<Magic:64/binary, UnknownVersion:8/unsigned, _/binary>>} ->
+        {ok, <<Magic:4/binary, UnknownVersion:8/unsigned, _/binary>>} ->
             exit({unknown_wal_file_format, Magic, UnknownVersion})
     end.
 

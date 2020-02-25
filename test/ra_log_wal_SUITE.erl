@@ -24,6 +24,7 @@ all_tests() ->
      out_of_seq_writes,
      roll_over,
      recover,
+     recover_empty,
      recover_after_roll_over,
      recover_truncated_write,
      sys_get_status
@@ -39,16 +40,24 @@ groups() ->
 
 init_per_group(Group, Config) ->
     ok = logger:set_primary_config(level, all),
+    meck:unload(),
     application:ensure_all_started(sasl),
     application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     ra_directory:init(?config(priv_dir, Config)),
     ra_counters:init(),
     % application:ensure_all_started(lg),
-    {SyncMethod, WriteStrat} = case Group of
-                                   fsync -> {sync, default};
-                                   _ -> {datasync, Group}
-                               end,
+    ok = application:set_env(ra, wal_pre_allocate, false),
+    {SyncMethod, WriteStrat} =
+        case Group of
+            fsync ->
+                {sync, default};
+            o_sync ->
+                {datasync, Group};
+            default ->
+                ok = application:set_env(ra, wal_pre_allocate, true),
+                {datasync, Group}
+        end,
     [{write_strategy, WriteStrat},
      {sync_method,  SyncMethod} | Config].
 
@@ -361,7 +370,7 @@ out_of_seq_writes(Config) ->
 roll_over(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    NumWrites = 5,
+    NumWrites = 100,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
@@ -455,6 +464,7 @@ recover_after_roll_over(Config) ->
     ok.
 
 recover(Config) ->
+    ok = logger:set_primary_config(level, all),
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
@@ -500,6 +510,22 @@ recover(Config) ->
 
     meck:unload(),
     proc_lib:stop(Pid),
+    ok.
+
+
+recover_empty(Config) ->
+    ok = logger:set_primary_config(level, all),
+    Conf0 = ?config(wal_conf, Config),
+    % {UId, _} = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => self()},
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await,
+                fun(_) -> ok end),
+    {ok, _Pid} = ra_log_wal:start_link(Conf, []),
+    proc_lib:stop(ra_log_wal),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
+    proc_lib:stop(Pid),
+    meck:unload(),
     ok.
 
 empty_mailbox() ->
