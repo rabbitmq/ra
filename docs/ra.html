@@ -23,8 +23,7 @@
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()} |
-    {wal_write_strategy, default | o_sync} |
-    {wal_pre_allocate, boolean()}</pre></p>
+    {wal_write_strategy, default | o_sync}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-index">index()</a></h3>
@@ -96,6 +95,8 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td>Same as <code>consistent_query/2</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Returns a list of cluster members.</td></tr>
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td>Returns a list of cluster members.</td></tr>
+<tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#initial_members-2">initial_members/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a follower.</td></tr>
 <tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td></td></tr>
@@ -350,7 +351,9 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
            ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
+              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+              {error, already_member} |
+              {error, cluster_change_not_permitted}</pre></p>
 <p><tt>ServerLoc</tt>: the ra server or servers to try to send the command to<br>
 <tt>ServerId</tt>: the ra server id of the new server.<br>
 </p>
@@ -369,7 +372,9 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
            ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
            Timeout :: timeout()) -&gt;
-              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
+              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+              {error, already_member} |
+              {error, cluster_change_not_permitted}</pre></p>
 </div><p>Same as <code>add_member/2</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#add_member-2">add_member/2</a>.</p>
 
@@ -377,7 +382,9 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
+                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+                 {error, not_member} |
+                 {error, cluster_change_not_permitted}</pre></p>
 <p><tt>ServerRef</tt>: the ra server to send the command to<br>
 <tt>ServerId</tt>: the ra server id of the server to remove<br>
 </p>
@@ -395,7 +402,9 @@ command to the log.</p>
 <p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
               Timeout :: timeout()) -&gt;
-                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a></pre></p>
+                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+                 {error, not_member} |
+                 {error, cluster_change_not_permitted}</pre></p>
 </div><p>Same as <code>remove_member/2</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#remove_member-2">remove_member/2</a>.</p>
 
@@ -729,6 +738,19 @@ success or otherwise.</p>
 <tt>Timeout</tt>: the timeout to use<br>
 </p>
 </div><p>Returns a list of cluster members</p>
+
+<h3 class="function"><a name="initial_members-1">initial_members/1</a></h3>
+<div class="spec">
+<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+                   <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>])</pre></p>
+</div>
+
+<h3 class="function"><a name="initial_members-2">initial_members/2</a></h3>
+<div class="spec">
+<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Timeout :: timeout()) -&gt;
+                   <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
+                                                     error)</pre></p>
+</div>
 
 <h3 class="function"><a name="transfer_leadership-2">transfer_leadership/2</a></h3>
 <div class="spec">

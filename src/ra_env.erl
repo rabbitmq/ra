@@ -4,8 +4,7 @@
          data_dir/0,
          server_data_dir/1,
          wal_data_dir/0,
-         configure_logger/1,
-         wal_pre_allocate/0
+         configure_logger/1
          ]).
 
 -export_type([
@@ -38,9 +37,3 @@ wal_data_dir() ->
 %% use this when interacting with Ra from a node without Ra running on it
 configure_logger(Module) ->
     persistent_term:put('$ra_logger', Module).
-
-wal_pre_allocate() ->
-    case application:get_env(ra, wal_pre_allocate) of
-        {ok, true} -> true;
-        _ -> false
-    end.
