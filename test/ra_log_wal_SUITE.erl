@@ -47,7 +47,6 @@ init_per_group(Group, Config) ->
     ra_directory:init(?config(priv_dir, Config)),
     ra_counters:init(),
     % application:ensure_all_started(lg),
-    ok = application:set_env(ra, wal_pre_allocate, false),
     {SyncMethod, WriteStrat} =
         case Group of
             fsync ->
@@ -55,7 +54,6 @@ init_per_group(Group, Config) ->
             o_sync ->
                 {datasync, Group};
             default ->
-                ok = application:set_env(ra, wal_pre_allocate, true),
                 {datasync, Group}
         end,
     [{write_strategy, WriteStrat},

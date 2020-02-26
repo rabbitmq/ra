@@ -7,14 +7,12 @@
 
 all() ->
   [
-    {group, no_wal_preallocate},
-    {group, wal_pre_allocate}
+    {group, tests}
   ].
 
 groups() ->
   [
-    {no_wal_preallocate, [], all_tests()},
-    {wal_pre_allocate, [], all_tests()}
+    {tests, [], all_tests()}
   ].
 
 all_tests() ->
@@ -30,16 +28,11 @@ end_per_suite(_Config) ->
   ok.
 
 init_per_testcase(TestCase, Config) ->
-  application:load(ra),
-  Group = proplists:get_value(name, proplists:get_value(tc_group_properties, Config)),
-  WorkDirectory = proplists:get_value(priv_dir, Config),
-  ok = application:set_env(ra, data_dir, filename:join(WorkDirectory, atom_to_list(Group) ++ "-" ++ atom_to_list(TestCase))),
-  case Group of
-      wal_pre_allocate ->
-        ok = application:set_env(ra, wal_pre_allocate, true);
-      _ -> ok
-  end,
-  Config.
+    application:load(ra),
+    Group = proplists:get_value(name, proplists:get_value(tc_group_properties, Config)),
+    WorkDirectory = proplists:get_value(priv_dir, Config),
+    ok = application:set_env(ra, data_dir, filename:join(WorkDirectory, atom_to_list(Group) ++ "-" ++ atom_to_list(TestCase))),
+    Config.
 
 end_per_testcase(_TestCase, _Config) ->
   application:stop(ra),

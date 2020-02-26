@@ -123,7 +123,9 @@ Indicate whether the wal should compute and validate checksums. Default: true
 
     The default. Uses the fdatasync system call after each batch. This avoids flushing
     file meta-data after each write batch and thus may be slightly faster than
-    `sync` on some system. NB: not all systems support fdatasync. Please consult system
+    `sync` on some system. When datasync is configured the wal will try to
+    pre allocate the entire WAL file.
+    NB: not all systems support fdatasync. Please consult system
     documentation and configure it to use sync instead if it is not supported.
 
     - `sync`:
@@ -134,12 +136,6 @@ Indicate whether the wal should compute and validate checksums. Default: true
 
 Controls the internal max batch size that the WAL will accept. Higher numbers may
 result in higher memory use. Default: 32768.
-
-* `wal_pre_allocate`:
-
-Boolean. When enabled each new WAL file will be extended to it's maximum size on creation. 
-Only likely to be useful if `wal_sync_method` is set to `datasync`. Default: false.
-
 
 * `logger_module`:
 

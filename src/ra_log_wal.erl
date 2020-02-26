@@ -69,8 +69,7 @@
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
-               counter :: counters:counters_ref(),
-               pre_allocate :: boolean()
+               counter :: counters:counters_ref()
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -212,8 +211,7 @@ init(#{dir := Dir} = Conf0) ->
                  max_size_bytes = max(?MIN_WAL_SIZE, MaxWalSize),
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
-                 counter = CRef,
-                 pre_allocate = ra_env:wal_pre_allocate()},
+                 counter = CRef},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -496,7 +494,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?DEBUG("wal: opening new file ~s~n", [Fn]),
+    ?DEBUG("wal: opening new file ~ts~n", [Fn]),
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelyhood that each erlang node will
     %% flush mem tables at the same time
@@ -521,7 +519,6 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         Modes = [sync | Modes0],
         case prepare_file(File, Modes) of
             {ok, Fd} ->
-                maybe_pre_allocate(Conf, Fd, Max),
                 % many platforms implement O_SYNC a bit like O_DSYNC
                 % perform a manual sync here to ensure metadata is flushed
                 {Conf, #wal{fd = Fd,
@@ -532,9 +529,9 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
                       "Reverting back to default strategy.", []),
                 open_wal(File, Max, Conf#conf{write_strategy = default})
         end;
-open_wal(File, Max, #conf{file_modes = Modes} = Conf) ->
+open_wal(File, Max, #conf{file_modes = Modes} = Conf0) ->
     {ok, Fd} = prepare_file(File, Modes),
-    maybe_pre_allocate(Conf, Fd, Max),
+    Conf = maybe_pre_allocate(Conf0, Fd, Max),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
@@ -560,22 +557,23 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-maybe_pre_allocate(#conf{sync_method = datasync,
-                         pre_allocate = true}, Fd, Max) ->
-    %% only pre allocate if requested and sync method is data sync,
-    %% anything else does not benefit
-    ok = pre_allocate(Fd, Max);
-maybe_pre_allocate(_Conf, _Fd, _Max) ->
-    ok.
-
-pre_allocate(Fd, Max0) when is_integer(Max0) ->
+maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
     Max = Max0 - ?HEADER_SIZE,
-    ok = file:allocate(Fd, ?HEADER_SIZE, Max),
-    {ok, Max} = file:position(Fd, Max),
-    ok = file:truncate(Fd),
-    {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
-    ok = file:sync(Fd),
-    ok.
+    case file:allocate(Fd, ?HEADER_SIZE, Max) of
+        ok ->
+            {ok, Max} = file:position(Fd, Max),
+            ok = file:truncate(Fd),
+            {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+            Conf;
+        {error, _} ->
+            %% fallocate may not be supported, fall back to fsync instead
+            %% of fdatasync
+            ?INFO("wal: preallocation may not be supported by the file system"
+                  " falling back to fsync instead of fdatasync", []),
+            Conf#conf{sync_method = sync}
+    end;
+maybe_pre_allocate(Conf, _Fd, _Max) ->
+    Conf.
 
 close_file(undefined) ->
     ok;
