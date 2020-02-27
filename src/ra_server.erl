@@ -201,6 +201,7 @@
 % TODO: test what is a good default here
 % TODO: make configurable
 -define(MAX_PIPELINE_DISTANCE, 10000).
+-define(MAX_FETCH_ENTRIES, 4096).
 
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
 name(ClusterName, UniqueSuffix) ->
@@ -1969,7 +1970,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
            machine_state := MacState0} = State0)
   when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
     From = LastApplied + 1,
-    To = min(From + 1024, ApplyTo),
+    To = min(From + ?MAX_FETCH_ENTRIES, ApplyTo),
     case fetch_entries(From, To, State0) of
         {[], State} ->
             %% reverse list before consing the notifications to ensure

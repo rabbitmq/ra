@@ -189,7 +189,7 @@ trigger_election(ServerId, Timeout) ->
     gen_statem:call(ServerId, trigger_election, Timeout).
 
 -spec transfer_leadership(ra_server_id(), ra_server_id(), timeout()) ->
-    ok | already_leader.
+    ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
 transfer_leadership(ServerId, TargetServerId, Timeout) ->
     leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
 

@@ -98,7 +98,7 @@ stop_server(RaName) ->
     end.
 
 -spec delete_server(NodeId :: ra_server_id()) ->
-    ok | {error, term()}.
+    ok | {error, term()} | {badrpc, term()}.
 delete_server(NodeId) ->
     Node = ra_lib:ra_server_id_node(NodeId),
     Name = ra_lib:ra_server_id_to_local_name(NodeId),
