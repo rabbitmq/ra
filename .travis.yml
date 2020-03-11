@@ -8,8 +8,6 @@ notifications:
   email:
     on_success: never
     on_failure: always
-cache:
-  apt: true
 
 otp_release:
   - "22.2.8"
