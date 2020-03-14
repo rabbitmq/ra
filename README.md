@@ -164,7 +164,7 @@ of low priority commands that are added to the log each flush cycle. Default: 25
 
 ## Copyright and License
 
-(c) 2017-2020, Pivotal Software Inc.
+(c) 2017-2020, VMware Inc or its affiliates.
 
 Double licensed under the ASL2 and MPL1.1.
 See [LICENSE](./LICENSE) for details.
