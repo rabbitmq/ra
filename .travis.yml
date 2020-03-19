@@ -1,6 +1,6 @@
 # vim:sw=2:et:
 os: linux
-dist: bionic
+dist: xenial
 
 language: erlang
 notifications:
