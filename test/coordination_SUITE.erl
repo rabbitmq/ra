@@ -427,7 +427,7 @@ get_current_host() ->
     list_to_atom(Host).
 
 make_node_name(N) ->
-    {ok, H} = inet:gethostname(),
+    H = get_current_host(),
     list_to_atom(lists:flatten(io_lib:format("~s@~s", [N, H]))).
 
 search_paths() ->
