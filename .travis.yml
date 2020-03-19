@@ -1,7 +1,6 @@
 # vim:sw=2:et:
+os: linux
 dist: bionic
-
-sudo: false
 
 language: erlang
 notifications:
@@ -10,8 +9,8 @@ notifications:
     on_failure: always
 
 otp_release:
-  - "22.2.8"
-  - "21.3.8"
+  - "21.3"
+  - "22.3"
 
 script:
   - make xref
