@@ -422,8 +422,9 @@ node_setup(DataDir) ->
     ok.
 
 get_current_host() ->
-    {ok, H} = inet:gethostname(),
-    list_to_atom(H).
+    NodeStr = atom_to_list(node()),
+    Host = re:replace(NodeStr, "^[^@]+@", "", [{return, list}]),
+    list_to_atom(Host).
 
 make_node_name(N) ->
     {ok, H} = inet:gethostname(),
@@ -439,7 +440,7 @@ start_slave(N, PrivDir) ->
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting slave node with ~s~n", [Pa]),
+    ct:pal("starting slave node with ~s on host ~s from node ~s~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
     S.
