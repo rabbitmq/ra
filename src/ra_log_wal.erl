@@ -734,13 +734,14 @@ recover_wal_chunks(Fd, RecoveryChunkSize, Cache) ->
     recover_records(Fd, Chunk, Cache, RecoveryChunkSize).
 
 % Reached zeros indicating end of wal file
-recover_records(_, <<_:1/unsigned, 0:1/unsigned, _:22/unsigned, 
-                    IdDataLen:16/unsigned, _:IdDataLen/binary,
-                    _:32/integer, 0:32/unsigned, _/binary>>,
-                  _, _) ->
+recover_records(_, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned, 
+                     IdDataLen:16/unsigned, _:IdDataLen/binary,
+                     0:32/integer, 0:32/unsigned, _/binary>>,
+                _, _) ->
     ok;
 % First record or different UID to last record
-recover_records(Fd, <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
+recover_records(Fd, 
+                <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
                   IdDataLen:16/unsigned, UId:IdDataLen/binary,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
@@ -749,14 +750,14 @@ recover_records(Fd, <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
                   Rest/binary>>,
                 Cache, RecoveryChunkSize) ->
     true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
-    recover_records(Fd, Rest,
-                    Cache#{
-                        IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}
-                    }, RecoveryChunkSize);
-
- % TODO: recover writers info, i.e. last index seen
+    Cache0 = Cache#{
+                IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}
+             },
+    recover_records(Fd, Rest, Cache0, RecoveryChunkSize);
+% TODO: recover writers info, i.e. last index seen
 % Same UID as last record
-recover_records(Fd, <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
+recover_records(Fd, 
+                <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
                   Idx:64/unsigned, Term:64/unsigned,
@@ -773,7 +774,7 @@ recover_records(Fd, <<>>, Cache, RecoveryChunkSize) ->
         <<>> -> ok;
         _ -> recover_records(Fd, Chunk, Cache, RecoveryChunkSize)
     end;
-% Reached the of chunk, with some remainder, time to read the next chunk
+% Reached the end of chunk, with some remainder, time to read the next chunk
 recover_records(Fd, Chunk, Cache, RecoveryChunkSize) ->
     NextChunk = read_from_wal_file(Fd, RecoveryChunkSize),
     
@@ -781,7 +782,7 @@ recover_records(Fd, Chunk, Cache, RecoveryChunkSize) ->
         <<>> ->
             % we were expecting more to be read and there wasn't meaning
             % we have a partial record. This should never happen.
-            ?WARN("Partial record lost", []),
+            ?WARN("wal: Partial record lost", []),
             ok;
         _ -> 
             %% append this chunk to the remainder of the last chunk
@@ -802,7 +803,7 @@ read_from_wal_file(Fd, Len) ->
 validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc) ->
     validate_checksum(Checksum, Idx, Term, EntryData),
     true = update_mem_table(ra_log_recover_mem_tables, UId, Idx, Term,
-                          binary_to_term(EntryData), Trunc =:= 1).
+                            binary_to_term(EntryData), Trunc =:= 1).
 
 validate_checksum(0, _, _, _) ->
     % checksum not used
