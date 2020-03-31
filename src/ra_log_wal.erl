@@ -94,7 +94,6 @@
                 % and the last index seen
                 writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
-                metrics_cursor = 0 :: non_neg_integer(),
                 batch :: maybe(#batch{})
                }).
 
@@ -192,13 +191,11 @@ init(#{dir := Dir} = Conf0) ->
       write_strategy := WriteStrategy,
       sync_method := SyncMethod} = merge_conf_defaults(Conf0),
     process_flag(trap_exit, true),
-    % TODO: test that off_heap is actuall beneficial
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
     CRef = ra_counters:new(?MODULE, 3),
-    % seed metrics table with data
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
@@ -252,7 +249,7 @@ recover_wal(Dir, #conf{segment_writer = TblWriter} = Conf) ->
     %  As we have waited for the segment writer to finish processing it is
     %  assumed that any remaining wal files need to be re-processed.
     WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
-    ?INFO("WAL: recovering ~p", [WalFiles]),
+    ?DEBUG("WAL: recovering ~p", [WalFiles]),
     % First we recover all the tables using a temporary lookup table.
     % Then we update the actual lookup tables atomically.
     _ = ets:new(ra_log_recover_mem_tables,
@@ -369,7 +366,7 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?DEBUG("WAL: requesting resend from `~p`, "
+            ?DEBUG("WAL: requesting resend from `~w`, "
                    "last idx ~b idx received ~b",
                    [UId, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
@@ -399,8 +396,6 @@ incr_batch(OpnMemTbl, #batch{writes = Writes,
                                          tid = _Tid,
                                          from = From,
                                          inserts = Inserts0} = W} ->
-                      % ct:pal("insertingf ~w ~w", [Tid, Idx]),
-                      % true = ets:insert(Tid, {Idx, Term, Entry}),
                       TblStart = case Truncate of
                                      true ->
                                          Idx;
@@ -435,8 +430,6 @@ incr_batch(OpnMemTbl, #batch{writes = Writes,
                                                          {UId, Idx, Idx, T}),
                                                 {T, Idx}
                                         end,
-                      % ct:pal("inserting ~w ~w", [Tid, Idx]),
-                      % true = ets:insert(Tid, {Idx, Term, Entry}),
                       Writer = #batch_writer{tbl_start = TblStart,
                                              from = Idx,
                                              to = Idx,
@@ -646,16 +639,13 @@ complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
                                      writes = NumWrites},
-                      metrics_cursor = Cursor,
                       conf = Cfg
                       } = State00) ->
     % TS = os:system_time(microsecond),
     State0 = flush_pending(State00),
     % SyncTS = os:system_time(microsecond),
     counters:add(Cfg#conf.counter, 1, NumWrites),
-    NextCursor = (Cursor + 1) rem ?METRICS_WINDOW_SIZE,
-    State = State0#state{metrics_cursor = NextCursor,
-                         batch = undefined},
+    State = State0#state{batch = undefined},
 
     %% process writers
     _ = maps:map(fun (Pid, #batch_writer{tbl_start = TblStart,
