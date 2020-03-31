@@ -29,6 +29,8 @@
 %% size that is smaller than the logical block size the pre-allocation code may
 %% fail
 -define(MIN_WAL_SIZE, 65536).
+%% The size of each WAL file chunk that is processed at a time during recovery
+-define(RECOVERY_CHUNK_SIZE, 33554432).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -67,6 +69,7 @@
                segment_writer = ra_log_segment_writer :: atom(),
                compute_checksums = false :: boolean(),
                max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
+               recovery_chunk_size = ?RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
                counter :: counters:counters_ref()
@@ -186,6 +189,7 @@ start_link(Config, Options0) when is_list(Options0) ->
 -spec init(wal_conf()) -> {ok, state()}.
 init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
+      recovery_chunk_size := RecoveryChunkSize,
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
       write_strategy := WriteStrategy,
@@ -206,6 +210,7 @@ init(#{dir := Dir} = Conf0) ->
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = max(?MIN_WAL_SIZE, MaxWalSize),
+                 recovery_chunk_size = RecoveryChunkSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
                  counter = CRef},
@@ -240,7 +245,8 @@ format_status(#state{conf = #conf{write_strategy = Strat,
 handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
-recover_wal(Dir, #conf{segment_writer = TblWriter} = Conf) ->
+recover_wal(Dir, #conf{segment_writer = TblWriter,
+                       recovery_chunk_size = RecoveryChunkSize} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
     %  recover each mem table and notify segment writer
@@ -260,8 +266,12 @@ recover_wal(Dir, #conf{segment_writer = TblWriter} = Conf) ->
     % read partially recovered
     % tables mixed with old tables
     All = [begin
-               Data = open_existing(F),
-               ok = try_recover_records(Data, #{}),
+
+               Fd = open_at_first_record(F),
+               ok = recover_wal_chunks(Fd, RecoveryChunkSize, #{
+                        chunk_remainder => <<>>, 
+                        chunk_remainder_len => 0}),
+               close_existing(Fd),
                recovering_to_closed(F)
            end || F <- WalFiles],
     % get all the recovered tables and insert them into closed
@@ -676,6 +686,23 @@ open_existing(File) ->
             exit({unknown_wal_file_format, Magic, UnknownVersion})
     end.
 
+open_at_first_record(File) ->
+    {ok, Fd} = file:open(File, [read, binary, raw]),
+    case file:read(Fd, 5) of
+        {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>} ->
+            %% the only version currently supported
+            Fd;
+        {ok, <<Magic:4/binary, UnknownVersion:8/unsigned>>} ->
+            exit({unknown_wal_file_format, Magic, UnknownVersion})
+    end.
+
+close_existing(Fd) ->
+    case file:close(Fd) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            exit({could_not_close, Reason})
+    end.
 
 dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
                IdDataLen:16/unsigned, _:IdDataLen/binary,
@@ -704,13 +731,37 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
 dump_records(<<>>, Entries) ->
     Entries.
 
-try_recover_records(Data, Cache) ->
-    try recover_records(Data, Cache) of
-        ok -> ok
-    catch _:_ = Err ->
-              ?WARN("wal: encountered error during recovery: ~w~n"
-                    "Continuing.~n", [Err]),
-              ok
+recover_wal_chunks(Fd, RecoveryChunkSize,
+                     #{chunk_remainder := Remainder,
+                       chunk_remainder_len := RemainderLen} = Cache) ->
+    {Data, DataLen} = read_from_wal_file(Fd, RecoveryChunkSize),
+  
+    %% append this chunk to any remainder of the last chunk
+    {Data0, DataLen0} = case RemainderLen of
+        0 ->
+            {Data, DataLen};
+        _ ->
+            {<<Remainder/bitstring, Data/binary>>, DataLen + RemainderLen}
+    end,
+
+    case DataLen0 of
+        0 ->
+            ok;
+        _ ->
+            case recover_records(Data0, Cache) of
+                end_of_wal ->
+                    ok;
+                {end_of_chunk, Cache0} ->
+                    Cache1 = Cache0#{
+                        chunk_remainder := <<>>, 
+                        chunk_remainder_len := 0},
+                    recover_wal_chunks(Fd, RecoveryChunkSize, Cache1);
+                {incomplete_record, Chunk, Cache0} ->
+                    Cache1 = Cache0#{
+                        chunk_remainder := Chunk, 
+                        chunk_remainder_len := byte_size(Chunk)},
+                    recover_wal_chunks(Fd, RecoveryChunkSize, Cache1)
+            end
     end.
 
 recover_records(<<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
@@ -719,31 +770,54 @@ recover_records(<<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
                   EntryDataLen:32/unsigned,
                   Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
-                  Rest/binary>>, Cache) ->
-    % first writer appearance in WAL
-    true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
-    % TODO: recover writers info, i.e. last index seen
-    recover_records(Rest,
-                    Cache#{IdRef =>
-                           {UId, <<1:1/unsigned, IdRef:22/unsigned>>}});
+                  Rest/binary>>,
+                Cache) ->
+    case EntryDataLen of 
+        0 -> 
+            end_of_wal;
+        _ ->
+            true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
+            recover_records(Rest,
+            Cache#{
+                IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}
+            })
+    end;
+
+ % TODO: recover writers info, i.e. last index seen
 recover_records(<<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
                   Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
-                  Rest/binary>>, Cache) ->
-    #{IdRef := {UId, _}} = Cache,
-    true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
+                  Rest/binary>>,
+                Cache) ->
+    case EntryDataLen of 
+        0 -> 
+            end_of_wal;
+        _ ->
+            #{IdRef := {UId, _}} = Cache,
+            true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
+            recover_records(Rest, Cache)
+    end;
+recover_records(<<>>, Cache) ->
+    {end_of_chunk, Cache};
+recover_records(Chunk, Cache) ->
+    {incomplete_record, Chunk, Cache}.
 
-    % TODO: recover writers info, i.e. last index seen
-    recover_records(Rest, Cache);
-recover_records(<<>>, _Cache) ->
-    ok.
+read_from_wal_file(Fd, Len) ->
+    case file:read(Fd, Len) of
+        {ok, <<Data/binary>>} ->
+            {Data, byte_size(Data)};
+        eof ->
+            {<<>>, 0};
+        {error, Reason} ->
+            exit({could_not_read_wal_chunk, Reason})
+    end.
 
 validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc) ->
     validate_checksum(Checksum, Idx, Term, EntryData),
     true = update_mem_table(ra_log_recover_mem_tables, UId, Idx, Term,
-                            binary_to_term(EntryData), Trunc =:= 1).
+                          binary_to_term(EntryData), Trunc =:= 1).
 
 validate_checksum(0, _, _, _) ->
     % checksum not used
@@ -761,6 +835,7 @@ validate_checksum(Checksum, Idx, Term, Data) ->
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
                  max_size_bytes => ?WAL_MAX_SIZE_BYTES,
+                 recovery_chunk_size => ?RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
                  write_strategy => default,
                  sync_method => datasync}, Conf).
