@@ -256,7 +256,6 @@ recover_wal(Dir, #conf{segment_writer = TblWriter,
     %  As we have waited for the segment writer to finish processing it is
     %  assumed that any remaining wal files need to be re-processed.
     WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
-    ?DEBUG("WAL: recovering ~p", [WalFiles]),
     % First we recover all the tables using a temporary lookup table.
     % Then we update the actual lookup tables atomically.
     _ = ets:new(ra_log_recover_mem_tables,
@@ -267,9 +266,13 @@ recover_wal(Dir, #conf{segment_writer = TblWriter,
     % read partially recovered
     % tables mixed with old tables
     All = [begin
-
+               FBase = filename:basename(F),
+               ?DEBUG("wal: recovering ~s", [FBase]),
                Fd = open_at_first_record(F),
-               ok = recover_wal_chunks(Fd, RecoveryChunkSize),
+               {Time, ok} = timer:tc(fun () ->
+                                             recover_wal_chunks(Fd, RecoveryChunkSize)
+                                     end),
+               ?DEBUG("wal: recovering ~s took ~bms", [FBase, Time div 1000]),
                close_existing(Fd),
                recovering_to_closed(F)
            end || F <- WalFiles],

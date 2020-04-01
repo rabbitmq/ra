@@ -40,7 +40,6 @@ groups() ->
     ].
 
 init_per_group(Group, Config) ->
-    ok = logger:set_primary_config(level, all),
     meck:unload(),
     application:ensure_all_started(sasl),
     application:load(ra),
@@ -476,15 +475,14 @@ recover(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, {1, 100, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
+    _ = await_written(WriterId, {101, 200, 2}),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf, []),
-    % how can we better wait for recovery to finish?
-    timer:sleep(1000),
-
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
     [] = ets:lookup(ra_log_open_mem_tables, UId),
@@ -526,14 +524,13 @@ recover_with_small_chunks(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, {1, 100, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
-    empty_mailbox(),
+    _ = await_written(WriterId, {101, 200, 2}),
     proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf, []),
-    % how can we better wait for recovery to finish?
-    timer:sleep(1000),
 
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
@@ -565,7 +562,6 @@ recover_with_small_chunks(Config) ->
 recover_empty(Config) ->
     ok = logger:set_primary_config(level, all),
     Conf0 = ?config(wal_conf, Config),
-    % {UId, _} = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await,
