@@ -24,6 +24,7 @@ all_tests() ->
      out_of_seq_writes,
      roll_over,
      recover,
+     recover_with_small_chunks,
      recover_empty,
      recover_after_roll_over,
      recover_truncated_write,
@@ -39,7 +40,6 @@ groups() ->
     ].
 
 init_per_group(Group, Config) ->
-    ok = logger:set_primary_config(level, all),
     meck:unload(),
     application:ensure_all_started(sasl),
     application:load(ra),
@@ -475,14 +475,62 @@ recover(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf, []),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, {1, 100, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
     [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
+    _ = await_written(WriterId, {101, 200, 2}),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf, []),
-    % how can we better wait for recovery to finish?
-    timer:sleep(1000),
+    % there should be no open mem tables after recovery as we treat any found
+    % wal files as complete
+    [] = ets:lookup(ra_log_open_mem_tables, UId),
+    [ {UId, _, 1, 100, MTid1}, % this is the "old" table
+      % these are the recovered tables
+      {UId, _, 1, 100, MTid2}, {UId, _, 101, 200, MTid4} ] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
+    100 = ets:info(MTid1, size),
+    100 = ets:info(MTid2, size),
+    100 = ets:info(MTid4, size),
+    % check that both mem_tables notifications are received by the segment writer
+    receive
+        {'$gen_cast', {mem_tables, [{UId, 1, 100, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+    receive
+        {'$gen_cast', {mem_tables, [{UId, 101, 200, _}], _}} -> ok
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+
+    meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
+recover_with_small_chunks(Config) ->
+    ok = logger:set_primary_config(level, all),
+    % open wal and write a few entreis
+    % close wal + delete mem_tables
+    % re-open wal and validate mem_tables are re-created
+    Conf0 = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => self(),
+                  recovery_chunk_size => 128},
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    {ok, _Wal} = ra_log_wal:start_link(Conf, []),
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, {1, 100, 1}),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
+     || Idx <- lists:seq(101, 200)],
+    _ = await_written(WriterId, {101, 200, 2}),
+    proc_lib:stop(ra_log_wal),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
 
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
@@ -514,7 +562,6 @@ recover(Config) ->
 recover_empty(Config) ->
     ok = logger:set_primary_config(level, all),
     Conf0 = ?config(wal_conf, Config),
-    % {UId, _} = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self()},
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await,
