@@ -689,7 +689,7 @@ process_command(ServerId, Command) ->
 %% structure will be returned informing the caller that it cannot process the
 %% message. The message will include the current cluster leader, if one is known:
 %%
-%% `{ra_event, CurrentLeader, {rejected, {not_leader, Leader, Correlation}}}'
+%% `{ra_event, FromId, {rejected, {not_leader, Leader | undefined, Correlation}}}'
 %%
 %% The caller must then redirect the command for the correlation identifier to
 %% the correct ra server: the leader.

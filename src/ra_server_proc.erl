@@ -1166,12 +1166,12 @@ send_rpc(To, Msg) ->
 gen_cast(To, Msg) ->
     send(To, {'$gen_cast', Msg}).
 
-send_ra_event(To, Msg, LeaderId, EvtType, State) ->
-    send(To, wrap_ra_event(State, LeaderId, EvtType, Msg)).
+send_ra_event(To, Msg, FromId, EvtType, State) ->
+    send(To, wrap_ra_event(State, FromId, EvtType, Msg)).
 
 wrap_ra_event(#state{conf = #conf{ra_event_formatter = undefined}},
-              LeaderId, EvtType, Evt) ->
-    {ra_event, LeaderId, {EvtType, Evt}};
+              FromId, EvtType, Evt) ->
+    {ra_event, FromId, {EvtType, Evt}};
 wrap_ra_event(#state{conf = #conf{ra_event_formatter = {M, F, A}}},
               LeaderId, EvtType, Evt) ->
     apply(M, F, [LeaderId, {EvtType, Evt} | A]).
@@ -1326,7 +1326,7 @@ reject_command(Pid, Corr, State) ->
                   "Rejecting to ~w ~n", [log_id(State), Pid, LeaderId])
     end,
     send_ra_event(Pid, {not_leader, LeaderId, Corr},
-                  LeaderId, rejected, State).
+                  id(State), rejected, State).
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.
