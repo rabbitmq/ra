@@ -519,7 +519,7 @@ recover_with_small_chunks(Config) ->
     Conf0 = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => self(),
-        recovery_chunk_size => 128},
+                  recovery_chunk_size => 128},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),

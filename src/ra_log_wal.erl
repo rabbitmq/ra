@@ -106,7 +106,8 @@
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
                       write_strategy => wal_write_strategy(),
-                      sync_method => sync | datasync}.
+                      sync_method => sync | datasync,
+                      recovery_chunk_size  => non_neg_integer()}.
 
 -export_type([wal_conf/0,
               wal_write_strategy/0]).
@@ -268,7 +269,7 @@ recover_wal(Dir, #conf{segment_writer = TblWriter,
     All = [begin
 
                Fd = open_at_first_record(F),
-               ok = recover_wal_chunks(Fd, RecoveryChunkSize, #{}),
+               ok = recover_wal_chunks(Fd, RecoveryChunkSize),
                close_existing(Fd),
                recovering_to_closed(F)
            end || F <- WalFiles],
@@ -526,7 +527,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
                             max_size = Max,
                             filename = File}};
             {error, enotsup} ->
-                ?WARN("WAL: o_sync write strategy not supported. "
+                ?WARN("wal: o_sync write strategy not supported. "
                       "Reverting back to default strategy.", []),
                 open_wal(File, Max, Conf#conf{write_strategy = default})
         end;
@@ -729,18 +730,18 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
 dump_records(<<>>, Entries) ->
     Entries.
 
-recover_wal_chunks(Fd, RecoveryChunkSize, Cache) ->
+% TODO: recover writers info, i.e. last index seen
+recover_wal_chunks(Fd, RecoveryChunkSize) ->
     Chunk = read_from_wal_file(Fd, RecoveryChunkSize),
-    recover_records(Fd, Chunk, Cache, RecoveryChunkSize).
-
-% Reached zeros indicating end of wal file
-recover_records(_, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned, 
-                     IdDataLen:16/unsigned, _:IdDataLen/binary,
-                     0:32/integer, 0:32/unsigned, _/binary>>,
-                _, _) ->
+    recover_records(Fd, Chunk, #{}, RecoveryChunkSize).
+% All zeros indicates end of a pre-allocated wal file
+recover_records(_Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
+                       IdDataLen:16/unsigned, _:IdDataLen/binary,
+                       0:32/integer, 0:32/unsigned, _/binary>>,
+                _Cache, _ChunkSize) ->
     ok;
 % First record or different UID to last record
-recover_records(Fd, 
+recover_records(Fd,
                 <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
                   IdDataLen:16/unsigned, UId:IdDataLen/binary,
                   Checksum:32/integer,
@@ -750,13 +751,10 @@ recover_records(Fd,
                   Rest/binary>>,
                 Cache, RecoveryChunkSize) ->
     true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
-    Cache0 = Cache#{
-                IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}
-             },
+    Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
     recover_records(Fd, Rest, Cache0, RecoveryChunkSize);
-% TODO: recover writers info, i.e. last index seen
 % Same UID as last record
-recover_records(Fd, 
+recover_records(Fd,
                 <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
@@ -767,24 +765,14 @@ recover_records(Fd,
     #{IdRef := {UId, _}} = Cache,
     true = validate_and_update(UId, Checksum, Idx, Term, EntryData, Trunc),
     recover_records(Fd, Rest, Cache, RecoveryChunkSize);
-% Reached end of chunk, with no remainder, time to read the next chunk
-recover_records(Fd, <<>>, Cache, RecoveryChunkSize) ->
-    Chunk = read_from_wal_file(Fd, RecoveryChunkSize),
-    case Chunk of
-        <<>> -> ok;
-        _ -> recover_records(Fd, Chunk, Cache, RecoveryChunkSize)
-    end;
-% Reached the end of chunk, with some remainder, time to read the next chunk
+% Not enough remainder to parse another record, need to read
 recover_records(Fd, Chunk, Cache, RecoveryChunkSize) ->
     NextChunk = read_from_wal_file(Fd, RecoveryChunkSize),
-    
-    case NextChunk of 
+    case NextChunk of
         <<>> ->
-            % we were expecting more to be read and there wasn't meaning
-            % we have a partial record. This should never happen.
-            ?WARN("wal: Partial record lost", []),
+            %% we have reached the end of the file
             ok;
-        _ -> 
+        _ ->
             %% append this chunk to the remainder of the last chunk
             Chunk0 = <<Chunk/binary, NextChunk/binary>>,
             recover_records(Fd, Chunk0, Cache, RecoveryChunkSize)
