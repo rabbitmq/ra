@@ -19,12 +19,13 @@
 
 -include("ra.hrl").
 
--define(VERSION, 1).
+-define(VERSION, 2).
 -define(MAGIC, "RASG").
 -define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
 -define(DEFAULT_MAX_PENDING, 4096).
--define(INDEX_RECORD_SIZE, ((2 * 64 + 3 * 32) div 8)).
+-define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
+-define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
                               Offset :: non_neg_integer(), % 32 bit
@@ -81,12 +82,13 @@ open(Filename, Options) ->
 
 process_file(true, Mode, Filename, Fd, _Options) ->
     case read_header(Fd) of
-        {ok, MaxCount} ->
-            IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+        {ok, Version, MaxCount} ->
+            IndexRecordSize = index_record_size(Version),
+            IndexSize = MaxCount * IndexRecordSize,
             {NumIndexRecords, DataOffset, Range, Index} =
-                recover_index(Fd, MaxCount),
-            IndexOffset = ?HEADER_SIZE + NumIndexRecords * ?INDEX_RECORD_SIZE,
-            {ok, #state{version = 1,
+                recover_index(Fd, Version, MaxCount),
+            IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
+            {ok, #state{version = Version,
                         max_count = MaxCount,
                         filename = Filename,
                         fd = Fd,
@@ -104,9 +106,9 @@ process_file(true, Mode, Filename, Fd, _Options) ->
 process_file(false, Mode, Filename, Fd, Options) ->
     MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
     MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
-    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+    IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
-    {ok, #state{version = 1,
+    {ok, #state{version = ?VERSION,
                 max_count = MaxCount,
                 max_pending = MaxPending,
                 filename = Filename,
@@ -127,7 +129,8 @@ append(#state{max_pending = PendingCount,
     ok =  ra_file_handle:pwrite(Fd, Pend),
     append(State#state{pending = [], pending_count = 0},
            Index, Term, Data);
-append(#state{index_offset = IndexOffset,
+append(#state{version = Version,
+              index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
@@ -141,13 +144,14 @@ append(#state{index_offset = IndexOffset,
             Length = erlang:byte_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
+            OSize = offset_size(Version),
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
-                          DataOffset:32/unsigned, Length:32/unsigned,
+                          DataOffset:OSize/unsigned, Length:32/unsigned,
                           Checksum:32/unsigned>>,
             Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
             Range = update_range(Range0, Index),
             % fsync is done explicitly
-            {ok, State#state{index_offset = IndexOffset + ?INDEX_RECORD_SIZE,
+            {ok, State#state{index_offset = IndexOffset + index_record_size(Version),
                              data_offset = DataOffset + Length,
                              range = Range,
                              pending = Pend,
@@ -182,17 +186,9 @@ read(State, Idx, Num) ->
 -spec read_cons(state(), ra_index(), Num :: non_neg_integer(),
                 fun((binary()) -> term()), Acc) ->
     Acc when Acc :: [{ra_index(), ra_term(), binary()}].
-read_cons(#state{fd = Fd, mode = read, index = Index}, Idx,
+read_cons(#state{fd = _Fd, mode = read, index = Index} = State, Idx,
           Num, Fun, Acc) ->
-    pread_cons(Fd, Idx + Num - 1, Idx, Index,
-               fun (Crc, Data) ->
-                       case erlang:crc32(Data) of
-                           Crc ->
-                               Fun(Data);
-                           _ ->
-                               exit(ra_log_segment_crc_check_failure)
-                       end
-               end, Acc).
+    pread_cons(State, Idx + Num - 1, Idx, Index, Fun, Acc).
 
 -spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
 term_query(#state{index = Index}, Idx) ->
@@ -205,14 +201,31 @@ term_query(#state{index = Index}, Idx) ->
 pread_cons(_Fd, Idx, FinalIdx, _, _Fun, Acc)
   when Idx < FinalIdx ->
     Acc;
-pread_cons(Fd, Idx, FinalIdx, Index, Fun, Acc) ->
+pread_cons(#state{fd = Fd} = State, Idx, FinalIdx, Index, Fun, Acc) ->
     case Index of
-        #{Idx := {Term, Offset, Length, Crc}} ->
+        #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
             {ok, Data} = ra_file_handle:pread(Fd, Offset, Length),
-            pread_cons(Fd, Idx-1, FinalIdx, Index, Fun,
-                       [{Idx, Term, Fun(Crc, Data)} | Acc]);
+            %% assert data size is same as length
+            case byte_size(Data) of
+                Length ->
+                    %% we read the correct length
+                    %% performc crc check
+                    case erlang:crc32(Data) of
+                        Crc ->
+                            pread_cons(State, Idx-1, FinalIdx, Index, Fun,
+                                       [{Idx, Term, Fun(Data)} | Acc]);
+                        _ ->
+                            %% CRC check failures are irrecoverable
+                            exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
+                                  State#state.filename})
+                    end;
+                _ReadSize ->
+                    %% we did not read the correct number of bytes suggesting
+                    exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
+                          State#state.filename})
+            end;
         _ ->
-            pread_cons(Fd, Idx-1, FinalIdx, Index, Fun, Acc)
+            pread_cons(State, Idx-1, FinalIdx, Index, Fun, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).
@@ -262,13 +275,13 @@ update_range(undefined, Idx) ->
 update_range({First, _Last}, Idx) ->
     {min(First, Idx), Idx}.
 
-recover_index(Fd, MaxCount) ->
-    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+recover_index(Fd, Version, MaxCount) ->
+    IndexSize = MaxCount * index_record_size(Version),
     {ok, ?HEADER_SIZE} = ra_file_handle:position(Fd, ?HEADER_SIZE),
     DataOffset = ?HEADER_SIZE + IndexSize,
     case ra_file_handle:read(Fd, IndexSize) of
         {ok, Data} ->
-            parse_index_data(Data, DataOffset);
+            parse_index_data(Version, Data, DataOffset);
         eof ->
             % if no entries have been written the file hasn't "stretched"
             % to where the data offset starts.
@@ -278,17 +291,17 @@ recover_index(Fd, MaxCount) ->
 dump_index(File) ->
     {ok, Fd} = file:open(File, [read, raw, binary
                                ]),
-    {ok, MaxCount} = read_header(Fd),
-    IndexSize = MaxCount * ?INDEX_RECORD_SIZE,
+    {ok, Version, MaxCount} = read_header(Fd),
+    IndexSize = MaxCount * index_record_size(Version),
     {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
     DataOffset = ?HEADER_SIZE + IndexSize,
     case file:read(Fd, IndexSize) of
         {ok, Data} ->
             D = [begin
-                     {ok, _} = file:position(Fd, O),
-                     {ok, B} = file:read(Fd, N),
-                     {I, T, binary_to_term(B)}
-                 end || {I, T, O, N} <- dump_index_data(Data, [])],
+                     % {ok, _} = file:position(Fd, O),
+                     % {ok, B} = file:read(Fd, N),
+                     {I, T, O}
+                 end || {I, T, O, _N} <- dump_index_data(Data, [])],
             _ = file:close(Fd),
             D;
         eof ->
@@ -299,26 +312,53 @@ dump_index(File) ->
     end.
 
 dump_index_data(<<Idx:64/unsigned, Term:64/unsigned,
-                  Offset:32/unsigned, Length:32/unsigned,
+                  Offset:64/unsigned, Length:32/unsigned,
                   _:32/unsigned, Rest/binary>>,
                  Acc) ->
 dump_index_data(Rest, [{Idx, Term, Offset, Length} | Acc]);
 dump_index_data(_, Acc) ->
     lists:reverse(Acc).
 
-parse_index_data(Data, DataOffset) ->
-    parse_index_data(Data, 0, 0, DataOffset, undefined, #{}).
+parse_index_data(2, Data, DataOffset) ->
+    parse_index_data(Data, 0, 0, DataOffset, undefined, #{});
+parse_index_data(1, Data, DataOffset) ->
+    parse_index_data_v1(Data, 0, 0, DataOffset, undefined, #{}).
 
 parse_index_data(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
     % end of data
     {Num, DataOffset, Range, Index};
-parse_index_data(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+parse_index_data(<<0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
                    0:32/unsigned, 0:32/integer, _Rest/binary>>,
                  Num, _LastIdx, DataOffset, Range, Index) ->
     % partially written index
     % end of written data
     {Num, DataOffset, Range, Index};
 parse_index_data(<<Idx:64/unsigned, Term:64/unsigned,
+                   Offset:64/unsigned, Length:32/unsigned,
+                   Crc:32/integer, Rest/binary>>,
+                 Num, LastIdx, _DataOffset, Range, Index0) ->
+    % trim index entries if Idx goes "backwards"
+    Index = case Idx < LastIdx of
+                true -> maps:filter(fun (K, _) when K > Idx -> false;
+                                        (_, _) -> true
+                                    end, Index0);
+                false -> Index0
+            end,
+    parse_index_data(Rest, Num+1, Idx,
+                     Offset + Length,
+                     update_range(Range, Idx),
+                     Index#{Idx => {Term, Offset, Length, Crc}}).
+
+parse_index_data_v1(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
+    % end of data
+    {Num, DataOffset, Range, Index};
+parse_index_data_v1(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+                   0:32/unsigned, 0:32/integer, _Rest/binary>>,
+                 Num, _LastIdx, DataOffset, Range, Index) ->
+    % partially written index
+    % end of written data
+    {Num, DataOffset, Range, Index};
+parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
                    Offset:32/unsigned, Length:32/unsigned,
                    Crc:32/integer, Rest/binary>>,
                  Num, LastIdx, _DataOffset, Range, Index0) ->
@@ -329,8 +369,7 @@ parse_index_data(<<Idx:64/unsigned, Term:64/unsigned,
                                     end, Index0);
                 false -> Index0
             end,
-
-    parse_index_data(Rest, Num+1, Idx,
+    parse_index_data_v1(Rest, Num+1, Idx,
                      Offset + Length,
                      update_range(Range, Idx),
                      Index#{Idx => {Term, Offset, Length, Crc}}).
@@ -346,8 +385,9 @@ read_header(Fd) ->
     case ra_file_handle:read(Fd, ?HEADER_SIZE) of
         {ok, Buffer} ->
             case Buffer of
-                <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>> ->
-                    {ok, MaxCount};
+                <<?MAGIC, Version:16/unsigned, MaxCount:16/unsigned>>
+                  when Version =< ?VERSION ->
+                    {ok, Version, MaxCount};
                 _ ->
                     {error, invalid_segment_format}
             end;
@@ -356,3 +396,11 @@ read_header(Fd) ->
         {error, _} = Err ->
             Err
     end.
+
+offset_size(2) -> 64;
+offset_size(1) -> 32.
+
+index_record_size(2) ->
+    ?INDEX_RECORD_SIZE_V2;
+index_record_size(1) ->
+    ?INDEX_RECORD_SIZE_V1.

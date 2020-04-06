@@ -119,7 +119,7 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
     ra:stop_server(Leader2),
     ra:restart_server(Leader2),
     %% this last leader must now be a version 2 not 1
-    {ok, _, Leader3} = ra:members(Leader2),
+    {ok, _, Leader3} = ra:members(Leader2, 60000),
 
     ?assertNotEqual(LastFollower, Leader3),
     ok.

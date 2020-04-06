@@ -24,7 +24,10 @@ all_tests() ->
      term_query,
      write_many,
      open_invalid,
-     segref
+     corrupted_segment,
+     large_segment,
+     segref,
+     versions_v1
     ].
 
 groups() ->
@@ -59,6 +62,96 @@ open_close_persists_max_count(Config) ->
     undefined = ra_log_segment:range(Seg),
     ok = ra_log_segment:close(Seg),
     ok.
+
+corrupted_segment(Config) ->
+    % tests items are bing persisted and index can be recovered
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data = make_data(1024),
+    ok = open_write_close(1, 2, Data, Fn),
+    %% truncate file a bit to simulate lost bytes
+    {ok, Fd} = file:open(Fn, [read, write, raw, binary]),
+    {ok, Pos} = file:position(Fd, eof),
+    {ok, _} = file:position(Fd, Pos -2),
+    ok = file:truncate(Fd),
+    ok = file:close(Fd),
+
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
+    %% for now we are just going to exit when reaching this point
+    %% in the future we can find a strategy for handling this case
+    ?assertExit({ra_log_segment_unexpected_eof, _, _, _},
+                ra_log_segment:read(SegR, 1, 2)),
+    ok.
+
+
+large_segment(Config) ->
+    % tests items are bing persisted and index can be recovered
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    Seg = lists:foldl(
+      fun (Idx, S0) ->
+              Data = make_data(1100 * 1100),
+              {ok, S} = ra_log_segment:append(S0, Idx, 1, Data),
+              S
+      end, Seg0, lists:seq(1, 4096)),
+    ok = ra_log_segment:close(Seg),
+    %% validate all entries can be read
+    {ok, Seg1} = ra_log_segment:open(Fn, #{mode => read}),
+    [begin
+         [{Idx, 1, _B}] = ra_log_segment:read(Seg1, Idx, 1)
+     end
+     || Idx <- lists:seq(1, 4096)],
+    ct:pal("Index ~p", [lists:last(ra_log_segment:dump_index(Fn))]),
+    %% it's a large file, let's cleanup when test is successful
+    file:delete(Fn),
+    ok.
+
+versions_v1(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data = make_data(1024),
+    Crc =  erlang:crc32(Data),
+    NumEntries = 4,
+    Idx =  1,
+    Term = 2,
+    Version = 1,
+    %% v1 index record size was 28
+    %% header size is 8
+    DataOffset = 8 + (NumEntries * 28),
+    %% in v1 the offset was 32 bit
+    IndexData = <<Idx:64/unsigned, Term:64/unsigned,
+                  DataOffset:32/unsigned,
+                  (byte_size(Data)):32/unsigned,
+                  Crc:32/unsigned>>,
+    %% fake version 1
+    Header = <<"RASG", Version:16/unsigned, NumEntries:16/unsigned>>,
+    {ok, Fd} = file:open(Fn, [write, raw, binary]),
+    ok = file:pwrite(Fd, [{0, Header},
+                     {8, IndexData},
+                     {DataOffset, Data}]),
+    ok = file:sync(Fd),
+    ok = file:close(Fd),
+    {ok, R0} = ra_log_segment:open(Fn, #{mode => read}),
+    [{Idx, Term, Data}] = ra_log_segment:read(R0, Idx, 1),
+    ok = ra_log_segment:close(R0),
+
+    %% append as v1
+    {ok, W0} = ra_log_segment:open(Fn),
+    {ok, W} = ra_log_segment:append(W0, Idx+1, Term, Data),
+    ok = ra_log_segment:close(W),
+    %% read again
+    {ok, R1} = ra_log_segment:open(Fn, #{mode => read}),
+    [{Idx, Term, Data},
+     {2, Term, Data}] = ra_log_segment:read(R1, Idx, 2),
+    ok = ra_log_segment:close(R1),
+    ok.
+
+open_write_close(Idx, Term, Data, Fn) ->
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    {ok, Seg1} = ra_log_segment:append(Seg0, Idx, Term, Data),
+    {ok, Seg} = ra_log_segment:sync(Seg1),
+    ok = ra_log_segment:close(Seg).
 
 open_invalid(Config) ->
     Dir = ?config(data_dir, Config),
@@ -209,6 +302,5 @@ write_until_full(Idx, Term, Data, Seg0) ->
 
 
 %%% Internal
-%%% p
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
