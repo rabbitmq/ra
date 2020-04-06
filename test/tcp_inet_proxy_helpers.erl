@@ -66,9 +66,22 @@ block_traffic_between(NodeA, NodeB) ->
     wait_for_blocked(NodeA, NodeB, 10).
 
 allow_traffic_between(NodeA, NodeB) ->
-    true = rpc:call(NodeA, inet_tcp_proxy, allow, [NodeB]),
-    true = rpc:call(NodeB, inet_tcp_proxy, allow, [NodeA]),
+    true = retry_rpc(20, fun () -> rpc:call(NodeA, inet_tcp_proxy, allow, [NodeB]) end),
+    true = retry_rpc(20, fun () -> rpc:call(NodeB, inet_tcp_proxy, allow, [NodeA]) end),
     wait_for_unblocked(NodeA, NodeB, 10).
+
+retry_rpc(1, Fun) ->
+    Fun();
+retry_rpc(N, Fun) ->
+    try Fun() of
+        {badrpc, _} ->
+            timer:sleep(1000),
+            retry_rpc(N-1, Fun);
+        Result -> Result
+    catch _:_ ->
+            timer:sleep(1000),
+            retry_rpc(N-1, Fun)
+    end.
 
 wait_for_blocked(NodeA, NodeB, 0) ->
     error({failed_to_block, NodeA, NodeB, no_more_attempts});
