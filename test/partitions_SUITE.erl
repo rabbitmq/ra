@@ -209,9 +209,9 @@ erlang_nodes(5) ->
      ].
 
 prepare_erlang_cluster(Config, Nodes) ->
-    Config0 = tcp_inet_proxy_helpers:enable_dist_proxy_manager(Config),
+    Config0 = tcp_inet_proxy_helpers:configure_dist_proxy(Config),
     erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
-    tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0).
+    Config0.
 
 setup_ra_cluster(Config, Machine) ->
     Nodes = ?config(nodes, Config),
