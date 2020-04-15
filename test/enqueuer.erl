@@ -68,7 +68,8 @@ handle_call(wait, _From, #state{next = N, max = N,
 handle_call(wait, From, State) ->
     {noreply, State#state{waiting = From}}.
 
-handle_cast(_Msg, State) ->
+handle_cast(Msg, State) ->
+    ct:pal("enqeuer unhandled cast ~w", [Msg]),
     {noreply, State}.
 
 handle_info(enqueue, #state{tag = Tag, next = Next0,

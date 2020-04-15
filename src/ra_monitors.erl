@@ -1,5 +1,6 @@
 -module(ra_monitors).
 
+-include("ra.hrl").
 -export([
          init/0,
          add/3,
@@ -103,7 +104,11 @@ handle_down(Target, Monitors0)
             {maps:keys(CompsMap), Monitors0};
         error ->
             {[], Monitors0}
-    end.
+    end;
+handle_down(Target, Monitors0) ->
+    ?DEBUG("ra_monitors: target ~w not recognised", [Target]),
+    {[], Monitors0}.
+
 
 -spec components(pid() | node(), state()) -> [component()].
 components(Target, Monitors) ->

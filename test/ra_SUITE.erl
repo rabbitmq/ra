@@ -54,7 +54,6 @@ groups() ->
 suite() -> [{timetrap, {seconds, 120}}].
 
 init_per_suite(Config) ->
-
     ok = logger:set_primary_config(level, all),
     Config.
 
@@ -71,7 +70,7 @@ init_per_group(_G, Config) ->
     PrivDir = ?config(priv_dir, Config),
     DataDir = filename:join([PrivDir, "data"]),
     ok = restart_ra(DataDir),
-    ok = logger:set_application_level(ra, all),
+    % ok = logger:set_application_level(ra, all),
     Config.
 
 end_per_group(_, Config) ->
@@ -85,7 +84,7 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 single_server_processes_command(Config) ->
-    ok = logger:set_primary_config(level, all),
+    % ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
@@ -402,7 +401,7 @@ consistent_query_stale(Config) ->
     terminate_cluster(Cluster).
 
 all_metrics_are_integers(Config) ->
-    ok = logger:set_primary_config(level, all),
+    % ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
     ok = ra:start_server(Name, N1, add_machine(), []),
@@ -639,7 +638,7 @@ contains(Match, Entries) ->
 
 follower_catchup(Config) ->
 
-    ok = logger:set_primary_config(level, all),
+    % ok = logger:set_primary_config(level, all),
     meck:new(ra_server_proc, [passthrough]),
     meck:expect(ra_server_proc, send_rpc,
                 fun(P, #append_entries_rpc{entries = Entries} = T) ->

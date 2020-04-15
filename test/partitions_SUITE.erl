@@ -228,6 +228,9 @@ setup_ra_cluster(Config, Machine) ->
                         ok = ct_rpc:call(Node, application, set_env,
                                          [ra, data_dir, [DataDir]]),
                         ok = ct_rpc:call(Node, ra, start, []),
+
+                        ok = ct_rpc:call(Node, logger, set_primary_config,
+                                         [level, all]),
                         C
                 end,
                 Nodes),

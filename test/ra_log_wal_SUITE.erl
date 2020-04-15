@@ -44,6 +44,7 @@ init_per_group(Group, Config) ->
     application:ensure_all_started(sasl),
     application:load(ra),
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
+    ra_env:configure_logger(logger),
     ra_directory:init(?config(priv_dir, Config)),
     ra_counters:init(),
     % application:ensure_all_started(lg),
