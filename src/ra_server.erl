@@ -364,14 +364,14 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
                 id := {_, _, LogId}} = State0) when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
-            ?WARN("~s saw append_entries_reply from unknown peer ~w~n",
+            ?WARN("~s: saw append_entries_reply from unknown peer ~w~n",
                   [LogId, PeerId]),
             {leader, State0, []};
         _ ->
-            ?NOTICE("~s leader saw append_entries_reply for term ~b "
+            ?NOTICE("~s: leader saw append_entries_reply from ~w for term ~b "
                     "abdicates term: ~b!~n",
-                    [LogId, Term, CurTerm]),
-            {follower, update_term(Term, State0), []}
+                    [LogId, PeerId, Term, CurTerm]),
+            {follower, update_term(Term, State0#{leader_id => undefined}), []}
     end;
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
@@ -491,9 +491,9 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
                   [LogId, PeerId]),
             {leader, State0, []};
         _ ->
-            ?DEBUG("~s: leader saw install_snapshot_result for term ~b"
-                  " abdicates term: ~b!~n", [LogId, Term, CurTerm]),
-            {follower, update_term(Term, State0), []}
+            ?DEBUG("~s: leader saw install_snapshot_result from ~w for term ~b"
+                  " abdicates term: ~b!~n", [LogId, PeerId, Term, CurTerm]),
+            {follower, update_term(Term, State0#{leader_id => undefined}), []}
     end;
 handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
               #{id := {_, _, LogId}} = State0) ->
@@ -541,9 +541,9 @@ handle_leader(#install_snapshot_rpc{term = Term,
         _ ->
             ?INFO("~s: leader saw install_snapshot_rpc from ~w for term ~b "
                   "abdicates term: ~b!~n",
-                  [LogId, Evt#install_snapshot_rpc.leader_id,
-                   Term, CurTerm]),
-            {follower, update_term(Term, State0), [{next_event, Evt}]}
+                  [LogId, Evt#install_snapshot_rpc.leader_id, Term, CurTerm]),
+            {follower, update_term(Term, State0#{leader_id => undefined}),
+             [{next_event, Evt}]}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
@@ -552,7 +552,8 @@ handle_leader(#append_entries_rpc{term = Term} = Msg,
           "abdicates term: ~b!~n",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
-    {follower, update_term(Term, State0), [{next_event, Msg}]};
+    {follower, update_term(Term, State0#{leader_id => undefined}),
+     [{next_event, Msg}]};
 handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
                                                   id := {_, _, LogId}}) ->
     ?ERR("~s: leader saw append_entries_rpc for same term ~b"
@@ -584,7 +585,8 @@ handle_leader(#heartbeat_rpc{term = Term} = Msg,
           "abdicates term: ~b!~n",
           [LogId, Msg#heartbeat_rpc.leader_id,
            Term, CurTerm]),
-    {follower, update_term(Term, State0), [{next_event, Msg}]};
+    {follower, update_term(Term, State0#{leader_id => undefined}),
+     [{next_event, Msg}]};
 handle_leader(#heartbeat_rpc{term = Term, leader_id = LeaderId},
               #{current_term := CurTerm, id := {Id, _, _}} = State)
         when CurTerm > Term ->
@@ -615,10 +617,10 @@ handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
             {leader, State0, []};
         {CurLower, TermHigher} when CurLower < TermHigher ->
             %% A node with higher term confirmed heartbeat. This should not happen
-            ?NOTICE("~s leader saw heartbeat_reply for term ~b "
+            ?NOTICE("~s leader saw heartbeat_reply from ~w for term ~b "
                     "abdicates term: ~b!~n",
-                    [LogId, Term, CurTerm]),
-            {follower, update_term(Term, State0), []}
+                    [LogId, PeerId, Term, CurTerm]),
+            {follower, update_term(Term, State0#{leader_id => undefined}), []}
     end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
@@ -631,9 +633,9 @@ handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
         _ ->
             ?INFO("~s: leader saw request_vote_rpc from ~w for term ~b "
                   "abdicates term: ~b!~n",
-                  [LogId, Msg#request_vote_rpc.candidate_id,
-                   Term, CurTerm]),
-            {follower, update_term(Term, State0), [{next_event, Msg}]}
+                  [LogId, Msg#request_vote_rpc.candidate_id, Term, CurTerm]),
+            {follower, update_term(Term, State0#{leader_id => undefined}),
+             [{next_event, Msg}]}
     end;
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
@@ -647,8 +649,9 @@ handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
                   [LogId, Cand]),
             {leader, State0, []};
         _ ->
-            ?INFO("~s: leader saw pre_vote_rpc for term ~b"
-                  " abdicates term: ~b!~n", [LogId, Term, CurTerm]),
+            ?INFO("~s: leader saw pre_vote_rpc from ~w for term ~b"
+                  " abdicates term: ~b!~n",
+                  [LogId, Msg#pre_vote_rpc.candidate_id, Term, CurTerm]),
             {follower, update_term(Term, State0), [{next_event, Msg}]}
     end;
 handle_leader(#pre_vote_rpc{term = Term},

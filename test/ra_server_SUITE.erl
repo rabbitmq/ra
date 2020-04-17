@@ -989,7 +989,7 @@ higher_term_detected(_Config) ->
                                          last_index = 3, last_term = 5}},
     Log1 = ra_log_memory:write_meta_f(current_term, IncomingTerm, Log),
     _ = ra_log_memory:write_meta_f(voted_for, undefined, Log1),
-    {follower, #{current_term := IncomingTerm}, []} =
+    {follower, #{current_term := IncomingTerm, leader_id := undefined}, []} =
         ra_server:handle_leader(AEReply, State),
     {follower, #{current_term := IncomingTerm}, []} =
         ra_server:handle_follower(AEReply, State),
@@ -999,7 +999,7 @@ higher_term_detected(_Config) ->
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = n3,
                                 prev_log_index = 3, prev_log_term = 5,
                                 leader_commit = 3},
-    {follower, #{current_term := IncomingTerm},
+    {follower, #{current_term := IncomingTerm, leader_id := undefined},
      [{next_event, AERpc}]} = ra_server:handle_leader(AERpc, State),
     {follower, #{current_term := IncomingTerm},
      [{next_event, AERpc}]} = ra_server:handle_candidate(AERpc, State),
@@ -1008,6 +1008,7 @@ higher_term_detected(_Config) ->
     Vote = #request_vote_rpc{candidate_id = n2, term = 6, last_log_index = 3,
                              last_log_term = 5},
     {follower, #{current_term := IncomingTerm,
+                 leader_id := undefined,
                  log := ExpectLog},
      [{next_event, Vote}]} = ra_server:handle_leader(Vote, State),
     {follower, #{current_term := IncomingTerm,
@@ -1017,7 +1018,7 @@ higher_term_detected(_Config) ->
     IRS = #install_snapshot_result{term = IncomingTerm,
                                    last_term = 0,
                                    last_index = 0},
-    {follower, #{current_term := IncomingTerm },
+    {follower, #{current_term := IncomingTerm, leader_id := undefined},
      _} = ra_server:handle_leader({n2, IRS}, State),
     ok.
 
@@ -1883,6 +1884,7 @@ leader_heartbeat(_Config) ->
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
     StateWithHigherTerm = set_peer_query_index(
                                 State#{current_term => NewTerm,
+                                       leader_id => undefined,
                                        voted_for => undefined},
                                 Id, 0),
     {follower, StateWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
@@ -2214,7 +2216,9 @@ leader_heartbeat_reply_higher_term(_Config) ->
     ReplyingPeerId = n2,
 
     %% Higher term is an error
-    StateWithNewTerm = State#{current_term => NewTerm, voted_for => undefined},
+    StateWithNewTerm = State#{current_term => NewTerm,
+                              voted_for => undefined,
+                              leader_id => undefined},
     {follower, StateWithNewTerm, []} =
         ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State),
 
