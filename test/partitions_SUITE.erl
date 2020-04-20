@@ -76,7 +76,7 @@ prop_enq_drain(Config) ->
                       do_enq_drain_scenario(ClusterName,
                                             Nodes, Servers,
                                             [{wait, 5000}] ++ S ++
-                                            [heal, {wait, 5000}]))
+                                            [heal, {wait, 20000}]))
       end, [], 10).
 
 print_scenario(Scenario) ->
@@ -129,8 +129,8 @@ do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
     % assert no messages were lost
     Remaining = (Applied ++ Applied2) -- Received,
     ct:pal("Remaining ~p~n", [Remaining]),
-    MaxReceived = lists:max(Received),
-    Remaining =:= [] andalso NumMessages =:= MaxReceived.
+    %% only assert we did not lose any applied entries
+    Remaining =:= [].
 
 validate_machine_state(Servers) ->
     validate_machine_state(Servers, 10).
@@ -209,9 +209,9 @@ erlang_nodes(5) ->
      ].
 
 prepare_erlang_cluster(Config, Nodes) ->
-    Config0 = tcp_inet_proxy_helpers:enable_dist_proxy_manager(Config),
+    Config0 = tcp_inet_proxy_helpers:configure_dist_proxy(Config),
     erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
-    tcp_inet_proxy_helpers:enable_dist_proxy(Nodes, Config0).
+    Config0.
 
 setup_ra_cluster(Config, Machine) ->
     Nodes = ?config(nodes, Config),

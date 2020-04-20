@@ -131,4 +131,6 @@ heal(Nodes) ->
     [tcp_inet_proxy_helpers:allow_traffic_between(Node, OtherNode)
      || OtherNode <- Nodes,
         Node <- Nodes,
-        OtherNode =/= Node].
+        OtherNode =/= Node],
+    [net_kernel:connect_node(N)
+     || N <- Nodes].

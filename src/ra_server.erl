@@ -1001,7 +1001,8 @@ handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0,
                            id := {Id, _, _},
                            leader_id := LeaderId,
-                           current_term := Term}) ->
+                           current_term := Term})
+  when LeaderId =/= undefined ->
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
     Reply = append_entries_reply(Term, true, State),
