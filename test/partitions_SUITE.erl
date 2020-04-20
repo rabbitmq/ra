@@ -129,8 +129,8 @@ do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
     % assert no messages were lost
     Remaining = (Applied ++ Applied2) -- Received,
     ct:pal("Remaining ~p~n", [Remaining]),
-    MaxReceived = lists:max(Received),
-    Remaining =:= [] andalso NumMessages =:= MaxReceived.
+    %% only assert we did not lose any applied entries
+    Remaining =:= [].
 
 validate_machine_state(Servers) ->
     validate_machine_state(Servers, 10).
