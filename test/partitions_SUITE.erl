@@ -76,7 +76,7 @@ prop_enq_drain(Config) ->
                       do_enq_drain_scenario(ClusterName,
                                             Nodes, Servers,
                                             [{wait, 5000}] ++ S ++
-                                            [heal, {wait, 5000}]))
+                                            [heal, {wait, 20000}]))
       end, [], 10).
 
 print_scenario(Scenario) ->
