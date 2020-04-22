@@ -97,7 +97,6 @@ accept_mem_tables(Config) ->
     ok = gen_server:stop(TblWriterPid),
     ok.
 
-
 truncate_segments(Config) ->
     Dir = ?config(wal_dir, Config),
     SegConf = #{max_count => 12},

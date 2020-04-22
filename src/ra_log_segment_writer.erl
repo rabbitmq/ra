@@ -119,8 +119,16 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
     SegFiles.
 
-handle_cast({mem_tables, Tables, WalFile}, State0) ->
-    State = lists:foldl(fun do_segment/2, State0, Tables),
+handle_cast({mem_tables, Tables, WalFile}, State) ->
+
+    Degree = erlang:system_info(schedulers),
+    _ = [begin
+             {_, []} = ra_lib:partition_parallel(
+                         fun (E) ->
+                                 ok = do_segment(E, State),
+                                 true
+                         end, Tabs, infinity)
+         end || Tabs <- ra_lib:lists_chunk(Degree, Tables)],
     % delete wal file once done
     % TODO: test scenario when server crashes after segments but before
     % deleting walfile
@@ -196,7 +204,7 @@ get_overview(#state{data_dir = Dir,
 
 do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
-                  segment_conf = SegConf} = State) ->
+                  segment_conf = SegConf}) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
     case open_file(Dir, SegConf) of
@@ -206,7 +214,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
             %% clean up the tables for this process
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(ServerUId, Tid),
-            State;
+            ok;
         Segment0 ->
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                    Segment0, SegConf) of
@@ -214,7 +222,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                     ?WARN("segment_writer: skipping segments for ~w as
                            directory ~s disappeared whilst writing~n",
                            [ServerUId, Dir]),
-                    State;
+                    ok;
                 {Segment1, Closed0} ->
                     % fsync
                     {ok, Segment} = ra_log_segment:sync(Segment1),
@@ -236,7 +244,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                     _ = ra_log_segment:close(Segment),
 
                     ok = send_segments(ServerUId, Tid, SegRefs),
-                    State
+                    ok
             end
     end.
 
