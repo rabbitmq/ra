@@ -230,8 +230,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                     % notify writerid of new segment update
                     % includes the full range of the segment
                     % filter out any undefined segrefs
-                    ClosedSegRefs = [ra_log_segment:segref(S)
-                                     || S <- Closed0,
+                    ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0,
                                         %% ensure we don't send undefined seg refs
                                         is_tuple(ra_log_segment:segref(S))],
                     SegRefs = case ra_log_segment:segref(Segment) of

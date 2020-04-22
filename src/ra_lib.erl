@@ -264,7 +264,6 @@ collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
     {Pid, true} ->
       erlang:demonitor(MRef, [flush]),
       collect(Next, {[E | Left], Right}, Timeout);
-      % [{left, E} | collect(Next, Timeout)];
     {Pid, false} ->
       erlang:demonitor(MRef, [flush]),
       collect(Next, {Left, [E | Right]}, Timeout);
