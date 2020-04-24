@@ -24,6 +24,7 @@ all_tests() ->
      out_of_seq_writes,
      roll_over,
      recover,
+     recover_overwrite_in_same_batch,
      recover_with_small_chunks,
      recover_empty,
      recover_after_roll_over,
@@ -510,6 +511,41 @@ recover(Config) ->
     proc_lib:stop(Pid),
     ok.
 
+recover_overwrite_in_same_batch(Config) ->
+    ok = logger:set_primary_config(level, all),
+    % open wal and write a few entreis
+    % close wal + delete mem_tables
+    % re-open wal and validate mem_tables are re-created
+    Conf0 = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => spawn(fun () -> ok end)},
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    {ok, _Wal} = ra_log_wal:start_link(Conf, []),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 1, 1, <<"data1">>),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 1, 2, <<"data2">>),
+    _ = await_written(WriterId, {1, 1, 2}),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    empty_mailbox(),
+    proc_lib:stop(ra_log_wal),
+    {ok, Pid} = ra_log_wal:start_link(Conf, []),
+    % there should be no open mem tables after recovery as we treat any found
+    % wal files as complete
+    [] = ets:lookup(ra_log_open_mem_tables, UId),
+    [ {UId, _, 1, 1, MTid1}, % this is the "old" table
+      {UId, _, 1, 1, MTid2}] =
+        lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
+        ct:pal("MTId1 ~w Mtid2 ~w", [MTid1, MTid2]),
+    [{1, 2, <<"data2">>}] = ets:lookup(MTid1, 1),
+    [{1, 2, <<"data2">>}] = ets:lookup(MTid2, 1),
+
+    % check that both mem_tables notifications are received by the segment writer
+    flush(),
+
+    meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
 recover_with_small_chunks(Config) ->
     ok = logger:set_primary_config(level, all),
     % open wal and write a few entreis
@@ -589,6 +625,7 @@ await_written({UId, _} = Id, {From, To, Term} = Written) ->
         {ra_log_event, {written, {From, T, _}}} ->
             await_written(Id, {T+1, To, Term})
     after 5000 ->
+              flush(),
               throw({written_timeout, To})
     end.
 
@@ -657,3 +694,9 @@ tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
     end;
 tbl_lookup([_ | Tail], Idx) ->
     tbl_lookup(Tail, Idx).
+flush() ->
+    receive Msg ->
+                ct:pal("flush: ~p~n", [Msg]),
+                flush()
+    after 0 -> ok
+    end.
