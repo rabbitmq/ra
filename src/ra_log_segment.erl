@@ -34,19 +34,21 @@
 
 -type ra_segment_index() :: #{ra_index() => index_record_data()}.
 
+-record(cfg, {version :: non_neg_integer(),
+              max_count = ?DEFAULT_INDEX_MAX_COUNT :: non_neg_integer(),
+              max_pending = ?DEFAULT_MAX_PENDING :: non_neg_integer(),
+              filename :: file:filename_all(),
+              fd :: maybe(file:io_device()),
+              index_size :: pos_integer(),
+              mode = append :: read | append}).
+
 -record(state,
-        {version :: non_neg_integer(),
-         max_count = ?DEFAULT_INDEX_MAX_COUNT :: non_neg_integer(),
-         max_pending = ?DEFAULT_MAX_PENDING :: non_neg_integer(),
-         filename :: file:filename_all(),
-         fd :: maybe(file:io_device()),
-         index_size :: pos_integer(),
+        {cfg :: #cfg{},
          index_offset :: pos_integer(),
          index_write_offset :: pos_integer(),
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
-         mode = append :: read | append,
          index = undefined :: maybe(ra_segment_index()),
          range :: maybe({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
@@ -91,20 +93,20 @@ process_file(true, Mode, Filename, Fd, _Options) ->
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
-            {ok, #state{version = Version,
-                        max_count = MaxCount,
-                        filename = Filename,
-                        fd = Fd,
-                        index_size = IndexSize,
-                        mode = Mode,
-                        data_start = ?HEADER_SIZE + IndexSize,
-                        data_offset = DataOffset,
-                        data_write_offset = DataOffset,
-                        index_offset = IndexOffset,
-                        index_write_offset = IndexOffset,
-                        range = Range,
-                        % TODO: we don't need an index in memory in append mode
-                        index = Index}};
+            {ok, #state{cfg = #cfg{version = Version,
+                                   max_count = MaxCount,
+                                   filename = Filename,
+                                   mode = Mode,
+                                   index_size = IndexSize,
+                                   fd = Fd},
+                    data_start = ?HEADER_SIZE + IndexSize,
+                    data_offset = DataOffset,
+                    data_write_offset = DataOffset,
+                    index_offset = IndexOffset,
+                    index_write_offset = IndexOffset,
+                    range = Range,
+                    % TODO: we don't need an index in memory in append mode
+                    index = Index}};
         Err ->
             Err
     end;
@@ -113,15 +115,15 @@ process_file(false, Mode, Filename, Fd, Options) ->
     MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
-    {ok, #state{version = ?VERSION,
-                max_count = MaxCount,
-                max_pending = MaxPending,
-                filename = Filename,
-                fd = Fd,
-                index_size = IndexSize,
-                index_offset = ?HEADER_SIZE,
+    {ok, #state{cfg = #cfg{version = ?VERSION,
+                           max_count = MaxCount,
+                           max_pending = MaxPending,
+                           filename = Filename,
+                           mode = Mode,
+                           index_size = IndexSize,
+                           fd = Fd},
                 index_write_offset = ?HEADER_SIZE,
-                mode = Mode,
+                index_offset = ?HEADER_SIZE,
                 data_start = ?HEADER_SIZE + IndexSize,
                 data_offset = ?HEADER_SIZE + IndexSize,
                 data_write_offset = ?HEADER_SIZE + IndexSize
@@ -129,16 +131,16 @@ process_file(false, Mode, Filename, Fd, Options) ->
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
-append(#state{max_pending = PendingCount,
+append(#state{cfg = #cfg{max_pending = PendingCount},
               pending_count = PendingCount} = State,
        Index, Term, Data) ->
     append(flush(State), Index, Term, Data);
-append(#state{version = Version,
+append(#state{cfg = #cfg{version = Version,
+                         mode = append},
               index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
-              mode = append,
               pending_count = PendCnt,
               pending_index = IdxPend0,
               pending_data = DataPend0} = State,
@@ -149,11 +151,11 @@ append(#state{version = Version,
             Length = erlang:byte_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
+            % Checksum = 0,
             OSize = offset_size(Version),
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
                           DataOffset:OSize/unsigned, Length:32/unsigned,
                           Checksum:32/unsigned>>,
-            % Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
             Range = update_range(Range0, Index),
             % fsync is done explicitly
             {ok, State#state{index_offset = IndexOffset + index_record_size(Version),
@@ -168,7 +170,8 @@ append(#state{version = Version,
      end.
 
 -spec sync(state()) -> {ok, state()} | {error, term()}.
-sync(#state{fd = Fd, pending_index = []} = State) ->
+sync(#state{cfg = #cfg{fd = Fd},
+            pending_index = []} = State) ->
     case ra_file_handle:sync(Fd) of
         ok ->
             {ok, State};
@@ -179,13 +182,13 @@ sync(State0) ->
     State = flush(State0),
     sync(State).
 
-flush(#state{pending_data = PendData,
+flush(#state{cfg = #cfg{fd = Fd},
+             pending_data = PendData,
              pending_index = PendIndex,
              index_offset = IdxOffs,
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
-             data_write_offset = DataWriteOffs,
-             fd = Fd} = State) ->
+             data_write_offset = DataWriteOffs} = State) ->
     ok = ra_file_handle:pwrite(Fd, DataWriteOffs, PendData),
     ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex),
     State#state{pending_data = [],
@@ -203,7 +206,8 @@ read(State, Idx, Num) ->
 -spec read_cons(state(), ra_index(), Num :: non_neg_integer(),
                 fun((binary()) -> term()), Acc) ->
     Acc when Acc :: [{ra_index(), ra_term(), binary()}].
-read_cons(#state{fd = _Fd, mode = read, index = Index} = State, Idx,
+read_cons(#state{cfg = #cfg{fd = _Fd, mode = read},
+                 index = Index} = State, Idx,
           Num, Fun, Acc) ->
     pread_cons(State, Idx + Num - 1, Idx, Index, Fun, Acc).
 
@@ -218,7 +222,8 @@ term_query(#state{index = Index}, Idx) ->
 pread_cons(_Fd, Idx, FinalIdx, _, _Fun, Acc)
   when Idx < FinalIdx ->
     Acc;
-pread_cons(#state{fd = Fd} = State, Idx, FinalIdx, Index, Fun, Acc) ->
+pread_cons(#state{cfg = #cfg{fd = Fd}} = State, Idx,
+           FinalIdx, Index, Fun, Acc) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
             {ok, Data} = ra_file_handle:pread(Fd, Offset, Length),
@@ -234,12 +239,12 @@ pread_cons(#state{fd = Fd} = State, Idx, FinalIdx, Index, Fun, Acc) ->
                         _ ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
-                                  State#state.filename})
+                                  State#state.cfg#cfg.filename})
                     end;
                 _ReadSize ->
                     %% we did not read the correct number of bytes suggesting
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
-                          State#state.filename})
+                          State#state.cfg#cfg.filename})
             end;
         _ ->
             pread_cons(State, Idx-1, FinalIdx, Index, Fun, Acc)
@@ -250,31 +255,32 @@ range(#state{range = Range}) ->
     Range.
 
 -spec max_count(state()) -> non_neg_integer().
-max_count(#state{max_count = Max}) ->
+max_count(#state{cfg = #cfg{max_count = Max}}) ->
     Max.
 
 -spec filename(state()) -> file:filename().
-filename(#state{filename = Fn}) ->
+filename(#state{cfg = #cfg{filename = Fn}}) ->
     filename:absname(Fn).
 
 -spec segref(state()) -> maybe(ra_log:segment_ref()).
 segref(#state{range = undefined}) ->
     undefined;
-segref(#state{range = {Start, End}, filename = Fn}) ->
+segref(#state{range = {Start, End},
+              cfg = #cfg{filename = Fn}}) ->
     {Start, End, ra_lib:to_string(filename:basename(Fn))}.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
-is_same_as(#state{filename = Fn0}, Fn) ->
+is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
 -spec close(state()) -> ok.
-close(#state{fd = Fd, mode = append} = State) ->
+close(#state{cfg = #cfg{fd = Fd, mode = append}} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
     _ = ra_file_handle:close(Fd),
     ok;
-close(#state{fd = Fd}) ->
+close(#state{cfg = #cfg{fd = Fd}}) ->
     _ = ra_file_handle:close(Fd),
     ok.
 
