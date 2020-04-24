@@ -42,12 +42,15 @@
          fd :: maybe(file:io_device()),
          index_size :: pos_integer(),
          index_offset :: pos_integer(),
+         index_write_offset :: pos_integer(),
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
+         data_write_offset :: pos_integer(),
          mode = append :: read | append,
          index = undefined :: maybe(ra_segment_index()),
          range :: maybe({ra_index(), ra_index()}),
-         pending = [] :: [{non_neg_integer(), binary()}],
+         pending_data = [] :: iodata(),
+         pending_index = [] :: iodata(),
          pending_count = 0 :: non_neg_integer()
         }).
 
@@ -96,7 +99,9 @@ process_file(true, Mode, Filename, Fd, _Options) ->
                         mode = Mode,
                         data_start = ?HEADER_SIZE + IndexSize,
                         data_offset = DataOffset,
+                        data_write_offset = DataOffset,
                         index_offset = IndexOffset,
+                        index_write_offset = IndexOffset,
                         range = Range,
                         % TODO: we don't need an index in memory in append mode
                         index = Index}};
@@ -115,20 +120,19 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 fd = Fd,
                 index_size = IndexSize,
                 index_offset = ?HEADER_SIZE,
+                index_write_offset = ?HEADER_SIZE,
                 mode = Mode,
                 data_start = ?HEADER_SIZE + IndexSize,
-                data_offset = ?HEADER_SIZE + IndexSize}}.
+                data_offset = ?HEADER_SIZE + IndexSize,
+                data_write_offset = ?HEADER_SIZE + IndexSize
+               }}.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
     {ok, state()} | {error, full}.
 append(#state{max_pending = PendingCount,
-              pending_count = PendingCount,
-              pending = Pend,
-              fd = Fd} = State,
+              pending_count = PendingCount} = State,
        Index, Term, Data) ->
-    ok =  ra_file_handle:pwrite(Fd, Pend),
-    append(State#state{pending = [], pending_count = 0},
-           Index, Term, Data);
+    append(flush(State), Index, Term, Data);
 append(#state{version = Version,
               index_offset = IndexOffset,
               data_start = DataStart,
@@ -136,7 +140,8 @@ append(#state{version = Version,
               range = Range0,
               mode = append,
               pending_count = PendCnt,
-              pending = Pend0} = State,
+              pending_index = IdxPend0,
+              pending_data = DataPend0} = State,
        Index, Term, Data) ->
     % check if file is full
     case IndexOffset < DataStart of
@@ -148,34 +153,46 @@ append(#state{version = Version,
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
                           DataOffset:OSize/unsigned, Length:32/unsigned,
                           Checksum:32/unsigned>>,
-            Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
+            % Pend = [{DataOffset, Data}, {IndexOffset, IndexData} | Pend0],
             Range = update_range(Range0, Index),
             % fsync is done explicitly
             {ok, State#state{index_offset = IndexOffset + index_record_size(Version),
                              data_offset = DataOffset + Length,
                              range = Range,
-                             pending = Pend,
-                             pending_count = PendCnt + 1}};
+                             pending_index = [IdxPend0, IndexData],
+                             pending_data = [DataPend0, Data],
+                             pending_count = PendCnt + 1}
+            };
         false ->
             {error, full}
      end.
 
 -spec sync(state()) -> {ok, state()} | {error, term()}.
-sync(#state{fd = Fd, pending = []} = State) ->
+sync(#state{fd = Fd, pending_index = []} = State) ->
     case ra_file_handle:sync(Fd) of
         ok ->
             {ok, State};
         {error, _} = Err ->
             Err
     end;
-sync(#state{fd = Fd, pending = Pend} = State) ->
-    case ra_file_handle:pwrite(Fd, Pend) of
-        ok ->
-            sync(State#state{pending = [],
-                             pending_count = 0});
-        {error, _} = Err ->
-            Err
-    end.
+sync(State0) ->
+    State = flush(State0),
+    sync(State).
+
+flush(#state{pending_data = PendData,
+             pending_index = PendIndex,
+             index_offset = IdxOffs,
+             data_offset = DataOffs,
+             index_write_offset = IdxWriteOffs,
+             data_write_offset = DataWriteOffs,
+             fd = Fd} = State) ->
+    ok = ra_file_handle:pwrite(Fd, DataWriteOffs, PendData),
+    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex),
+    State#state{pending_data = [],
+                pending_index = [],
+                pending_count = 0,
+                index_write_offset = IdxOffs,
+                data_write_offset = DataOffs}.
 
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
