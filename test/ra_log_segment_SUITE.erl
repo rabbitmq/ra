@@ -280,23 +280,41 @@ term_query(Config) ->
 
 write_many(Config) ->
     Dir = ?config(data_dir, Config),
-    Fn = filename:join(Dir, "seg1.seg"),
-    Data = make_data(1024 * 10),
-    {ok, Seg0} = ra_log_segment:open(Fn),
-    % start_profile(Config, [ra_log_segment,
-    %                        file,
-    %                        ra_file_handle,
-    %                        prim_file]),
+    Sizes = [10,
+             100,
+             1000,
+             10000,
+             100000
+            ],
+    Result =
+    [begin
+         {Max,
+         [begin
+              Data = make_data(Size),
+              Name = integer_to_list(Max) ++ "_" ++  integer_to_list(Size) ++ ".seg",
+              Fn = filename:join(Dir, Name),
+              {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 4096 * 2,
+                                                     max_pending => Max}),
+              % start_profile(Config, [ra_log_segment,
+              %                        file,
+              %                        ra_file_handle,
+              %                        prim_file]),
 
-    {Taken, {ok, Seg}} = timer:tc(
-                           fun() ->
-                                   S = write_until_full(1, 2, Data, Seg0),
-                                   ra_log_segment:sync(S)
-                           end),
-    % stop_profile(Config),
-    ct:pal("write_many took ~pms~n", [Taken/1000]),
+              {Taken, Seg} = timer:tc(
+                               fun() ->
+                                       S0 = write_until_full(1, 2, Data, Seg0),
+                                       ra_log_segment:flush(S0)
+                               end),
+              % stop_profile(Config),
+              % ct:pal("write_many ~b size ~b took ~bms",
+              %        [Max, Size, Taken div 1000]),
 
-    ok = ra_log_segment:close(Seg),
+              ok = ra_log_segment:close(Seg),
+              {Size, Taken div 1000}
+          end || Size <- Sizes]}
+     end || Max <- [64,128,256,512,1024,2048,4096]],
+
+    ct:pal("~p", [Result]),
     ok.
 
 write_until_full(Idx, Term, Data, Seg0) ->

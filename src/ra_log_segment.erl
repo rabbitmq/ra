@@ -10,6 +10,7 @@
          term_query/2,
          close/1,
          range/1,
+         flush/1,
          max_count/1,
          filename/1,
          segref/1,
@@ -23,7 +24,7 @@
 -define(MAGIC, "RASG").
 -define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
 -define(DEFAULT_INDEX_MAX_COUNT, 4096).
--define(DEFAULT_MAX_PENDING, 4096).
+-define(DEFAULT_MAX_PENDING, 1024).
 -define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
 -define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
 
@@ -57,6 +58,7 @@
         }).
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
+                                    max_pending => non_neg_integer(),
                                     mode => append | read}.
 -opaque state() :: #state{}.
 
@@ -85,9 +87,10 @@ open(Filename, Options) ->
         Err -> Err
     end.
 
-process_file(true, Mode, Filename, Fd, _Options) ->
+process_file(true, Mode, Filename, Fd, Options) ->
     case read_header(Fd) of
         {ok, Version, MaxCount} ->
+            MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
             IndexRecordSize = index_record_size(Version),
             IndexSize = MaxCount * IndexRecordSize,
             {NumIndexRecords, DataOffset, Range, Index} =
@@ -95,6 +98,7 @@ process_file(true, Mode, Filename, Fd, _Options) ->
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
+                                   max_pending = MaxPending,
                                    filename = Filename,
                                    mode = Mode,
                                    index_size = IndexSize,
@@ -182,6 +186,7 @@ sync(State0) ->
     State = flush(State0),
     sync(State).
 
+-spec flush(state()) -> state().
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
@@ -190,7 +195,7 @@ flush(#state{cfg = #cfg{fd = Fd},
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
     ok = ra_file_handle:pwrite(Fd, DataWriteOffs, PendData),
-    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex),
+    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, iolist_to_binary(PendIndex)),
     State#state{pending_data = [],
                 pending_index = [],
                 pending_count = 0,
