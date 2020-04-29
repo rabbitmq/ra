@@ -3,6 +3,7 @@
 -compile(export_all).
 
 -include("src/ra.hrl").
+-include("src/ra_server.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -163,10 +164,12 @@ setup_log() ->
     ok.
 
 init_test(_Config) ->
-    #{id := {Id, UId, _},
-      cluster := Cluster,
+    #{cluster := Cluster,
       current_term := CurrentTerm,
-      log := Log0} = base_state(3, ?FUNCTION_NAME),
+      log := Log0} = Base = base_state(3, ?FUNCTION_NAME),
+    Id = ra_server:id(Base),
+    UId = ra_server:uid(Base),
+
     % ensure it is written to the log
     InitConf = #{cluster_name => init,
                  id => Id,
@@ -212,17 +215,20 @@ recover_restores_cluster_changes(_Config) ->
                                (ra_server_init(InitConf))#{votes => 0,
                                                            current_term => 1,
                                                            voted_for => n1}),
-    {leader, State0 = #{cluster := Cluster0}, _} =
+    {leader, State0 = #{cluster := Cluster0,
+                        current_term := 1}, _} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
-    {leader, State, _} = ra_server:handle_leader(written_evt({1, 1, 1}), State0),
     ?assert(maps:size(Cluster0) =:= 1),
+    {leader, State, _} = ra_server:handle_leader(written_evt({1, 1, 1}), State0),
+    ?assertMatch(#{current_term := 1}, State),
+    ?assertMatch(#{cluster_change_permitted := true}, State),
 
     % n2 joins
     {leader, #{cluster := Cluster,
                log := Log0}, _} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            n2, await_consensus}}, State),
-    ?assert(maps:size(Cluster) =:= 2),
+    ?assertEqual(2, maps:size(Cluster)),
     % intercept ra_log:init call to simulate persisted log data
     % ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
@@ -709,11 +715,11 @@ wal_down_condition(_Config) ->
     ok.
 
 update_release_cursor(_Config) ->
-    State00 = (base_state(3, ?FUNCTION_NAME)),
+    State00 = #{cfg := Cfg} = (base_state(3, ?FUNCTION_NAME)),
     meck:expect(?FUNCTION_NAME, version, fun () -> 1 end),
-    State0 = State00#{machine_versions => [{1, 1}, {0, 0}]},
+    State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
     %% need to match on something for this macro
-    ?assertMatch({#{machine_version := 0}, []},
+    ?assertMatch({#{cfg := #cfg{machine_version = 0}}, []},
                  ra_server:update_release_cursor(2, some_state, State0)),
     ok.
 
@@ -878,19 +884,20 @@ follower_pre_vote(_Config) ->
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 99},
                                   State),
 
+    Cfg = maps:get(cfg, State),
     % disallow votes from a lower machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 1},
-                              State#{machine_version => 2}),
+                              State#{cfg => Cfg#cfg{machine_version = 2}}),
 
     % allow votes for the same machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
-                              State#{machine_version => 2}),
+                              State#{cfg => Cfg#cfg{machine_version = 2}}),
 
     % fail due to lower term
     % return failure and immediately enter pre_vote phase as there are
@@ -964,7 +971,7 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
 
 
 leader_replies_to_append_entries_rpc_with_lower_term(_Config) ->
-    State = #{id := {Id, _, _},
+    State = #{cfg := #cfg{id = Id},
               current_term := CTerm} = base_state(3, ?FUNCTION_NAME),
     AERpc = #append_entries_rpc{term = CTerm - 1,
                                 leader_id = n3,
@@ -1039,19 +1046,21 @@ leader_noop_increments_machine_version(_Config) ->
     Mod = ?FUNCTION_NAME,
     MacVer = 2,
     OldMacVer = 1,
-    State00 = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => false,
-                                               machine_version => MacVer,
-                                               effective_machine_version => OldMacVer},
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    State00 = Base#{cluster_change_permitted => false,
+                    cfg => Cfg#cfg{machine_version = MacVer,
+                                   effective_machine_version = OldMacVer}},
     ModV2 = leader_noop_increments_machine_version_v2,
     meck:new(ModV2, [non_strict]),
     meck:expect(Mod, version, fun () -> MacVer end),
     meck:expect(Mod, which_module, fun (1) -> Mod;
                                        (2) -> ModV2
                                    end),
-    {leader, #{effective_machine_version := OldMacVer,
-               effective_machine_module := Mod} = State0, _Effects} =
-        ra_server:handle_leader({command, {noop, meta(), MacVer}},
-                                 State00),
+    {leader, #{cfg := #cfg{effective_machine_version = OldMacVer,
+                           effective_machine_module = Mod}} = State0,
+     _Effects} = ra_server:handle_leader({command, {noop, meta(), MacVer}},
+                                         State00),
     %% new machine version is applied
     {leader, State1, _} =
         ra_server:handle_leader({ra_log_event, {written, {4, 4, 5}}}, State0),
@@ -1068,8 +1077,8 @@ leader_noop_increments_machine_version(_Config) ->
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
     % noop consensus
-    {leader, #{effective_machine_version := MacVer,
-               effective_machine_module := ModV2}, _} =
+    {leader, #{cfg := #cfg{effective_machine_version = MacVer,
+                           effective_machine_module = ModV2}}, _} =
         ra_server:handle_leader(AEReply, State1),
 
     ?assert(meck:called(ModV2, apply, ['_', {machine_version, 1, 2}, '_'])),
@@ -1086,8 +1095,8 @@ follower_machine_version(_Config) ->
                               prev_log_index = 3,
                               prev_log_term = 5,
                               leader_commit = 5},
-    {follower, #{machine_version := 0,
-                 effective_machine_version := 1,
+    {follower, #{cfg := #cfg{machine_version = 0,
+                             effective_machine_version = 1},
                  last_applied := 3,
                  commit_index := 5} = State0, _} =
         ra_server:handle_follower(Aer, State00),
@@ -1095,8 +1104,8 @@ follower_machine_version(_Config) ->
     %% machine version
     %% last_applied is not updated we simply "peek" at the noop command to
     %% learn the next machine version to update it
-    {follower, #{machine_version := 0,
-                 effective_machine_version := 1,
+    {follower, #{cfg := #cfg{machine_version = 0,
+                             effective_machine_version = 1},
                  last_applied := 3,
                  commit_index := 5,
                  log := _Log} = _State1, _Effects} =
@@ -1201,8 +1210,12 @@ follower_cluster_change(_Config) ->
     OldCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n3 => new_peer_with(#{next_index => 4, match_index => 3})},
-    State = (base_state(3, ?FUNCTION_NAME))#{id => {n2, <<"n2">>, "n2"},
-                             cluster => OldCluster},
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    State = Base#{cfg => Cfg#cfg{id = n2,
+                                 uid = <<"n2">>,
+                                 log_id = "n2"},
+                  cluster => OldCluster},
     NewCluster = #{n1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    n3 => new_peer_with(#{next_index => 4, match_index => 3}),
@@ -1601,7 +1614,20 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                       [{1, 1, {noop, meta(), 1}},
                        {2, 2, {'$usr', meta(), {enq, apple}, after_log_append}},
                        {3, 5, {2, {'$usr', meta(), {enq, pear}, after_log_append}}}]),
-    Leader0 = #{cluster =>
+    Cfg = #cfg{id = n1,
+               uid = <<"n1">>,
+               log_id = <<"n1">>,
+               metrics_key = n1,
+               machine = {machine, ra_machine_simple,
+                            #{simple_fun => ?MACFUN,
+                              initial_state => <<>>}}, % just keep last applied value
+               machine_version = 0,
+               machine_versions = [{0, 0}],
+               effective_machine_version = 0,
+               effective_machine_module = ra_machine_simple
+              },
+    Leader0 = #{cfg => Cfg,
+                cluster =>
                 #{n1 => new_peer_with(#{match_index => 0}), % current leader in term 2
                   n2 => new_peer_with(#{match_index => 0,
                                         next_index => N2NextIndex}), % stale peer - previous leader
@@ -1612,17 +1638,8 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                 cluster_index_term => {0,0},
                 commit_index => 3,
                 current_term => Term,
-                id => {n1, <<"n1">>, <<"n1">>},
                 last_applied => 4,
                 log => Log,
-                machine => {machine, ra_machine_simple,
-                            #{simple_fun => ?MACFUN,
-                              initial_state => <<>>}},
-                machine_version => 0,
-                machine_versions => [{0, 0}],
-                metrics_key => n1,
-                effective_machine_version => 0,
-                effective_machine_module =>  ra_machine_simple,
                 machine_state => [{4,apple}],
                 query_index => 0,
                 queries_waiting_heartbeats => queue:new(),
@@ -1652,7 +1669,18 @@ leader_receives_install_snapshot_result(_Config) ->
                        {3, 1, {'$usr', meta(), {enq,apple}, after_log_append}},
                        {4, 1, {'$usr', meta(), {enq,pear}, after_log_append}}]),
     mock_machine(?FUNCTION_NAME),
-    Leader = #{cluster =>
+    Cfg = #cfg{id = n1,
+               uid = <<"n1">>,
+               log_id = <<"n1">>,
+               metrics_key = n1,
+               machine = {machine, ?FUNCTION_NAME, #{}},
+               machine_version = 0,
+               machine_versions = [{0, 0}],
+               effective_machine_version = 1,
+               effective_machine_module = ra_machine_simple
+              },
+    Leader = #{cfg => Cfg,
+               cluster =>
                #{n1 => new_peer_with(#{match_index => 0}),
                  n2 => new_peer_with(#{match_index => 4, next_index => 5,
                                        commit_index_sent => 4}),
@@ -1661,16 +1689,9 @@ leader_receives_install_snapshot_result(_Config) ->
                cluster_index_term => {0,0},
                commit_index => 4,
                current_term => Term,
-               id => {n1, <<"n1">>, <<"n1">>},
                last_applied => 4,
                log => Log0,
-               machine => {machine, ?FUNCTION_NAME, #{}},
                machine_state => [{4,apple}],
-               machine_version => 0,
-               machine_versions => [{0, 0}],
-               metrics_key => n1,
-               effective_machine_version => 1,
-               effective_machine_module => ra_machine_simple,
                query_index => 0,
                queries_waiting_heartbeats => queue:new(),
                pending_consistent_queries => []},
@@ -1693,7 +1714,7 @@ follower_heartbeat(_Config) ->
     #{current_term := Term,
       query_index := QIndex,
       cluster := Cluster,
-      id := {Id, _, _},
+      cfg := #cfg{id = Id},
       leader_id := LeaderId} = State,
     #{Id := _} = Cluster,
     NewQueryIndex = QIndex + 1,
@@ -1752,7 +1773,7 @@ candidate_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       leader_id := LeaderId,
-      id := {Id, _, _},
+      cfg := #cfg{id = Id},
       query_index := QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
@@ -1805,7 +1826,7 @@ pre_vote_heartbeat(_Config) ->
     #{current_term := Term,
       query_index := QueryIndex,
       leader_id := LeaderId,
-      id := {Id, _, _}} = State,
+      cfg := #cfg{id = Id}} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
                                term = Term,
@@ -1864,7 +1885,7 @@ leader_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       leader_id := LeaderId,
-      id := {Id, _, _},
+      cfg := #cfg{id = Id},
       query_index := QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
@@ -1903,7 +1924,7 @@ leader_heartbeat(_Config) ->
 leader_heartbeat_reply_node_size_5(_Config) ->
     BaseState = base_state(5, ?FUNCTION_NAME),
     #{current_term := Term,
-      id := {Id, _, _},
+      cfg := #cfg{id = Id},
       commit_index := CommitIndex} = BaseState,
     QueryIndex = 2,
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
@@ -1926,7 +1947,7 @@ leader_heartbeat_reply_node_size_5(_Config) ->
 leader_heartbeat_reply_same_term(_Config) ->
     BaseState = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
-      id := {Id, _, _},
+      cfg := #cfg{id = Id},
       commit_index := CommitIndex} = BaseState,
     QueryIndex = 2,
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
@@ -2011,7 +2032,7 @@ leader_consistent_query_delay(_Config) ->
     #{commit_index := CommitIndex,
       query_index := QueryIndex,
       current_term := Term,
-      id := {Id, _, _}} = State,
+      cfg := #cfg{id = Id}} = State,
 
     %% If cluster changes are not permitted - delay the heartbeats
     Fun = fun(_) -> query_result end,
@@ -2058,7 +2079,7 @@ leader_consistent_query(_Config) ->
     #{commit_index := CommitIndex,
       query_index := QueryIndex,
       current_term := Term,
-      id := {Id, _, _}} = State,
+      cfg := #cfg{id = Id}} = State,
 
     Fun = fun(_) -> query_result end,
     Query1 = {from1, Fun, CommitIndex},
@@ -2103,7 +2124,7 @@ await_condition_heartbeat_dropped(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
     #{current_term := Term,
       query_index := QueryIndex,
-      id := {Id, _, _}} = State,
+      cfg := #cfg{id = Id}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -2139,7 +2160,7 @@ receive_snapshot_heartbeat_dropped(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       query_index := QueryIndex,
-      id := {Id, _, _}} = State,
+      cfg := #cfg{id = Id}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -2259,11 +2280,11 @@ empty_state(NumServers, Id) ->
 
 base_state(NumServers, MacMod) ->
     Log0 = lists:foldl(fun(E, L) ->
-                              ra_log:append(E, L)
-                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
-                      [{1, 1, usr(<<"hi1">>)},
-                       {2, 3, usr(<<"hi2">>)},
-                       {3, 5, usr(<<"hi3">>)}]),
+                               ra_log:append(E, L)
+                       end, ra_log:init(#{data_dir => "", uid => <<>>}),
+                       [{1, 1, usr(<<"hi1">>)},
+                        {2, 3, usr(<<"hi2">>)},
+                        {3, 5, usr(<<"hi3">>)}]),
     {Log, _} = ra_log:handle_event({written, {1, 3, 5}}, Log0),
 
     Servers = lists:foldl(fun(N, Acc) ->
@@ -2273,21 +2294,25 @@ base_state(NumServers, MacMod) ->
                                                      match_index => 3})}
                         end, #{}, lists:seq(1, NumServers)),
     mock_machine(MacMod),
-    #{id => {n1, <<"n1">>, <<"n1">>},
+    Cfg = #cfg{id = n1,
+               uid = <<"n1">>,
+               log_id = <<"n1">>,
+               metrics_key = n1,
+               machine = {machine, MacMod, #{}}, % just keep last applied value
+               machine_version = 0,
+               machine_versions = [{0, 0}],
+               effective_machine_version = 0,
+               effective_machine_module = MacMod
+              },
+    #{cfg => Cfg,
       leader_id => n1,
       cluster => Servers,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
+      machine_state => <<"hi3">>, % last entry has been applied
       current_term => 5,
       commit_index => 3,
       last_applied => 3,
-      machine => {machine, MacMod, #{}}, % just keep last applied value
-      machine_state => <<"hi3">>, % last entry has been applied
-      machine_version => 0,
-      machine_versions => [{0, 0}],
-      metrics_key => n1,
-      effective_machine_version => 0,
-      effective_machine_module => MacMod,
       log => Log,
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),

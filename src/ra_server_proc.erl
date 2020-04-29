@@ -238,8 +238,10 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
     Config = maps:merge(config_defaults(), Config0),
-    #{id := {_, UId, LogId},
-      cluster := Cluster} = ServerState = ra_server:init(Config),
+    #{cluster := Cluster} = ServerState = ra_server:init(Config),
+    LogId = ra_server:log_id(ServerState),
+    UId = ra_server:uid(ServerState),
+    Id = ra_server:id(ServerState),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(),
@@ -946,13 +948,10 @@ handle_receive_snapshot(Msg, State) ->
 handle_await_condition(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
 
-perform_local_query(QueryFun, Leader, #{effective_machine_module := MacMod,
-                                        machine_state := MacState,
-                                        last_applied := Last,
-                                        current_term := Term}) ->
-    try ra_machine:query(MacMod, QueryFun, MacState) of
+perform_local_query(QueryFun, Leader, ServerState) ->
+    try ra_server:machine_query(QueryFun, ServerState) of
         Result ->
-            {ok, {{Last, Term}, Result}, Leader}
+            {ok, Result, Leader}
     catch
         _:_ = Err ->
             {error, Err}
