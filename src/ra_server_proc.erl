@@ -736,11 +736,6 @@ terminating_follower(EvtType, Msg, State0) ->
                                       " - remaining in current state",
                                       [LogName, NextState]),
                                {S, A};
-                           {next_state, NextState, S} ->
-                               ?DEBUG("~s: terminating follower requested state '~s'"
-                                      " - remaining in current state",
-                                      [LogName, NextState]),
-                               {S, []};
                            {keep_state, S, A} ->
                                {S, A}
                        end,
