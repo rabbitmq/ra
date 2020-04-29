@@ -731,6 +731,16 @@ terminating_follower(EvtType, Msg, State0) ->
     {State, Actions} = case follower(EvtType, Msg, State0) of
                            {next_state, terminating_follower, S, A} ->
                                {S, A};
+                           {next_state, NextState, S, A} ->
+                               ?DEBUG("~s: terminating follower requested state '~s'"
+                                      " - remaining in current state",
+                                      [LogName, NextState]),
+                               {S, A};
+                           {next_state, NextState, S} ->
+                               ?DEBUG("~s: terminating follower requested state '~s'"
+                                      " - remaining in current state",
+                                      [LogName, NextState]),
+                               {S, []};
                            {keep_state, S, A} ->
                                {S, A}
                        end,

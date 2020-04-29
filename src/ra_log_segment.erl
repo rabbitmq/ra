@@ -195,7 +195,7 @@ flush(#state{cfg = #cfg{fd = Fd},
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
     ok = ra_file_handle:pwrite(Fd, DataWriteOffs, PendData),
-    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, iolist_to_binary(PendIndex)),
+    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex),
     State#state{pending_data = [],
                 pending_index = [],
                 pending_count = 0,
