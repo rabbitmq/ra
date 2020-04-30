@@ -160,7 +160,6 @@ append(#state{cfg = #cfg{version = Version,
             Length = erlang:byte_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
-            % Checksum = 0,
             OSize = offset_size(Version),
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
                           DataOffset:OSize/unsigned, Length:32/unsigned,

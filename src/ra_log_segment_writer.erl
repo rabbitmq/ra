@@ -123,11 +123,20 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
 
     Degree = erlang:system_info(schedulers),
     _ = [begin
-             {_, []} = ra_lib:partition_parallel(
-                         fun (E) ->
-                                 ok = do_segment(E, State),
-                                 true
-                         end, Tabs, infinity)
+             {_, Failures} = ra_lib:partition_parallel(
+                               fun (E) ->
+                                       ok = do_segment(E, State),
+                                       true
+                               end, Tabs, infinity),
+             case Failures of
+                 [] ->
+                     %% this is what we expect
+                     ok;
+                 _ ->
+                     ?ERROR("segment_writer: ~b failures encounted during segment"
+                            " flush Errors ~P", [length(Failures), Failures, 32]),
+                     exit(segment_writer_segment_write_failure)
+             end
          end || Tabs <- ra_lib:lists_chunk(Degree, Tables)],
     % delete wal file once done
     % TODO: test scenario when server crashes after segments but before
