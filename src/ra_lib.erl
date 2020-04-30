@@ -252,26 +252,26 @@ partition_parallel(F, Es) ->
     partition_parallel(F, Es, 60000).
 
 partition_parallel(F, Es, Timeout) ->
-   Parent = self(),
-   Running = [
-              {spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
-       || E <- Es],
-   collect(Running, {[], []}, Timeout).
+    Parent = self(),
+    Running = [{spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
+               || E <- Es],
+    collect(Running, {[], []}, Timeout).
 
-collect([], Acc, _Timeout) -> Acc;
+collect([], Acc, _Timeout) ->
+    Acc;
 collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
-  receive
-    {Pid, true} ->
-      erlang:demonitor(MRef, [flush]),
-      collect(Next, {[E | Left], Right}, Timeout);
-    {Pid, false} ->
-      erlang:demonitor(MRef, [flush]),
-      collect(Next, {Left, [E | Right]}, Timeout);
-    {'DOWN', MRef, process, Pid, _Reason} ->
-      collect(Next, {Left, [E | Right]}, Timeout)
-  after Timeout ->
-    exit(partition_parallel_timeout)
-  end.
+    receive
+        {Pid, true} ->
+            erlang:demonitor(MRef, [flush]),
+            collect(Next, {[E | Left], Right}, Timeout);
+        {Pid, false} ->
+            erlang:demonitor(MRef, [flush]),
+            collect(Next, {Left, [E | Right]}, Timeout);
+        {'DOWN', MRef, process, Pid, _Reason} ->
+            collect(Next, {Left, [E | Right]}, Timeout)
+    after Timeout ->
+              exit(partition_parallel_timeout)
+    end.
 
 retry(Func, Attempts) ->
     retry(Func, Attempts, 5000).
