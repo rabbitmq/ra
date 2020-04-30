@@ -8,8 +8,8 @@ configure_dist_proxy(Config) ->
     [{erlang_dist_module, inet_tcp_proxy_dist} | Config].
 
 block_traffic_between(NodeA, NodeB) ->
-    ok = rpc:call(NodeA, inet_tcp_proxy_dist, block, [NodeB]),
-    ok = rpc:call(NodeB, inet_tcp_proxy_dist, block, [NodeA]),
+    ok = retry_rpc(20, fun () -> rpc:call(NodeA, inet_tcp_proxy_dist, block, [NodeB]) end),
+    ok = retry_rpc(20, fun () -> rpc:call(NodeB, inet_tcp_proxy_dist, block, [NodeA]) end),
     wait_for_blocked(NodeA, NodeB, 10).
 
 allow_traffic_between(NodeA, NodeB) ->
