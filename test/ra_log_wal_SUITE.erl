@@ -4,6 +4,8 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(MAX_SIZE_BYTES, 128 * 1000 * 1000).
+
 all() ->
     [
      {group, default},
@@ -72,7 +74,8 @@ init_per_testcase(TestCase, Config) ->
     {ok, Ets} = ra_log_ets:start_link(PrivDir),
     UId = atom_to_binary(TestCase, utf8),
     yes = ra_directory:register_name(UId, self(), TestCase),
-    WalConf = #{dir => Dir, write_strategy => G},
+    WalConf = #{dir => Dir, write_strategy => G,
+                max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics, [named_table, public, {write_concurrency, true}]),
     ra_file_handle:start_link(),
