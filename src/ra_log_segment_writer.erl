@@ -311,7 +311,10 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
                     % recurse
                     append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
                                       [Seg0 | Closed], SegConf)
-            end
+            end;
+        {error, Posix} ->
+            FileName = ra_log_segment:filename(Seg0),
+            exit({segment_writer_append_error, FileName, Posix})
     end.
 
 find_segment_files(Dir) ->

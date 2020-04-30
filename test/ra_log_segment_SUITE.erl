@@ -303,7 +303,8 @@ write_many(Config) ->
               {Taken, Seg} = timer:tc(
                                fun() ->
                                        S0 = write_until_full(1, 2, Data, Seg0),
-                                       ra_log_segment:flush(S0)
+                                       {ok, S} = ra_log_segment:flush(S0),
+                                       S
                                end),
               % stop_profile(Config),
               % ct:pal("write_many ~b size ~b took ~bms",

@@ -134,11 +134,16 @@ process_file(false, Mode, Filename, Fd, Options) ->
                }}.
 
 -spec append(state(), ra_index(), ra_term(), binary()) ->
-    {ok, state()} | {error, full}.
+    {ok, state()} | {error, full | inet:posix()}.
 append(#state{cfg = #cfg{max_pending = PendingCount},
-              pending_count = PendingCount} = State,
+              pending_count = PendingCount} = State0,
        Index, Term, Data) ->
-    append(flush(State), Index, Term, Data);
+    case flush(State0) of
+        {ok, State} ->
+            append(State, Index, Term, Data);
+        Err ->
+            Err
+    end;
 append(#state{cfg = #cfg{version = Version,
                          mode = append},
               index_offset = IndexOffset,
@@ -183,10 +188,14 @@ sync(#state{cfg = #cfg{fd = Fd},
             Err
     end;
 sync(State0) ->
-    State = flush(State0),
-    sync(State).
+    case flush(State0) of
+        {ok, State} ->
+            sync(State);
+        Err ->
+            Err
+    end.
 
--spec flush(state()) -> state().
+-spec flush(state()) -> {ok, state()} | {error, term()}.
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
@@ -194,13 +203,21 @@ flush(#state{cfg = #cfg{fd = Fd},
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
-    ok = ra_file_handle:pwrite(Fd, DataWriteOffs, PendData),
-    ok = ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex),
-    State#state{pending_data = [],
-                pending_index = [],
-                pending_count = 0,
-                index_write_offset = IdxOffs,
-                data_write_offset = DataOffs}.
+    case ra_file_handle:pwrite(Fd, DataWriteOffs, PendData) of
+        ok ->
+            case ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex) of
+                ok ->
+                    {ok, State#state{pending_data = [],
+                                     pending_index = [],
+                                     pending_count = 0,
+                                     index_write_offset = IdxOffs,
+                                     data_write_offset = DataOffs}};
+                Err ->
+                    Err
+            end;
+        Err ->
+            Err
+    end.
 
 -spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
     [{ra_index(), ra_term(), binary()}].
