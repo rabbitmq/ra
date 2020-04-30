@@ -134,7 +134,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
                      ok;
                  _ ->
                      ?ERROR("segment_writer: ~b failures encounted during segment"
-                            " flush Errors ~P", [length(Failures), Failures, 32]),
+                            " flush. Errors: ~P", [length(Failures), Failures, 32]),
                      exit(segment_writer_segment_write_failure)
              end
          end || Tabs <- ra_lib:lists_chunk(Degree, Tables)],
