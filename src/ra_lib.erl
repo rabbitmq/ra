@@ -29,9 +29,11 @@
          derive_safe_string/2,
          validate_base64uri/1,
          partition_parallel/2,
+         partition_parallel/3,
          retry/2,
          retry/3,
-         write_file/2
+         write_file/2,
+         lists_chunk/2
         ]).
 
 ceiling(X) when X < 0 ->
@@ -247,27 +249,29 @@ derive_safe_string(S, Num) ->
      string:slice(F(string:next_grapheme(S), []), 0, Num).
 
 partition_parallel(F, Es) ->
-   Parent = self(),
-   Running = [
-              {spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
-       || E <- Es],
-   collect(Running, {[], []}, 60000).
+    partition_parallel(F, Es, 60000).
 
-collect([], Acc, _Timeout) -> Acc;
+partition_parallel(F, Es, Timeout) ->
+    Parent = self(),
+    Running = [{spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
+               || E <- Es],
+    collect(Running, {[], []}, Timeout).
+
+collect([], Acc, _Timeout) ->
+    Acc;
 collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
-  receive
-    {Pid, true} ->
-      erlang:demonitor(MRef, [flush]),
-      collect(Next, {[E | Left], Right}, Timeout);
-      % [{left, E} | collect(Next, Timeout)];
-    {Pid, false} ->
-      erlang:demonitor(MRef, [flush]),
-      collect(Next, {Left, [E | Right]}, Timeout);
-    {'DOWN', MRef, process, Pid, _Reason} ->
-      collect(Next, {Left, [E | Right]}, Timeout)
-  after Timeout ->
-    exit(partition_parallel_timeout)
-  end.
+    receive
+        {Pid, true} ->
+            erlang:demonitor(MRef, [flush]),
+            collect(Next, {[E | Left], Right}, Timeout);
+        {Pid, false} ->
+            erlang:demonitor(MRef, [flush]),
+            collect(Next, {Left, [E | Right]}, Timeout);
+        {'DOWN', MRef, process, Pid, _Reason} ->
+            collect(Next, {Left, [E | Right]}, Timeout)
+    after Timeout ->
+              exit(partition_parallel_timeout)
+    end.
 
 retry(Func, Attempts) ->
     retry(Func, Attempts, 5000).
@@ -307,8 +311,37 @@ write_file(Name, IOData) ->
             Err
     end.
 
+lists_chunk(0, List) ->
+    error(invalid_size, [0, List]);
+lists_chunk(Size, List) ->
+    lists_chunk(Size, List, []).
+
+lists_chunk(_Size, [], Acc)  ->
+    lists:reverse(Acc);
+lists_chunk(Size, List, Acc) when length(List) < Size ->
+    lists:reverse([List | Acc]);
+lists_chunk(Size, List, Acc) ->
+    {L, Rem} = lists_take(Size, List, []),
+    lists_chunk(Size, Rem, [L | Acc]).
+
+lists_take(0, List, Acc) ->
+    {lists:reverse(Acc), List};
+lists_take(_N, [], Acc) ->
+    {lists:reverse(Acc), []};
+lists_take(N, [H | T], Acc) ->
+    lists_take(N-1, T, [H | Acc]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+lists_chink_test() ->
+    ?assertError(invalid_size, lists_chunk(0, [a])),
+    ?assertMatch([], lists_chunk(2, [])),
+    ?assertMatch([[a]], lists_chunk(2, [a])),
+    ?assertMatch([[a, b]], lists_chunk(2, [a, b])),
+    ?assertMatch([[a, b], [c]], lists_chunk(2, [a, b, c])),
+    ?assertMatch([[a, b], [c, d]], lists_chunk(2, [a, b, c, d])),
+    ok.
 
 make_uid_test() ->
     U1 = make_uid(),

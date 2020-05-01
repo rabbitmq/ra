@@ -637,6 +637,7 @@ flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend} = Batch,
                      conf =  #conf{write_strategy = WriteStrategy,
                                    sync_method = SyncMeth}} = State0) ->
+
     case WriteStrategy of
         default ->
             ok = ra_file_handle:write(Fd, Pend),
@@ -667,7 +668,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                                          term = Term,
                                          inserts = Inserts,
                                          tid = Tid}) ->
-                         true = ets:insert(Tid, Inserts),
+                         true = ets:insert(Tid, lists:reverse(Inserts)),
                          true = ets:update_element(ra_log_open_mem_tables, UId,
                                                    [{2, TblStart}, {3, To}]),
                          Pid ! {ra_log_event, {written, {From, To, Term}}},

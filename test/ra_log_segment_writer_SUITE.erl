@@ -36,6 +36,7 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
+    ra_env:configure_logger(logger),
     Config.
 
 end_per_group(tests, Config) ->
@@ -96,7 +97,6 @@ accept_mem_tables(Config) ->
     false = filelib:is_file(WalFile),
     ok = gen_server:stop(TblWriterPid),
     ok.
-
 
 truncate_segments(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -414,13 +414,16 @@ accept_mem_tables_for_down_server(Config) ->
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
+    %% as segments are written in parallel we need await the segment writer
+    %% before asserting
+    ra_log_segment_writer:await(),
 
     %% if the server is down at the time the segment writer send the segments
     %% the segment writer should clear up the ETS mem tables
     %% This is safe as the server synchronises through the segment writer
     %% on start.
     %% check the fake tid is removed
-    undefined = ets:info(Tid),
+    ?assertEqual(undefined, ets:info(Tid)),
     [] = ets:tab2list(ra_log_closed_mem_tables),
 
     % assert wal file has been deleted.

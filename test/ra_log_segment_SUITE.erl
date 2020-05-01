@@ -280,16 +280,43 @@ term_query(Config) ->
 
 write_many(Config) ->
     Dir = ?config(data_dir, Config),
-    Fn = filename:join(Dir, "seg1.seg"),
-    Data = make_data(1024),
-    {ok, Seg0} = ra_log_segment:open(Fn),
-    {Taken, {ok, Seg}} = timer:tc(fun() ->
-                                    S = write_until_full(1, 2, Data, Seg0),
-                                    ra_log_segment:sync(S)
-                            end),
-    ct:pal("write_many took ~pms~n", [Taken/1000]),
+    Sizes = [10,
+             100,
+             1000,
+             10000,
+             100000,
+             256000
+            ],
+    Result =
+    [begin
+         {Max,
+         [begin
+              Data = make_data(Size),
+              Name = integer_to_list(Max) ++ "_" ++  integer_to_list(Size) ++ ".seg",
+              Fn = filename:join(Dir, Name),
+              {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 4096 * 2,
+                                                     max_pending => Max}),
+              % start_profile(Config, [ra_log_segment,
+              %                        file,
+              %                        ra_file_handle,
+              %                        prim_file]),
 
-    ok = ra_log_segment:close(Seg),
+              {Taken, Seg} = timer:tc(
+                               fun() ->
+                                       S0 = write_until_full(1, 2, Data, Seg0),
+                                       {ok, S} = ra_log_segment:flush(S0),
+                                       S
+                               end),
+              % stop_profile(Config),
+              % ct:pal("write_many ~b size ~b took ~bms",
+              %        [Max, Size, Taken div 1000]),
+
+              ok = ra_log_segment:close(Seg),
+              {Size, Taken div 1000}
+          end || Size <- Sizes]}
+     end || Max <- [64,128,256,512,1024,2048,4096]],
+
+    ct:pal("~p", [Result]),
     ok.
 
 write_until_full(Idx, Term, Data, Seg0) ->
@@ -304,3 +331,23 @@ write_until_full(Idx, Term, Data, Seg0) ->
 %%% Internal
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
+
+start_profile(Config, Modules) ->
+    Dir = ?config(priv_dir, Config),
+    Case = ?config(test_case, Config),
+    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
+    ct:pal("Profiling to ~p~n", [GzFile]),
+
+    lg:trace(Modules, lg_file_tracer,
+             GzFile, #{running => false, mode => profile}).
+
+stop_profile(Config) ->
+    Case = ?config(test_case, Config),
+    ct:pal("Stopping profiling for ~p~n", [Case]),
+    lg:stop(),
+    % this segfaults
+    % timer:sleep(2000),
+    Dir = ?config(priv_dir, Config),
+    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
+    ok.

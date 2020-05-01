@@ -73,7 +73,7 @@ run(#{name := Name,
     Taken = End - Start,
     io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
-    ra:delete_cluster(ServerIds),
+    _ = ra:delete_cluster(ServerIds),
     print_metrics(atom_to_binary(Name, utf8)),
     ok.
 
