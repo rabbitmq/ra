@@ -151,7 +151,14 @@
          term :: ra_term()}).
 
 %% WAL defaults
--define(WAL_MAX_SIZE_BYTES, 512 * 1024 * 1024).
+-define(WAL_DEFAULT_MAX_SIZE_BYTES, 256 * 1000 * 1000).
+-define(WAL_DEFAULT_MAX_BATCH_SIZE, 8192).
+%% define a minimum allowable wal size. If anyone tries to set a really small
+%% size that is smaller than the logical block size the pre-allocation code may
+%% fail
+-define(WAL_MIN_SIZE, 65536).
+%% The size of each WAL file chunk that is processed at a time during recovery
+-define(WAL_RECOVERY_CHUNK_SIZE, 33554432).
 
 %% logging shim
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).

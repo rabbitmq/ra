@@ -20,17 +20,9 @@
 
 -include("ra.hrl").
 
--define(MAX_SIZE_BYTES, 512 * 1000 * 1000).
--define(METRICS_WINDOW_SIZE, 100).
 -define(CURRENT_VERSION, 1).
 -define(MAGIC, "RAWA").
 -define(HEADER_SIZE, 5).
-%% define a minimum allowable wal size. If anyone tries to set a really small
-%% size that is smaller than the logical block size the pre-allocation code may
-%% fail
--define(MIN_WAL_SIZE, 65536).
-%% The size of each WAL file chunk that is processed at a time during recovery
--define(RECOVERY_CHUNK_SIZE, 33554432).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
@@ -68,8 +60,8 @@
                dir :: string(),
                segment_writer = ra_log_segment_writer :: atom(),
                compute_checksums = false :: boolean(),
-               max_size_bytes = ?MAX_SIZE_BYTES :: non_neg_integer(),
-               recovery_chunk_size = ?RECOVERY_CHUNK_SIZE :: non_neg_integer(),
+               max_size_bytes :: non_neg_integer(),
+               recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
                counter :: counters:counters_ref()
@@ -78,7 +70,7 @@
 -record(wal, {fd :: maybe(file:io_device()),
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
-              max_size = ?MAX_SIZE_BYTES :: non_neg_integer()
+              max_size :: non_neg_integer()
               }).
 
 -record(state, {conf = #conf{},
@@ -210,7 +202,7 @@ init(#{dir := Dir} = Conf0) ->
                  dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
-                 max_size_bytes = max(?MIN_WAL_SIZE, MaxWalSize),
+                 max_size_bytes = max(?WAL_MIN_SIZE, MaxWalSize),
                  recovery_chunk_size = RecoveryChunkSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
@@ -812,8 +804,8 @@ validate_checksum(Checksum, Idx, Term, Data) ->
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
-                 max_size_bytes => ?WAL_MAX_SIZE_BYTES,
-                 recovery_chunk_size => ?RECOVERY_CHUNK_SIZE,
+                 max_size_bytes => ?WAL_DEFAULT_MAX_SIZE_BYTES,
+                 recovery_chunk_size => ?WAL_RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
                  write_strategy => default,
                  sync_method => datasync}, Conf).

@@ -19,9 +19,10 @@ start_link(Conf) ->
 init([WalConf0]) ->
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     MaxSizeBytes = application:get_env(ra, wal_max_size_bytes,
-                                       ?WAL_MAX_SIZE_BYTES),
+                                       ?WAL_DEFAULT_MAX_SIZE_BYTES),
     ComputeChecksums = application:get_env(ra, wal_compute_checksums, true),
-    WalMaxBatchSize = application:get_env(ra, wal_max_batch_size, 32768),
+    WalMaxBatchSize = application:get_env(ra, wal_max_batch_size,
+                                          ?WAL_DEFAULT_MAX_BATCH_SIZE),
     Strategy = application:get_env(ra, wal_write_strategy, default),
     SyncMethod = application:get_env(ra, wal_sync_method, datasync),
     WalConf = maps:merge(#{compute_checksums => ComputeChecksums,
