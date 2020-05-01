@@ -725,6 +725,7 @@ aux_and_machine_monitor_same_node(Config) ->
               flush(),
               exit(got_down_machine)
     end,
+    ra:delete_cluster(Cluster),
     ok.
 
 aux_and_machine_monitor_leader_change(Config) ->
