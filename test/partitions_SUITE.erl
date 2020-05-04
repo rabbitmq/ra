@@ -133,7 +133,7 @@ do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
     Remaining =:= [].
 
 validate_machine_state(Servers) ->
-    validate_machine_state(Servers, 10).
+    validate_machine_state(Servers, 20).
 
 validate_machine_state(Servers, 0) ->
     MacStates = [begin
@@ -270,7 +270,8 @@ make_server_config(Name, Nodes, Node, Machine) ->
       log_init_args =>
       #{uid => atom_to_binary(Name, utf8)},
       machine =>  Machine,
-      await_condition_timeout => 5
+      await_condition_timeout => 5,
+      tick_timeout => 500
      }.
 
 run_proper(Fun, Args, NumTests) ->
