@@ -162,6 +162,17 @@ of low priority commands that are added to the log each flush cycle. Default: 25
 ]
 ```
 
+### Logging
+
+Ra will use default OTP `logger` by default, unless `logger_module` configuration key is used to override.
+
+To change log level to `debug` for all applications, use
+
+``` erl
+logger:set_primary_config(level, debug).
+```
+
+
 ## Copyright and License
 
 (c) 2017-2020, VMware Inc or its affiliates.
