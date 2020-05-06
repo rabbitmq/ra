@@ -15,10 +15,14 @@ ct.coverdata
 test/ct.cover.spec
 _build
 
-rabbitmq_rtopic_exchange.d
+ra.d
 *.plt
 *.d
 
 *.jar
 
-
+# Ra node runtime artifacts
+config
+*.dets
+*.wal
+*.segment
