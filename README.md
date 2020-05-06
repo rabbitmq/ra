@@ -43,7 +43,27 @@ The example below assumes a few things:
    Therefore the naming scheme is `ra{N}@{hostname}`. This is not a Ra requirement so you are
    welcome to use different node names and update the code accordingly.
 
+Erlang nodes can be started using `rebar3 shell --name {node name}`. They will have Ra modules
+on code path:
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra1@hostname.local
+```
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra2@hostname.local
+```
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra3@hostname.local
+```
+
 After Ra nodes form a cluster, state machine commands can be performed.
+
+Here's what a small example looks like:
 
 ``` erlang
 %% The Ra application has to be started before it can be used.
