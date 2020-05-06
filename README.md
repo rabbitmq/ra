@@ -33,6 +33,22 @@ The following Raft features are implemented:
 Ra requires Erlang/OTP 21.3+. Erlang 22+ is **highly recommended**
 because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/).
 
+## Design Goals
+
+ * Low footprint: use as few resources as possible, avoid process tree explosion
+ * Able to run thousands of `ra` clusters within an Erlang node
+ * Provide adequate performance for use as a basis for a distributed data service
+
+## Use Cases
+
+This library is primarily developed as the foundation for replication layer for
+replicated queues in a future version of RabbitMQ. The design it aims to replace uses
+a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
+which has two major shortcomings:
+
+ * Replication algorithm is linear
+ * Failure recovery procedure requires expensive topology changes
+
 ## Smallest Possible Usage Example
 
 The example below assumes a few things:
@@ -108,33 +124,19 @@ the `ra_machine` behaviour.
 A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store) is available
 in a separate repository.
 
-## Design Goals
-
- * Low footprint: use as few resources as possible, avoid process tree explosion
- * Able to run thousands of `ra` clusters within an Erlang node
- * Provide adequate performance for use as a basis for a distributed data service
-
-## Use Cases
-
-This library is primarily developed as the foundation for replication layer for
-replicated queues in a future version of RabbitMQ. The design it aims to replace uses
-a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
-which has two major shortcomings:
-
- * Replication algorithm is linear
- * Failure recovery procedure requires expensive topology changes
 
 ## Documentation
 
-* API docs: https://rabbitmq.github.io/ra/
+* [API reference](https://rabbitmq.github.io/ra/)
 * How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 * Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
 
 ### Examples
 
-A number of examples can be found in a [separate repository](https://github.com/rabbitmq/ra-examples).
+* [Ra-based key/value store](https://github.com/rabbitmq/ra-kv-store)
 
-## Configuration
+
+## Configuration Reference
 
 * `data_dir`:
 
