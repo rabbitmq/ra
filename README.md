@@ -103,10 +103,17 @@ ErlangNodes = [ra1@hostname.local, ra2@hostname.local, ra3@hostname.local],
 %% used to address Ra nodes in Ra API functions.
 ServerIds = [{quick_start, N} || N <- ErlangNodes],
 
-%% Start a simple distributed addition state machine with an initial state of 0
 ClusterName = quick_start,
 %% State machine that implements the logic
 Machine = {simple, fun erlang:'+'/2, 0},
+
+%% Start a Ra cluster  with an addition state machine that has an initial state of 0.
+%% It's sufficient to invoke this function only on one Erlang node. For example, this
+%% can be a "designated seed" node or the node that was first to start and did not discover
+%% any peers after a few retries.
+%%
+%% Repeated startup attempts will fail even if the cluster is formed, has elected a leader
+%% and is fully functional.
 {ok, ServersStarted, _ServersNotStarted} = ra:start_cluster(ClusterName, Machine, ServerIds),
 
 %% Add a number to the state machine.
