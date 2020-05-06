@@ -36,23 +36,36 @@ because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Hi
 ## Quick start
 
 ```erlang
-%% First we have to start the Ra application
+%% The Ra application has to be started before it can be used.
 ra:start(),
 
-%% All servers in a Ra cluster are named processes.
-%% Create some Server Ids to pass to the configuration
-ErlangNodes = [ra@node1, ra@node2, ra@node3],
+%% All servers in a Ra cluster are named processes on Erlang nodes.
+%% The Erlang nodes must have distribution enabled and be able to
+%% communicate with each other.
+%% See https://learnyousomeerlang.com/distribunomicon if you are new to Erlang/OTP.
+
+%% These Erlang nodes will host Ra nodes. They are the "seed" and assumed to
+%% be running or come online shortly after Ra cluster formation is started with ra:start_cluster/3.
+ErlangNodes = [ra1@hostname.local, ra2@hostname.local, ra3@hostname.local],
+
+%% This will check for Erlang distribution connectivity. If Erlang nodes
+%% cannot communicate with each other, Ra nodes would not be able to cluster or communicate
+%% either.
+[io:format("Attempting to communicate with node ~s, response: ~s~n", [N, net_adm:ping(N)]) || N <- ErlangNodes],
+
+%% Create some Ra server IDs to pass to the configuration. These IDs will be
+%% used to address Ra nodes in Ra API functions.
 ServerIds = [{quick_start, N} || N <- ErlangNodes],
 
-%% start a simple distributed addition state machine with an initial state of 0
+%% Start a simple distributed addition state machine with an initial state of 0
 ClusterName = quick_start,
-{ok, ServersStarted, ServersNotStarted} = ra:start_cluster(ClusterName, {simple, fun erlang:'+'/2, 0}, ServerIds),
+{ok, ServersStarted, _ServersNotStarted} = ra:start_cluster(ClusterName, {simple, fun erlang:'+'/2, 0}, ServerIds),
 
-%% Add a number to the state machine
-%% Simple state machines always return the full state after each operation
+%% Add a number to the state machine.
+%% Simple state machines always return the full state after each operation.
 {ok, StateMachineResult, LeaderId} = ra:process_command(hd(ServersStarted), 5),
 
-%% use the leader id from the last command result for the next
+%% Use the leader id from the last command result for the next one
 {ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
