@@ -101,8 +101,12 @@ Machine = {simple, fun erlang:'+'/2, 0},
 {ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
-"Simple" state machines like the above can only take you so far. See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
-for how to write a state machine by implementing the `ra_machine` behaviour.
+See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
+for how to write more sophisiticated state machines by implementing
+the `ra_machine` behaviour.
+
+A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store) is available
+in a separate repository.
 
 ## Design Goals
 
