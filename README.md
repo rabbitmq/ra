@@ -33,9 +33,19 @@ The following Raft features are implemented:
 Ra requires Erlang/OTP 21.3+. Erlang 22+ is **highly recommended**
 because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/).
 
-## Quick start
+## Smallest Possible Usage Example
 
-```erlang
+The example below assumes a few things:
+
+ * You are familiar with the basics of [distributed Erlang](https://learnyousomeerlang.com/distribunomicon)
+ * Three Erlang nodes are started on the local machine or reachable resolvable hosts.
+   Their names are `ra1@hostname.local`, `ra2@hostname.local`, and `ra3@hostname.local` in the example below but your actual hostname will be different.
+   Therefore the naming scheme is `ra{N}@{hostname}`. This is not a Ra requirement so you are
+   welcome to use different node names and update the code accordingly.
+
+After Ra nodes form a cluster, state machine commands can be performed.
+
+``` erlang
 %% The Ra application has to be started before it can be used.
 ra:start(),
 
