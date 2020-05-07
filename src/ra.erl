@@ -535,7 +535,7 @@ leave_and_terminate(ServerId) ->
 %% @param ServerId the ra server to remove
 %% @see leave_and_terminate/3
 %% @end
--spec leave_and_terminate(ra_server_id(), ra_server_id()) ->
+-spec leave_and_terminate(ra_server_id() | [ra_server_id()], ra_server_id()) ->
     ok | timeout | {error, noproc}.
 leave_and_terminate(ServerRef, ServerId) ->
     leave_and_terminate(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
@@ -546,7 +546,8 @@ leave_and_terminate(ServerRef, ServerId) ->
 %% @param Timeout timeout to use
 %% @see leave_and_terminate/2
 %% @end
--spec leave_and_terminate(ra_server_id(), ra_server_id(), timeout()) ->
+-spec leave_and_terminate(ra_server_id() | [ra_server_id()],
+                          ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
 leave_and_terminate(ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
@@ -792,10 +793,10 @@ local_query(ServerId, QueryFun, Timeout) ->
 %% The leader state may be more up-to-date compared to local state of some followers.
 %% This function may still return stale results as it reads the current state
 %% and does not wait for commands to be applied.
-%% @param ServerId the ra server id to send the query to
+%% @param ServerId the ra server id(s) to send the query to
 %% @param QueryFun the query function to run
 %% @end
--spec leader_query(ServerId :: ra_server_id(),
+-spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun()) ->
     ra_server_proc:ra_leader_call_ret(term()) |
     {ok, {ra_idxterm(), term()}, not_known}.
@@ -803,12 +804,12 @@ leader_query(ServerId, QueryFun) ->
     leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leader_query/2' but accepts a custom timeout.
-%% @param ServerId the ra server id to send the query to
+%% @param ServerId the ra server id(s) to send the query to
 %% @param QueryFun the query function to run
 %% @param Timeout the timeout to use
 %% @see leader_query/2
 %% @end
--spec leader_query(ServerId :: ra_server_id(),
+-spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun(),
                    Timeout :: timeout()) ->
     ra_server_proc:ra_leader_call_ret(term()) |
@@ -822,22 +823,22 @@ leader_query(ServerId, QueryFun, Timeout) ->
 %% Consistency guarantee is that the query will return result containing
 %% at least all changes, committed before this query is issued.
 %% This may include changes which were committed while the query is running.
-%% @param ServerId the ra server id to send the query to
+%% @param ServerId the ra server id(s) to send the query to
 %% @param QueryFun the query function to run
 %% @end
--spec consistent_query(ServerId :: ra_server_id(),
+-spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun()) ->
     ra_server_proc:ra_leader_call_ret(term()).
 consistent_query(ServerId, QueryFun) ->
     consistent_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `consistent_query/2' but accepts a custom timeout.
-%% @param ServerId the ra server id to send the query to
+%% @param ServerId the ra server id(s) to send the query to
 %% @param QueryFun the query function to run
 %% @param Timeout the timeout to use
 %% @see consistent_query/2
 %% @end
--spec consistent_query(ServerId :: ra_server_id(),
+-spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
     ra_server_proc:ra_leader_call_ret(term()).
@@ -845,28 +846,28 @@ consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, consistent, Timeout).
 
 %% @doc Returns a list of cluster members
-%% @param ServerId the Ra server to send the query to
+%% @param ServerId the Ra server(s) to send the query to
 %% @end
--spec members(ra_server_id()) ->
+-spec members(ra_server_id() | [ra_server_id()]) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId) ->
     members(ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Returns a list of cluster members
-%% @param ServerId the Ra server to send the query to
+%% @param ServerId the Ra server(s) to send the query to
 %% @param Timeout the timeout to use
 %% @end
--spec members(ra_server_id(), timeout()) ->
+-spec members(ra_server_id() | [ra_server_id()], timeout()) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
--spec initial_members(ra_server_id()) ->
+-spec initial_members(ra_server_id() | [ra_server_id()]) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId) ->
     initial_members(ServerId, ?DEFAULT_TIMEOUT).
 
--spec initial_members(ra_server_id(), timeout()) ->
+-spec initial_members(ra_server_id() | [ra_server_id()], timeout()) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, initial_members, Timeout).
