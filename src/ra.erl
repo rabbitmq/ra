@@ -121,7 +121,7 @@ start_in(DataDir) ->
 
 %% @doc Restarts a previously successfully started ra server
 %% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, Error}' when error can be
+%% @returns `{ok | error, Error}' where error can be
 %% `not_found' or `name_not_registered' when the ra server has never before
 %% been started on the Erlang node.
 %% @end
@@ -650,7 +650,7 @@ overview() ->
 %% @end
 -spec process_command(ServerId :: ra_server_id() | [ra_server_id()],
                       Command :: term(),
-                      Timeout :: non_neg_integer()) ->
+                      Timeout :: timeout()) ->
     {ok, Reply :: term(), Leader :: ra_server_id()} |
     {error, term()} |
     {timeout, ra_server_id()}.
@@ -780,7 +780,8 @@ local_query(ServerId, QueryFun) ->
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun(),
                   Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}) |
+    {ok, {ra_idxterm(), term()}, not_known}.
 local_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, local, Timeout).
 
@@ -796,7 +797,8 @@ local_query(ServerId, QueryFun, Timeout) ->
 %% @end
 -spec leader_query(ServerId :: ra_server_id(),
                    QueryFun :: query_fun()) ->
-    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+    ra_server_proc:ra_leader_call_ret(term()) |
+    {ok, {ra_idxterm(), term()}, not_known}.
 leader_query(ServerId, QueryFun) ->
     leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -809,7 +811,8 @@ leader_query(ServerId, QueryFun) ->
 -spec leader_query(ServerId :: ra_server_id(),
                    QueryFun :: query_fun(),
                    Timeout :: timeout()) ->
-    {ok, {ra_idxterm(), term()}, ra_server_id() | not_known}.
+    ra_server_proc:ra_leader_call_ret(term()) |
+    {ok, {ra_idxterm(), term()}, not_known}.
 leader_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, leader, Timeout).
 
@@ -859,7 +862,7 @@ members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
 -spec initial_members(ra_server_id()) ->
-    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+    ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId) ->
     initial_members(ServerId, ?DEFAULT_TIMEOUT).
 
@@ -872,7 +875,7 @@ initial_members(ServerId, Timeout) ->
 %% Returns `already_leader' if the transfer targer is already the leader.
 %% @end
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
-    ok | already_leader.
+    ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 
