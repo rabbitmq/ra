@@ -155,9 +155,9 @@ stop_server(ServerId) ->
 %% @doc Deletes a ra server
 %% The server is forcefully deleted.
 %% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, nodedown}'
+%% @returns `ok | {error, nodedown} | {badrpc, Reason}'
 %% @end
--spec force_delete_server(ServerId :: ra_server_id()) -> ok | {error, term()}.
+-spec force_delete_server(ServerId :: ra_server_id()) -> ok | {error, term()} | {badrpc, term()}.
 force_delete_server(ServerId) ->
     ra_server_sup_sup:delete_server(ServerId).
 
