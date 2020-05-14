@@ -173,7 +173,6 @@
                               tick_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
-                              low_priority_commands_flush_size => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]}}.
 
 -type config() :: ra_server_config().
