@@ -160,8 +160,8 @@ cast_command(ServerId, Priority, Cmd) ->
 
 -spec query(server_loc(), query_fun(),
             local | consistent | leader, timeout()) ->
-    ra_server_proc:ra_leader_call_ret(term())
-    | {ok, Reply :: term(), not_known}.
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+    | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 query(ServerLoc, QueryFun, local, Timeout) ->
     statem_call(ServerLoc, {local_query, QueryFun}, Timeout);
 query(ServerLoc, QueryFun, leader, Timeout) ->
