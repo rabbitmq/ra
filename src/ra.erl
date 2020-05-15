@@ -768,7 +768,7 @@ pipeline_command(ServerId, Command) ->
 %% @end
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}).
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}).
 local_query(ServerId, QueryFun) ->
     local_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -781,8 +781,8 @@ local_query(ServerId, QueryFun) ->
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun(),
                   Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), term()}) |
-    {ok, {ra_idxterm(), term()}, not_known}.
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
+    {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 local_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, local, Timeout).
 
@@ -798,8 +798,8 @@ local_query(ServerId, QueryFun, Timeout) ->
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret(term()) |
-    {ok, {ra_idxterm(), term()}, not_known}.
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
+    {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 leader_query(ServerId, QueryFun) ->
     leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -812,8 +812,8 @@ leader_query(ServerId, QueryFun) ->
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun(),
                    Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret(term()) |
-    {ok, {ra_idxterm(), term()}, not_known}.
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
+    {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 leader_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, leader, Timeout).
 
@@ -828,7 +828,7 @@ leader_query(ServerId, QueryFun, Timeout) ->
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret(term()).
+    ra_server_proc:ra_leader_call_ret(Reply :: term()).
 consistent_query(ServerId, QueryFun) ->
     consistent_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -841,7 +841,7 @@ consistent_query(ServerId, QueryFun) ->
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret(term()).
+    ra_server_proc:ra_leader_call_ret(Reply :: term()).
 consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, consistent, Timeout).
 
