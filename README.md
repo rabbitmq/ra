@@ -153,7 +153,7 @@ in a separate repository.
     </tr>
     <tr>
         <td>data_dir</td>
-        <td>A directory name where Ra node will store it's data</td>
+        <td>A directory name where Ra node will store its data</td>
         <td>Local directory path</td>
     </tr>
     <tr>
@@ -166,7 +166,7 @@ in a separate repository.
     </tr>
     <tr>
         <td>wal_max_size_bytes</td>
-        <td>The maximum size of the WAL in bytes. Default: 512Mb.</td>
+        <td>The maximum size of the WAL in bytes. Default: 512 MB</td>
         <td>Positive integer</td>
     </tr>
     <tr>
@@ -186,7 +186,7 @@ in a separate repository.
                 </li>
             </ul>
         </td>
-        <td>Enumeration: default | o_sync</td>
+        <td>Enumeration: <code>default</code> | <code>o_sync</code></td>
     </tr>
     <tr>
         <td>wal_sync_method</td>
@@ -203,7 +203,7 @@ in a separate repository.
                 </li>
             </ul>
         </td>
-        <td>Enumeration: datasync | sync</td>
+        <td>Enumeration: <code>datasync</code> | <code>sync</code></td>
     </tr>
     <tr>
         <td>logger_module</td>
