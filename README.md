@@ -174,66 +174,59 @@ in a separate repository.
         <td>Indicate whether the wal should compute and validate checksums. Default: `true`</td>
         <td>Boolean</td>
     </tr>
-
     <tr>
         <td>wal_write_strategy</td>
         <td>
             <ul>
                 <li>
-                    default: used by default. Write system calls are delayed until a buffer is
-                    due to be flushed. Then it writes all the data in a single call then fsyncs. Fastest option but incurs some additional memory use.
+                    <code>default</code>: used by default. <code>write(2)</code> system calls are delayed until a buffer is due to be flushed. Then it writes all the data in a single call then <code>fsync</code>s. Fastest option but incurs some additional memory use.
                 </li>
                 <li>
-                    o_sync: Like default but will try to open the file with O_SYNC and thus wont need the additional `fsync(2)` system call. If it fails to open the file with this flag this mode falls back to default.
+                    <code>o_sync</code>: Like default but will try to open the file with O_SYNC and thus wont need the additional <code>fsync(2)</code> system call. If it fails to open the file with this flag this mode falls back to default.
                 </li>
             </ul>
         </td>
         <td>Enumeration: default | o_sync</td>
     </tr>
-
     <tr>
         <td>wal_sync_method</td>
         <td>
             <ul>
                 <li>
-                    datasync: used by default. Uses the fdatasync system call after each batch. This avoids flushing
+                    <code>datasync</code>: used by default. Uses the <code>fdatasync(2)</code> system call after each batch. This avoids flushing
                     file meta-data after each write batch and thus may be slightly faster than sync on some system. When datasync is configured the wal will try to pre-allocate the entire WAL file.
-                    Not all systems support fdatasync. Please consult system
+                    Not all systems support <code>fdatasync</code>. Please consult system
                     documentation and configure it to use sync instead if it is not supported.
                 </li>
                 <li>
-                    sync: Uses the fsync system call after each batch.
+                    <code>sync</code>: uses the fsync system call after each batch.
                 </li>
             </ul>
         </td>
         <td>Enumeration: datasync | sync</td>
     </tr>
-
     <tr>
         <td>logger_module</td>
         <td>
-            Allows the configuration of a custom logger module. The default is `logger`.
+            Allows the configuration of a custom logger module. The default is logger.
             The module must implement a function of the same signature
-            as [logger:log/4](http://erlang.org/doc/man/logger.html#log-4) (the variant
-            that takes a format not the variant that takes a fun).
+            as <a href="http://erlang.org/doc/man/logger.html#log-4">logger:log/4</a> (the variant that takes a format not the variant that takes a function).
         </td>
         <td>Atom</td>
     </tr>
-
     <tr>
         <td>wal_max_batch_size</td>
         <td>
-            Controls the internal max batch size that the WAL will accept. Higher numbers may result in higher memory use. Default: 32768.
+            Controls the internal max batch size that the WAL will accept.
+            Higher numbers may result in higher memory use. Default: 32768.
         </td>
         <td>Positive integer</td>
     </tr>
-
     <tr>
         <td>metrics_key</td>
         <td>Metrics key. The key used to write metrics into the ra_metrics table.</td>
         <td>Atom</td>
     </tr>
-
     <tr>
         <td>low_priority_commands_flush_size</td>
         <td>
