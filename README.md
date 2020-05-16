@@ -152,12 +152,12 @@ in a separate repository.
         <td>Data Type</td>
     </tr>
     <tr>
-        <td>`data_dir`</td>
+        <td>data_dir</td>
         <td>A directory name where Ra node will store it's data</td>
         <td>Local directory path</td>
     </tr>
     <tr>
-        <td>`wal_data_dir`</td>
+        <td>wal_data_dir</td>
         <td>
             A directory name where Ra will store it's WAL (Write Ahead Log) data.
             If unspecified, `data_dir` is used.
@@ -165,56 +165,52 @@ in a separate repository.
         <td>Local directory path</td>
     </tr>
     <tr>
-        <td>`wal_max_size_bytes`</td>
+        <td>wal_max_size_bytes</td>
         <td>The maximum size of the WAL in bytes. Default: 512Mb.</td>
         <td>Positive integer</td>
     </tr>
     <tr>
-        <td>`wal_compute_checksums`</td>
+        <td>wal_compute_checksums</td>
         <td>Indicate whether the wal should compute and validate checksums. Default: `true`</td>
         <td>Boolean</td>
     </tr>
 
     <tr>
-        <td>`wal_write_strategy`</td>
+        <td>wal_write_strategy</td>
         <td>
-            
             <ul>
                 <li>
-                    `default`: used by default. `write(2)` system calls are delayed until a buffer is
-                    due to be flushed. Then it writes all the data in a single call then fsyncs.
-                    Fastest but incurs some additional memory use.
+                    default: used by default. Write system calls are delayed until a buffer is
+                    due to be flushed. Then it writes all the data in a single call then fsyncs. Fastest option but incurs some additional memory use.
                 </li>
                 <li>
-                    `o_sync`: Like `default` but will try to open the file with `O_SYNC` and thus wont
-                    need the additional `fsync(2)` system call. If it fails to open the file with this
-                    flag this mode falls back to `default`.
+                    o_sync: Like default but will try to open the file with O_SYNC and thus wont need the additional `fsync(2)` system call. If it fails to open the file with this flag this mode falls back to default.
                 </li>
             </ul>
         </td>
-        <td>Enumeration: `default | o_sync`</td>
+        <td>Enumeration: default | o_sync</td>
     </tr>
 
     <tr>
-        <td>`wal_sync_method`</td>
+        <td>wal_sync_method</td>
         <td>
             <ul>
                 <li>
-                    `datasync`: used by default. Uses the `fdatasync` system call after each batch. This avoids flushing
-                    file meta-data after each write batch and thus may be slightly faster than `sync` on some system. When datasync is configured the wal will try to pre-allocate the entire WAL file.
+                    datasync: used by default. Uses the fdatasync system call after each batch. This avoids flushing
+                    file meta-data after each write batch and thus may be slightly faster than sync on some system. When datasync is configured the wal will try to pre-allocate the entire WAL file.
                     Not all systems support fdatasync. Please consult system
                     documentation and configure it to use sync instead if it is not supported.
                 </li>
                 <li>
-                    `sync`: Uses the fsync system call after each batch.
+                    sync: Uses the fsync system call after each batch.
                 </li>
             </ul>
         </td>
-        <td></td>
+        <td>Enumeration: datasync | sync</td>
     </tr>
 
     <tr>
-        <td>`logger_module`</td>
+        <td>logger_module</td>
         <td>
             Allows the configuration of a custom logger module. The default is `logger`.
             The module must implement a function of the same signature
@@ -225,25 +221,25 @@ in a separate repository.
     </tr>
 
     <tr>
-        <td>`wal_max_batch_size`</td>
+        <td>wal_max_batch_size</td>
         <td>
-            Controls the internal max batch size that the WAL will accept. Higher numbers may result in higher memory use. Default: `32768`.
+            Controls the internal max batch size that the WAL will accept. Higher numbers may result in higher memory use. Default: 32768.
         </td>
-        <td></td>
+        <td>Positive integer</td>
     </tr>
 
     <tr>
-        <td>`metrics_key`</td>
-        <td>Metrics key. The key used to write metrics into the `ra_metrics` table.</td>
+        <td>metrics_key</td>
+        <td>Metrics key. The key used to write metrics into the ra_metrics table.</td>
         <td>Atom</td>
     </tr>
 
     <tr>
-        <td>`low_priority_commands_flush_size`</td>
+        <td>low_priority_commands_flush_size</td>
         <td>
             When commands are pipelined using the low priority mode Ra tries to hold them
             back in favour of normal priority commands. This setting determines the number
-            of low priority commands that are added to the log each flush cycle. Default: `25`
+            of low priority commands that are added to the log each flush cycle. Default: 25
         </td>
         <td>Positive integer</td>
     </tr>
