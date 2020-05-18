@@ -19,14 +19,20 @@ The process is fairly standard and straightforward:
 
 Ra uses [erlang.mk](https://erlang.mk/) for build system. Build it with
 
-    make
+``` shell
+make
+```
 
 Clean compilation artifacts with
 
-    make clean
+``` shell
+make clean
+```
 
 ## Running Tests
 
-    make tests
+```
+make tests
+```
 
 and then open `logs/index.html` to see test run results.
