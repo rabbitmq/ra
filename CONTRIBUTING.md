@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ra is a project under heavy development, so consider discussing your idea with
+Ra is still a maturing project under development, so consider discussing your idea with
 the maintainers on the RabbitMQ mailing list, rabbitmq-users.
 
 The process is fairly standard and straightforward:
