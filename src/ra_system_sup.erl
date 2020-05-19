@@ -33,7 +33,7 @@ init([]) ->
                                start => {ra_server_sup_sup, start_link, []}},
             {ok, {SupFlags, [Ets, RaLogSup, RaServerSupSup]}};
         {error, Code} = Error ->
-            ?ERR("Failed to create Ra data directory, filesystem operation error: ~p~n", [Code]),
+            ?ERR("Failed to create Ra data directory, file system operation error: ~p~n", [Code]),
             Error
     end.
 
