@@ -236,6 +236,15 @@ in a separate repository.
         </td>
         <td>Positive integer</td>
     </tr>
+    <tr>
+        <td>to_iodata_mfa</td>
+        <td>
+            Allows the function used for binary serialisation in the WAL and
+            segment writer to be configured. Needs to return an iodata in the
+            erlang binary format. Default: erlang:term_to_binary/2
+        </td>
+        <td>{Module, Function, AdditionalArgsList}</td>
+    </tr>
 </table>
 
 ## Logging
