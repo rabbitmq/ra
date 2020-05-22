@@ -37,6 +37,7 @@ all_tests() ->
 groups() ->
     [
      {default, [], all_tests()},
+     {iovec, [], all_tests()},
      %% uses fsync instead of the default fdatasync
      {fsync, [], all_tests()},
      {o_sync, [], all_tests()}
@@ -57,6 +58,9 @@ init_per_group(Group, Config) ->
                 {sync, default};
             o_sync ->
                 {datasync, Group};
+            iovec ->
+                ok = application:set_env(ra, to_iodata_mfa, {erlang, term_to_iovec, []}),
+                {datasync, default};
             default ->
                 {datasync, Group}
         end,

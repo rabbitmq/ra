@@ -4,7 +4,8 @@
          data_dir/0,
          server_data_dir/1,
          wal_data_dir/0,
-         configure_logger/1
+         configure_logger/1,
+         to_iodata_mfa/0
          ]).
 
 -export_type([
@@ -37,3 +38,11 @@ wal_data_dir() ->
 %% use this when interacting with Ra from a node without Ra running on it
 configure_logger(Module) ->
     persistent_term:put('$ra_logger', Module).
+
+to_iodata_mfa() ->
+    case application:get_env(ra, to_iodata_mfa) of
+        {ok, MFA} ->
+            MFA;
+        undefined ->
+            {erlang, term_to_binary, []}
+    end.

@@ -24,6 +24,7 @@
 
 -record(state, {data_dir :: file:filename(),
                 counter :: counters:counters_ref(),
+                to_iodata_mfa :: {module(), atom(), list()},
                 segment_conf = #{} :: ra_log_segment:ra_log_segment_options()}).
 
 -include("ra.hrl").
@@ -104,6 +105,7 @@ init([#{data_dir := DataDir} = Conf]) ->
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{data_dir = DataDir,
                 counter = CRef,
+                to_iodata_mfa = ra_env:to_iodata_mfa(),
                 segment_conf = SegmentConf}}.
 
 handle_call(await, _From, State) ->
@@ -213,7 +215,7 @@ get_overview(#state{data_dir = Dir,
 
 do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
-                  segment_conf = SegConf}) ->
+                  segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
     case open_file(Dir, SegConf) of
@@ -226,7 +228,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
             ok;
         Segment0 ->
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
-                                   Segment0, SegConf) of
+                                   Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
                            directory ~s disappeared whilst writing~n",
@@ -289,23 +291,24 @@ clean_closed_mem_tables(UId, Tid) ->
          true = ets:delete_object(ra_log_closed_mem_tables, O)
      end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
-append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, SegConf) ->
+append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
     StartIdx = start_index(UId, StartIdx0),
     % EndIdx + 1 because FP
-    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
+    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], State).
 
 append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _)
   when StartIdx >= EndIdx ->
     {Seg, Closed};
-append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
+append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed,
+                  #state{to_iodata_mfa = {M, F, A}} = State) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
-    Data = term_to_binary(Data0),
+    Data = M:F(Data0, A),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
-            append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
+            append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
         {error, full} ->
             % close and open a new segment
-            case open_successor_segment(Seg0, SegConf) of
+            case open_successor_segment(Seg0, State#state.segment_conf) of
                 undefined ->
                     %% a successor cannot be opened - this is most likely due
                     %% to the directory having been deleted.
@@ -319,7 +322,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
                     StartIdx = start_index(UId, Idx),
                     % recurse
                     append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
-                                      [Seg0 | Closed], SegConf)
+                                      [Seg0 | Closed], State)
             end;
         {error, Posix} ->
             FileName = ra_log_segment:filename(Seg0),

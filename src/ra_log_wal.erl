@@ -64,7 +64,8 @@
                recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
-               counter :: counters:counters_ref()
+               counter :: counters:counters_ref(),
+               to_iodata_mfa :: {module(), atom(), list()}
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -206,7 +207,8 @@ init(#{dir := Dir} = Conf0) ->
                  recovery_chunk_size = RecoveryChunkSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
-                 counter = CRef},
+                 counter = CRef,
+                 to_iodata_mfa = ra_env:to_iodata_mfa()},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -321,12 +323,12 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
     end.
 
 write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
-           #state{conf = #conf{compute_checksums = ComputeChecksum},
+           #state{conf = #conf{compute_checksums = ComputeChecksum} = Conf,
                   file_size = FileSize,
                   wal = #wal{max_size = MaxWalSize,
                              writer_name_cache = Cache0} = Wal} = State00) ->
-    EntryData = to_binary(Data0),
-    EntryDataLen = byte_size(EntryData),
+    EntryData = to_binary(Conf, Data0),
+    EntryDataLen = iolist_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
     % fixed overhead =
     % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
@@ -810,5 +812,5 @@ merge_conf_defaults(Conf) ->
                  write_strategy => default,
                  sync_method => datasync}, Conf).
 
-to_binary(Term) ->
-    term_to_binary(Term).
+to_binary(#conf{to_iodata_mfa = {M, F, A}}, Term) ->
+    M:F(Term, A).

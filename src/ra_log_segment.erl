@@ -133,7 +133,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 data_write_offset = ?HEADER_SIZE + IndexSize
                }}.
 
--spec append(state(), ra_index(), ra_term(), binary()) ->
+-spec append(state(), ra_index(), ra_term(), iodata()) ->
     {ok, state()} | {error, full | inet:posix()}.
 append(#state{cfg = #cfg{max_pending = PendingCount},
               pending_count = PendingCount} = State0,
@@ -157,7 +157,7 @@ append(#state{cfg = #cfg{version = Version,
     % check if file is full
     case IndexOffset < DataStart of
         true ->
-            Length = erlang:byte_size(Data),
+            Length = iolist_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = erlang:crc32(Data),
             OSize = offset_size(Version),

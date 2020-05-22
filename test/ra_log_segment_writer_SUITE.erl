@@ -32,14 +32,20 @@ all_tests() ->
 
 groups() ->
     [
-     {tests, [], all_tests()}
+     {tests, [], all_tests()},
+     {iovec, [], all_tests()}
     ].
 
+init_per_group(iovec, Config) ->
+    application:load(ra),
+    application:set_env(ra, to_iodata_mfa, {erlang, term_to_iovec, []}),
+    ra_env:configure_logger(logger),
+    Config;
 init_per_group(tests, Config) ->
     ra_env:configure_logger(logger),
     Config.
 
-end_per_group(tests, Config) ->
+end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
