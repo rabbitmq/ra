@@ -8,7 +8,7 @@ PROJECT = ra
 ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
-dep_gen_batch_server = hex 0.8.2
+dep_gen_batch_server = hex 0.8.3
 dep_aten = hex 0.5.3
 DEPS = aten gen_batch_server
 
