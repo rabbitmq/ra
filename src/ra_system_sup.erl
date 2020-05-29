@@ -32,9 +32,9 @@ init([]) ->
                                type => supervisor,
                                start => {ra_server_sup_sup, start_link, []}},
             {ok, {SupFlags, [Ets, RaLogSup, RaServerSupSup]}};
-        {error, Code} = Error ->
-            ?ERR("Failed to create Ra data directory, file system operation error: ~p~n", [Code]),
-            Error
+        {error, Code} ->
+            ?ERR("Failed to create Ra data directory at '~s', file system operation error: ~p~n", [DataDir, Code]),
+            exit({error, "Ra could not create its data directory. See the log for details."})
     end.
 
 
