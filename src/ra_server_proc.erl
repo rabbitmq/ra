@@ -442,8 +442,6 @@ leader(EventType, Msg, State0) ->
             State = send_rpcs(State2),
             case ra_server:is_fully_replicated(State#state.server_state) of
                 true ->
-                    #conf{cluster_name = ClusterName} = State#state.conf,
-                    ra_leaderboard:clear(ClusterName),
                     {stop, {shutdown, delete}, State};
                 false ->
                     next_state(terminating_leader, State, Actions)
@@ -718,8 +716,6 @@ terminating_leader(EvtType, Msg, State0) ->
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
-            #conf{cluster_name = ClusterName} = State#state.conf,
-            ra_leaderboard:clear(ClusterName),
             {stop, {shutdown, delete}, State};
         false ->
             ?DEBUG("~s: is not fully replicated after ~W~n",
@@ -747,8 +743,6 @@ terminating_follower(EvtType, Msg, State0) ->
                        end,
     case ra_server:is_fully_persisted(State#state.server_state) of
         true ->
-            #conf{cluster_name = ClusterName} = State#state.conf,
-            ra_leaderboard:clear(ClusterName),
             {stop, {shutdown, delete}, State};
         false ->
             ?DEBUG("~s: is not fully persisted after ~W~n",
@@ -820,7 +814,7 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{conf = #conf{name = Key},
+          #state{conf = #conf{name = Key, cluster_name = ClusterName},
                  server_state = ServerState} = State) ->
     ?INFO("~s: terminating with ~w in state ~w~n",
           [log_id(State), Reason, StateName]),
@@ -829,6 +823,7 @@ terminate(Reason, StateName,
     Parent = ra_directory:where_is_parent(UId),
     case Reason of
         {shutdown, delete} ->
+            catch ra_leaderboard:clear(ClusterName),
             catch ra_directory:unregister_name(UId),
             catch ra_log_meta:delete_sync(UId),
             catch ets:delete(ra_state, UId),
