@@ -3,6 +3,7 @@
 -export([
          init/0,
          record/3,
+         clear/1,
          lookup_leader/1,
          lookup_members/1,
          overview/0
@@ -16,6 +17,11 @@ init() ->
 -spec record(term(), ra:server_id(), [ra:server_id()]) -> ok.
 record(ClusterName, Leader, Members) ->
     true = ets:insert(?MODULE, {ClusterName, Leader, Members}),
+    ok.
+
+-spec clear(term()) -> ok.
+clear(ClusterName) ->
+    true = ets:delete(?MODULE, ClusterName),
     ok.
 
 -spec lookup_leader(term()) -> ra:server_id() | undefined.

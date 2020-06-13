@@ -814,7 +814,7 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{conf = #conf{name = Key},
+          #state{conf = #conf{name = Key, cluster_name = ClusterName},
                  server_state = ServerState} = State) ->
     ?INFO("~s: terminating with ~w in state ~w~n",
           [log_id(State), Reason, StateName]),
@@ -823,6 +823,7 @@ terminate(Reason, StateName,
     Parent = ra_directory:where_is_parent(UId),
     case Reason of
         {shutdown, delete} ->
+            catch ra_leaderboard:clear(ClusterName),
             catch ra_directory:unregister_name(UId),
             catch ra_log_meta:delete_sync(UId),
             catch ets:delete(ra_state, UId),
