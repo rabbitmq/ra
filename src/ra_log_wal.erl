@@ -260,13 +260,16 @@ recover_wal(Dir, #conf{segment_writer = TblWriter,
     All = [begin
                FBase = filename:basename(F),
                ?DEBUG("wal: recovering ~s", [FBase]),
-               Fd = open_at_first_record(F),
-               {Time, ok} = timer:tc(fun () ->
-                                             recover_wal_chunks(Fd, RecoveryChunkSize)
-                                     end),
-               ?DEBUG("wal: recovering ~s took ~bms", [FBase, Time div 1000]),
-               close_existing(Fd),
-               recovering_to_closed(F)
+               case open_at_first_record(F) of
+                   error -> ok;
+                   Fd ->
+                    {Time, ok} = timer:tc(fun () ->
+                                                    recover_wal_chunks(Fd, RecoveryChunkSize)
+                                            end),
+                    ?DEBUG("wal: recovering ~s took ~bms", [FBase, Time div 1000]),
+                    close_existing(Fd),
+                    recovering_to_closed(F)
+                end
            end || F <- WalFiles],
     % get all the recovered tables and insert them into closed
     Closed = lists:append([C || {C, _, _} <- All]),
@@ -677,18 +680,28 @@ open_existing(File) ->
         {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned, Data/binary>>} ->
             %% the only version currently supported
             Data;
-        {ok, <<Magic:4/binary, UnknownVersion:8/unsigned, _/binary>>} ->
-            exit({unknown_wal_file_format, Magic, UnknownVersion})
+        _ ->
+            ?WARN("Will delete the corrupt WAL file: ~p.", [File]),
+            _ = file:delete(File),
+            <<>>
     end.
 
 open_at_first_record(File) ->
-    {ok, Fd} = file:open(File, [read, binary, raw]),
-    case file:read(Fd, 5) of
-        {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>} ->
-            %% the only version currently supported
-            Fd;
-        {ok, <<Magic:4/binary, UnknownVersion:8/unsigned>>} ->
-            exit({unknown_wal_file_format, Magic, UnknownVersion})
+    case file:open(File, [read, binary, raw]) of
+        {ok, Fd} ->
+            case file:read(Fd, 5) of
+                {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>} ->
+                    %% the only version currently supported
+                    Fd;
+                _ ->
+                    ?WARN("Will delete the corrupt WAL file: ~p.", [File]),
+                    _ = file:delete(File),
+                    error
+            end;
+        _ ->
+            ?WARN("Failed to open a WAL file at ~p. Will delete it.", [File]),
+            _ = file:delete(File),
+            error
     end.
 
 close_existing(Fd) ->
