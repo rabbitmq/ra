@@ -92,7 +92,7 @@ ra:start(),
 
 %% These Erlang nodes will host Ra nodes. They are the "seed" and assumed to
 %% be running or come online shortly after Ra cluster formation is started with ra:start_cluster/3.
-ErlangNodes = [ra1@hostname.local, ra2@hostname.local, ra3@hostname.local],
+ErlangNodes = ['ra1@hostname.local', 'ra2@hostname.local', 'ra3@hostname.local'],
 
 %% This will check for Erlang distribution connectivity. If Erlang nodes
 %% cannot communicate with each other, Ra nodes would not be able to cluster or communicate
