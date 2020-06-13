@@ -402,11 +402,11 @@ start_server(Conf) ->
             {error, invalid_uid}
     end.
 
-%% @doc Deletes a ra cluster in an orderly fashion
-%% This function commits and end of life command which after each server applies
-%% it will cause that server to shut down and delete all it's data.
+%% @doc Deletes a ra cluster in an orderly fashion.
+%% This function commits an end of life command which after each server applies
+%% it will cause that server to shut down and delete all its data.
 %% The leader will stay up until it has successfully replicated the end of life
-%% command to all servers after which it too will shut down and delete all it's
+%% command to all servers after which it too will shut down and delete all of its
 %% data.
 %% @param ServerIds the ra_server_ids of the cluster
 %% @returns `{{ok, Leader} | error, nodedown}'
