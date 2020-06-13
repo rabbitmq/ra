@@ -442,6 +442,8 @@ leader(EventType, Msg, State0) ->
             State = send_rpcs(State2),
             case ra_server:is_fully_replicated(State#state.server_state) of
                 true ->
+                    #conf{cluster_name = ClusterName} = State#state.conf,
+                    ra_leaderboard:clear(ClusterName),
                     {stop, {shutdown, delete}, State};
                 false ->
                     next_state(terminating_leader, State, Actions)
@@ -716,6 +718,8 @@ terminating_leader(EvtType, Msg, State0) ->
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
+            #conf{cluster_name = ClusterName} = State#state.conf,
+            ra_leaderboard:clear(ClusterName),
             {stop, {shutdown, delete}, State};
         false ->
             ?DEBUG("~s: is not fully replicated after ~W~n",
@@ -743,6 +747,8 @@ terminating_follower(EvtType, Msg, State0) ->
                        end,
     case ra_server:is_fully_persisted(State#state.server_state) of
         true ->
+            #conf{cluster_name = ClusterName} = State#state.conf,
+            ra_leaderboard:clear(ClusterName),
             {stop, {shutdown, delete}, State};
         false ->
             ?DEBUG("~s: is not fully persisted after ~W~n",

@@ -181,6 +181,8 @@ cluster_is_deleted(Config) ->
     % timer:sleep(100),
     UIds = [ ra_directory:uid_of(Name) || {Name, _} <- Peers],
     Pids = [ ra_directory:where_is(Name) || {Name, _} <- Peers],
+    Leader = ra_leaderboard:lookup_leader(ClusterName),
+    ?assert(lists:member(Leader, Peers)),
     %% redeclaring the same cluster should fail
     {error, cluster_not_formed} = ra:start_cluster(ClusterName,
                                                    {module, ?MODULE, #{}},
@@ -189,6 +191,8 @@ cluster_is_deleted(Config) ->
     %% Assert all ETS tables are deleted for each UId
 
     validate_ets_table_deletes(UIds, Pids, Peers),
+    ?assertEqual(undefined, ra_leaderboard:lookup_leader(ClusterName)),
+
     ok = start_cluster(ClusterName, Peers),
     ok.
 
