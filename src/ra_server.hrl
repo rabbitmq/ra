@@ -1,7 +1,5 @@
 -define(AER_CHUNK_SIZE, 25).
 -define(FOLD_LOG_BATCH_SIZE, 25).
-% TODO: test what is a good default here
-% TODO: make configurable
 -define(DEFAULT_MAX_PIPELINE_COUNT, 4096).
 -define(MAX_FETCH_ENTRIES, 4096).
 
