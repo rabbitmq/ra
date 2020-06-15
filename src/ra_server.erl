@@ -175,12 +175,21 @@
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]}}.
 
+-type mutable_config() :: #{cluster_name => ra_cluster_name(),
+                            metrics_key => term(),
+                            broadcast_time => non_neg_integer(), % ms
+                            tick_timeout => non_neg_integer(), % ms
+                            await_condition_timeout => non_neg_integer(),
+                            max_pipeline_count => non_neg_integer(),
+                            ra_event_formatter => {module(), atom(), [term()]}}.
+
 -type config() :: ra_server_config().
 
 -export_type([config/0,
               ra_server_state/0,
               ra_state/0,
               ra_server_config/0,
+              mutable_config/0,
               ra_msg/0,
               machine_conf/0,
               command/0,

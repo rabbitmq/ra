@@ -31,6 +31,7 @@ all_tests() ->
      recover_after_kill,
      start_server_uid_validation,
      custom_ra_event_formatter,
+     config_modification_at_restart,
      segment_writer_handles_server_deletion,
      external_reader,
      add_member_without_quorum,
@@ -420,6 +421,56 @@ custom_ra_event_formatter(Config) ->
     ok = ra:start_server(Conf),
     ra:trigger_election(ServerId),
     _ = ra:members(ServerId),
+    ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
+    receive
+        {custom_event, ServerId, {applied, _}} ->
+            ok
+    after 2000 ->
+              flush(),
+              exit(custom_event_timeout)
+    end,
+    ok.
+
+config_modification_at_restart(Config) ->
+    ServerId = ?config(server_id, Config),
+    UId = <<"ADSFASDF2"/utf8>>,
+    Conf = #{cluster_name => ?config(cluster_name, Config),
+             id => ServerId,
+             uid => UId,
+             initial_members => [ServerId],
+             log_init_args => #{uid => UId},
+             machine => {module, ?MODULE, #{}}},
+    ok = ra:start_server(Conf),
+    ra:trigger_election(ServerId),
+    _ = ra:members(ServerId),
+    ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
+    receive
+        {ra_event, ServerId, {applied, _}} ->
+            ok
+    after 2000 ->
+              exit(ra_event_timeout)
+    end,
+
+    ok = ra:stop_server(ServerId),
+
+    %% add an event formatter at restart
+    AddConfig = #{ra_event_formatter => {?MODULE, format_ra_event, [my_arg]}},
+    ok = ra:restart_server(ServerId, AddConfig),
+    ra:members(ServerId),
+    ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
+    receive
+        {custom_event, ServerId, {applied, _}} ->
+            ok
+    after 2000 ->
+              flush(),
+              exit(custom_event_timeout)
+    end,
+
+    %% do another restart
+    ok = ra:stop_server(ServerId),
+    %% add an event formatter at restart
+    ok = ra:restart_server(ServerId, #{}),
+    ra:members(ServerId),
     ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
     receive
         {custom_event, ServerId, {applied, _}} ->

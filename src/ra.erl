@@ -38,6 +38,7 @@
          start_server/1,
          start_server/4,
          restart_server/1,
+         restart_server/2,
          stop_server/1,
          force_delete_server/1,
          trigger_election/1,
@@ -128,7 +129,27 @@ start_in(DataDir) ->
 -spec restart_server(ra_server_id()) -> ok | {error, term()}.
 restart_server(ServerId) ->
     % don't match on return value in case it is already running
-    case catch ra_server_sup_sup:restart_server(ServerId) of
+    case catch ra_server_sup_sup:restart_server(ServerId, #{}) of
+        {ok, _} -> ok;
+        {ok, _, _} -> ok;
+        {error, _} = Err -> Err;
+        {'EXIT', Err} -> {error, Err}
+    end.
+
+%% @doc Restarts a previously successfully started ra server
+%% @param ServerId the ra_server_id() of the server
+%% @param AddConfig additional config parameters to be merged into the
+%% original config.
+%% @returns `{ok | error, Error}' where error can be
+%% `not_found' or `name_not_registered' when the ra server has never before
+%% been started on the Erlang node.
+%% @end
+
+-spec restart_server(ra_server_id(), ra_server:mutable_config()) ->
+    ok | {error, term()}.
+restart_server(ServerId, AddConfig) ->
+    % don't match on return value in case it is already running
+    case catch ra_server_sup_sup:restart_server(ServerId, AddConfig) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
@@ -210,10 +231,11 @@ start_or_restart_cluster(ClusterName, Machine, ServerIds) ->
     {error, cluster_not_formed}.
 start_or_restart_cluster(ClusterName, Machine,
                          [FirstServer | RemServers] = ServerIds, Timeout) ->
-    case ra_server_sup_sup:restart_server(FirstServer) of
+    case ra_server_sup_sup:restart_server(FirstServer, #{}) of
         {ok, _} ->
             %% restart the rest of the servers
-            _ = [{ok, _} = ra_server_sup_sup:restart_server(N) || N <- RemServers],
+            _ = [{ok, _} = ra_server_sup_sup:restart_server(N, #{})
+                 || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
             ?ERR("start_or_restart_cluster: got an error: ~p~n", [Err]),

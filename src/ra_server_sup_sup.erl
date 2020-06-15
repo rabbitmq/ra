@@ -3,9 +3,18 @@
 
 -behaviour(supervisor).
 
+-define(MUTABLE_CONFIG_KEYS,
+        [cluster_name,
+         metrics_key,
+         broadcast_time,
+         tick_timeout,
+         await_condition_timeout,
+         max_pipeline_count,
+         ra_event_formatter]).
+
 %% API functions
 -export([start_server/1,
-         restart_server/1,
+         restart_server/2,
          stop_server/1,
          delete_server/1,
          remove_all/0,
@@ -33,10 +42,14 @@ start_server(#{id := NodeId,
             Err
     end.
 
--spec restart_server(ra_server_id()) -> supervisor:startchild_ret().
-restart_server({RaName, Node}) ->
+-spec restart_server(ra_server_id(), ra_server:mutable_config()) ->
+    supervisor:startchild_ret().
+restart_server({RaName, Node}, AddConfig) ->
     case rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]) of
-        {ok, Config} ->
+        {ok, Config0} ->
+            %% only certain config keys are mutable
+            Config = maps:merge(Config0,
+                                maps:with(?MUTABLE_CONFIG_KEYS, AddConfig)),
             supervisor:start_child({?MODULE, Node}, [Config]);
         {error, _} = Err ->
             Err;
