@@ -45,11 +45,13 @@
      MaxOpen :: non_neg_integer(),
      SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>]) -&gt;
         <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="close-1">close/1</a></h3>
 <div class="spec">
 <p><pre>close(X1 :: <a href="#type-state">state()</a>) -&gt; ok</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="update_segments-2">update_segments/2</a></h3>
@@ -57,6 +59,7 @@
 <p><pre>update_segments(NewSegmentRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
                 State :: <a href="#type-state">state()</a>) -&gt;
                    <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="handle_log_update-2">handle_log_update/2</a></h3>
@@ -68,34 +71,40 @@
                        [<a href="#type-segment_ref">segment_ref()</a>]},
                   State :: <a href="#type-state">state()</a>) -&gt;
                      <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="update_first_index-2">update_first_index/2</a></h3>
 <div class="spec">
 <p><pre>update_first_index(Idx :: <a href="#type-ra_index">ra_index()</a>, State :: <a href="#type-state">state()</a>) -&gt;
                       {<a href="#type-state">state()</a>, [<a href="#type-segment_ref">segment_ref()</a>]}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="segment_refs-1">segment_refs/1</a></h3>
 <div class="spec">
 <p><pre>segment_refs(X1 :: <a href="#type-state">state()</a>) -&gt; [<a href="#type-segment_ref">segment_ref()</a>]</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="num_open_segments-1">num_open_segments/1</a></h3>
 <div class="spec">
 <p><pre>num_open_segments(X1 :: <a href="#type-state">state()</a>) -&gt; non_neg_integer()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="read-3">read/3</a></h3>
 <div class="spec">
 <p><pre>read(From :: <a href="#type-ra_index">ra_index()</a>, To :: <a href="#type-ra_index">ra_index()</a>, State :: <a href="#type-state">state()</a>) -&gt;
         {[<a href="#type-log_entry">log_entry()</a>], Metrics :: list(), <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="fetch_term-2">fetch_term/2</a></h3>
 <div class="spec">
 <p><pre>fetch_term(Idx :: <a href="#type-ra_index">ra_index()</a>, State0 :: <a href="#type-state">state()</a>) -&gt;
               {<a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
 </div>
 <hr>
 

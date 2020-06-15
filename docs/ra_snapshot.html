@@ -61,36 +61,43 @@
      Module :: module(),
      SnapshotsDir :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
         <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="init_ets-0">init_ets/0</a></h3>
 <div class="spec">
 <p><pre>init_ets() -&gt; ok</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="current-1">current/1</a></h3>
 <div class="spec">
 <p><pre>current(X1 :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_idxterm">ra_idxterm()</a>)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="pending-1">pending/1</a></h3>
 <div class="spec">
 <p><pre>pending(X1 :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>({pid(), <a href="#type-ra_idxterm">ra_idxterm()</a>})</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="accepting-1">accepting/1</a></h3>
 <div class="spec">
 <p><pre>accepting(X1 :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_idxterm">ra_idxterm()</a>)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="directory-1">directory/1</a></h3>
 <div class="spec">
 <p><pre>directory(X1 :: <a href="#type-state">state()</a>) -&gt; <a href="file.html#type-filename">file:filename()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="last_index_for-1">last_index_for/1</a></h3>
 <div class="spec">
 <p><pre>last_index_for(UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_index">ra_index()</a>)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="begin_snapshot-3">begin_snapshot/3</a></h3>
@@ -99,17 +106,20 @@
                ReleaseCursorRef :: term(),
                State :: <a href="#type-state">state()</a>) -&gt;
                   {<a href="#type-state">state()</a>, [<a href="#type-effect">effect()</a>]}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="complete_snapshot-2">complete_snapshot/2</a></h3>
 <div class="spec">
 <p><pre>complete_snapshot(IdxTerm :: <a href="#type-ra_idxterm">ra_idxterm()</a>, State :: <a href="#type-state">state()</a>) -&gt;
                      <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="begin_accept-2">begin_accept/2</a></h3>
 <div class="spec">
 <p><pre>begin_accept(Meta :: <a href="#type-meta">meta()</a>, State :: <a href="#type-state">state()</a>) -&gt; {ok, <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="accept_chunk-4">accept_chunk/4</a></h3>
@@ -119,22 +129,26 @@
              ChunkFlag :: <a href="#type-chunk_flag">chunk_flag()</a>,
              State :: <a href="#type-state">state()</a>) -&gt;
                 {ok, <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="abort_accept-1">abort_accept/1</a></h3>
 <div class="spec">
 <p><pre>abort_accept(State :: <a href="#type-state">state()</a>) -&gt; <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="handle_down-3">handle_down/3</a></h3>
 <div class="spec">
 <p><pre>handle_down(Pid :: pid(), Info :: term(), State :: <a href="#type-state">state()</a>) -&gt;
                <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="delete-2">delete/2</a></h3>
 <div class="spec">
 <p><tt>delete(Dir, X2) -&gt; any()</tt></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="begin_read-1">begin_read/1</a></h3>
@@ -142,6 +156,7 @@
 <p><pre>begin_read(State :: <a href="#type-state">state()</a>) -&gt;
               {ok, Meta :: <a href="#type-meta">meta()</a>, ReadState} | {error, term()}</pre>
 <ul class="definitions"><li><pre>ReadState = term()</pre></li></ul></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="read_chunk-3">read_chunk/3</a></h3>
@@ -152,6 +167,7 @@
               {ok, Data :: term(), {next, ReadState} | last} |
               {error, term()}</pre>
 <ul class="definitions"><li><pre>ReadState = term()</pre></li></ul></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="recover-1">recover/1</a></h3>
@@ -160,6 +176,7 @@
            {ok, Meta :: <a href="#type-meta">meta()</a>, State :: term()} |
            {error, no_current_snapshot} |
            {error, term()}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="read_meta-2">read_meta/2</a></h3>
@@ -172,11 +189,13 @@
               checksum_error |
               <a href="#type-file_err">file_err()</a> |
               term()}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="current_snapshot_dir-1">current_snapshot_dir/1</a></h3>
 <div class="spec">
 <p><pre>current_snapshot_dir(X1 :: <a href="#type-state">state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="file.html#type-filename">file:filename()</a>)</pre></p>
+<p> </p>
 </div>
 <hr>
 

@@ -36,11 +36,13 @@
 <h3 class="function"><a name="init-1">init/1</a></h3>
 <div class="spec">
 <p><pre>init(Dir :: <a href="file.html#type-filename">file:filename()</a>) -&gt; ok</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="deinit-0">deinit/0</a></h3>
 <div class="spec">
 <p><pre>deinit() -&gt; ok</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="register_name-5">register_name/5</a></h3>
@@ -51,6 +53,7 @@
               ServerName :: atom(),
               ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>) -&gt;
                  yes | no</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="register_name-4">register_name/4</a></h3>
@@ -60,63 +63,75 @@
               ParentPid :: <a href="#type-maybe">maybe</a>(pid()),
               ServerName :: atom()) -&gt;
                  yes | no</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="register_name-3">register_name/3</a></h3>
 <div class="spec">
 <p><pre>register_name(UId :: <a href="#type-ra_uid">ra_uid()</a>, Pid :: pid(), ServerName :: atom()) -&gt;
                  yes | no</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="unregister_name-1">unregister_name/1</a></h3>
 <div class="spec">
 <p><pre>unregister_name(UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; <a href="#type-ra_uid">ra_uid()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="where_is-1">where_is/1</a></h3>
 <div class="spec">
 <p><pre>where_is(ServerName :: <a href="#type-ra_uid">ra_uid()</a> | atom()) -&gt; pid() | undefined</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="where_is_parent-1">where_is_parent/1</a></h3>
 <div class="spec">
 <p><pre>where_is_parent(ServerName :: <a href="#type-ra_uid">ra_uid()</a> | atom()) -&gt;
                    pid() | undefined</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="name_of-1">name_of/1</a></h3>
 <div class="spec">
 <p><pre>name_of(UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; <a href="#type-maybe">maybe</a>(atom())</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="cluster_name_of-1">cluster_name_of/1</a></h3>
 <div class="spec">
 <p><pre>cluster_name_of(UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_cluster_name">ra_cluster_name()</a>)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="pid_of-1">pid_of/1</a></h3>
 <div class="spec">
 <p><pre>pid_of(UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt; <a href="#type-maybe">maybe</a>(pid())</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="uid_of-1">uid_of/1</a></h3>
 <div class="spec">
 <p><tt>uid_of(ServerName) -&gt; any()</tt></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="send-2">send/2</a></h3>
 <div class="spec">
 <p><pre>send(UIdOrName :: <a href="#type-ra_uid">ra_uid()</a> | atom(), Msg :: term()) -&gt; pid()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="overview-0">overview/0</a></h3>
 <div class="spec">
 <p><tt>overview() -&gt; any()</tt></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="list_registered-0">list_registered/0</a></h3>
 <div class="spec">
 <p><pre>list_registered() -&gt; [{atom(), <a href="#type-ra_uid">ra_uid()</a>}]</pre></p>
+<p> </p>
 </div>
 <hr>
 

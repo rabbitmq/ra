@@ -49,6 +49,7 @@
 <tr><td valign="top"><a href="#start-1">start/1</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start_in-1">start_in/1</a></td><td>Starts the ra application with a provided data directory.</td></tr>
 <tr><td valign="top"><a href="#restart_server-1">restart_server/1</a></td><td>Restarts a previously successfully started ra server.</td></tr>
+<tr><td valign="top"><a href="#restart_server-2">restart_server/2</a></td><td>Restarts a previously successfully started ra server.</td></tr>
 <tr><td valign="top"><a href="#stop_server-1">stop_server/1</a></td><td>Stops a ra server.</td></tr>
 <tr><td valign="top"><a href="#force_delete_server-1">force_delete_server/1</a></td><td>Deletes a ra server
   The server is forcefully deleted.</td></tr>
@@ -108,6 +109,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="start-0">start/0</a></h3>
 <div class="spec">
 <p><pre>start() -&gt; ok</pre></p>
+<p> </p>
 </div><p>Starts the ra application.</p>
 
 <h3 class="function"><a name="start-1">start/1</a></h3>
@@ -115,6 +117,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><pre>start(Params :: [<a href="#type-environment_param">environment_param()</a>]) -&gt;
          {ok, [Started]} | {error, term()}</pre>
 <ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
+<p> </p>
 </div><p>Starts the ra application.
   If the application is running it will be stopped and restarted.</p>
 
@@ -123,6 +126,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><pre>start_in(DataDir :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
             {ok, [Started]} | {error, term()}</pre>
 <ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
+<p> </p>
 </div><p>Starts the ra application with a provided data directory.
   The same as ra:start([{data_dir, dir}])
   If the application is running it will be stopped and restarted.</p>
@@ -131,6 +135,20 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <div class="spec">
 <p><pre>restart_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt; ok | {error, term()}</pre></p>
 <p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+</p>
+<p>returns: <code>{ok | error, Error}</code> where error can be
+  <code>not_found</code> or <code>name_not_registered</code> when the ra server has never before
+  been started on the Erlang node.</p>
+</div><p>Restarts a previously successfully started ra server</p>
+
+<h3 class="function"><a name="restart_server-2">restart_server/2</a></h3>
+<div class="spec">
+<p><pre>restart_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+               AddConfig :: <a href="ra_server.html#type-mutable_config">ra_server:mutable_config()</a>) -&gt;
+                  ok | {error, term()}</pre></p>
+<p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+<tt>AddConfig</tt>: additional config parameters to be merged into the
+  original config.<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code> where error can be
   <code>not_found</code> or <code>name_not_registered</code> when the ra server has never before
@@ -344,6 +362,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><pre>delete_cluster(ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>],
                Timeout :: timeout()) -&gt;
                   {ok, Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()}</pre></p>
+<p> </p>
 </div><p>Same as <code>delete_cluster/1</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#delete_cluster-1">delete_cluster/1</a>.</p>
 
@@ -375,6 +394,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
               <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
               {error, already_member} |
               {error, cluster_change_not_permitted}</pre></p>
+<p> </p>
 </div><p>Same as <code>add_member/2</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#add_member-2">add_member/2</a>.</p>
 
@@ -405,6 +425,7 @@ command to the log.</p>
                  <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
                  {error, not_member} |
                  {error, cluster_change_not_permitted}</pre></p>
+<p> </p>
 </div><p>Same as <code>remove_member/2</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#remove_member-2">remove_member/2</a>.</p>
 
@@ -424,11 +445,13 @@ command to the log.</p>
 <div class="spec">
 <p><pre>trigger_election(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Timeout :: timeout()) -&gt;
                     ok</pre></p>
+<p> </p>
 </div><p>Same as <code>trigger_election/2</code> but also accepts a timeout.</p>
 
 <h3 class="function"><a name="leave_and_terminate-1">leave_and_terminate/1</a></h3>
 <div class="spec">
 <p><tt>leave_and_terminate(ServerId) -&gt; any()</tt></p>
+<p> </p>
 </div><p>A safe way for a an active server to remove itself from its cluster.
   The server is first removed, then asked to terminate.
   Use this when a node knows that it is being permanently decommissioned.</p>
@@ -464,6 +487,7 @@ command to the log.</p>
 <h3 class="function"><a name="leave_and_delete_server-1">leave_and_delete_server/1</a></h3>
 <div class="spec">
 <p><tt>leave_and_delete_server(ServerId) -&gt; any()</tt></p>
+<p> </p>
 </div><p>A safe way for a an active server to force remove itself from its cluster.
   The server will be force removed after a membership transition command was
   added to the log.
@@ -504,12 +528,14 @@ command to the log.</p>
 <h3 class="function"><a name="new_uid-1">new_uid/1</a></h3>
 <div class="spec">
 <p><tt>new_uid(Source) -&gt; any()</tt></p>
+<p> </p>
 </div><p>generates a random uid using the provided source material for the first
   6 characters.</p>
 
 <h3 class="function"><a name="overview-0">overview/0</a></h3>
 <div class="spec">
 <p><pre>overview() -&gt; map()</pre></p>
+<p> </p>
 </div><p>Returns a map of overview data of the Ra system on the current Erlang
   node.</p>
 
@@ -639,7 +665,7 @@ success or otherwise.</p>
 <div class="spec">
 <p><pre>local_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
-                                                  term()})</pre></p>
+                                                  Reply :: term()})</pre></p>
 <p><tt>ServerId</tt>: the ra server id to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 </p>
@@ -655,8 +681,8 @@ success or otherwise.</p>
             QueryFun :: <a href="#type-query_fun">query_fun()</a>,
             Timeout :: timeout()) -&gt;
                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
-                                                  term()}) |
-               {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, not_known}</pre></p>
+                                                  Reply :: term()}) |
+               {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
 <p><tt>ServerId</tt>: the ra server id to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 <tt>Timeout</tt>: the timeout to use<br>
@@ -668,8 +694,9 @@ success or otherwise.</p>
 <div class="spec">
 <p><pre>leader_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
              QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
-                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(term()) |
-                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, not_known}</pre></p>
+                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+                                                   Reply :: term()}) |
+                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
 <p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 </p>
@@ -685,8 +712,9 @@ success or otherwise.</p>
 <p><pre>leader_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
              QueryFun :: <a href="#type-query_fun">query_fun()</a>,
              Timeout :: timeout()) -&gt;
-                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(term()) |
-                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, term()}, not_known}</pre></p>
+                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+                                                   Reply :: term()}) |
+                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
 <p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 <tt>Timeout</tt>: the timeout to use<br>
@@ -698,7 +726,8 @@ success or otherwise.</p>
 <div class="spec">
 <p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                  QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
-                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(term())</pre></p>
+                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(Reply ::
+                                                          term())</pre></p>
 <p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 </p>
@@ -714,7 +743,8 @@ success or otherwise.</p>
 <p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                  QueryFun :: <a href="#type-query_fun">query_fun()</a>,
                  Timeout :: timeout()) -&gt;
-                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(term())</pre></p>
+                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(Reply ::
+                                                          term())</pre></p>
 <p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
 <tt>QueryFun</tt>: the query function to run<br>
 <tt>Timeout</tt>: the timeout to use<br>
@@ -745,6 +775,7 @@ success or otherwise.</p>
 <p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
                                                      error)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="initial_members-2">initial_members/2</a></h3>
@@ -753,6 +784,7 @@ success or otherwise.</p>
                 Timeout :: timeout()) -&gt;
                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
                                                      error)</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="transfer_leadership-2">transfer_leadership/2</a></h3>
@@ -762,23 +794,27 @@ success or otherwise.</p>
                        ok | already_leader |
                        {error, term()} |
                        {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
+<p> </p>
 </div><p>Transfers leadership from the leader to a follower.
   Returns <code>already_leader</code> if the transfer targer is already the leader.</p>
 
 <h3 class="function"><a name="aux_command-2">aux_command/2</a></h3>
 <div class="spec">
 <p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; term()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="cast_aux_command-2">cast_aux_command/2</a></h3>
 <div class="spec">
 <p><pre>cast_aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; ok</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="register_external_log_reader-1">register_external_log_reader/1</a></h3>
 <div class="spec">
 <p><pre>register_external_log_reader(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
                                 <a href="ra_log_reader.html#type-state">ra_log_reader:state()</a></pre></p>
+<p> </p>
 </div><p>Registers an external log reader. ServerId needs to be local to the node.
   Returns an initiated ra_log_reader:state() state.</p>
 <hr>

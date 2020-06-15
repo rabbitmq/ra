@@ -182,6 +182,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
 <p><pre>init(Machine :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
+<p> </p>
 </div><p>initialise a new machine
   This is only called on startup only if there isn't yet a snapshot to recover
   from. Once a snapshot has been taken this is never called again.</p>
@@ -193,12 +194,14 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
       Cmd :: <a href="#type-command">command()</a>,
       State) -&gt;
          {State, <a href="#type-reply">reply()</a>, <a href="#type-effects">effects()</a>} | {State, <a href="#type-reply">reply()</a>}</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>
 <div class="spec">
 <p><pre>tick(Mod :: module(), TimeMs :: <a href="#type-milliseconds">milliseconds()</a>, State :: <a href="#type-state">state()</a>) -&gt;
         <a href="#type-effects">effects()</a></pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
@@ -207,32 +210,38 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
             RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol,
             State :: <a href="#type-state">state()</a>) -&gt;
                <a href="#type-effects">effects()</a></pre></p>
+<p> </p>
 </div><p>called when the ra_server_proc enters a new state</p>
 
 <h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
 <p><pre>overview(Mod :: module(), State :: <a href="#type-state">state()</a>) -&gt; map()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="version-1">version/1</a></h3>
 <div class="spec">
 <p><pre>version(X1 :: <a href="#type-machine">machine()</a>) -&gt; <a href="#type-version">version()</a></pre></p>
+<p> </p>
 </div><p>used to discover the latest machine version supported by the current
   code</p>
 
 <h3 class="function"><a name="is_versioned-1">is_versioned/1</a></h3>
 <div class="spec">
 <p><pre>is_versioned(Machine :: <a href="#type-machine">machine()</a>) -&gt; boolean()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="which_module-2">which_module/2</a></h3>
 <div class="spec">
 <p><pre>which_module(X1 :: <a href="#type-machine">machine()</a>, Version :: <a href="#type-version">version()</a>) -&gt; module()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="init_aux-2">init_aux/2</a></h3>
 <div class="spec">
 <p><pre>init_aux(Mod :: module(), Name :: atom()) -&gt; term()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
@@ -253,6 +262,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
               {no_reply, AuxState, LogState,
                [{monitor, process, aux, pid()}]}</pre>
 <ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state">ra_log:state()</a></pre></li></ul></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>
@@ -262,16 +272,19 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
       State :: <a href="#type-state">state()</a>) -&gt;
          Result</pre>
 <ul class="definitions"><li><pre>Result = term()</pre></li></ul></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
 <p><pre>module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
+<p> </p>
 </div>
 
 <h3 class="function"><a name="snapshot_module-1">snapshot_module/1</a></h3>
 <div class="spec">
 <p><pre>snapshot_module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
+<p> </p>
 </div>
 <hr>
 
