@@ -440,7 +440,7 @@ start_slave(N, PrivDir) ->
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting slave node with ~s on host ~s from node ~s~n", [Pa, Host, node()]),
+    ct:pal("starting mirror node with ~s on host ~s from node ~s~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
     S.

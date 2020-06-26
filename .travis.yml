@@ -14,7 +14,7 @@ otp_release:
 
 before_script:
   # We force the hostname to be "localhost" for the common_test node.
-  # This fixes an issue where Erlang fails to start a slave node in
+  # This fixes an issue where Erlang fails to start a CT worker node in
   # coordination_SUITE if the hostname is the real one (it times out).
   - sed -E -i'' -e 's/(-sname ct_\$\(PROJECT\))/\1@localhost/' erlang.mk
 
