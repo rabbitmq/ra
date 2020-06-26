@@ -77,7 +77,7 @@ conf({Name, _Node} = NodeId, Nodes) ->
 
 start_stop_restart_delete_on_remote(Config) ->
     PrivDir = ?config(data_dir, Config),
-    S1 = start_slave(s1, PrivDir),
+    S1 = start_follower(s1, PrivDir),
     % ensure application is started
     NodeId = {c1, S1},
     Conf = conf(NodeId, [NodeId]),
@@ -102,7 +102,7 @@ start_stop_restart_delete_on_remote(Config) ->
 start_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert all were said to be started
@@ -117,7 +117,7 @@ start_cluster(Config) ->
 start_or_restart_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     %% this should start
     {ok, Started, []} = ra:start_or_restart_cluster(ClusterName, Machine,
@@ -130,7 +130,7 @@ start_or_restart_cluster(Config) ->
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
     % timer:sleep(1000),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     %% this should restart
     {ok, Started2, []} = ra:start_or_restart_cluster(ClusterName, Machine,
                                                      NodeIds),
@@ -145,7 +145,7 @@ start_or_restart_cluster(Config) ->
 delete_one_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     [{_, Node}] = NodeIds,
@@ -160,7 +160,7 @@ delete_one_server_cluster(Config) ->
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     % restart node
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     receive
         Anything ->
             ct:pal("got weird message ~p~n", [Anything]),
@@ -180,7 +180,7 @@ delete_one_server_cluster(Config) ->
 delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
@@ -201,7 +201,7 @@ delete_two_server_cluster(Config) ->
 delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
@@ -215,7 +215,7 @@ delete_three_server_cluster(Config) ->
 delete_three_server_cluster_parallel(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     %% spawn a delete command to try cause it to commit more than
@@ -239,7 +239,7 @@ check_sup() ->
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2]],
+    NodeIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
     % s3 isn't available
     S3 = make_node_name(s3),
     NodeIds = NodeIds0 ++ [{ClusterName, S3}],
@@ -259,7 +259,7 @@ start_cluster_majority(Config) ->
 start_cluster_minority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds0 = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1]],
+    NodeIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     % s3 isn't available
     S2 = make_node_name(s2),
     S3 = make_node_name(s3),
@@ -275,7 +275,7 @@ start_cluster_minority(Config) ->
 send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert all were said to be started
@@ -300,7 +300,7 @@ send_local_msg(Config) ->
 local_log_effect(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert all were said to be started
@@ -325,7 +325,7 @@ local_log_effect(Config) ->
 leaderboard(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_slave(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     % assert all were said to be started
@@ -435,12 +435,12 @@ search_paths() ->
     lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
                  code:get_path()).
 
-start_slave(N, PrivDir) ->
+start_follower(N, PrivDir) ->
     Dir0 = filename:join(PrivDir, N),
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting mirror node with ~s on host ~s from node ~s~n", [Pa, Host, node()]),
+    ct:pal("starting secondary node with ~s on host ~s for node ~s~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
     S.
