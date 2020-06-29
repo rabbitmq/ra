@@ -1259,7 +1259,7 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
 cfg_to_map(Cfg) ->
     element(2, lists:foldl(
                  fun (F, {N, Acc}) ->
-                         {N, Acc#{F => element(N, Cfg)}}
+                         {N + 1, Acc#{F => element(N, Cfg)}}
                  end, {2, #{}}, record_info(fields, cfg))).
 
 -spec metrics(ra_server_state()) ->
