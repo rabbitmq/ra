@@ -251,6 +251,10 @@
 -spec init(machine(), atom()) -> state().
 init({machine, _, Args} = Machine, Name) ->
     %% init always dispatches to the first version
+    %% as this means every state machine in a mixed version cluster will
+    %% have a common starting point.
+    %% TODO: it should be possible to pass a lowest supported state machine
+    %% version flag in the init args so that old machine version can be purged
     Mod = which_module(Machine, 0),
     Mod:init(Args#{name => Name}).
 
