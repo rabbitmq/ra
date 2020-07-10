@@ -253,5 +253,5 @@ logger:set_primary_config(level, debug).
 
 (c) 2017-2020, VMware Inc or its affiliates.
 
-Double licensed under the ASL2 and MPL1.1.
+Double licensed under the ASL2 and MPL2.0.
 See [LICENSE](./LICENSE) for details.
