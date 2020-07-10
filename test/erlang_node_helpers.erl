@@ -1,3 +1,9 @@
+%% This Source Code Form is subject to the terms of the Mozilla Public
+%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%
+%% Copyright (c) 2017-2020 VMware, Inc. or its affiliates.  All rights reserved.
+%%
 -module(erlang_node_helpers).
 
 -export([start_erlang_nodes/2, start_erlang_node/2, stop_erlang_nodes/1, stop_erlang_node/1, wait_for_stop/2]).
