@@ -30,8 +30,15 @@ The following Raft features are implemented:
 
 ## Supported Erlang/OTP Versions
 
-Ra requires Erlang/OTP 21.3+. Erlang 22+ is **highly recommended**
+Ra supports the following Erlang/OTP versions:
+
+ * `23.x`
+ * `22.x`
+ * `21.3.x` (testing will be discontinued in September 2020)
+
+22.x and later versions are **highly recommended**
 because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/).
+
 
 ## Design Goals
 
