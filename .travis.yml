@@ -9,7 +9,6 @@ notifications:
     on_failure: always
 
 otp_release:
-  - "21.3"
   - "22.3"
 
 before_script:
