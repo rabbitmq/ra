@@ -9,7 +9,8 @@ notifications:
     on_failure: always
 
 otp_release:
-  - "22.3"
+  - "23.0.2"
+  - "22.3.4"
 
 before_script:
   # We force the hostname to be "localhost" for the common_test node.
