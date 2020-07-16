@@ -886,7 +886,7 @@ follower_pre_vote(_Config) ->
     % disallow pre votes from higher machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
-                               vote_granted = false}}]} =
+                               vote_granted = false}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 99},
                                   State),
 
@@ -894,7 +894,7 @@ follower_pre_vote(_Config) ->
     % disallow votes from a lower machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
-                               vote_granted = false}}]} =
+                               vote_granted = false}} | _]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 1},
                               State#{cfg => Cfg#cfg{machine_version = 2}}),
 

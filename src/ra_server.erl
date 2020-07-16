@@ -1835,7 +1835,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
                    " ours is ~b~n",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer]),
-            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
+                               start_election_timeout]};
         true ->
             ?DEBUG("~s: granting pre-vote for ~w"
                    " machine version (their:ours) ~b:~b"
@@ -2137,6 +2138,8 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
             State = State0#{cfg => Cfg,
                             cluster_change_permitted => ClusterChangePerm},
             Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+            ?DEBUG("~s: applying new machine version ~b current ~b",
+                   [LogId, NextMacVer, MacVer]),
             apply_with({Idx, Term,
                         {'$usr', Meta,
                          {machine_version, OldMacVer, NextMacVer}, none}},
