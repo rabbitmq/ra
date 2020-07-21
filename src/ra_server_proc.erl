@@ -891,13 +891,13 @@ handle_enter(RaftState, OldRaftState,
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~s: ~s -> ~s in term: ~b~n",
+            ?NOTICE("~s: ~s -> ~s in term: ~b machine version: ~b~n",
                     [log_id(State), OldRaftState, RaftState,
-                     current_term(State)]);
+                     current_term(State), machine_version(State)]);
         false ->
-            ?DEBUG("~s: ~s -> ~s in term: ~b~n",
+            ?DEBUG("~s: ~s -> ~s in term: ~b machine version: ~b~n",
                    [log_id(State), OldRaftState, RaftState,
-                    current_term(State)])
+                    current_term(State), machine_version(State)])
     end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
@@ -1210,6 +1210,9 @@ leader_id(#state{server_state = ServerState}) ->
 
 current_term(#state{server_state = ServerState}) ->
     ra_server:current_term(ServerState).
+
+machine_version(#state{server_state = ServerState}) ->
+    ra_server:machine_version(ServerState).
 
 process_pending_queries(NewLeader,
                         #state{server_state = ServerState0} = State) ->

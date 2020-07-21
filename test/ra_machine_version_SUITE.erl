@@ -292,6 +292,7 @@ lower_version_does_not_apply_until_upgraded(Config) ->
     %% leaving the follower on a lower version
     Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     Followers = lists:delete(Leader, Cluster),
+    ct:pal("Leader1 ~w Followers ~w", [Leader, Followers]),
     meck:expect(Mod, version, fun () ->
                                       Self = self(),
                                       case whereis(element(1, Leader)) of
@@ -299,10 +300,12 @@ lower_version_does_not_apply_until_upgraded(Config) ->
                                           _ -> 1
                                       end
                               end),
+    timer:sleep(200),
     ra:stop_server(Leader),
-    ra:restart_server(Leader),
-    {ok, _, Leader2} = ra:members(Leader),
+    {ok, _, Leader2} = ra:members(Followers),
     [LastFollower] = lists:delete(Leader2, Followers),
+    ct:pal("Leader2 ~w LastFollower ~w", [Leader2, LastFollower]),
+    ra:restart_server(Leader),
     meck:expect(Mod, version, fun () ->
                                       New = [whereis(element(1, Leader)),
                                              whereis(element(1, Leader2))],
@@ -312,7 +315,22 @@ lower_version_does_not_apply_until_upgraded(Config) ->
                                       end
                               end),
     ra:stop_server(Leader2),
+    timer:sleep(500),
+    {ok, _, Leader3} = ra:members(LastFollower),
+    ct:pal("Leader3 ~w LastFollower ~w", [Leader3, LastFollower]),
     ra:restart_server(Leader2),
+
+    case Leader3 of
+        LastFollower ->
+            %% if last follower happened to be elected
+            ct:pal("Leader3 is LastFollower", []),
+            ra:stop_server(Leader3),
+            %% allow time for a different member to be elected
+            timer:sleep(1000),
+            ra:restart_server(Leader3);
+        _ -> ok
+    end,
+
 
     %% process a command that should be replicated to all servers but only
     %% applied to new machine version servers

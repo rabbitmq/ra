@@ -35,6 +35,7 @@
          log_id/1,
          leader_id/1,
          current_term/1,
+         machine_version/1,
          machine_query/2,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -1347,6 +1348,10 @@ leader_id(State) ->
 current_term(State) ->
     maps:get(current_term, State).
 
+-spec machine_version(ra_server_state()) -> non_neg_integer().
+machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
+    MacVer.
+
 -spec machine_query(fun((term()) -> term()), ra_server_state()) ->
     {ra_idxterm(), term()}.
 machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
@@ -1821,7 +1826,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                          token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
-                 #{cfg := #cfg{machine_version = OurMacVer},
+                 #{cfg := #cfg{machine_version = OurMacVer,
+                               effective_machine_version = EffMacVer},
                    current_term := CurTerm} = State0)
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
@@ -1831,13 +1837,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b~n",
                    [log_id(State0), Cand, Version]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
-        true when OurMacVer =/= TheirMacVer->
-            ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
-                   " ours is ~b~n",
-                   [log_id(State0), Cand, TheirMacVer, OurMacVer]),
-            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
-                               start_election_timeout]};
-        true ->
+        true when TheirMacVer >= EffMacVer andalso
+                  TheirMacVer =< OurMacVer ->
             ?DEBUG("~s: granting pre-vote for ~w"
                    " machine version (their:ours) ~b:~b"
                    " with last indexterm ~w"
@@ -1846,6 +1847,12 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                     {LLIdx, LLTerm}, Term, CurTerm]),
             {FsmState, State#{voted_for => Cand},
              [{reply, pre_vote_result(Term, Token, true)}]};
+        true ->
+            ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
+                   " ours is ~b~n",
+                   [log_id(State0), Cand, TheirMacVer, OurMacVer]),
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
+                               start_election_timeout]};
         false ->
             ?DEBUG("~s: declining pre-vote for ~w for term ~b,"
                    " candidate last log index term was: ~w~n"
@@ -2139,7 +2146,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                             cluster_change_permitted => ClusterChangePerm},
             Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
             ?DEBUG("~s: applying new machine version ~b current ~b",
-                   [LogId, NextMacVer, MacVer]),
+                   [LogId, NextMacVer, OldMacVer]),
             apply_with({Idx, Term,
                         {'$usr', Meta,
                          {machine_version, OldMacVer, NextMacVer}, none}},

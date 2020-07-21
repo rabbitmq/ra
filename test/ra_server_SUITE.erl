@@ -873,7 +873,7 @@ follower_pre_vote(_Config) ->
        {follower, _,
         [{reply, #pre_vote_result{term = Term, token = Token,
                                   vote_granted = false}}]},
-       ra_server:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION+1},
+       ra_server:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION + 1},
                                  State)),
 
     % but still allow from a lower protocol version
@@ -891,12 +891,24 @@ follower_pre_vote(_Config) ->
                                   State),
 
     Cfg = maps:get(cfg, State),
-    % disallow votes from a lower machine version
+
+    % disallow votes from a lower machine version when the effective machine
+    % version is higher
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
-    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 1},
-                              State#{cfg => Cfg#cfg{machine_version = 2}}),
+    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
+                              State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                                    machine_version = 1}}),
+
+    % allow votes from a lower machine version when the effective machine
+    % version is lower too
+    {follower, _,
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}} | _]} =
+    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
+                              State#{cfg => Cfg#cfg{effective_machine_version = 0,
+                                                    machine_version = 1}}),
 
     % allow votes for the same machine version
     {follower, _,
