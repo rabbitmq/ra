@@ -124,6 +124,8 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
                               end),
     ra:stop_server(Leader2),
     ra:restart_server(Leader2),
+    %% need to stop last follower as it can still be elected now
+    ra:stop_server(LastFollower),
     %% this last leader must now be a version 2 not 1
     {ok, _, Leader3} = ra:members(Leader2, 60000),
 
