@@ -126,7 +126,8 @@
                ra_event_formatter :: undefined | {module(), atom(), [term()]},
                flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer(),
                snapshot_chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
-               receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer()
+               receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer(),
+               aten_poll_interval = 1000 :: non_neg_integer()
               }).
 
 -record(state, {conf :: #conf{},
@@ -270,9 +271,10 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     FlushCommandsSize = application:get_env(ra, low_priority_commands_flush_size,
                                             ?FLUSH_COMMANDS_SIZE),
     SnapshotChunkSize = application:get_env(ra, snapshot_chunk_size,
-                                    ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+                                            ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
     ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
                                                  ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
+    AtenPollInt = application:get_env(aten, poll_interval, 1000),
     State = #state{conf = #conf{log_id = LogId,
                                 cluster_name = ClusterName,
                                 name = Key,
@@ -281,7 +283,8 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 ra_event_formatter = RaEventFormatterMFA,
                                 flush_commands_size = FlushCommandsSize,
                                 snapshot_chunk_size = SnapshotChunkSize,
-                                receive_snapshot_timeout = ReceiveSnapshotTimeout},
+                                receive_snapshot_timeout = ReceiveSnapshotTimeout,
+                                aten_poll_interval = AtenPollInt},
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -1229,9 +1232,12 @@ election_timeout_action(really_short, #conf{broadcast_time = Timeout}) ->
 election_timeout_action(short, #conf{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + Timeout,
     {state_timeout, T, election_timeout};
-election_timeout_action(long, #conf{broadcast_time = Timeout}) ->
-    %% this should be longer than aten detection poll interval
-    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT * 2) + 1000,
+election_timeout_action(long, #conf{broadcast_time = Timeout,
+                                    aten_poll_interval = Poll}) ->
+    %% this should be longer than aten detection poll interval so that
+    %% there is a chance a false positive from aten can be reversed without
+    %% triggering elections
+    T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT * 2) + Poll,
     {state_timeout, T, election_timeout}.
 
 % sets the tick timer for periodic actions such as sending rpcs to servers

@@ -148,29 +148,29 @@ delete_server_rpc(RaName) ->
 
 delete_data_directory(Directory) ->
     DeleteFunction = fun() ->
-                         try ra_lib:recursive_delete(Directory) of
-                            ok ->
-                                % moving on
-                                ok
-                         catch
-                            _:_ = Err ->
-                                ?WARN("delete_server/1 failed to delete directory ~s~n"
-                                    "Error: ~p~n", [Directory, Err]),
-                                error
-                         end
+                             try ra_lib:recursive_delete(Directory) of
+                                 ok ->
+                                     % moving on
+                                     ok
+                             catch
+                                 _:_ = Err ->
+                                     ?WARN("ra: delete_server/1 failed to delete directory ~s~n"
+                                           "Error: ~p~n", [Directory, Err]),
+                                     error
+                             end
                      end,
     case DeleteFunction() of
         ok ->
             ok;
         _ ->
             spawn(fun() ->
-                      ra_lib:retry(DeleteFunction, 2)
+                          ra_lib:retry(DeleteFunction, 2)
                   end)
     end.
 
 remove_all() ->
     _ = [begin
-             ?INFO("terminating child ~w~n", [Pid]),
+             ?DEBUG("ra: terminating child ~w~n", [Pid]),
              supervisor:terminate_child(?MODULE, Pid)
          end
          || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],
