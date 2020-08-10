@@ -671,7 +671,8 @@ handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
             ?INFO("~s: leader saw pre_vote_rpc from ~w for term ~b"
                   " abdicates term: ~b!~n",
                   [LogId, Msg#pre_vote_rpc.candidate_id, Term, CurTerm]),
-            {follower, update_term(Term, State0), [{next_event, Msg}]}
+            {follower, update_term(Term, State0#{leader_id => undefined}),
+             [{next_event, Msg}]}
     end;
 handle_leader(#pre_vote_rpc{term = Term},
               #{current_term := CurTerm} = State0)
@@ -936,7 +937,7 @@ handle_follower(#append_entries_rpc{term = Term,
                          evaluate_commit_index_follower(State1, Effects0),
                     Reply = append_entries_reply(Term, true, State),
                     {NextState, State,
-                    [cast_reply(Id, LeaderId, Reply) | Effects]};
+                     [cast_reply(Id, LeaderId, Reply) | Effects]};
                 [{FirstIdx, _, _} | _] -> % FirstTerm
                     {_LastIdx, State} = lists:foldl(
                                           fun pre_append_log_follower/2,
