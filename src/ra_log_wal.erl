@@ -678,7 +678,6 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          Pid ! {ra_log_event, {written, {From, To, Term}}},
                          ok
                  end, Waiting),
-    % erlang:send_after(Cfg#confgtimeout, rollover, 
     State.
 
 wal2list(File) ->
