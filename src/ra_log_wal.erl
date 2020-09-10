@@ -78,7 +78,7 @@
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
-              count = 0 :: non_neg_integer()
+              entry_count = 0 :: non_neg_integer()
               }).
 
 -record(state, {conf = #conf{},
@@ -334,7 +334,7 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
 write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
                   wal = #wal{writer_name_cache = Cache0,
-                             count = Count} = Wal} = State00) ->
+                             entry_count = Count} = Wal} = State00) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
@@ -352,7 +352,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache,
-                                                 count = Count + 1}},
+                                                 entry_count = Count + 1}},
             Entry = [<<Idx:64/unsigned,
                        Term:64/unsigned>>,
                      EntryData],
@@ -829,7 +829,7 @@ to_binary(Term) ->
 should_roll_wal(DataSize, #state{conf = #conf{max_entries = MaxEntries},
                                  file_size = FileSize,
                                  wal = #wal{max_size = MaxWalSize,
-                                            count = Count}}) ->
+                                            entry_count = Count}}) ->
     TooManyEntries = case MaxEntries of
                          undefined -> false;
                          _ ->
