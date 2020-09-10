@@ -67,6 +67,7 @@
                segment_writer = ra_log_segment_writer :: atom(),
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
+               max_entries :: undefined | non_neg_integer(),
                recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync,
@@ -76,7 +77,8 @@
 -record(wal, {fd :: maybe(file:io_device()),
               filename :: maybe(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
-              max_size :: non_neg_integer()
+              max_size :: non_neg_integer(),
+              entry_count = 0 :: non_neg_integer()
               }).
 
 -record(state, {conf = #conf{},
@@ -101,6 +103,7 @@
 -type state() :: #state{}.
 -type wal_conf() :: #{dir => file:filename_all(),
                       max_size_bytes => non_neg_integer(),
+                      max_entries => non_neg_integer(),
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
                       write_strategy => wal_write_strategy(),
@@ -188,6 +191,7 @@ start_link(Config, Options0) when is_list(Options0) ->
 -spec init(wal_conf()) -> {ok, state()}.
 init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
+      max_entries := MaxEntries,
       recovery_chunk_size := RecoveryChunkSize,
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
@@ -209,6 +213,7 @@ init(#{dir := Dir} = Conf0) ->
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = max(?WAL_MIN_SIZE, MaxWalSize),
+                 max_entries = MaxEntries,
                  recovery_chunk_size = RecoveryChunkSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
@@ -328,9 +333,8 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
 
 write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
-                  file_size = FileSize,
-                  wal = #wal{max_size = MaxWalSize,
-                             writer_name_cache = Cache0} = Wal} = State00) ->
+                  wal = #wal{writer_name_cache = Cache0,
+                             entry_count = Count} = Wal} = State00) ->
     EntryData = to_binary(Data0),
     EntryDataLen = byte_size(EntryData),
     {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
@@ -339,7 +343,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
     DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
-    case FileSize + DataSize > MaxWalSize of
+    case should_roll_wal(DataSize, State00) of
         true ->
             State = roll_over(State00),
             % TODO: there is some redundant computation performed by
@@ -347,7 +351,8 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             % when a wal file fills up
             write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
-            State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache}},
+            State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache,
+                                                 entry_count = Count + 1}},
             Entry = [<<Idx:64/unsigned,
                        Term:64/unsigned>>,
                      EntryData],
@@ -361,6 +366,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             append_data(State0, Id, Idx, Term, Data0,
                         DataSize, Record, Trunc)
     end.
+
 
 handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
            #state{writers = Writers} = State0) ->
@@ -811,6 +817,7 @@ validate_checksum(Checksum, Idx, Term, Data) ->
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
                  max_size_bytes => ?WAL_DEFAULT_MAX_SIZE_BYTES,
+                 max_entries => undefined,
                  recovery_chunk_size => ?WAL_RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
                  write_strategy => default,
@@ -818,3 +825,14 @@ merge_conf_defaults(Conf) ->
 
 to_binary(Term) ->
     term_to_binary(Term).
+
+should_roll_wal(DataSize, #state{conf = #conf{max_entries = MaxEntries},
+                                 file_size = FileSize,
+                                 wal = #wal{max_size = MaxWalSize,
+                                            entry_count = Count}}) ->
+    TooManyEntries = case MaxEntries of
+                         undefined -> false;
+                         _ ->
+                             Count + 1 > MaxEntries
+                     end,
+    FileSize + DataSize > MaxWalSize orelse TooManyEntries.
