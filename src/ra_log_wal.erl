@@ -30,6 +30,15 @@
 -define(MAGIC, "RAWA").
 -define(HEADER_SIZE, 5).
 
+-define(COUNTER_FIELDS,
+        [wal_files,
+         batches,
+         writes
+         ]).
+
+-define(C_WAL_FILES, 1).
+-define(C_BATCHES, 2).
+-define(C_WRITES, 3).
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
 % The pid is used for the immediate writer notification
@@ -202,7 +211,7 @@ init(#{dir := Dir} = Conf0) ->
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
-    CRef = ra_counters:new(?MODULE, 3),
+    CRef = ra_counters:new(?MODULE, ?COUNTER_FIELDS),
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
@@ -499,7 +508,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                                           max_size_bytes = MaxBytes,
                                           segment_writer = SegWriter} = Conf0}
           = State0) ->
-    counters:add(Conf0#conf.counter, 3, 1),
+    counters:add(Conf0#conf.counter, ?C_WAL_FILES, 1),
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
@@ -633,7 +642,7 @@ open_mem_table(UId) ->
     Tid.
 
 start_batch(#state{conf = #conf{counter = CRef}} = State) ->
-    ok = counters:add(CRef, 2, 1),
+    ok = counters:add(CRef, ?C_BATCHES, 1),
     State#state{batch = #batch{}}.
 
 
@@ -661,7 +670,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     % TS = os:system_time(microsecond),
     State0 = flush_pending(State00),
     % SyncTS = os:system_time(microsecond),
-    counters:add(Cfg#conf.counter, 1, NumWrites),
+    counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
     State = State0#state{batch = undefined},
 
     %% process writers
@@ -672,6 +681,9 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                                          term = Term,
                                          inserts = Inserts,
                                          tid = Tid}) ->
+                         %% need to reverse inserts in case an index overwrite
+                         %% came to be processed in the same batch.
+                         %% Unlikely, but possible
                          true = ets:insert(Tid, lists:reverse(Inserts)),
                          true = ets:update_element(ra_log_open_mem_tables, UId,
                                                    [{2, TblStart}, {3, To}]),

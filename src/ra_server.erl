@@ -180,7 +180,8 @@
                               tick_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
-                              ra_event_formatter => {module(), atom(), [term()]}}.
+                              ra_event_formatter => {module(), atom(), [term()]},
+                              counter => counters:counters_ref()}.
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
@@ -240,9 +241,11 @@ init(#{id := Id,
               end,
 
     SnapModule = ra_machine:snapshot_module(Machine),
+    Counter = maps:get(counter, Config, undefined),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
                                     uid => UId,
+                                    counter => Counter,
                                     log_id => LogId}),
     ok = ra_log:write_config(Config, Log0),
     CurrentTerm = ra_log_meta:fetch(UId, current_term, 0),
@@ -278,7 +281,8 @@ init(#{id := Id,
                machine_versions = [{SnapshotIdx, MacVer}],
                effective_machine_version = MacVer,
                effective_machine_module = MacMod,
-               max_pipeline_count = MaxPipelineCount},
+               max_pipeline_count = MaxPipelineCount,
+               counter = maps:get(counter, Config, undefined)},
 
     #{cfg => Cfg,
       current_term => CurrentTerm,
@@ -330,7 +334,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              last_index = LastIdx}},
               #{current_term := Term,
                 cfg := #cfg{id = Id,
-                            log_id = LogId}} = State0) ->
+                            log_id = LogId} = Cfg} = State0) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_SUCCESS, 1),
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~s: saw append_entries_reply from unknown peer ~w~n",
@@ -392,8 +397,9 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
                                              last_term = LastTerm}},
-              State0 = #{cfg := #cfg{log_id = LogId},
+              State0 = #{cfg := #cfg{log_id = LogId} = Cfg,
                          cluster := Nodes, log := Log0}) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_FAILED, 1),
     #{PeerId := Peer0 = #{match_index := MI,
                           next_index := NI}} = Nodes,
     % if the last_index exists and has a matching term we can forward
@@ -443,7 +449,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
     {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
-handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId}} = State00) ->
+handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId} = Cfg} = State00) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, 1),
     case append_log_leader(Cmd, State00) of
         {not_appended, Reason, State} ->
             ?WARN("~s command ~W NOT appended to log. Reason ~w",
@@ -468,8 +475,9 @@ handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId}} = State00) ->
                       end,
             {leader, State, Effects}
     end;
-handle_leader({commands, Cmds}, State00) ->
+handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
     %% TODO: refactor to use wal batch API?
+    Num = length(Cmds),
     {State0, Effects0} =
         lists:foldl(fun(C, {S0, E}) ->
                             {ok, I, T, S} = append_log_leader(C, S0),
@@ -481,9 +489,10 @@ handle_leader({commands, Cmds}, State00) ->
                                     {S, E}
                             end
                     end, {State00, []}, Cmds),
+    ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
+    ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
+    {State, _, Effects} = make_pipelined_rpc_effects(Num, State0, Effects0),
 
-    {State, _, Effects} = make_pipelined_rpc_effects(length(Cmds), State0,
-                                                     Effects0),
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
@@ -903,10 +912,11 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_term = PLTerm,
                                     entries = Entries0},
                 State00 = #{cfg := #cfg{log_id = LogId,
-                                        id = Id},
+                                        id = Id} = Cfg,
                             log := Log00,
                             current_term := CurTerm})
   when Term >= CurTerm ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
     %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
     State0 = update_term(Term, State00#{leader_id => LeaderId,
@@ -997,8 +1007,9 @@ handle_follower(#append_entries_rpc{term = Term,
              Effects}
     end;
 handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
-                #{cfg := #cfg{id = Id, log_id = LogId},
+                #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                   current_term := CurTerm} = State) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
     ?DEBUG("~s: follower got append_entries_rpc from ~w in"
@@ -1534,9 +1545,7 @@ make_pipelined_rpc_effects(MaxBatchSize,
                       %% is there more potentially pipelining
                       More = More0 orelse (NextIdx < NextLogIdx andalso
                                            NextIdx - MI < MaxPipelineCount),
-                      {update_peer(PeerId, Peer, S),
-                       More,
-                       [Eff | Effs]};
+                      {update_peer(PeerId, Peer, S), More, [Eff | Effs]};
                   false ->
                       Acc
               end;
@@ -1781,8 +1790,9 @@ read_at(Idx, #{log := Log0,
 %%% Internal functions
 %%%===================================================================
 
-call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId},
+call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                                current_term := CurrentTerm} = State0) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_ELECTIONS, 1),
     NewTerm = CurrentTerm + 1,
     ?DEBUG("~s: election called for in term ~b~n", [LogId, NewTerm]),
     PeerIds = peer_ids(State0),
@@ -1800,8 +1810,9 @@ call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
 call_for_election(pre_vote, #{cfg := #cfg{id = Id,
                                           log_id = LogId,
-                                          machine_version = MacVer},
+                                          machine_version = MacVer} = Cfg,
                               current_term := Term} = State0) ->
+    ok = incr_counter(Cfg, ?C_RA_SRV_PRE_VOTE_ELECTIONS, 1),
     ?DEBUG("~s: pre_vote election called for in term ~b~n", [LogId, Term]),
     Token = make_ref(),
     PeerIds = peer_ids(State0),
@@ -2570,6 +2581,11 @@ process_pending_consistent_queries(#{cluster_change_permitted := true,
         end,
         {State0#{pending_consistent_queries => []}, Effects0},
         Pending).
+
+incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:add(Cnt, Ix, N);
+incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
+    ok.
 
 %%% ===================
 %%% Internal unit tests

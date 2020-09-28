@@ -51,7 +51,7 @@
          transfer_leadership/3
         ]).
 
--export([send_rpc/2]).
+-export([send_rpc/3]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 100).
@@ -127,7 +127,8 @@
                flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer(),
                snapshot_chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
                receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer(),
-               aten_poll_interval = 1000 :: non_neg_integer()
+               aten_poll_interval = 1000 :: non_neg_integer(),
+               counter :: undefined | counters:counters_ref()
               }).
 
 -record(state, {conf :: #conf{},
@@ -244,12 +245,11 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
-    Config = maps:merge(config_defaults(), Config0),
+    Key = ra_lib:ra_server_id_to_local_name(Id),
+    Config = #{counter := Counter} = maps:merge(config_defaults(Key), Config0),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
-    Id = ra_server:id(ServerState),
-    Key = ra_lib:ra_server_id_to_local_name(Id),
     % ensure ra_directory has the new pid
     yes = ra_directory:register_name(UId, self(),
                                      maps:get(parent, Config, undefined), Key,
@@ -284,7 +284,8 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 flush_commands_size = FlushCommandsSize,
                                 snapshot_chunk_size = SnapshotChunkSize,
                                 receive_snapshot_timeout = ReceiveSnapshotTimeout,
-                                aten_poll_interval = AtenPollInt},
+                                aten_poll_interval = AtenPollInt,
+                                counter = Counter},
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     {ok, recover, State, [{next_event, cast, go}]}.
@@ -301,6 +302,7 @@ recover(enter, OldState, State0) ->
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
     true = erlang:garbage_collect(),
+    incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     %% we have to issue the next_event here so that the recovered state is
     %% only passed through very briefly
     next_state(recovered, State#state{server_state = ServerState},
@@ -858,6 +860,7 @@ terminate(Reason, StateName,
     end,
     _ = ets:delete(ra_metrics, Key),
     _ = ets:delete(ra_state, Key),
+    ok = ra_counters:delete({Key, self()}),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -986,7 +989,7 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
 handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
-    ?MODULE:send_rpc(To, Rpc),
+    ?MODULE:send_rpc(To, Rpc, State0),
     {State0, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
@@ -994,7 +997,7 @@ handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
     %% default is to send without any wrapping
-    ok = send(To, Msg),
+    ok = send(To, Msg, State#state.conf),
     {State, Actions};
 handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
               _, State, Actions) ->
@@ -1059,7 +1062,7 @@ handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
-    ok = gen_cast(To, Msg),
+    ok = gen_cast(To, Msg, State),
     {State, Actions};
 handle_effect(_, {reply, From, Reply}, _, State, Actions) ->
     % reply directly
@@ -1074,7 +1077,8 @@ handle_effect(_, {reply, Reply}, EvtType, _, _) ->
 handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
-                     conf = #conf{snapshot_chunk_size = ChunkSize}} = State0, Actions) ->
+                     conf = #conf{snapshot_chunk_size = ChunkSize} = Conf} = State0, Actions) ->
+    ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
     %% leader effect only
     Me = self(),
     Pid = spawn(fun () ->
@@ -1119,12 +1123,14 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
     {State, Actions};
 handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
               #state{server_state = ServerState0} = State0, Actions0) ->
+    incr_counter(State0#state.conf, ?C_RA_SRV_RELEASE_CURSORS, 1),
     {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
                                                              ServerState0),
     State1 = State0#state{server_state = ServerState},
     handle_effects(RaftState, Effects, EvtType, State1, Actions0);
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
+    incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     {State, Actions};
 handle_effect(_, {monitor, _ProcOrNode, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->
@@ -1166,22 +1172,23 @@ send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
     % TODO: review
-    [ok = ?MODULE:send_rpc(To, Rpc) || {send_rpc, To, Rpc} <-  Rpcs],
+    [ok = ?MODULE:send_rpc(To, Rpc, State) || {send_rpc, To, Rpc} <-  Rpcs],
     State.
 
 make_rpcs(State) ->
     {ServerState, Rpcs} = ra_server:make_rpcs(State#state.server_state),
     {State#state{server_state = ServerState}, Rpcs}.
 
-send_rpc(To, Msg) ->
+send_rpc(To, Msg, State) ->
+    incr_counter(State#state.conf, ?C_RA_SRV_RPCS_SENT, 1),
     % fake gen cast - need to avoid any blocking delays here
-    gen_cast(To, Msg).
+    gen_cast(To, Msg, State).
 
-gen_cast(To, Msg) ->
-    send(To, {'$gen_cast', Msg}).
+gen_cast(To, Msg, State) ->
+    send(To, {'$gen_cast', Msg}, State#state.conf).
 
 send_ra_event(To, Msg, FromId, EvtType, State) ->
-    send(To, wrap_ra_event(State, FromId, EvtType, Msg)).
+    send(To, wrap_ra_event(State, FromId, EvtType, Msg), State#state.conf).
 
 wrap_ra_event(#state{conf = #conf{ra_event_formatter = undefined}},
               FromId, EvtType, Evt) ->
@@ -1314,11 +1321,12 @@ do_state_query(initial_members, #{log := Log}) ->
             error
     end.
 
-config_defaults() ->
+config_defaults(RegName) ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
-      initial_members => []
+      initial_members => [],
+      counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS)
      }.
 
 maybe_redirect(From, Msg, #state{pending_commands = Pending,
@@ -1351,12 +1359,14 @@ reject_command(Pid, Corr, State) ->
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.
 
-send(To, Msg) ->
+send(To, Msg, Conf) ->
     % we do not want to block the ra server whilst attempting to set up
     % a TCP connection to a potentially down node.
     case erlang:send(To, Msg, [noconnect, nosuspend]) of
-        ok -> ok;
-        _ -> ok
+        ok ->
+            incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1);
+        _ ->
+            incr_counter(Conf, ?C_RA_SRV_DROPPED_SENDS, 1)
     end.
 
 
@@ -1425,15 +1435,18 @@ next_state(Next, State, Actions) ->
     {next_state, Next, State#state{election_timeout_set = false}, Actions}.
 
 send_msg({send_msg, To, Msg, Options}, State) ->
+    incr_counter(State#state.conf, ?C_RA_SRV_SEND_MSG_EFFS_SENT, 1),
     case parse_send_msg_options(Options) of
         {true, true} ->
-            gen_cast(To, wrap_ra_event(State, leader_id(State), machine, Msg));
+            gen_cast(To, wrap_ra_event(State, leader_id(State), machine, Msg),
+                    State);
         {true, false} ->
-            send(To, wrap_ra_event(State, leader_id(State), machine, Msg));
+            send(To, wrap_ra_event(State, leader_id(State), machine, Msg),
+                 State#state.conf);
         {false, true} ->
-            gen_cast(To, Msg);
+            gen_cast(To, Msg, State);
         {false, false} ->
-            send(To, Msg)
+            send(To, Msg, State#state.conf)
     end.
 
 has_local_opt(local) ->
@@ -1510,4 +1523,9 @@ record_leader_change(Leader, #state{conf = #conf{cluster_name = ClusterName},
                             server_state = ServerState}) ->
     Members = do_state_query(members, ServerState),
     ok = ra_leaderboard:record(ClusterName, Leader, Members),
+    ok.
+
+incr_counter(#conf{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:add(Cnt, Ix, N);
+incr_counter(#conf{counter = undefined}, _Ix, _N) ->
     ok.

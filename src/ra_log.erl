@@ -81,14 +81,17 @@
 
 -type effects() :: [effect()].
 
+-record(cfg, {uid :: ra_uid(),
+              log_id :: unicode:chardata(),
+              directory :: file:filename(),
+              snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+              snapshot_module :: module(),
+              resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
+              wal :: atom(),
+              counter :: undefined | counters:counters_ref()}).
+
 -record(?MODULE,
-        {uid :: ra_uid(),
-         log_id :: unicode:chardata(),
-         directory :: file:filename(),
-         snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
-         snapshot_module :: module(),
-         resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
-         wal :: atom(), % registered name
+        {cfg = #cfg{},
          %% mutable data below
          first_index = -1 :: ra_index(),
          last_index = -1 :: -1 | ra_index(),
@@ -113,7 +116,8 @@
                               snapshot_interval => non_neg_integer(),
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
-                              snapshot_module => module()}.
+                              snapshot_module => module(),
+                              counter => counters:counters_ref()}.
 
 -export_type([state/0,
               % reader/0,
@@ -154,6 +158,7 @@ init(#{uid := UId} = Conf) ->
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
     SnapshotsDir = filename:join(Dir, "snapshots"),
+    Counter = maps:get(counter, Conf, undefined),
 
     %% ensure directories are there
     ok = ra_lib:make_dir(Dir),
@@ -173,7 +178,7 @@ init(#{uid := UId} = Conf) ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
-    Reader = ra_log_reader:init(UId, FirstIdx, MaxOpen, SegRefs),
+    Reader = ra_log_reader:init(UId, FirstIdx, MaxOpen, SegRefs, Counter),
     % recover last snapshot file
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -183,17 +188,20 @@ init(#{uid := UId} = Conf) ->
                   {SnapIdx, FirstIdx}});
         false -> ok
     end,
-    State000 = #?MODULE{directory = Dir,
-                        uid = UId,
-                        log_id = LogId,
+    Cfg = #cfg{directory = Dir,
+               uid = UId,
+               log_id = LogId,
+               snapshot_interval = SnapInterval,
+               wal = Wal,
+               resend_window_seconds = ResendWindow,
+               snapshot_module = SnapModule,
+               counter = Counter},
+    State000 = #?MODULE{cfg = Cfg,
                         first_index = max(SnapIdx + 1, FirstIdx),
                         last_index = max(SnapIdx, LastIdx0),
                         reader = Reader,
-                        snapshot_state = SnapshotState,
-                        snapshot_interval = SnapInterval,
-                        wal = Wal,
-                        resend_window_seconds = ResendWindow,
-                        snapshot_module = SnapModule},
+                        snapshot_state = SnapshotState
+                       },
 
     LastIdx = State000#?MODULE.last_index,
     % recover the last term
@@ -214,13 +222,13 @@ init(#{uid := UId} = Conf) ->
     State = maybe_append_first_entry(State0),
     ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
            " first index ~b~n",
-           [State#?MODULE.log_id,
+           [State#?MODULE.cfg#cfg.log_id,
             last_index_term(State),
             State#?MODULE.first_index]),
     element(1, delete_segments(SnapIdx, State)).
 
 -spec close(state()) -> ok.
-close(#?MODULE{uid = UId,
+close(#?MODULE{cfg = #cfg{uid = UId},
                reader = Reader}) ->
     % deliberately ignoring return value
     % close all open segments
@@ -273,7 +281,8 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
     end;
 write([], State) ->
     {ok, State};
-write([{Idx, _, _} | _], #?MODULE{uid = UId, last_index = LastIdx}) ->
+write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
+                                  last_index = LastIdx}) ->
     Msg = lists:flatten(io_lib:format("~p: ra_log:write/2 "
                                       "tried writing ~b - expected ~b",
                                       [UId, Idx, LastIdx+1])),
@@ -281,22 +290,22 @@ write([{Idx, _, _} | _], #?MODULE{uid = UId, last_index = LastIdx}) ->
 
 -spec take(ra_index(), non_neg_integer(), state()) ->
     {[log_entry()], state()}.
-take(Start, Num, #?MODULE{uid = UId, first_index = FirstIdx,
+take(Start, Num, #?MODULE{cfg = Cfg,
+                          first_index = FirstIdx,
                           reader = Reader0,
                           last_index = LastIdx} = State)
   when Start >= FirstIdx andalso Start =< LastIdx andalso Num > 0 ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
     % 0. Check that the request isn't outside of first_index and last_index
     % 1. Check the local cache for any unflushed entries, carry remainders
     % 2. Check ra_log_open_mem_tables
     % 3. Check ra_log_closed_mem_tables in turn
     % 4. Check on disk segments in turn
     case cache_take(Start, Num, State) of
-        {Entries, MetricOps0, undefined} ->
-            ok = update_metrics(UId, MetricOps0),
+        {Entries, undefined} ->
             {Entries, State};
-        {Entries0, MetricOps0, {S, F}} ->
-            {Entries, Metr, Reader} = ra_log_reader:read(S, F, Reader0),
-            ok = update_metrics(UId, MetricOps0 ++ Metr),
+        {Entries0, {S, F}} ->
+            {Entries, Reader} = ra_log_reader:read(S, F, Reader0),
             %% TODO: avoid concat
             {Entries ++ Entries0, State#?MODULE{reader = Reader}}
     end;
@@ -371,11 +380,11 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
         {_X, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
-                   [State#?MODULE.log_id, Term, ToIdx, _X]),
+                   [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, _X]),
             {State, []}
     end;
 handle_event({written, {FromIdx, _, _}},
-             #?MODULE{log_id = LogId,
+             #?MODULE{cfg = #cfg{log_id = LogId},
                       last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
@@ -384,7 +393,7 @@ handle_event({written, {FromIdx, _, _}},
            [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
-             #?MODULE{uid = UId,
+             #?MODULE{cfg = #cfg{uid = UId},
                       reader = Reader0,
                       readers = Readers} = State0) ->
     ClosedTables = closed_mem_tables(UId),
@@ -490,15 +499,17 @@ set_snapshot_state(SnapState, State) ->
 
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
     {state(), effects()}.
-install_snapshot({Idx, _} = IdxTerm, SnapState, State0) ->
+install_snapshot({Idx, _} = IdxTerm, SnapState,
+                 #?MODULE{cfg = Cfg} = State0) ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
     {State, Effs} = delete_segments(Idx, State0),
     {State#?MODULE{snapshot_state = SnapState,
-                  first_index = Idx + 1,
-                  last_index = Idx,
-                  %% TODO: update last_term too?
-                  %% cache can go
-                  cache = #{},
-                  last_written_index_term = IdxTerm},
+                   first_index = Idx + 1,
+                   last_index = Idx,
+                   %% TODO: update last_term too?
+                   %% cache can go
+                   cache = #{},
+                   last_written_index_term = IdxTerm},
      Effs}.
 
 -spec recover_snapshot(State :: state()) ->
@@ -530,9 +541,9 @@ update_release_cursor(Idx, Cluster, MacVersion, MacState,
     end.
 
 update_release_cursor0(Idx, Cluster, MacVersion, MacState,
-                       #?MODULE{reader = Reader,
-                                snapshot_state = SnapState,
-                                snapshot_interval = SnapInter} = State0) ->
+                       #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
+                                reader = Reader,
+                                snapshot_state = SnapState} = State0) ->
     ClusterServerIds = maps:keys(Cluster),
     SnapLimit = case ra_snapshot:current(SnapState) of
                     undefined -> SnapInter;
@@ -598,7 +609,7 @@ write_sync(Entries, Log0) ->
     end.
 
 -spec can_write(state()) -> boolean().
-can_write(#?MODULE{wal = Wal}) ->
+can_write(#?MODULE{cfg = #cfg{wal = Wal}}) ->
     undefined =/= whereis(Wal).
 
 -spec exists(ra_idxterm(), state()) ->
@@ -633,15 +644,15 @@ overview(#?MODULE{last_index = LastIndex,
      }.
 
 -spec write_config(ra_server:config(), state()) -> ok.
-write_config(Config0, #?MODULE{directory = Dir}) ->
+write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ConfigPath = filename:join(Dir, "config"),
     % clean config of potentially unserialisable data
-    Config = maps:without([parent], Config0),
+    Config = maps:without([parent, counter], Config0),
     ok = ra_lib:write_file(ConfigPath,
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
-read_config(#?MODULE{directory = Dir}) ->
+read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
@@ -654,7 +665,7 @@ read_config(Dir) ->
     end.
 
 -spec delete_everything(state()) -> ok.
-delete_everything(#?MODULE{directory = Dir} = Log) ->
+delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
     _ = close(Log),
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
@@ -667,7 +678,8 @@ delete_everything(#?MODULE{directory = Dir} = Log) ->
 
 -spec release_resources(non_neg_integer(), state()) -> state().
 release_resources(MaxOpenSegments,
-                  #?MODULE{uid = UId,
+                  #?MODULE{cfg = #cfg{uid = UId,
+                                      counter = Counter},
                            first_index = FstIdx,
                            reader = Reader} = State) ->
     ActiveSegs = ra_log_reader:segment_refs(Reader),
@@ -676,11 +688,11 @@ release_resources(MaxOpenSegments,
     _ = ra_log_reader:close(Reader),
     %% open a new segment with the new max open segment value
     State#?MODULE{reader = ra_log_reader:init(UId, FstIdx, MaxOpenSegments,
-                                              ActiveSegs)}.
+                                              ActiveSegs, Counter)}.
 
 -spec register_reader(pid(), state()) ->
     {state(), effects()}.
-register_reader(Pid, #?MODULE{uid = UId,
+register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId},
                               first_index = Idx,
                               reader = Reader,
                               readers = Readers} = State) ->
@@ -704,8 +716,8 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
 
 %% deletes all segments where the last index is lower or equal to
 %% the Idx argumement
-delete_segments(Idx, #?MODULE{log_id = LogId,
-                              uid = UId,
+delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
+                                         uid = UId},
                               readers = Readers,
                               reader = Reader0} = State0) ->
     case ra_log_reader:update_first_index(Idx, Reader0) of
@@ -724,37 +736,46 @@ delete_segments(Idx, #?MODULE{log_id = LogId,
             {State, log_update_effects(Readers, Pid, State)}
     end.
 
-wal_truncate_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
+wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
+                                       wal = Wal} = Cfg,
+                            cache = Cache} = State,
                    {Idx, Term, Data}) ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
     % and that prior entries should be considered stale
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
     State#?MODULE{last_index = Idx, last_term = Term,
                   cache = Cache#{Idx => {Idx, Term, Data}}}.
 
-wal_write(#?MODULE{uid = UId, cache = Cache, wal = Wal} = State,
+wal_write(#?MODULE{cfg = #cfg{uid = UId,
+                              wal = Wal} = Cfg,
+                   cache = Cache} = State,
           {Idx, Term, Data}) ->
     case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Data) of
         ok ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             State#?MODULE{last_index = Idx, last_term = Term,
                           cache = Cache#{Idx => {Idx, Term, Data}}};
         {error, wal_down} ->
             exit(wal_down)
     end.
 
-wal_write_batch(#?MODULE{uid = UId, cache = Cache0, wal = Wal} = State,
+wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
+                                    wal = Wal} = Cfg,
+                         cache = Cache0} = State,
                 Entries) ->
     WriterId = {UId, self()},
-    {WalCommands, Cache} =
-        lists:foldl(fun ({Idx, Term, Data}, {WC, C0}) ->
+    {WalCommands, Num, Cache} =
+        lists:foldl(fun ({Idx, Term, Data}, {WC, N, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], C0#{Idx => {Idx, Term, Data}}}
-                    end, {[], Cache0}, Entries),
+                            {[WalC | WC], N+1, C0#{Idx => {Idx, Term, Data}}}
+                    end, {[], 0, Cache0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         ok ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
             State#?MODULE{last_index = LastIdx,
                           last_term = LastTerm,
                           cache = Cache};
@@ -789,25 +810,23 @@ cache_without(Idx, Idx, Cache) ->
 cache_without(FromIdx, ToIdx, Cache) ->
     cache_without(FromIdx + 1, ToIdx, maps:remove(FromIdx, Cache)).
 
-
-update_metrics(Id, Ops) ->
-    _ = ets:update_counter(ra_log_metrics, Id, Ops),
-    ok.
-
-cache_take(Start, Num, #?MODULE{cache = Cache, last_index = LastIdx}) ->
+cache_take(Start, Num, #?MODULE{cfg = Cfg,
+                                cache = Cache,
+                                last_index = LastIdx}) ->
     Highest = min(LastIdx, Start + Num - 1),
     % cache needs to be queried in reverse to ensure
     % we can bail out when an item is not found
     case cache_take0(Highest, Start, Cache, []) of
         [] ->
-            {[], [], {Start, Highest}};
+            {[], {Start, Highest}};
         [Last | _] = Entries when element(1, Last) =:= Start ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, Highest - Start + 1),
             % there is no remainder - everything was in the cache
-            {Entries, [{?METRICS_CACHE_POS, Highest - Start + 1}], undefined};
+            {Entries, undefined};
         [Last | _] = Entries ->
             LastEntryIdx = element(1, Last),
-            {Entries, [{?METRICS_CACHE_POS, LastIdx - Start + 1}],
-             {Start, LastEntryIdx - 1}}
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, LastIdx - Start + 1),
+            {Entries, {Start, LastEntryIdx - 1}}
     end.
 
 cache_take0(Next, Last, _Cache, Acc)
@@ -830,7 +849,7 @@ maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
 maybe_append_first_entry(State) ->
     State.
 
-resend_from(Idx, #?MODULE{uid = UId} = State0) ->
+resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
     try resend_from0(Idx, State0) of
         State -> State
     catch
@@ -840,11 +859,13 @@ resend_from(Idx, #?MODULE{uid = UId} = State0) ->
             State0
     end.
 
-resend_from0(Idx, #?MODULE{last_index = LastIdx,
+resend_from0(Idx, #?MODULE{cfg = Cfg,
+                           last_index = LastIdx,
                            last_resend_time = undefined,
                            cache = Cache} = State) ->
     ?DEBUG("~s: ra_log: resending from ~b to ~b",
-           [State#?MODULE.log_id, Idx, LastIdx]),
+           [State#?MODULE.cfg#cfg.log_id, Idx, LastIdx]),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, LastIdx - Idx + 1),
     lists:foldl(fun (I, Acc) ->
                         wal_write(Acc, maps:get(I, Cache))
                 end,
@@ -852,7 +873,7 @@ resend_from0(Idx, #?MODULE{last_index = LastIdx,
                 % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
 resend_from0(Idx, #?MODULE{last_resend_time = LastResend,
-                           resend_window_seconds = ResendWindow} = State) ->
+                           cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
     case erlang:system_time(seconds) > LastResend + ResendWindow of
         true ->
             % it has been more than a minute since last resend
@@ -889,7 +910,9 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
     end.
 
 write_snapshot(Meta, MacRef,
-               #?MODULE{snapshot_state = SnapState0} = State) ->
+               #?MODULE{cfg = Cfg,
+                        snapshot_state = SnapState0} = State) ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
     {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
@@ -970,6 +993,11 @@ log_update_wait_n(N) ->
               ok
     end.
 
+incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:add(Cnt, Ix, N);
+incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
+    ok.
+
 %%%% TESTS
 
 -ifdef(TEST).
@@ -979,13 +1007,12 @@ cache_take0_test() ->
     Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},
     State = #?MODULE{cache = Cache, last_index = 3, first_index = 1},
     % no remainder
-    {[{2, 9, b}], _, undefined} = cache_take(2, 1, State),
-    {[{2, 9, b}, {3, 9, c}], _,  undefined} = cache_take(2, 2, State),
-    {[{1, 9, a}, {2, 9, b}, {3, 9, c}], _, undefined} = cache_take(1, 3, State),
+    {[{2, 9, b}], undefined} = cache_take(2, 1, State),
+    {[{2, 9, b}, {3, 9, c}], undefined} = cache_take(2, 2, State),
+    {[{1, 9, a}, {2, 9, b}, {3, 9, c}], undefined} = cache_take(1, 3, State),
     % small remainder
-    {[{3, 9, c}], _, {1, 2}} = cache_take(1, 3,
-                                             State#?MODULE{cache = #{3 => {3, 9, c}}}),
-    {[], _, {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {4, 9, d}}}),
+    {[{3, 9, c}], {1, 2}} = cache_take(1, 3, State#?MODULE{cache = #{3 => {3, 9, c}}}),
+    {[], {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {4, 9, d}}}),
     ok.
 
 pick_range_test() ->

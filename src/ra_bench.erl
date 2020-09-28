@@ -25,7 +25,8 @@
 
          prepare/0,
          run/1,
-         run/0
+         run/0,
+         print_metrics/1
 
         ]).
 
@@ -79,8 +80,13 @@ run(#{name := Name,
     Taken = End - Start,
     io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
+
+    BName = atom_to_binary(Name, utf8),
+    print_metrics(BName),
+    [rpc:call(N, ?MODULE, print_metrics, [BName])
+     || N <- nodes()],
     _ = ra:delete_cluster(ServerIds),
-    print_metrics(atom_to_binary(Name, utf8)),
+    %% 
     ok.
 
 start(Name, Nodes) when is_atom(Name) ->
@@ -106,9 +112,10 @@ prepare() ->
 
 send_n(_, 0) -> ok;
 send_n(Leader, N) ->
-    ra:pipeline_command(Leader, {noop, <<>>}, make_ref(), normal),
+    ra:pipeline_command(Leader, {noop, <<>>}, make_ref(), low),
     send_n(Leader, N-1).
 
+-define(PIPE_SIZE, 4000).
 
 client_loop(0, 0, _Leader) ->
     ok;
@@ -128,18 +135,21 @@ client_loop(Num, Sent, _Leader) ->
             client_loop(Num, Sent,Leader)
     end.
 
-spawn_client(Parent, Leader, Num) when Num >= 1000 ->
+spawn_client(Parent, Leader, Num) when Num >= ?PIPE_SIZE ->
     spawn_link(
       fun () ->
               %% first send one 1000 noop commands
               %% then top up as they are applied
-              send_n(Leader, 1000),
-              ok = client_loop(Num, Num - 1000, Leader),
+              send_n(Leader, ?PIPE_SIZE),
+              ok = client_loop(Num, Num - ?PIPE_SIZE, Leader),
               Parent ! {done, self()}
       end).
 
 print_metrics(Name) ->
-    io:format("metrics ~p", [ets:lookup(ra_metrics, Name)]).
+    io:format("Node ~w:~n", [node()]),
+    io:format("metrics ~p~n~n", [ets:lookup(ra_metrics, Name)]),
+    io:format("counters ~p~n", [ra_counters:overview()]).
+
 
 
 % profile() ->

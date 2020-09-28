@@ -4,7 +4,7 @@
 %%
 %% Copyright (c) 2017-2020 VMware, Inc. or its affiliates.  All rights reserved.
 %%
--define(AER_CHUNK_SIZE, 25).
+-define(AER_CHUNK_SIZE, 128).
 -define(FOLD_LOG_BATCH_SIZE, 25).
 -define(DEFAULT_MAX_PIPELINE_COUNT, 4096).
 -define(MAX_FETCH_ENTRIES, 4096).
@@ -19,5 +19,6 @@
          machine_versions :: [{ra_index(), ra_machine:version()}, ...],
          effective_machine_version :: ra_machine:version(),
          effective_machine_module :: module(),
-         max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer()
+         max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer(),
+         counter :: undefined | counters:counters_ref()
         }).

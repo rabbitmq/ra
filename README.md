@@ -177,6 +177,11 @@ in a separate repository.
         <td>Positive integer</td>
     </tr>
     <tr>
+        <td>wal_max_entries</td>
+        <td>The maximum number of entries per WAL file. Default: undefined</td>
+        <td>Positive integer</td>
+    </tr>
+    <tr>
         <td>wal_compute_checksums</td>
         <td>Indicate whether the wal should compute and validate checksums. Default: `true`</td>
         <td>Boolean</td>
@@ -228,6 +233,13 @@ in a separate repository.
             Higher numbers may result in higher memory use. Default: 32768.
         </td>
         <td>Positive integer</td>
+    </tr>
+    <tr>
+        <td>wal_hibernate_after</td>
+        <td>
+            Enables hibernation after a timeout of inactivity for the WAL process.
+        </td>
+        <td>Milliseconds</td>
     </tr>
     <tr>
         <td>metrics_key</td>

@@ -36,6 +36,16 @@
 
 -define(AWAIT_TIMEOUT, 30000).
 
+-define(COUNTER_FIELDS,
+        [mem_tables,
+         segments,
+         entries
+         ]).
+
+-define(C_MEM_TABLES, 1).
+-define(C_SEGMENTS, 2).
+-define(C_ENTRIES, 3).
+
 %%% ra_log_segment_writer
 %%% receives a set of closed mem_segments from the wal
 %%% appends to the current segment for the ra server
@@ -106,7 +116,7 @@ await(SegWriter)  ->
 
 init([#{data_dir := DataDir} = Conf]) ->
     process_flag(trap_exit, true),
-    CRef = ra_counters:new(?MODULE, 2),
+    CRef = ra_counters:new(?MODULE, ?COUNTER_FIELDS),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{data_dir = DataDir,
                 counter = CRef,
@@ -126,7 +136,7 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     SegFiles.
 
 handle_cast({mem_tables, Tables, WalFile}, State) ->
-
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
     Degree = erlang:system_info(schedulers),
     _ = [begin
              {_, Failures} = ra_lib:partition_parallel(
@@ -219,20 +229,20 @@ get_overview(#state{data_dir = Dir,
 
 do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{data_dir = DataDir,
-                  segment_conf = SegConf}) ->
+                  segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
 
     case open_file(Dir, SegConf) of
         enoent ->
             ?WARN("segment_writer: skipping segment as directory ~s does "
-                   "not exist~n", [Dir]),
+                  "not exist~n", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(ServerUId, Tid),
             ok;
         Segment0 ->
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
-                                   Segment0, SegConf) of
+                                   Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
                            directory ~s disappeared whilst writing~n",
@@ -245,7 +255,8 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                     % notify writerid of new segment update
                     % includes the full range of the segment
                     % filter out any undefined segrefs
-                    ClosedSegRefs = [ra_log_segment:segref(S) || S <- Closed0,
+                    ClosedSegRefs = [ra_log_segment:segref(S)
+                                     || S <- Closed0,
                                         %% ensure we don't send undefined seg refs
                                         is_tuple(ra_log_segment:segref(S))],
                     SegRefs = case ra_log_segment:segref(Segment) of
@@ -295,23 +306,24 @@ clean_closed_mem_tables(UId, Tid) ->
          true = ets:delete_object(ra_log_closed_mem_tables, O)
      end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
-append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, SegConf) ->
+append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
     StartIdx = start_index(UId, StartIdx0),
     % EndIdx + 1 because FP
-    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], SegConf).
+    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], State).
 
-append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _)
+append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
   when StartIdx >= EndIdx ->
     {Seg, Closed};
-append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
+append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
     Data = term_to_binary(Data0),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
-            append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, SegConf);
+            ok = counters:add(State#state.counter, ?C_ENTRIES, 1),
+            append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
         {error, full} ->
             % close and open a new segment
-            case open_successor_segment(Seg0, SegConf) of
+            case open_successor_segment(Seg0, State#state.segment_conf) of
                 undefined ->
                     %% a successor cannot be opened - this is most likely due
                     %% to the directory having been deleted.
@@ -320,12 +332,13 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, SegConf) ->
                     _ = clean_closed_mem_tables(UId, Tid),
                     undefined;
                 Seg ->
+                    ok = counters:add(State#state.counter, ?C_SEGMENTS, 1),
                     %% re-evaluate snapshot state for the server in case
                     %% a snapshot has completed during segment flush
                     StartIdx = start_index(UId, Idx),
                     % recurse
                     append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
-                                      [Seg0 | Closed], SegConf)
+                                      [Seg0 | Closed], State)
             end;
         {error, Posix} ->
             FileName = ra_log_segment:filename(Seg0),
