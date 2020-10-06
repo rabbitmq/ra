@@ -228,6 +228,8 @@
 -define(C_RA_SRV_GCS, ?C_RA_LOG_RESERVED + 14).
 -define(C_RA_SRV_SNAPSHOTS_SENT, ?C_RA_LOG_RESERVED + 15).
 -define(C_RA_SRV_RELEASE_CURSORS, ?C_RA_LOG_RESERVED + 16).
+-define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
+-define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -247,7 +249,10 @@
          elections,
          forced_gcs,
          snapshots_sent,
-         release_cursors
+         release_cursors,
+         aer_received_follower_empty,
+         term_and_voted_for_updates
+
          ]).
 
 -define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).

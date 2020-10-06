@@ -647,16 +647,16 @@ follower_catchup(Config) ->
     % ok = logger:set_primary_config(level, all),
     meck:new(ra_server_proc, [passthrough]),
     meck:expect(ra_server_proc, send_rpc,
-                fun(P, #append_entries_rpc{entries = Entries} = T) ->
+                fun(P, #append_entries_rpc{entries = Entries} = T, S) ->
                         case contains(500, Entries) of
                             true ->
                                 ct:pal("dropped 500"),
                                 ok;
                             false ->
-                                meck:passthrough([P, T])
+                                meck:passthrough([P, T, S])
                         end;
-                   (P, T) ->
-                        meck:passthrough([P, T])
+                   (P, T, S) ->
+                        meck:passthrough([P, T, S])
                 end),
     Name = ?config(test_name, Config),
     % suite unique server names
@@ -735,7 +735,7 @@ post_partition_liveness(Config) ->
     {ok, _, Leader}  = ra:members({N1, node()}),
 
     % simulate partition
-    meck:expect(ra_server_proc, send_rpc, fun(_, _) -> ok end),
+    meck:expect(ra_server_proc, send_rpc, fun(_, _, _) -> ok end),
     Corr = make_ref(),
     % send an entry that will not be replicated
     ok = ra:pipeline_command(Leader, 500, Corr),

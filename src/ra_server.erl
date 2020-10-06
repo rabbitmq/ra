@@ -927,6 +927,7 @@ handle_follower(#append_entries_rpc{term = Term,
             {Log1, Entries} = drop_existing({Log0, Entries0}),
             case Entries of
                 [] ->
+                    ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
                     LastIdx = ra_log:last_index_term(Log1),
                     Log2 = case Entries0 of
                                [] when element(1, LastIdx) > PLIdx ->
@@ -945,13 +946,15 @@ handle_follower(#append_entries_rpc{term = Term,
                     % commit_index for previously written entries
                     {NextState, State, Effects} =
                          evaluate_commit_index_follower(State1, Effects0),
+                    % TODO: only send a reply if there is no pending write
+                    % between the follower and the wal as the written event
+                    % will trigger a reply anyway
                     Reply = append_entries_reply(Term, true, State),
                     {NextState, State,
                      [cast_reply(Id, LeaderId, Reply) | Effects]};
-                [{FirstIdx, _, _} | _] -> % FirstTerm
-                    {_LastIdx, State} = lists:foldl(
-                                          fun pre_append_log_follower/2,
-                                          {FirstIdx, State0}, Entries),
+                _ ->
+                    State = lists:foldl(fun pre_append_log_follower/2,
+                                        State0, Entries),
                     case ra_log:write(Entries, Log1) of
                         {ok, Log} ->
                             evaluate_commit_index_follower(State#{log => Log},
@@ -1941,7 +1944,7 @@ peer(PeerId, #{cluster := Nodes}) ->
 update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
     State#{cluster => Nodes#{PeerId => Peer}}.
 
-update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId},
+update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
                                             current_term := CurTerm} = State) ->
     CurVotedFor = maps:get(voted_for, State, undefined),
     case Term =:= CurTerm andalso VotedFor =:= CurVotedFor of
@@ -1949,8 +1952,10 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId},
             %% no update needed
             State;
         false ->
+            %% as this is a rare event it is ok to go sync here
             ok = ra_log_meta:store(UId, current_term, Term),
             ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),
+            incr_counter(Cfg, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, 1),
             reset_query_index(State#{current_term => Term,
                                      voted_for => VotedFor})
     end.
@@ -2265,7 +2270,7 @@ append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
     {ok, NextIdx, Term, State#{log => Log}}.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
-                        {_, State = #{cluster_index_term := {Idx, CITTerm}}})
+                        State = #{cluster_index_term := {Idx, CITTerm}})
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster
@@ -2273,22 +2278,21 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
-            {Idx, State#{cluster => Cluster,
-                         cluster_index_term => {Idx, Term}}};
+            State#{cluster => Cluster,
+                   cluster_index_term => {Idx, Term}};
         _ ->
             % revert back to previous cluster
-            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster,
-                                                        State),
+            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
-            pre_append_log_follower(Entry, {Idx, State1})
+            pre_append_log_follower(Entry, State1)
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
-                    {_, State}) ->
-    {{Idx, Term}, State#{cluster => Cluster,
-                         cluster_index_term => {Idx, Term}}};
-pre_append_log_follower({Idx, _, _}, {_, State}) ->
-    {Idx, State}.
+                        State) ->
+    State#{cluster => Cluster,
+           cluster_index_term => {Idx, Term}};
+pre_append_log_follower(_, State) ->
+    State.
 
 append_cluster_change(Cluster, From, ReplyMode,
                       State = #{log := Log0,
