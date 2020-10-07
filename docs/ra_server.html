@@ -151,7 +151,8 @@
       tick_timeout =&gt; non_neg_integer(),
       await_condition_timeout =&gt; non_neg_integer(),
       max_pipeline_count =&gt; non_neg_integer(),
-      ra_event_formatter =&gt; {module(), atom(), [term()]}}</pre></p>
+      ra_event_formatter =&gt; {module(), atom(), [term()]},
+      counter =&gt; <a href="counters.html#type-counters_ref">counters:counters_ref()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_server_state">ra_server_state()</a></h3>
@@ -219,6 +220,7 @@
 <tr><td valign="top"><a href="#uid-1">uid/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_id-1">leader_id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#machine_version-1">machine_version/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#machine_query-2">machine_query/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#make_rpcs-1">make_rpcs/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_release_cursor-3">update_release_cursor/3</a></td><td></td></tr>
@@ -393,6 +395,12 @@
 <h3 class="function"><a name="current_term-1">current_term/1</a></h3>
 <div class="spec">
 <p><pre>current_term(State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-maybe">maybe</a>(<a href="#type-ra_term">ra_term()</a>)</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="machine_version-1">machine_version/1</a></h3>
+<div class="spec">
+<p><pre>machine_version(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; non_neg_integer()</pre></p>
 <p> </p>
 </div>
 
