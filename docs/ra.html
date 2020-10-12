@@ -61,9 +61,7 @@
 <tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td>Same as <code>start_cluster/1</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#start_server-4">start_server/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server.</td></tr>
-<tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion
-  This function commits and end of life command which after each server applies
-  it will cause that server to shut down and delete all it's data.</td></tr>
+<tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-2">delete_cluster/2</a></td><td>Same as <code>delete_cluster/1</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#add_member-2">add_member/2</a></td><td>Add a ra server id to a ra cluster's membership configuration.</td></tr>
 <tr><td valign="top"><a href="#add_member-3">add_member/3</a></td><td>Same as <code>add_member/2</code> but also accepts a timeout.</td></tr>
@@ -350,11 +348,11 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><tt>ServerIds</tt>: the ra_server_ids of the cluster<br>
 </p>
 <p>returns: <code>{{ok, Leader} | error, nodedown}</code></p>
-</div><p>Deletes a ra cluster in an orderly fashion
-  This function commits and end of life command which after each server applies
-  it will cause that server to shut down and delete all it's data.
+</div><p>Deletes a ra cluster in an orderly fashion.
+  This function commits an end of life command which after each server applies
+  it will cause that server to shut down and delete all its data.
   The leader will stay up until it has successfully replicated the end of life
-  command to all servers after which it too will shut down and delete all it's
+  command to all servers after which it too will shut down and delete all of its
   data.</p>
 
 <h3 class="function"><a name="delete_cluster-2">delete_cluster/2</a></h3>

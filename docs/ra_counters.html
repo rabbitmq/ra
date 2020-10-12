@@ -15,6 +15,10 @@
 
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-name">name()</a></h3>
+<p><pre>name() = term()</pre></p>
+
+
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
 <p><b>abstract datatype</b>: <tt>state()</tt></p>
 
@@ -22,33 +26,47 @@
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-0">init/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#new-2">new/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#register-3">register/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#fetch-1">fetch/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#delete-1">delete/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-0">overview/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
 <h3 class="function"><a name="init-0">init/0</a></h3>
 <div class="spec">
-<p><tt>init() -&gt; any()</tt></p>
+<p><pre>init() -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="new-2">new/2</a></h3>
 <div class="spec">
-<p><tt>new(Name, Size) -&gt; any()</tt></p>
+<p><pre>new(Name :: <a href="#type-name">name()</a>, Fields :: [atom()]) -&gt; <a href="counters.html#type-counters_ref">counters:counters_ref()</a></pre></p>
 <p> </p>
 </div>
 
-<h3 class="function"><a name="register-3">register/3</a></h3>
+<h3 class="function"><a name="fetch-1">fetch/1</a></h3>
 <div class="spec">
-<p><tt>register(Name, Ref, Size) -&gt; any()</tt></p>
+<p><pre>fetch(Name :: <a href="#type-name">name()</a>) -&gt; undefined | <a href="counters.html#type-counters_ref">counters:counters_ref()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="delete-1">delete/1</a></h3>
+<div class="spec">
+<p><pre>delete(Name :: term()) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="overview-0">overview/0</a></h3>
 <div class="spec">
-<p><tt>overview() -&gt; any()</tt></p>
+<p><pre>overview() -&gt; #{<a href="#type-name">name()</a> =&gt; #{atom() =&gt; non_neg_integer()}}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="overview-1">overview/1</a></h3>
+<div class="spec">
+<p><pre>overview(Name :: <a href="#type-name">name()</a>) -&gt; #{atom() =&gt; non_neg_integer()}</pre></p>
 <p> </p>
 </div>
 <hr>

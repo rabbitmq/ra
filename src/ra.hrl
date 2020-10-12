@@ -188,3 +188,71 @@
 -define(DEFAULT_TIMEOUT, 5000).
 
 -define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
+
+-define(RA_LOG_COUNTER_FIELDS,
+        [write_ops,
+         write_resends,
+         read_ops,
+         read_cache,
+         read_open_mem_tbl,
+         read_closed_mem_tbl,
+         read_segment,
+         snapshots_written,
+         snapshot_installed,
+         reserved_1
+         ]).
+-define(C_RA_LOG_WRITE_OPS, 1).
+-define(C_RA_LOG_WRITE_RESENDS, 2).
+-define(C_RA_LOG_READ_OPS, 3).
+-define(C_RA_LOG_READ_CACHE, 4).
+-define(C_RA_LOG_READ_OPEN_MEM_TBL, 5).
+-define(C_RA_LOG_READ_CLOSED_MEM_TBL, 6).
+-define(C_RA_LOG_READ_SEGMENT, 7).
+-define(C_RA_LOG_SNAPSHOTS_WRITTEN, 8).
+-define(C_RA_LOG_SNAPSHOTS_INSTALLED, 9).
+-define(C_RA_LOG_RESERVED, 10).
+
+-define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
+-define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).
+-define(C_RA_SRV_AER_REPLIES_FAILED, ?C_RA_LOG_RESERVED + 3).
+-define(C_RA_SRV_COMMANDS, ?C_RA_LOG_RESERVED + 4).
+-define(C_RA_SRV_COMMAND_FLUSHES, ?C_RA_LOG_RESERVED + 5).
+-define(C_RA_SRV_AUX_COMMANDS, ?C_RA_LOG_RESERVED + 6).
+-define(C_RA_SRV_CONSISTENT_QUERIES, ?C_RA_LOG_RESERVED + 7).
+-define(C_RA_SRV_RPCS_SENT, ?C_RA_LOG_RESERVED + 8).
+-define(C_RA_SRV_MSGS_SENT, ?C_RA_LOG_RESERVED + 9).
+-define(C_RA_SRV_DROPPED_SENDS, ?C_RA_LOG_RESERVED + 10).
+-define(C_RA_SRV_SEND_MSG_EFFS_SENT, ?C_RA_LOG_RESERVED + 11).
+-define(C_RA_SRV_PRE_VOTE_ELECTIONS, ?C_RA_LOG_RESERVED + 12).
+-define(C_RA_SRV_ELECTIONS, ?C_RA_LOG_RESERVED + 13).
+-define(C_RA_SRV_GCS, ?C_RA_LOG_RESERVED + 14).
+-define(C_RA_SRV_SNAPSHOTS_SENT, ?C_RA_LOG_RESERVED + 15).
+-define(C_RA_SRV_RELEASE_CURSORS, ?C_RA_LOG_RESERVED + 16).
+-define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
+-define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
+
+
+-define(RA_SRV_COUNTER_FIELDS,
+        [
+         aer_received_follower,
+         aer_replies_success,
+         aer_replies_fail,
+         commands,
+         command_flushes,
+         aux_commands,
+         consistent_queries,
+         rpcs_sent,
+         msgs_sent, %% all messages sent (exept messages sent to wal)
+         dropped_sends, %% any message sends that return noconnect or nosuspend are dropped
+         send_msg_effects_sent,
+         pre_vote_elections,
+         elections,
+         forced_gcs,
+         snapshots_sent,
+         release_cursors,
+         aer_received_follower_empty,
+         term_and_voted_for_updates
+
+         ]).
+
+-define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).

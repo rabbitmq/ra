@@ -4,6 +4,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-include("src/ra.hrl").
 %%
 %%
 
@@ -132,17 +133,22 @@ receive_segment(Config) ->
     ok.
 
 read_one(Config) ->
+    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{uid => UId}),
+    Log0 = ra_log:init(#{uid => UId,
+                         counter => ra_counters:fetch(?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log:take(1, 5, Log2),
     % read out of range
     {[], Log} = ra_log:take(5, 5, Log2),
-    [{_, M1, M2, M3, M4}] = ets:lookup(ra_log_metrics, UId),
+    #{?FUNCTION_NAME := #{read_cache := M1,
+                          read_open_mem_tbl := M2,
+                          read_closed_mem_tbl := M3,
+                          read_segment := M4}} = ra_counters:overview(),
     % read two entries
-    ?assert(M1 + M2 + M3 + M4 =:= 1),
+    ?assertEqual(1, M1 + M2 + M3 + M4),
     ra_log:close(Log),
     ok.
 
@@ -165,7 +171,9 @@ take_after_overwrite_and_init(Config) ->
 
 validate_sequential_reads(Config) ->
     UId = ?config(uid, Config),
+    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log:init(#{uid => UId,
+                         counter => ra_counters:fetch(?FUNCTION_NAME),
                          max_open_segments => 100}),
     % write a few entries
     Log1 = append_and_roll(1, 500, 1, Log0),
@@ -180,11 +188,15 @@ validate_sequential_reads(Config) ->
                          {_, Reds} = erlang:statistics(exact_reductions),
                          {Reds - Reds0, L}
                  end),
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_metrics, UId),
-    ?assert(M1 + M2 + M3 + M4 =:= 1000),
+
+    #{?FUNCTION_NAME := #{read_cache := M1,
+                          read_open_mem_tbl := M2,
+                          read_closed_mem_tbl := M3,
+                          read_segment := M4} = O} = ra_counters:overview(),
+    ?assertEqual(1000, M1 + M2 + M3 + M4),
 
     ct:pal("validate_sequential_reads COLD took ~pms Reductions: ~p~nMetrics: ~p",
-           [ColdTaken/1000, ColdReds, Metrics]),
+           [ColdTaken/1000, ColdReds, O]),
     % we'd like to know if we regress beyond this
     % some of the reductions are spent validating the reads
     % NB: in OTP 21.1 reduction counts shot up mostly probably due to lists:reverse
@@ -211,7 +223,10 @@ validate_sequential_reads(Config) ->
 
 validate_reads_for_overlapped_writes(Config) ->
     UId = ?config(uid, Config),
-    Log0 = ra_log:init(#{uid => UId}),
+    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    Log0 = ra_log:init(#{uid => UId,
+                         counter => ra_counters:fetch(?FUNCTION_NAME)
+                        }),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
     % write 300 - 399 in term 1 - no roll
@@ -226,9 +241,11 @@ validate_reads_for_overlapped_writes(Config) ->
     Log7 = validate_read(1, 200, 1, Log6),
     Log8 = validate_read(200, 551, 2, Log7),
 
-    [{_, M1, M2, M3, M4}] = Metrics = ets:lookup(ra_log_metrics, UId),
-    ct:pal("Metrics: ~p", [Metrics]),
-    ?assert(M1 + M2 + M3 + M4 =:= 550),
+    #{?FUNCTION_NAME := #{read_cache := M1,
+                          read_open_mem_tbl := M2,
+                          read_closed_mem_tbl := M3,
+                          read_segment := M4}} = ra_counters:overview(),
+    ?assertEqual(550, M1 + M2 + M3 + M4),
     ra_log:close(Log8),
     ok.
 
@@ -287,7 +304,9 @@ written_event_after_snapshot(Config) ->
 
 updated_segment_can_be_read(Config) ->
     UId = ?config(uid, Config),
+    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log:init(#{uid => UId,
+                         counter => ra_counters:fetch(?FUNCTION_NAME),
                          snapshot_interval => 1}),
     %% append a few entrie
     Log2 = append_and_roll(1, 5, 1, Log0),
@@ -301,7 +320,7 @@ updated_segment_can_be_read(Config) ->
     {Entries1, _} = ra_log:take(1, 15, Log4),
     ct:pal("Entries: ~p~n", [Entries]),
     ct:pal("Entries1: ~p~n", [Entries1]),
-    ct:pal("Metrics ~p", [ets:tab2list(ra_log_metrics)]),
+    ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
     ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     ?assertEqual(15, length(Entries1)),
     % l18 = length(Entries1),
@@ -873,7 +892,7 @@ external_reader(Config) ->
             fun () ->
                     receive
                         {ra_log_reader_state, R1} = Evt ->
-                            {Es, _, R2} = ra_log_reader:read(0, 220, R1),
+                            {Es, R2} = ra_log_reader:read(0, 220, R1),
                             Len1 = length(Es),
                             ct:pal("Es ~w", [Len1]),
                             Self ! {got, Evt, Es},
@@ -881,10 +900,10 @@ external_reader(Config) ->
                                 {ra_log_update, _, F, _} = Evt2 ->
                                     %% reader before update has been processed
                                     %% should work
-                                    {Stale, _, _} = ra_log_reader:read(F, 220, R2),
+                                    {Stale, _} = ra_log_reader:read(F, 220, R2),
                                     ?assertEqual(Len1, length(Stale)),
                                     R3 = ra_log_reader:handle_log_update(Evt2, R2),
-                                    {Es2, _, _R4} = ra_log_reader:read(F, 220, R3),
+                                    {Es2, _R4} = ra_log_reader:read(F, 220, R3),
                                     ct:pal("Es2 ~w", [length(Es2)]),
                                     ?assertEqual(Len1, length(Es2)),
                                     Self ! {got, Evt2, Es2}
