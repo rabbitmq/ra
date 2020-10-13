@@ -272,5 +272,12 @@ logger:set_primary_config(level, debug).
 
 (c) 2017-2020, VMware Inc or its affiliates.
 
-Double licensed under the ASL2 and MPL2.0.
+Dual licensed under the Apache License Version 2.0 and
+Mozilla Public License Version 2.0.
+
+This means that the user can consider the library to be licensed under
+**any of the licenses from the list** above. For example, you may
+choose the Apache Public License 2.0 and include this library into a
+commercial product.
+
 See [LICENSE](./LICENSE) for details.
