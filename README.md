@@ -34,10 +34,9 @@ Ra supports the following Erlang/OTP versions:
 
  * `23.x`
  * `22.x`
- * `21.3.x` (testing will be discontinued in September 2020)
 
-22.x and later versions are **highly recommended**
-because of [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/).
+22.x and later versions use [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/) which
+algorithms such as Raft significantly benefit from.
 
 
 ## Design Goals
