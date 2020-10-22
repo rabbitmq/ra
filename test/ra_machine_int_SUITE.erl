@@ -13,6 +13,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-define(SYS, default).
 
 %%%===================================================================
 %%% Common Test callbacks
@@ -67,7 +68,7 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TestCase, Config) ->
-    ra_server_sup_sup:remove_all(),
+    ra_server_sup_sup:remove_all(?SYS),
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     [
@@ -813,7 +814,7 @@ validate_state_enters(States) ->
                   end, States).
 
 start_cluster(ClusterName, Machine, ServerIds) ->
-    {ok, Started, _} = ra:start_cluster(ClusterName, Machine, ServerIds),
+    {ok, Started, _} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     ?assertEqual(length(ServerIds), length(Started)),
     ok.
 

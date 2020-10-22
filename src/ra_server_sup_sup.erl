@@ -19,132 +19,144 @@
          ra_event_formatter]).
 
 %% API functions
--export([start_server/1,
-         restart_server/2,
-         stop_server/1,
-         delete_server/1,
-         remove_all/0,
-         start_link/0,
+-export([start_server/2,
+         restart_server/3,
+         stop_server/2,
+         delete_server/2,
+         remove_all/1,
+         start_link/1,
+         recover_config/2,
          % for rpcs only
-         prepare_start_rpc/1,
-         prepare_restart_rpc/1,
-         delete_server_rpc/1]).
+         start_server_rpc/3,
+         restart_server_rpc/3,
+         delete_server_rpc/2,
+         prepare_server_stop_rpc/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
 -include("ra.hrl").
 
--spec start_server(ra_server:ra_server_config()) ->
-    supervisor:startchild_ret() | {error, not_new}.
-start_server(#{id := NodeId,
-               uid := UId} = Config) ->
-    %% check that the node isn't already registered
+-spec start_server(System :: atom(), ra_server:ra_server_config()) ->
+    supervisor:startchild_ret() | {error, not_new | system_not_started}.
+start_server(System, #{id := NodeId,
+                       uid := UId} = Config)
+  when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(NodeId),
-    case rpc:call(Node, ?MODULE, prepare_start_rpc, [UId]) of
-        ok ->
-            supervisor:start_child({?MODULE, Node}, [Config]);
-        Err ->
-            Err
+    rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]).
+
+-spec restart_server(atom(), ra_server_id(), ra_server:mutable_config()) ->
+    supervisor:startchild_ret() | {error, system_not_started}.
+restart_server(System, {RaName, Node}, AddConfig) ->
+    rpc:call(Node, ?MODULE, restart_server_rpc,
+             [System, {RaName, Node}, AddConfig]).
+
+start_server_rpc(System, UId, Config0) ->
+    case ra_system:fetch(System) of
+        undefined ->
+            {error, system_not_started};
+        SysCfg ->
+            Config = Config0#{system_config => SysCfg},
+            %% check that the server isn't already registered
+            case ra_directory:name_of(System, UId) of
+                undefined ->
+                    case ra_system:lookup_name(System, server_sup) of
+                        {ok, Name} ->
+                            supervisor:start_child({Name, node()}, [Config]);
+                        Err ->
+                            Err
+                    end;
+                Name ->
+                    case whereis(Name) of
+                        undefined ->
+                            {error, not_new};
+                        Pid ->
+                            {error, {already_started, Pid}}
+                    end
+            end
     end.
 
--spec restart_server(ra_server_id(), ra_server:mutable_config()) ->
-    supervisor:startchild_ret().
-restart_server({RaName, Node}, AddConfig) ->
-    case rpc:call(Node, ?MODULE, prepare_restart_rpc, [RaName]) of
-        {ok, Config0} ->
-            %% only certain config keys are mutable
-            Config = maps:merge(Config0,
-                                maps:with(?MUTABLE_CONFIG_KEYS, AddConfig)),
-            supervisor:start_child({?MODULE, Node}, [Config]);
+restart_server_rpc(System, {RaName, Node}, AddConfig)
+  when is_atom(System) ->
+    case ra_system:fetch(System) of
+        undefined ->
+            {error, system_not_started};
+        _ ->
+            case recover_config(System, RaName) of
+                {ok, Config0} ->
+                    Config = maps:merge(Config0,
+                                        maps:with(?MUTABLE_CONFIG_KEYS, AddConfig)),
+                    {ok, Name} = ra_system:lookup_name(System, server_sup),
+                    supervisor:start_child({Name, Node}, [Config]);
+                Err ->
+                    Err
+            end
+    end.
+
+-spec stop_server(System :: atom(), RaNodeId :: ra_server_id()) ->
+    ok | {error, term()}.
+stop_server(System, ServerId) when is_atom(System) ->
+    Node = ra_lib:ra_server_id_node(ServerId),
+    RaName = ra_lib:ra_server_id_to_local_name(ServerId),
+    Res = rpc:call(Node, ?MODULE,
+                   prepare_server_stop_rpc, [System, RaName]),
+    case Res of
         {error, _} = Err ->
             Err;
+        {ok, Pid, SrvSup} when is_pid(Pid) ->
+            supervisor:terminate_child({SrvSup, Node}, Pid);
+        {ok, undefined, _} ->
+            %% no parent - no need to stop
+            ok;
         Err ->
             {error, Err}
     end.
 
-prepare_start_rpc(UId) ->
-    case ra_directory:name_of(UId) of
+prepare_server_stop_rpc(System, RaName) ->
+    case ra_system:fetch(System) of
         undefined ->
-            ok;
-        Name ->
-            case whereis(Name) of
-                undefined ->
-                    {error, not_new};
-                Pid ->
-                    {error, {already_started, Pid}}
-              end
+            {error, system_not_started};
+        #{names := #{server_sup := SrvSup} = Names} ->
+            Parent =  ra_directory:where_is_parent(Names, RaName),
+            {ok, Parent, SrvSup}
     end.
 
-prepare_restart_rpc(RaName) ->
-    case ra_directory:uid_of(RaName) of
-        undefined ->
-            name_not_registered;
-        UId ->
-            Dir = ra_env:server_data_dir(UId),
-            case ra_directory:where_is(UId) of
-                Pid when is_pid(Pid) ->
-                    case is_process_alive(Pid) of
-                        true ->
-                            {error, {already_started, Pid}};
-                        false ->
-                            ra_log:read_config(Dir)
-                    end;
-                _ ->
-                    % can it be made generic without already knowing the config state?
-                    ra_log:read_config(Dir)
-            end
-    end.
-
--spec stop_server(RaNodeId :: ra_server_id()) -> ok | {error, term()}.
-stop_server({RaName, Node}) ->
-    Pid = rpc:call(Node, ra_directory,
-                   where_is_parent, [RaName]),
-    case Pid of
-        undefined ->
-          ok;
-        _ when is_pid(Pid) ->
-          supervisor:terminate_child({?MODULE, Node}, Pid);
-        Err ->
-        {error, Err}
-    end;
-stop_server(RaName) ->
-    % local node
-    case ra_directory:where_is_parent(RaName) of
-        undefined -> ok;
-        Pid ->
-            supervisor:terminate_child(?MODULE, Pid)
-    end.
-
--spec delete_server(NodeId :: ra_server_id()) ->
+-spec delete_server(atom(), NodeId :: ra_server_id()) ->
     ok | {error, term()} | {badrpc, term()}.
-delete_server(NodeId) ->
+delete_server(System, NodeId) when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(NodeId),
     Name = ra_lib:ra_server_id_to_local_name(NodeId),
-    case stop_server(NodeId) of
+    case stop_server(System, NodeId) of
         ok ->
-            rpc:call(Node, ?MODULE, delete_server_rpc, [Name]);
+            rpc:call(Node, ?MODULE, delete_server_rpc, [System, Name]);
         {error, _} = Err -> Err
     end.
 
-delete_server_rpc(RaName) ->
-    ?INFO("Deleting server ~w and its data directory.",
-          [RaName]),
-    %% TODO: better handle and report errors
-    UId = ra_directory:uid_of(RaName),
-    Pid = ra_directory:where_is(RaName),
-    ra_log_meta:delete(UId),
-    Dir = ra_env:server_data_dir(UId),
-    _ = supervisor:terminate_child(?MODULE, UId),
-    _ = delete_data_directory(Dir),
-    _ = ra_directory:unregister_name(UId),
-    %% forcefully clean up ETS tables
-    catch ets:delete(ra_log_metrics, UId),
-    catch ets:delete(ra_log_snapshot_state, UId),
-    catch ets:delete(ra_metrics, RaName),
-    catch ets:delete(ra_state, RaName),
-    catch ets:delete(ra_open_file_metrics, Pid),
-    ok.
+delete_server_rpc(System, RaName) ->
+    case ra_system:fetch(System) of
+        undefined ->
+            {error, system_not_started};
+        #{data_dir := _SysDir,
+          names := #{log_meta := Meta,
+                     server_sup := SrvSup} = Names} ->
+            ?INFO("Deleting server ~w and its data directory.~n",
+                  [RaName]),
+            %% TODO: better handle and report errors
+            UId = ra_directory:uid_of(Names, RaName),
+            Pid = ra_directory:where_is(Names, RaName),
+            ra_log_meta:delete(Meta, UId),
+            Dir = ra_env:server_data_dir(System, UId),
+            _ = supervisor:terminate_child(SrvSup, UId),
+            _ = delete_data_directory(Dir),
+            _ = ra_directory:unregister_name(Names, UId),
+            %% forcefully clean up ETS tables
+            catch ets:delete(ra_log_metrics, UId),
+            catch ets:delete(ra_log_snapshot_state, UId),
+            catch ets:delete(ra_metrics, RaName),
+            catch ets:delete(ra_state, RaName),
+            catch ets:delete(ra_open_file_metrics, Pid),
+            ok
+    end.
 
 delete_data_directory(Directory) ->
     DeleteFunction = fun() ->
@@ -168,18 +180,39 @@ delete_data_directory(Directory) ->
                   end)
     end.
 
-remove_all() ->
+remove_all(System) when is_atom(System) ->
+    #{names := #{server_sup := Sup}} = ra_system:fetch(System),
     _ = [begin
-             ?DEBUG("ra: terminating child ~w", [Pid]),
-             supervisor:terminate_child(?MODULE, Pid)
+             ?DEBUG("ra: terminating child ~w in system ~s~n", [Pid, System]),
+             supervisor:terminate_child(Sup, Pid)
          end
-         || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],
+         || {_, Pid, _, _} <- supervisor:which_children(Sup)],
     ok.
 
--spec start_link() ->
+recover_config(System, RaName) ->
+    case ra_directory:uid_of(System, RaName) of
+        undefined ->
+            {error, name_not_registered};
+        UId ->
+            Dir = ra_env:server_data_dir(System, UId),
+            case ra_directory:where_is(System, UId) of
+                Pid when is_pid(Pid) ->
+                    case is_process_alive(Pid) of
+                        true ->
+                            {error, {already_started, Pid}};
+                        false ->
+                            ra_log:read_config(Dir)
+                    end;
+                _ ->
+                    % can it be made generic without already knowing the config state?
+                    ra_log:read_config(Dir)
+            end
+    end.
+
+-spec start_link(ra_system:config()) ->
     {ok, pid()} | ignore | {error, term()}.
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(#{names := #{server_sup := Name}}) ->
+    supervisor:start_link({local, Name}, ?MODULE, []).
 
 init([]) ->
     SupFlags = #{strategy => simple_one_for_one},

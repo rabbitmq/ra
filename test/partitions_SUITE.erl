@@ -151,6 +151,7 @@ validate_machine_state(Servers, Num) ->
     % give the cluster a bit of time to settle first
     timer:sleep(500),
     MacStates = [begin
+                     ct:pal("querying ~w", [N]),
                      {ok, {IT, _} = S, _} = ra:local_query(N, fun ra_lib:id/1),
                      ct:pal("validating ~w at ~w", [N, IT]),
                      S
@@ -235,8 +236,7 @@ setup_ra_cluster(Config, Machine) ->
                                          [ra, data_dir, [DataDir]]),
                         ok = ct_rpc:call(Node, application, set_env,
                                          [ra, wal_max_bytes, [64000000]]),
-                        ok = ct_rpc:call(Node, ra, start, []),
-
+                        {ok, _} = ct_rpc:call(Node, ra, start, [[{data_dir, DataDir}]]),
                         ok = ct_rpc:call(Node, logger, set_primary_config,
                                          [level, all]),
                         C

@@ -8,6 +8,8 @@
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends
 
+-define(SYS, default).
+
 all() ->
     [
      {group, tests}
@@ -36,18 +38,16 @@ groups() ->
     ].
 
 init_per_group(tests, Config) ->
+    ra_env:configure_logger(logger),
     PrivDir = ?config(priv_dir, Config),
     {ok, _} = ra:start_in(PrivDir),
+    SysCfg = ra_system:fetch(default),
     InitFun = fun (TestCase) ->
-                      try ra_directory:init(PrivDir) of
-                          _ -> ok
-                      catch
-                          _:_ ->
-                               ok
-                      end,
                       UId = atom_to_binary(TestCase, utf8),
-                      ra_directory:register_name(UId, self(), TestCase),
-                      ra_log:init(#{uid => UId})
+                      ra_directory:register_name(?SYS, UId, self(), undefined,
+                                                 TestCase, TestCase),
+                      ra_log:init(#{uid => UId,
+                                    system_config => SysCfg})
               end,
     [{init_fun, InitFun} | Config].
 
@@ -244,13 +244,13 @@ init_close_init(Config) ->
     Log0 = ?config(ra_log, Config),
     Log1 = append_in(1, "entry1", Log0),
     Log2 = append_in(2, "entry2", Log1),
-    ok = ra_log_meta:store_sync(?config(uid, Config), current_term, 2),
+    ok = ra_log_meta:store_sync(ra_log_meta, ?config(uid, Config), current_term, 2),
     ok = ra_log:close(Log2),
     LogA = InitFun(init_close_init),
     {2, 2} = ra_log:last_index_term(LogA),
     {{2, 2, "entry2"}, LogA1} = ra_log:fetch(2, LogA),
     {{1, 1, "entry1"}, LogA2} = ra_log:fetch(1, LogA1),
-    2 = ra_log_meta:fetch(?config(uid, Config), current_term),
+    2 = ra_log_meta:fetch(ra_log_meta, ?config(uid, Config), current_term),
     % ensure we can append after recovery
     LogB = append_in(2, "entry3", LogA2),
     {{1, 1, "entry1"}, LogB1} = ra_log:fetch(1, LogB),

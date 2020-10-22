@@ -33,6 +33,7 @@
          id/1,
          uid/1,
          log_id/1,
+         system_config/1,
          leader_id/1,
          current_term/1,
          machine_version/1,
@@ -181,7 +182,8 @@
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
-                              counter => counters:counters_ref()}.
+                              counter => counters:counters_ref(),
+                              system_config => ra_system:config()}.
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
@@ -221,6 +223,8 @@ init(#{id := Id,
        initial_members := InitialNodes,
        log_init_args := LogInitArgs,
        machine := MachineConf} = Config) ->
+    SystemConfig = maps:get(system_config, Config,
+                            ra_system:default_config()),
     LogId = maps:get(friendly_name, Config,
                      lists:flatten(io_lib:format("~w", [Id]))),
     MaxPipelineCount = maps:get(max_pipeline_count, Config,
@@ -244,13 +248,15 @@ init(#{id := Id,
     Counter = maps:get(counter, Config, undefined),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
+                                    system_config => SystemConfig,
                                     uid => UId,
                                     counter => Counter,
                                     log_id => LogId}),
     ok = ra_log:write_config(Config, Log0),
-    CurrentTerm = ra_log_meta:fetch(UId, current_term, 0),
-    LastApplied = ra_log_meta:fetch(UId, last_applied, 0),
-    VotedFor = ra_log_meta:fetch(UId, voted_for, undefined),
+    MetaName = meta_name(SystemConfig),
+    CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term, 0),
+    LastApplied = ra_log_meta:fetch(MetaName, UId, last_applied, 0),
+    VotedFor = ra_log_meta:fetch(MetaName, UId, voted_for, undefined),
 
     LatestMacVer = ra_machine:version(Machine),
 
@@ -282,7 +288,8 @@ init(#{id := Id,
                effective_machine_version = MacVer,
                effective_machine_module = MacMod,
                max_pipeline_count = MaxPipelineCount,
-               counter = maps:get(counter, Config, undefined)},
+               counter = maps:get(counter, Config, undefined),
+               system_config = SystemConfig},
 
     #{cfg => Cfg,
       current_term => CurrentTerm,
@@ -1358,6 +1365,9 @@ log_id(#{cfg := #cfg{log_id = LogId}}) -> LogId.
 -spec uid(ra_server_state()) -> ra_uid().
 uid(#{cfg := #cfg{uid = UId}}) -> UId.
 
+-spec system_config(ra_server_state()) -> ra_system:config().
+system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
+
 -spec leader_id(ra_server_state()) -> maybe(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
@@ -1650,8 +1660,8 @@ persist_last_applied(#{persisted_last_applied := PLA,
     % if last applied is less than PL for some reason do nothing
     State;
 persist_last_applied(#{last_applied := LastApplied,
-                       cfg := #cfg{uid = UId}} = State) ->
-    ok = ra_log_meta:store(UId, last_applied, LastApplied),
+                       cfg := #cfg{uid = UId} = Cfg} = State) ->
+    ok = ra_log_meta:store(meta_name(Cfg), UId, last_applied, LastApplied),
     State#{persisted_last_applied => LastApplied}.
 
 
@@ -1955,9 +1965,10 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
             %% no update needed
             State;
         false ->
+            MetaName = meta_name(Cfg),
             %% as this is a rare event it is ok to go sync here
-            ok = ra_log_meta:store(UId, current_term, Term),
-            ok = ra_log_meta:store_sync(UId, voted_for, VotedFor),
+            ok = ra_log_meta:store(MetaName, UId, current_term, Term),
+            ok = ra_log_meta:store_sync(MetaName, UId, voted_for, VotedFor),
             incr_counter(Cfg, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, 1),
             reset_query_index(State#{current_term => Term,
                                      voted_for => VotedFor})
@@ -2604,6 +2615,10 @@ incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
 incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
+meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
+    Name;
+meta_name(#{names := #{log_meta := Name}}) ->
+    Name.
 %%% ===================
 %%% Internal unit tests
 %%% ===================

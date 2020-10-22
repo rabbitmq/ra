@@ -247,14 +247,17 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
     Key = ra_lib:ra_server_id_to_local_name(Id),
-    Config = #{counter := Counter} = maps:merge(config_defaults(Key), Config0),
+    Config = #{counter := Counter,
+               system_config := SysConf} = maps:merge(config_defaults(Key),
+                                                      Config0),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
     % ensure ra_directory has the new pid
-    yes = ra_directory:register_name(UId, self(),
-                                     maps:get(parent, Config, undefined), Key,
-                                     ClusterName),
+    #{names := Names} = SysConf,
+    ok = ra_directory:register_name(Names, UId, self(),
+                                    maps:get(parent, Config, undefined), Key,
+                                    ClusterName),
 
     % ensure each relevant erlang node is connected
     Peers = maps:keys(maps:remove(Id, Cluster)),
@@ -834,14 +837,17 @@ terminate(Reason, StateName,
                  server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
     ?INFO("~s: terminating with ~w in state ~w",
           [log_id(State), Reason, StateName]),
+    #{names := #{server_sup := SrvSup,
+                 log_meta := MetaName} = Names} =
+        ra_server:system_config(ServerState),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
-    Parent = ra_directory:where_is_parent(UId),
+    Parent = ra_directory:where_is_parent(Names, UId),
     case Reason of
         {shutdown, delete} ->
             catch ra_leaderboard:clear(ClusterName),
-            catch ra_directory:unregister_name(UId),
-            catch ra_log_meta:delete_sync(UId),
+            catch ra_directory:unregister_name(Names, UId),
+            catch ra_log_meta:delete_sync(MetaName, UId),
             catch ets:delete(ra_state, UId),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
@@ -852,8 +858,7 @@ terminate(Reason, StateName,
                               receive
                                   {'DOWN', Ref, _, _, _} ->
                                       ok = supervisor:terminate_child(
-                                             ra_server_sup_sup,
-                                             Parent)
+                                             SrvSup, Parent)
                               after 5000 ->
                                         ok
                               end
@@ -1355,7 +1360,8 @@ config_defaults(RegName) ->
       tick_timeout => ?TICK_INTERVAL_MS,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS)
+      counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS),
+      system_config => ra_system:default_config()
      }.
 
 maybe_redirect(From, Msg, #state{pending_commands = Pending,

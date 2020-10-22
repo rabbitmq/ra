@@ -8,8 +8,7 @@
 
 -export([
          data_dir/0,
-         server_data_dir/1,
-         wal_data_dir/0,
+         server_data_dir/2,
          configure_logger/1
          ]).
 
@@ -27,18 +26,10 @@ data_dir() ->
     Node = ra_lib:to_list(node()),
     filename:join(DataDir, Node).
 
-server_data_dir(UId) ->
+server_data_dir(System, UId) when is_atom(System) ->
+    #{data_dir := Dir} = ra_system:fetch(System),
     Me = ra_lib:to_list(UId),
-    filename:join(data_dir(), Me).
-
-wal_data_dir() ->
-    %% allows the wal director to be overridden or fall back to the default
-    %% data directory
-    case application:get_env(ra, wal_data_dir) of
-        {ok, Dir} -> Dir;
-        _ ->
-            data_dir()
-    end.
+    filename:join(Dir, Me).
 
 %% use this when interacting with Ra from a node without Ra running on it
 configure_logger(Module) ->

@@ -13,12 +13,12 @@
          handle_batch/2,
          terminate/2,
          format_status/1,
-         store/3,
-         store_sync/3,
-         delete/1,
-         delete_sync/1,
-         fetch/2,
-         fetch/3
+         store/4,
+         store_sync/4,
+         delete/2,
+         delete_sync/2,
+         fetch/3,
+         fetch/4
         ]).
 
 -include("ra.hrl").
@@ -28,35 +28,39 @@
 -type key() :: current_term | voted_for | last_applied.
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.
 
--define(TBL_NAME, ?MODULE).
 -define(TIMEOUT, 30000).
--define(SYNC_INTERVAL, 5).
+-define(SYNC_INTERVAL, 5000).
 
--record(?MODULE, {ref :: reference()}).
+-record(?MODULE, {ref :: reference(),
+                  table_name :: atom()}).
 
 -opaque state() :: #?MODULE{}.
 
 -export_type([state/0]).
 
--spec start_link(Config :: map()) ->
+-spec start_link(ra_system:config()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
-start_link(Config) ->
-    gen_batch_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
+start_link(#{names := #{log_meta := Name}} = Cfg) ->
+    gen_batch_server:start_link({local, Name}, ?MODULE, Cfg, []).
 
--spec init(file:filename()) -> {ok, state()}.
-init(Dir) ->
+-spec init(ra_system:config()) -> {ok, state()}.
+init(#{name := System,
+       data_dir := Dir,
+       names := #{log_meta := TblName}}) ->
     process_flag(trap_exit, true),
     ok = ra_lib:make_dir(Dir),
     MetaFile = filename:join(Dir, "meta.dets"),
-    {ok, Ref} = dets:open_file(?TBL_NAME, [{file, MetaFile},
-                                           {auto_save, ?SYNC_INTERVAL}]),
-    _ = ets:new(?TBL_NAME, [named_table, public, {read_concurrency, true}]),
-    ?TBL_NAME = dets:to_ets(?TBL_NAME, ?TBL_NAME),
-    ?INFO("ra: meta data store initialised. ~b record(s) recovered",
-          [ets:info(?TBL_NAME, size)]),
-    {ok, #?MODULE{ref = Ref}}.
+    {ok, Ref} = dets:open_file(TblName, [{file, MetaFile},
+                                         {auto_save, ?SYNC_INTERVAL}]),
+    _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
+    TblName = dets:to_ets(TblName, TblName),
+    ?INFO("ra: meta data store initialised for system ~s. ~b record(s) recovered",
+          [System, ets:info(TblName, size)]),
+    {ok, #?MODULE{ref = Ref,
+                  table_name = TblName}}.
 
-handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
+handle_batch(Commands, #?MODULE{ref = Ref,
+                                table_name = TblName} = State) ->
     DoInsert =
         fun (Id, Key, Value, Inserts0) ->
                 case Inserts0 of
@@ -84,25 +88,26 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
                    [{reply, From, ok} | Replies], true};
               ({cast, {delete, Id}},
                {Inserts0, Replies, DoSync}) ->
-                  {handle_delete(Id, Ref, Inserts0), Replies, DoSync};
+                  {handle_delete(TblName, Id, Ref, Inserts0), Replies, DoSync};
               ({call, From, {delete, Id}},
                {Inserts0, Replies, _DoSync}) ->
-                  {handle_delete(Id, Ref, Inserts0),
+                  {handle_delete(TblName, Id, Ref, Inserts0),
                    [{reply, From, ok} | Replies], true}
           end, {#{}, [], false}, Commands),
     Objects = maps:values(Inserts),
-    ok = dets:insert(?MODULE, Objects),
-    true = ets:insert(?MODULE, Objects),
+    ok = dets:insert(TblName, Objects),
+    true = ets:insert(TblName, Objects),
     case ShouldSync of
         true ->
-            ok = dets:sync(?MODULE);
+            ok = dets:sync(TblName);
         false ->
             ok
     end,
     {ok, Replies, State}.
 
-terminate(_, #?MODULE{ref = Ref}) ->
-    ok = dets:sync(?MODULE),
+terminate(_, #?MODULE{ref = Ref,
+                      table_name = TblName}) ->
+    ok = dets:sync(TblName),
     _ = dets:close(Ref),
     ok.
 
@@ -110,54 +115,54 @@ format_status(State) ->
     State.
 
 %% send a message to the meta data store using cast
--spec store(ra_uid(), key(), value()) -> ok.
-store(UId, Key, Value) ->
-    gen_batch_server:cast(?MODULE, {store, UId, Key, Value}).
+-spec store(atom(), ra_uid(), key(), value()) -> ok.
+store(Name, UId, Key, Value) when is_atom(Name) ->
+    gen_batch_server:cast(Name, {store, UId, Key, Value}).
 
 %% waits until batch has been processed and synced.
 %% when it returns the store request has been safely flushed to disk
--spec store_sync(ra_uid(), key(), value()) -> ok.
-store_sync(UId, Key, Value) ->
-    gen_batch_server:call(?MODULE, {store, UId, Key, Value}, ?TIMEOUT).
+-spec store_sync(atom(), ra_uid(), key(), value()) -> ok.
+store_sync(Name, UId, Key, Value) ->
+    gen_batch_server:call(Name, {store, UId, Key, Value}, ?TIMEOUT).
 
--spec delete(ra_uid()) -> ok.
-delete(UId) ->
-    gen_batch_server:cast(?MODULE, {delete, UId}).
+-spec delete(atom(), ra_uid()) -> ok.
+delete(Name, UId) ->
+    gen_batch_server:cast(Name, {delete, UId}).
 
--spec delete_sync(ra_uid()) -> ok.
-delete_sync(UId) ->
-    gen_batch_server:call(?MODULE, {delete, UId}, ?TIMEOUT).
+-spec delete_sync(atom(), ra_uid()) -> ok.
+delete_sync(Name, UId) ->
+    gen_batch_server:call(Name, {delete, UId}, ?TIMEOUT).
 
 %% READER API
 
--spec fetch(ra_uid(), key()) -> value() | undefined.
-fetch(Id, current_term) ->
-    maybe_fetch(Id, 2);
-fetch(Id, voted_for) ->
-    maybe_fetch(Id, 3);
-fetch(Id, last_applied) ->
-    maybe_fetch(Id, 4).
+-spec fetch(atom(), ra_uid(), key()) -> value() | undefined.
+fetch(MetaName, Id, current_term) ->
+    maybe_fetch(MetaName, Id, 2);
+fetch(MetaName, Id, voted_for) ->
+    maybe_fetch(MetaName, Id, 3);
+fetch(MetaName, Id, last_applied) ->
+    maybe_fetch(MetaName, Id, 4).
 
--spec fetch(ra_uid(), key(), term()) -> value().
-fetch(Id, Key, Default) ->
-    case fetch(Id, Key) of
+-spec fetch(atom(), ra_uid(), key(), term()) -> value().
+fetch(MetaName, Id, Key, Default) ->
+    case fetch(MetaName, Id, Key) of
         undefined -> Default;
         Value -> Value
     end.
 
 %%% internal
 
-maybe_fetch(Id, Pos) ->
-    try ets:lookup_element(?TBL_NAME, Id, Pos) of
+maybe_fetch(MetaName, Id, Pos) ->
+    try ets:lookup_element(MetaName, Id, Pos) of
         E -> E
     catch
         _:badarg ->
             undefined
     end.
 
-handle_delete(Id, Ref, Inserts) ->
+handle_delete(TblName, Id, Ref, Inserts) ->
   _ = dets:delete(Ref, Id),
-  _ = ets:delete(?MODULE, Id),
+  _ = ets:delete(TblName, Id),
   maps:remove(Id, Inserts).
 
 update_key(current_term, Value, Data) ->
