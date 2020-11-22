@@ -72,7 +72,9 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="typedecl"><a name="type-builtin_command">builtin_command()</a></h3>
 <p><pre>builtin_command() = 
-    {down, pid(), term()} | {nodeup | nodedown, node()} | timeout</pre></p>
+    {down, pid(), term()} |
+    {nodeup | nodedown, node()} |
+    {timeout, term()}</pre></p>
 <p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
   to monitor effects</p>
 
