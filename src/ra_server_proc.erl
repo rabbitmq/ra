@@ -816,8 +816,9 @@ await_condition(EventType, Msg, State0) ->
         {pre_vote, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             next_state(pre_vote, State, Actions);
-        {await_condition, State1, []} ->
-            {keep_state, State1, []}
+        {await_condition, State1, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {keep_state, State, Actions}
     end.
 
 handle_event(_EventType, EventContent, StateName, State) ->
