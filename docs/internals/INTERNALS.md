@@ -150,12 +150,13 @@ or similar.
 
 ### Setting a timer
 
-The `{timer, Time :: non_neg_integer() | infinity}}` effects asks the Ra leader
+The `{timer, Name :: term(), Time :: non_neg_integer() | infinity}` effects asks the Ra leader
 to maintain a timer on behalf of the state machine and commit a `timeout` command
-when the timer triggers.
+when the timer triggers. If setting the time to `infinity`, the timer will not be started
+and any running timer with same name will be cancelled.
 
-The timer is relative and setting another timer before the current timer runs
-out results in the current timer being reset.
+The timer is relative and setting another timer with same name before the current 
+timer runs out results in the current timer being reset.
 
 All timers are invalidated when the leader changes. State machines should
 re-issue timer effects when becoming leader using the `state_enter/2`

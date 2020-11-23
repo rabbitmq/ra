@@ -100,7 +100,7 @@
 
 -type builtin_command() :: {down, pid(), term()} |
                            {nodeup | nodedown, node()} |
-                           timeout.
+                           {timeout, term()}.
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
