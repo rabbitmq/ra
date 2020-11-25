@@ -412,6 +412,9 @@ leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
 leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+leader(info, {update_peer, PeerId, Update}, State0) ->
+    State = update_peer(PeerId, Update, State0),
+    {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
@@ -472,7 +475,7 @@ candidate({call, From}, {leader_call, Msg},
 candidate(cast, {command, _Priority,
                  {_CmdType, _Data, {notify, Corr, Pid}}},
           State) ->
-    ok = reject_command(Pid, Corr, State),
+    _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 candidate({call, From}, {local_query, QueryFun},
           #state{server_state = ServerState} = State) ->
@@ -520,7 +523,7 @@ pre_vote({call, From}, {leader_call, Msg},
 pre_vote(cast, {command, _Priority,
                 {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
-    ok = reject_command(Pid, Corr, State),
+    _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 pre_vote({call, From}, {local_query, QueryFun},
           #state{server_state = ServerState} = State) ->
@@ -594,7 +597,7 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
 follower(cast, {command, _Priority,
                 {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
-    ok = reject_command(Pid, Corr, State),
+    _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 follower({call, From}, {local_query, QueryFun},
          #state{server_state = ServerState} = State) ->
@@ -987,18 +990,39 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
                          end, {State0, Actions0}, Effects0),
     {State, lists:reverse(Actions)}.
 
-handle_effect(_, {send_rpc, To, Rpc}, _, State0, Actions) ->
+handle_effect(_, {send_rpc, To, Rpc}, _,
+              #state{conf = Conf} = State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
-    ?MODULE:send_rpc(To, Rpc, State0),
-    {State0, Actions};
+    case ?MODULE:send_rpc(To, Rpc, State0) of
+        ok ->
+            {State0, Actions};
+        nosuspend ->
+            %% update peer status to suspended and spawn a process
+            %% to send the rpc without nosuspend so that it will block until
+            %% the data can get through
+            Self = self(),
+            _Pid = spawn_link(fun () ->
+                                      ok = gen_statem:cast(To, Rpc),
+                                      incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
+                                      Self ! {update_peer, To, #{status => normal}}
+                              end),
+            {update_peer(To, #{status => suspended}, State0), Actions};
+        noconnect ->
+            %% send failure: rpc will be re-generated and sent next time
+            %% instead - the fallback state allows us to reset the peer's
+            %% next_index and commit_index_sent to what they were before the
+            %% rpc was generated
+            {State0, Actions}
+    end;
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
     %% default is to send without any wrapping
-    ok = send(To, Msg, State#state.conf),
+    %% TODO: handle send failure? how?
+    _ = send(To, Msg, State#state.conf),
     {State, Actions};
 handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
               _, State, Actions) ->
@@ -1055,7 +1079,7 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
                                                      State0#state.server_state),
     {State, Actions} =
-        handle_effects(RaftState, Effects,  EventType,
+        handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
@@ -1063,7 +1087,8 @@ handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
-    ok = gen_cast(To, Msg, State),
+    %% TODO: handle send failure
+    _ = gen_cast(To, Msg, State),
     {State, Actions};
 handle_effect(_, {reply, From, Reply}, _, State, Actions) ->
     % reply directly
@@ -1101,7 +1126,7 @@ handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
                 end),
     %% update the peer state so that no pipelined entries are sent during
     %% the snapshot sending phase
-    SS = ra_server:update_peer_status(To, {sending_snapshot, Pid}, SS0),
+    SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid}}, SS0),
     {State0#state{server_state = SS,
                   monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
                   Actions};
@@ -1153,6 +1178,7 @@ handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
+    %% TODO: catch and log failures or rely on calling function never crashing
     _ = erlang:apply(Mod, Fun, Args),
     {State, Actions};
 handle_effect(_RaftState, start_election_timeout, _, State, Actions) ->
@@ -1173,7 +1199,9 @@ send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
     % TODO: review
-    [ok = ?MODULE:send_rpc(To, Rpc, State) || {send_rpc, To, Rpc} <-  Rpcs],
+    % We can ignore send failures here as they have not incremented
+    % the peer's next index
+    [_ = ?MODULE:send_rpc(To, Rpc, State) || {send_rpc, To, Rpc} <- Rpcs],
     State.
 
 make_rpcs(State) ->
@@ -1182,7 +1210,7 @@ make_rpcs(State) ->
 
 send_rpc(To, Msg, State) ->
     incr_counter(State#state.conf, ?C_RA_SRV_RPCS_SENT, 1),
-    % fake gen cast - need to avoid any blocking delays here
+    % fake gen cast
     gen_cast(To, Msg, State).
 
 gen_cast(To, Msg, State) ->
@@ -1362,12 +1390,15 @@ maybe_persist_last_applied(#state{server_state = NS} = State) ->
 
 send(To, Msg, Conf) ->
     % we do not want to block the ra server whilst attempting to set up
-    % a TCP connection to a potentially down node.
+    % a TCP connection to a potentially down node or when the distribution
+    % buffer is full, better to drop and try again later
     case erlang:send(To, Msg, [noconnect, nosuspend]) of
         ok ->
-            incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1);
-        _ ->
-            incr_counter(Conf, ?C_RA_SRV_DROPPED_SENDS, 1)
+            incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
+            ok;
+        Res ->
+            incr_counter(Conf, ?C_RA_SRV_DROPPED_SENDS, 1),
+            Res
     end.
 
 
@@ -1521,7 +1552,7 @@ handle_process_down(Pid, Info, RaftState,
     {keep_state, State, Actions}.
 
 record_leader_change(Leader, #state{conf = #conf{cluster_name = ClusterName},
-                            server_state = ServerState}) ->
+                                    server_state = ServerState}) ->
     Members = do_state_query(members, ServerState),
     ok = ra_leaderboard:record(ClusterName, Leader, Members),
     ok.
@@ -1530,3 +1561,9 @@ incr_counter(#conf{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
 incr_counter(#conf{counter = undefined}, _Ix, _N) ->
     ok.
+
+update_peer(PeerId, Update,
+            #state{server_state = ServerState} = State0)
+  when is_map(Update) ->
+    State0#state{server_state =
+                 ra_server:update_peer(PeerId, Update, ServerState)}.

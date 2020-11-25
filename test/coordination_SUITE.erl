@@ -449,6 +449,8 @@ start_follower(N, PrivDir) ->
     ct:pal("starting secondary node with ~s on host ~s for node ~s~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
+    ok = ct_rpc:call(S, logger, set_primary_config,
+                     [level, all]),
     S.
 
 flush() ->
