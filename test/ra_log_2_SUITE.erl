@@ -1110,7 +1110,8 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0,
-      query_index => 0}.
+      query_index => 0,
+      status => normal}.
 
 flush() ->
     receive

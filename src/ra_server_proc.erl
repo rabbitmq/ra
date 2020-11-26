@@ -1002,17 +1002,17 @@ handle_effect(_, {send_rpc, To, Rpc}, _,
             %% to send the rpc without nosuspend so that it will block until
             %% the data can get through
             Self = self(),
-            _Pid = spawn_link(fun () ->
-                                      ok = gen_statem:cast(To, Rpc),
-                                      incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
-                                      Self ! {update_peer, To, #{status => normal}}
-                              end),
+            _Pid = spawn(fun () ->
+                                 %% AFAIK none of the below code will throw and
+                                 %% exception so we should always end up setting
+                                 %% the peer status back to normal
+                                 ok = gen_statem:cast(To, Rpc),
+                                 incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
+                                 Self ! {update_peer, To, #{status => normal}}
+                         end),
             {update_peer(To, #{status => suspended}, State0), Actions};
         noconnect ->
-            %% send failure: rpc will be re-generated and sent next time
-            %% instead - the fallback state allows us to reset the peer's
-            %% next_index and commit_index_sent to what they were before the
-            %% rpc was generated
+            %% for noconnects just allow it to pipeline and catch up later
             {State0, Actions}
     end;
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->

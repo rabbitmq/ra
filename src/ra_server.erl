@@ -1322,7 +1322,8 @@ is_fully_replicated(#{commit_index := CI} = State) ->
         [] -> true; % there is only one server
         Peers ->
             MinMI = lists:min([M || #{match_index := M} <- Peers]),
-            MinMI >= CI
+            MinCI = lists:min([M || #{commit_index_sent := M} <- Peers]),
+            MinMI >= CI andalso MinCI >= CI
     end.
 
 handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod},
@@ -1909,7 +1910,8 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0,
-      query_index => 0}.
+      query_index => 0,
+      status => normal}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).

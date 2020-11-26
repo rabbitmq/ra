@@ -49,7 +49,7 @@
                            commit_index_sent := non_neg_integer(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
-                           status => ra_peer_status()}.
+                           status := ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
