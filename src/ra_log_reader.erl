@@ -174,7 +174,8 @@ retry_read(N, From, To, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State) ->
 
 
 -spec fetch_term(ra_index(), state()) -> {ra_index(), state()}.
-fetch_term(Idx, #?STATE{cfg = #cfg{uid = UId}} = State0) ->
+fetch_term(Idx, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State0) ->
+    incr_counter(Cfg, {?C_RA_LOG_FETCH_TERM, 1}),
     case ets:lookup(ra_log_open_mem_tables, UId) of
         [{_, From, To, Tid}] when Idx >= From andalso Idx =< To ->
             Term = ets:lookup_element(Tid, Idx, 2),

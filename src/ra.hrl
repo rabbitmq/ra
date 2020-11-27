@@ -197,6 +197,7 @@
          read_open_mem_tbl,
          read_closed_mem_tbl,
          read_segment,
+         fetch_term,
          snapshots_written,
          snapshot_installed,
          reserved_1
@@ -208,9 +209,10 @@
 -define(C_RA_LOG_READ_OPEN_MEM_TBL, 5).
 -define(C_RA_LOG_READ_CLOSED_MEM_TBL, 6).
 -define(C_RA_LOG_READ_SEGMENT, 7).
--define(C_RA_LOG_SNAPSHOTS_WRITTEN, 8).
--define(C_RA_LOG_SNAPSHOTS_INSTALLED, 9).
--define(C_RA_LOG_RESERVED, 10).
+-define(C_RA_LOG_FETCH_TERM, 8).
+-define(C_RA_LOG_SNAPSHOTS_WRITTEN, 9).
+-define(C_RA_LOG_SNAPSHOTS_INSTALLED, 10).
+-define(C_RA_LOG_RESERVED, 11).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).
