@@ -214,17 +214,18 @@ take(Config) ->
                                ra_log:append_sync(Entry, L0)
                        end, Log0, lists:seq(Idx, LastIdx)),
     % wont work for memory
-    {[?IDX(1)], Log2} = ra_log:take(1, 1, Log1),
-    {[?IDX(1), ?IDX(2)], Log3} = ra_log:take(1, 2, Log2),
+    {[?IDX(1)], 1, Log2} = ra_log:take(1, 1, Log1),
+    {[?IDX(1), ?IDX(2)], 2, Log3} = ra_log:take(1, 2, Log2),
     % partly out of range
-    {[?IDX(9), ?IDX(10)], Log4} = ra_log:take(9, 3, Log3),
+    {[?IDX(9), ?IDX(10)], 2, Log4} = ra_log:take(9, 3, Log3),
     % completely out of range
-    {[], Log5} = ra_log:take(11, 3, Log4),
+    {[], 0, Log5} = ra_log:take(11, 3, Log4),
     % take all
-    {Taken, _} = ra_log:take(1, 10, Log5),
-    %% take 0
-    {[], _} = ra_log:take(5, 0, Log5),
+    {Taken, C0, _} = ra_log:take(1, 10, Log5),
+    ?assertEqual(length(Taken), C0),
     ?assertEqual(10, length(Taken)),
+    %% take 0
+    {[], 0, _} = ra_log:take(5, 0, Log5),
     ok.
 
 

@@ -1611,18 +1611,8 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                           cfg := #cfg{id = Id},
                           commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
-    %% TODO: refactor to avoid lists:last call later
-    %% ra_log:take should be able to return the actual number of entries
-    %% read at fixed cost
-    {Entries, Log} = ra_log:take(Next, Num, Log0),
-    NextIndex = case Entries of
-                    [] -> Next;
-                    _ ->
-                        {LastIdx, _, _} = lists:last(Entries),
-                        %% assertion
-                        {Next, _, _} = hd(Entries),
-                        LastIdx + 1
-                end,
+    {Entries, NumRead, Log} = ra_log:take(Next, Num, Log0),
+    NextIndex = Next + NumRead,
     {NextIndex,
      {send_rpc, PeerId,
       #append_entries_rpc{entries = Entries,
@@ -2017,7 +2007,7 @@ fetch_term(Idx, #{log := Log}) ->
     ra_log:fetch_term(Idx, Log).
 
 fetch_entries(From, To, #{log := Log0} = State) ->
-    {Entries, Log} = ra_log:take(From, To - From + 1, Log0),
+    {Entries, _, Log} = ra_log:take(From, To - From + 1, Log0),
     {Entries, State#{log => Log}}.
 
 make_cluster(Self, Nodes) ->
@@ -2403,9 +2393,9 @@ log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
 
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, ?FOLD_LOG_BATCH_SIZE, Log0) of
-        {[], Log} ->
+        {[], _, Log} ->
             {ok, {St, Log}};
-        {Entries, Log}  ->
+        {Entries, _, Log}  ->
             try
                 St1 = lists:foldl(Folder, St, Entries),
                 fold_log_from(From + ?FOLD_LOG_BATCH_SIZE, Folder, {St1, Log})

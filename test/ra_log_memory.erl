@@ -102,10 +102,9 @@ write(_Entries, _State) ->
     {error, {integrity_error, undefined}}.
 
 
--spec take(ra_index(), non_neg_integer(), ra_log_memory_state()) ->
-    {[log_entry()], ra_log_memory_state()}.
 take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
-    {sparse_take(Start, Log, Num, LastIdx, []), State}.
+    Entries = sparse_take(Start, Log, Num, LastIdx, []),
+    {Entries, length(Entries), State}.
 
 % this allows for missing entries in the log
 sparse_take(Idx, _Log, Num, Max, Res)

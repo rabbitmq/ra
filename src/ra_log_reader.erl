@@ -18,6 +18,7 @@
          num_open_segments/1,
          update_first_index/2,
          read/3,
+         read/4,
          fetch_term/2
          ]).
 
@@ -136,39 +137,45 @@ num_open_segments(#?STATE{open_segments = Open}) ->
      ra_flru:size(Open).
 
 -spec read(ra_index(), ra_index(), state()) ->
-    {[log_entry()], state()}.
-read(From, To, State) when From =< To ->
-    retry_read(2, From, To, State);
-read(_From, _To, State) ->
-    {[], State}.
+    {[log_entry()], NumRead :: non_neg_integer(), state()}.
+read(From, To, State) ->
+    read(From, To, State, []).
 
-retry_read(0, From, To, State) ->
+-spec read(ra_index(), ra_index(), state(), [log_entry()]) ->
+    {[log_entry()], NumRead :: non_neg_integer(), state()}.
+read(From, To, State, Entries) when From =< To ->
+    retry_read(2, From, To, Entries, State);
+read(_From, _To, State, Entries) ->
+    {Entries, 0, State}.
+
+retry_read(0, From, To, _Acc, State) ->
     exit({ra_log_reader_reader_retry_exhausted, From, To, State});
-retry_read(N, From, To, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State) ->
+retry_read(N, From, To, Acc, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State) ->
     % 2. Check ra_log_open_mem_tables
     % 3. Check ra_log_closed_mem_tables in turn
     % 4. Check on disk segments in turn
-    case open_mem_tbl_take(UId, {From, To}, []) of
-        {Entries1, Counter0, undefined} ->
+    case open_mem_tbl_take(UId, {From, To}, Acc) of
+        {Entries1, {_, C} = Counter0, undefined} ->
             ok = incr_counter(Cfg, Counter0),
-            {Entries1, State};
-        {Entries1, Counter0, Rem1} ->
+            {Entries1, C, State};
+        {Entries1, {_, C0} = Counter0, Rem1} ->
             ok = incr_counter(Cfg, Counter0),
             case catch closed_mem_tbl_take(UId, Rem1, Entries1) of
-                {Entries2, Counter1, undefined} ->
+                {Entries2, {_, C1} = Counter1, undefined} ->
                     ok = incr_counter(Cfg, Counter1),
-                    {Entries2, State};
-                {Entries2, Counter1, {S, E} = Rem2} ->
+                    {Entries2, C0 + C1, State};
+                {Entries2, {_, C1} = Counter1, {S, E} = Rem2} ->
                     ok = incr_counter(Cfg, Counter1),
                     case catch segment_take(State, Rem2, Entries2) of
                         {Open, undefined, Entries} ->
+                            C = (E - S + 1) + C0 + C1,
                             incr_counter(Cfg, {?C_RA_LOG_READ_SEGMENT, E - S + 1}),
-                            {Entries, State#?MODULE{open_segments = Open}}
+                            {Entries, C, State#?MODULE{open_segments = Open}}
                     end;
                 {ets_miss, _Index} ->
                     %% this would happend if a mem table was deleted after
                     %% an external reader had read the range
-                    retry_read(N-1, From, To, State)
+                    retry_read(N-1, From, To, Acc, State)
             end
     end.
 
