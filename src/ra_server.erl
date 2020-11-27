@@ -2199,7 +2199,7 @@ apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with({Idx, _, _} = Cmd, Acc) ->
-    % TODO: remove to make more strics, ideally we should not need a catch all
+    % TODO: remove to make more strict, ideally we should not need a catch all
     ?WARN("~s: apply_with: unhandled command: ~W~n",
           [log_id(element(2, Acc)), Cmd, 10]),
     setelement(2, Acc, Idx).

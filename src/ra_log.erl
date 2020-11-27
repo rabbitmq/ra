@@ -306,7 +306,6 @@ take(Start, Num, #?MODULE{cfg = Cfg,
             {Entries, C0, State};
         {Entries0, C0, {S, F}} ->
             {Entries, C1, Reader} = ra_log_reader:read(S, F, Reader0, Entries0),
-            %% TODO: avoid concat
             {Entries, C0 + C1, State#?MODULE{reader = Reader}}
     end;
 take(_, _, State) ->
@@ -430,9 +429,9 @@ handle_event({segments, Tid, NewSegs},
             %% delay deletion until all readers confirmed they have received
             %% the update
             Pid = spawn(fun () ->
-                          ok = log_update_wait_n(length(Readers)),
-                          DeleteFun()
-                  end),
+                                ok = log_update_wait_n(length(Readers)),
+                                DeleteFun()
+                        end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
 handle_event({snapshot_written, {Idx, _} = Snap},
@@ -634,7 +633,6 @@ overview(#?MODULE{last_index = LastIndex,
       first_index => FirstIndex,
       last_written_index_term => LWIT,
       num_segments => length(ra_log_reader:segment_refs(Reader)),
-      %%TODO: re-introduce open segment count
       open_segments => ra_log_reader:num_open_segments(Reader),
       snapshot_index => case ra_snapshot:current(SnapshotState) of
                             undefined -> undefined;
@@ -872,7 +870,6 @@ resend_from0(Idx, #?MODULE{cfg = Cfg,
                         wal_write(Acc, maps:get(I, Cache))
                 end,
                 State#?MODULE{last_resend_time = erlang:system_time(seconds)},
-                % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
 resend_from0(Idx, #?MODULE{last_resend_time = LastResend,
                            cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->

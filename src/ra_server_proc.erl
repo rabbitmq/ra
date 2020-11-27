@@ -1198,7 +1198,6 @@ handle_effect(_, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
 send_rpcs(State0) ->
     {State, Rpcs} = make_rpcs(State0),
     % module call so that we can mock
-    % TODO: review
     % We can ignore send failures here as they have not incremented
     % the peer's next index
     [_ = ?MODULE:send_rpc(To, Rpc, State) || {send_rpc, To, Rpc} <- Rpcs],

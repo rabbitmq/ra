@@ -26,7 +26,6 @@
 
 -define(STATE, ?MODULE).
 
-%% TODO: these could be captured in a record
 -define(METRICS_OPEN_MEM_TBL_POS, 3).
 -define(METRICS_CLOSED_MEM_TBL_POS, 4).
 -define(METRICS_SEGMENT_POS, 5).
