@@ -39,7 +39,7 @@
 %% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
 
--type ra_peer_status() :: normal | {sending_snapshot, pid()}.
+-type ra_peer_status() :: normal | {sending_snapshot, pid()} | suspended.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
@@ -49,7 +49,7 @@
                            commit_index_sent := non_neg_integer(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
-                           status => ra_peer_status()}.
+                           status := ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
@@ -197,6 +197,7 @@
          read_open_mem_tbl,
          read_closed_mem_tbl,
          read_segment,
+         fetch_term,
          snapshots_written,
          snapshot_installed,
          reserved_1
@@ -208,9 +209,10 @@
 -define(C_RA_LOG_READ_OPEN_MEM_TBL, 5).
 -define(C_RA_LOG_READ_CLOSED_MEM_TBL, 6).
 -define(C_RA_LOG_READ_SEGMENT, 7).
--define(C_RA_LOG_SNAPSHOTS_WRITTEN, 8).
--define(C_RA_LOG_SNAPSHOTS_INSTALLED, 9).
--define(C_RA_LOG_RESERVED, 10).
+-define(C_RA_LOG_FETCH_TERM, 8).
+-define(C_RA_LOG_SNAPSHOTS_WRITTEN, 9).
+-define(C_RA_LOG_SNAPSHOTS_INSTALLED, 10).
+-define(C_RA_LOG_RESERVED, 11).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).

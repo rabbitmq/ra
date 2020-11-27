@@ -529,7 +529,7 @@ external_reader(Config) ->
     receive
         {ra_event, _, {machine, {ra_log_update, _, _, _} = E}} ->
             R1 = ra_log_reader:handle_log_update(E, R0),
-            {Entries, _R2} = ra_log_reader:read(0, 1026, R1),
+            {Entries, _, _R2} = ra_log_reader:read(0, 1026, R1),
             ct:pal("read ~w ~w", [length(Entries), lists:last(Entries)]),
             %% read all entries
             ok

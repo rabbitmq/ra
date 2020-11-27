@@ -128,7 +128,8 @@ receive_segment(Config) ->
     [] = ets:tab2list(ra_log_open_mem_tables),
     [] = ets:tab2list(ra_log_closed_mem_tables),
     % validate reads
-    {Entries, FinalLog} = ra_log:take(1, 3, Log3),
+    {Entries, C, FinalLog} = ra_log:take(1, 3, Log3),
+    ?assertEqual(length(Entries), C),
     ra_log:close(FinalLog),
     ok.
 
@@ -140,9 +141,9 @@ read_one(Config) ->
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
-    {[_], Log} = ra_log:take(1, 5, Log2),
+    {[_], 1, Log} = ra_log:take(1, 5, Log2),
     % read out of range
-    {[], Log} = ra_log:take(5, 5, Log2),
+    {[], 0, Log} = ra_log:take(5, 5, Log2),
     #{?FUNCTION_NAME := #{read_cache := M1,
                           read_open_mem_tbl := M2,
                           read_closed_mem_tbl := M3,
@@ -157,15 +158,15 @@ take_after_overwrite_and_init(Config) ->
     Log0 = ra_log:init(#{uid => UId}),
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
-    {[_, _, _, _], Log3} = ra_log:take(1, 5, Log2),
+    {[_, _, _, _], 4, Log3} = ra_log:take(1, 5, Log2),
     Log4 = write_and_roll_no_deliver(1, 2, 2, Log3),
     % fake lost segments event
     Log5 = deliver_written_log_events(Log4, 200),
     % ensure we cannot take stale entries
-    {[{1, 2, _}], Log6} = ra_log:take(1, 5, Log5),
+    {[{1, 2, _}], 1, Log6} = ra_log:take(1, 5, Log5),
     _ = ra_log:close(Log6),
     Log = ra_log:init(#{uid => UId}),
-    {[{1, 2, _}], _} = ra_log:take(1, 5, Log),
+    {[{1, 2, _}], 1, _} = ra_log:take(1, 5, Log),
     ok.
 
 
@@ -257,7 +258,7 @@ read_opt(Config) ->
     Log1 = write_and_roll(1, Num, 1, Log0, 50),
     Log2 = wait_for_segments(Log1, 5000),
     %% read small batch of the latest entries
-    {_, Log} = ra_log:take(Num - 5, 5, Log2),
+    {_, _, Log} = ra_log:take(Num - 5, 5, Log2),
     %% measure the time it takes to read the first index
     {Time, _} = timer:tc(fun () ->
                                  _ = erlang:statistics(exact_reductions),
@@ -313,11 +314,13 @@ updated_segment_can_be_read(Config) ->
     % Log2 = deliver_all_log_events(Log1, 200),
     %% read some, this will open the segment with the an index of entries
     %% 1 - 4
-    {Entries, Log3} = ra_log:take(1, 25, Log2),
+    {Entries, C0, Log3} = ra_log:take(1, 25, Log2),
+    ?assertEqual(length(Entries), C0),
     %% append a few more itmes and process the segments
     Log4 = append_and_roll(5, 16, 1, Log3),
     % this should return all entries
-    {Entries1, _} = ra_log:take(1, 15, Log4),
+    {Entries1, C1, _} = ra_log:take(1, 15, Log4),
+    ?assertEqual(length(Entries1), C1),
     ct:pal("Entries: ~p~n", [Entries]),
     ct:pal("Entries1: ~p~n", [Entries1]),
     ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
@@ -332,7 +335,7 @@ cache_overwrite_then_take(Config) ->
     Log1 = write_n(1, 5, 1, Log0),
     Log2 = write_n(3, 4, 2, Log1),
     % validate only 3 entries can be read even if requested range is greater
-    {[_, _, _], _} = ra_log:take(1, 5, Log2),
+    {[_, _, _], 3, _} = ra_log:take(1, 5, Log2),
     ok.
 
 last_written_overwrite(Config) ->
@@ -474,7 +477,7 @@ resend_write(Config) ->
     Log6 = assert_log_events(Log5, fun (L) ->
                                            {13, 2} == ra_log:last_written(L)
                                    end),
-    {[_, _, _, _, _], _} = ra_log:take(9, 5, Log6),
+    {[_, _, _, _, _], 5, _} = ra_log:take(9, 5, Log6),
     ra_log:close(Log6),
 
     ok.
@@ -512,7 +515,8 @@ wal_down_read_availability(Config) ->
                                            {9, 2} == ra_log:last_written(L)
                                    end),
     ok = supervisor:terminate_child(ra_log_wal_sup, ra_log_wal),
-    {Entries, _} = ra_log:take(0, 10, Log2),
+    {Entries, C0, _} = ra_log:take(0, 10, Log2),
+    ?assertEqual(length(Entries), C0),
     ?assert(length(Entries) =:= 10),
     ok.
 
@@ -564,11 +568,13 @@ detect_lost_written_range(Config) ->
                                            {19, 2} == ra_log:last_written(L)
                                    end),
     % validate no writes were lost and can be recovered
-    {Entries, _} = ra_log:take(0, 20, Log5),
+    {Entries, C0, _} = ra_log:take(0, 20, Log5),
+    ?assertEqual(length(Entries), C0),
     ra_log:close(Log5),
     Log = ra_log:init(#{uid => UId}),
     {19, 2} = ra_log:last_written(Log5),
-    {RecoveredEntries, _} = ra_log:take(0, 20, Log),
+    {RecoveredEntries, C1, _} = ra_log:take(0, 20, Log),
+    ?assertEqual(length(RecoveredEntries), C1),
     ?assert(length(Entries) =:= 20),
     ?assert(length(RecoveredEntries) =:= 20),
     Entries = RecoveredEntries,
@@ -622,8 +628,8 @@ snapshot_installation(Config) ->
     Log = assert_log_events(Log5, fun (L) ->
                                           {19, 2} == ra_log:last_written(L)
                                   end),
-    {[], _} = ra_log:take(1, 9, Log),
-    {[_, _], _} = ra_log:take(16, 2, Log),
+    {[], 0, _} = ra_log:take(1, 9, Log),
+    {[_, _], 2, _} = ra_log:take(16, 2, Log),
     ok.
 
 append_after_snapshot_installation(Config) ->
@@ -657,8 +663,8 @@ append_after_snapshot_installation(Config) ->
     Log = assert_log_events(Log3, fun (L) ->
                                           {19, 2} == ra_log:last_written(L)
                                   end),
-    {[], _} = ra_log:take(1, 9, Log),
-    {[_, _], _} = ra_log:take(16, 2, Log),
+    {[], 0, _} = ra_log:take(1, 9, Log),
+    {[_, _], 2, _} = ra_log:take(16, 2, Log),
     ok.
 
 written_event_after_snapshot_installation(Config) ->
@@ -892,7 +898,7 @@ external_reader(Config) ->
             fun () ->
                     receive
                         {ra_log_reader_state, R1} = Evt ->
-                            {Es, R2} = ra_log_reader:read(0, 220, R1),
+                            {Es, _, R2} = ra_log_reader:read(0, 220, R1),
                             Len1 = length(Es),
                             ct:pal("Es ~w", [Len1]),
                             Self ! {got, Evt, Es},
@@ -900,10 +906,10 @@ external_reader(Config) ->
                                 {ra_log_update, _, F, _} = Evt2 ->
                                     %% reader before update has been processed
                                     %% should work
-                                    {Stale, _} = ra_log_reader:read(F, 220, R2),
+                                    {Stale, _, _} = ra_log_reader:read(F, 220, R2),
                                     ?assertEqual(Len1, length(Stale)),
                                     R3 = ra_log_reader:handle_log_update(Evt2, R2),
-                                    {Es2, _R4} = ra_log_reader:read(F, 220, R3),
+                                    {Es2, _, _R4} = ra_log_reader:read(F, 220, R3),
                                     ct:pal("Es2 ~w", [length(Es2)]),
                                     ?assertEqual(Len1, length(Es2)),
                                     Self ! {got, Evt2, Es2}
@@ -943,7 +949,8 @@ validate_read(To, To, _Term, Log0) ->
     Log0;
 validate_read(From, To, Term, Log0) ->
     End = min(From + 25, To),
-    {Entries, Log} = ra_log:take(From, End - From, Log0),
+    {Entries, C0, Log} = ra_log:take(From, End - From, Log0),
+    ?assertEqual(length(Entries), C0),
     % validate entries are correctly read
     Expected = [ {I, Term, <<I:64/integer>>} ||
                  I <- lists:seq(From, End - 1) ],
@@ -1110,7 +1117,8 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0,
-      query_index => 0}.
+      query_index => 0,
+      status => normal}.
 
 flush() ->
     receive

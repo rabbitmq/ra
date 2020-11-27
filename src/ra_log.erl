@@ -289,7 +289,7 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
     {error, {integrity_error, Msg}}.
 
 -spec take(ra_index(), non_neg_integer(), state()) ->
-    {[log_entry()], state()}.
+    {[log_entry()], non_neg_integer(), state()}.
 take(Start, Num, #?MODULE{cfg = Cfg,
                           first_index = FirstIdx,
                           reader = Reader0,
@@ -302,15 +302,14 @@ take(Start, Num, #?MODULE{cfg = Cfg,
     % 3. Check ra_log_closed_mem_tables in turn
     % 4. Check on disk segments in turn
     case cache_take(Start, Num, State) of
-        {Entries, undefined} ->
-            {Entries, State};
-        {Entries0, {S, F}} ->
-            {Entries, Reader} = ra_log_reader:read(S, F, Reader0),
-            %% TODO: avoid concat
-            {Entries ++ Entries0, State#?MODULE{reader = Reader}}
+        {Entries, C0, undefined} ->
+            {Entries, C0, State};
+        {Entries0, C0, {S, F}} ->
+            {Entries, C1, Reader} = ra_log_reader:read(S, F, Reader0, Entries0),
+            {Entries, C0 + C1, State#?MODULE{reader = Reader}}
     end;
 take(_, _, State) ->
-    {[], State}.
+    {[], 0, State}.
 
 -spec last_index_term(state()) -> ra_idxterm().
 last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
@@ -430,9 +429,9 @@ handle_event({segments, Tid, NewSegs},
             %% delay deletion until all readers confirmed they have received
             %% the update
             Pid = spawn(fun () ->
-                          ok = log_update_wait_n(length(Readers)),
-                          DeleteFun()
-                  end),
+                                ok = log_update_wait_n(length(Readers)),
+                                DeleteFun()
+                        end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
 handle_event({snapshot_written, {Idx, _} = Snap},
@@ -468,9 +467,9 @@ next_index(#?MODULE{last_index = LastIdx}) ->
     {maybe(log_entry()), state()}.
 fetch(Idx, State0) ->
     case take(Idx, 1, State0) of
-        {[], State} ->
+        {[], _, State} ->
             {undefined, State};
-        {[Entry], State} ->
+        {[Entry], _, State} ->
             {Entry, State}
     end.
 
@@ -634,7 +633,6 @@ overview(#?MODULE{last_index = LastIndex,
       first_index => FirstIndex,
       last_written_index_term => LWIT,
       num_segments => length(ra_log_reader:segment_refs(Reader)),
-      %%TODO: re-introduce open segment count
       open_segments => ra_log_reader:num_open_segments(Reader),
       snapshot_index => case ra_snapshot:current(SnapshotState) of
                             undefined -> undefined;
@@ -818,15 +816,17 @@ cache_take(Start, Num, #?MODULE{cfg = Cfg,
     % we can bail out when an item is not found
     case cache_take0(Highest, Start, Cache, []) of
         [] ->
-            {[], {Start, Highest}};
+            {[], 0, {Start, Highest}};
         [Last | _] = Entries when element(1, Last) =:= Start ->
-            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, Highest - Start + 1),
+            NumRead = Highest - Start + 1,
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
             % there is no remainder - everything was in the cache
-            {Entries, undefined};
+            {Entries, NumRead, undefined};
         [Last | _] = Entries ->
             LastEntryIdx = element(1, Last),
-            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, LastIdx - Start + 1),
-            {Entries, {Start, LastEntryIdx - 1}}
+            NumRead = Highest - LastEntryIdx + 1,
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
+            {Entries, NumRead, {Start, LastEntryIdx - 1}}
     end.
 
 cache_take0(Next, Last, _Cache, Acc)
@@ -870,7 +870,6 @@ resend_from0(Idx, #?MODULE{cfg = Cfg,
                         wal_write(Acc, maps:get(I, Cache))
                 end,
                 State#?MODULE{last_resend_time = erlang:system_time(seconds)},
-                % TODO: replace with recursive function
                 lists:seq(Idx, LastIdx));
 resend_from0(Idx, #?MODULE{last_resend_time = LastResend,
                            cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
@@ -1007,12 +1006,12 @@ cache_take0_test() ->
     Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},
     State = #?MODULE{cache = Cache, last_index = 3, first_index = 1},
     % no remainder
-    {[{2, 9, b}], undefined} = cache_take(2, 1, State),
-    {[{2, 9, b}, {3, 9, c}], undefined} = cache_take(2, 2, State),
-    {[{1, 9, a}, {2, 9, b}, {3, 9, c}], undefined} = cache_take(1, 3, State),
+    {[{2, 9, b}], 1, undefined} = cache_take(2, 1, State),
+    {[{2, 9, b}, {3, 9, c}], 2, undefined} = cache_take(2, 2, State),
+    {[{1, 9, a}, {2, 9, b}, {3, 9, c}], 3, undefined} = cache_take(1, 3, State),
     % small remainder
-    {[{3, 9, c}], {1, 2}} = cache_take(1, 3, State#?MODULE{cache = #{3 => {3, 9, c}}}),
-    {[], {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {4, 9, d}}}),
+    {[{3, 9, c}], 1, {1, 2}} = cache_take(1, 3, State#?MODULE{cache = #{3 => {3, 9, c}}}),
+    {[], 0, {1, 3}} = cache_take(1, 3, State#?MODULE{cache = #{4 => {4, 9, d}}}),
     ok.
 
 pick_range_test() ->

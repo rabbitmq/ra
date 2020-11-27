@@ -39,7 +39,8 @@ all_tests() ->
      start_cluster_minority,
      send_local_msg,
      local_log_effect,
-     leaderboard
+     leaderboard,
+     bench
     ].
 
 groups() ->
@@ -190,7 +191,7 @@ delete_two_server_cluster(Config) ->
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(ClusterName, Machine, NodeIds),
     {ok, _} = ra:delete_cluster(NodeIds),
-    timer:sleep(250),
+    timer:sleep(1000),
     {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
     {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
@@ -360,6 +361,19 @@ leaderboard(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
+bench(Config) ->
+    %% exercies the large message handling code
+    PrivDir = ?config(data_dir, Config),
+    Nodes = [start_follower(N, PrivDir) || N <- [s1,s2,s3]],
+    ok = ra_bench:run(#{name => ?FUNCTION_NAME,
+                        seconds => 10,
+                        target => 500,
+                        degree => 3,
+                        data_size => 256 * 1000,
+                        nodes => Nodes}),
+    [ok = slave:stop(N) || N <- Nodes],
+    ok.
+
 test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, CmdTag, Opts0) ->
     Opts = case Opts0 of
                local -> [local];
@@ -449,6 +463,8 @@ start_follower(N, PrivDir) ->
     ct:pal("starting secondary node with ~s on host ~s for node ~s~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
+    ok = ct_rpc:call(S, logger, set_primary_config,
+                     [level, all]),
     S.
 
 flush() ->

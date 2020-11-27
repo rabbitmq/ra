@@ -41,7 +41,7 @@
          make_rpcs/1,
          update_release_cursor/3,
          persist_last_applied/1,
-         update_peer_status/3,
+         update_peer/3,
          register_external_log_reader/2,
          handle_down/5,
          handle_node_status/6,
@@ -344,7 +344,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
         Peer0 = #{match_index := MI, next_index := NI} ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
-            State1 = update_peer(PeerId, Peer, State0),
+            State1 = put_peer(PeerId, Peer, State0),
             {State2, Effects0} = evaluate_quorum(State1, []),
 
             {State3, Effects1} = process_pending_consistent_queries(State2,
@@ -528,12 +528,12 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                   [LogId, PeerId]),
             {leader, State0, []};
         Peer0 ->
-            State1 = update_peer(PeerId,
-                                 Peer0#{status => normal,
-                                        match_index => LastIndex,
-                                        commit_index_sent => LastIndex,
-                                        next_index => LastIndex + 1},
-                                 State0),
+            State1 = put_peer(PeerId,
+                              Peer0#{status => normal,
+                                     match_index => LastIndex,
+                                     commit_index_sent => LastIndex,
+                                     next_index => LastIndex + 1},
+                              State0),
 
             %% we can now demonitor the process
             Effects0 = case Peer0 of
@@ -1322,7 +1322,8 @@ is_fully_replicated(#{commit_index := CI} = State) ->
         [] -> true; % there is only one server
         Peers ->
             MinMI = lists:min([M || #{match_index := M} <- Peers]),
-            MinMI >= CI
+            MinCI = lists:min([M || #{commit_index_sent := M} <- Peers]),
+            MinMI >= CI andalso MinCI >= CI
     end.
 
 handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod},
@@ -1527,6 +1528,8 @@ make_pipelined_rpc_effects(MaxBatchSize,
       fun (I, _, Acc) when I =:= Id ->
               %% oneself
               Acc;
+          (_, #{status := suspended}, Acc) ->
+              Acc;
           (_, #{status := {sending_snapshot, _}}, Acc) ->
               %% if a peers is currently receiving a snapshot
               %% we should not pipeline
@@ -1542,13 +1545,13 @@ make_pipelined_rpc_effects(MaxBatchSize,
               case NI - MI < MaxPipelineCount of
                   true ->
                       {NextIdx, Eff, S} =
-                      make_rpc_effect(PeerId, NI, MaxBatchSize, S0),
+                          make_rpc_effect(PeerId, Peer0, MaxBatchSize, S0),
                       Peer = Peer0#{next_index => NextIdx,
                                     commit_index_sent => CommitIndex},
                       %% is there more potentially pipelining
                       More = More0 orelse (NextIdx < NextLogIdx andalso
                                            NextIdx - MI < MaxPipelineCount),
-                      {update_peer(PeerId, Peer, S), More, [Eff | Effs]};
+                      {put_peer(PeerId, Peer, S), More, [Eff | Effs]};
                   false ->
                       Acc
               end;
@@ -1564,23 +1567,24 @@ make_rpcs(State) ->
 % makes empty append entries for peers that aren't pipelineable
 make_all_rpcs(State0) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State0),
-    {State2, EffectsAER} = make_rpcs_for(peers_not_sending_snapshots(State1), State1),
+    {State2, EffectsAER} = make_rpcs_for(peers_with_normal_status(State1), State1),
     {State2, EffectsAER ++ EffectsHR}.
 
 make_rpcs_for(Peers, State) ->
-    maps:fold(fun(PeerId, #{next_index := Next}, {S0, Effs}) ->
+    maps:fold(fun(PeerId, Peer, {S0, Effs}) ->
                       {_, Eff, S} =
-                          make_rpc_effect(PeerId, Next, ?AER_CHUNK_SIZE, S0),
+                          make_rpc_effect(PeerId, Peer, ?AER_CHUNK_SIZE, S0),
                       {S, [Eff | Effs]}
               end, {State, []}, Peers).
 
-make_rpc_effect(PeerId, Next, MaxBatchSize,
+make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                 #{cfg := #cfg{id = Id}, log := Log0,
                   current_term := Term} = State) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when is_integer(PrevTerm) ->
-            make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, MaxBatchSize,
+            make_append_entries_rpc(PeerId, PrevIdx,
+                                    PrevTerm, MaxBatchSize,
                                     State#{log => Log});
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
@@ -1607,25 +1611,16 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                           cfg := #cfg{id = Id},
                           commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
-    %% TODO: refactor to avoid lists:last call later
-    %% ra_log:take should be able to return the actual number of entries
-    %% read at fixed cost
-    {Entries, Log} = ra_log:take(Next, Num, Log0),
-    NextIndex = case Entries of
-                    [] -> Next;
-                    _ ->
-                        {LastIdx, _, _} = lists:last(Entries),
-                        %% assertion
-                        {Next, _, _} = hd(Entries),
-                        LastIdx + 1
-                end,
+    {Entries, NumRead, Log} = ra_log:take(Next, Num, Log0),
+    NextIndex = Next + NumRead,
     {NextIndex,
-     {send_rpc, PeerId, #append_entries_rpc{entries = Entries,
-                                            term = Term,
-                                            leader_id = Id,
-                                            prev_log_index = PrevIdx,
-                                            prev_log_term = PrevTerm,
-                                            leader_commit = CommitIndex}},
+     {send_rpc, PeerId,
+      #append_entries_rpc{entries = Entries,
+                          term = Term,
+                          leader_id = Id,
+                          prev_log_index = PrevIdx,
+                          prev_log_term = PrevTerm,
+                          leader_commit = CommitIndex}},
      State#{log => Log}}.
 
 % stores the cluster config at an index such that we can later snapshot
@@ -1658,11 +1653,16 @@ persist_last_applied(#{last_applied := LastApplied,
     State#{persisted_last_applied => LastApplied}.
 
 
--spec update_peer_status(ra_server_id(), ra_peer_status(),
-                         ra_server_state()) -> ra_server_state().
-update_peer_status(PeerId, Status, #{cluster := Peers} = State) ->
-    Peer = maps:put(status, Status, maps:get(PeerId, Peers)),
-    State#{cluster => maps:put(PeerId, Peer, Peers)}.
+-spec update_peer(ra_server_id(),
+                  #{next_index => non_neg_integer(),
+                    query_index => non_neg_integer(),
+                    commit_index_sent => non_neg_integer(),
+                    status => ra_peer_status()},
+                  ra_server_state()) -> ra_server_state().
+update_peer(PeerId, Update, #{cluster := Peers} = State)
+  when is_map(Update) ->
+    Peer = maps:merge(maps:get(PeerId, Peers), Update),
+    put_peer(PeerId, Peer, State).
 
 -spec register_external_log_reader(pid(), ra_server_state()) ->
     {ra_server_state(), effects()}.
@@ -1680,7 +1680,7 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
                        end, Peers)),
      case PeerKv of
          [{PeerId, Peer}] ->
-             update_peer(PeerId, Peer#{status => normal}, State);
+             put_peer(PeerId, Peer#{status => normal}, State);
          _ ->
              State
      end.
@@ -1900,7 +1900,8 @@ new_peer() ->
     #{next_index => 1,
       match_index => 0,
       commit_index_sent => 0,
-      query_index => 0}.
+      query_index => 0,
+      status => normal}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
@@ -1909,9 +1910,9 @@ peers(#{cfg := #cfg{id = Id}, cluster := Peers}) ->
     maps:remove(Id, Peers).
 
 %% remove any peers that are currently receiving a snapshot
-peers_not_sending_snapshots(State) ->
-    maps:filter(fun (_, #{status := {sending_snapshot, _}}) -> false;
-                    (_, _) -> true
+peers_with_normal_status(State) ->
+    maps:filter(fun (_, #{status := normal}) -> true;
+                    (_, _) -> false
                 end, peers(State)).
 
 % peers that could need an update
@@ -1920,14 +1921,14 @@ stale_peers(#{commit_index := CommitIndex,
               cluster := Cluster}) ->
     maps:filter(fun (Id , _) when Id == ThisId ->
                         false;
-                    (_, #{status := {sending_snapshot, _}}) ->
-                        false;
-                    (_, #{next_index := NI,
+                    (_, #{status := normal,
+                          next_index := NI,
                           match_index := MI})
                       when MI < NI - 1 ->
                         % there are unconfirmed items
                         true;
-                    (_, #{commit_index_sent := CI})
+                    (_, #{status := normal,
+                          commit_index_sent := CI})
                       when CI < CommitIndex ->
                         % the commit index has been updated
                         true;
@@ -1941,8 +1942,8 @@ peer_ids(State) ->
 peer(PeerId, #{cluster := Nodes}) ->
     maps:get(PeerId, Nodes, undefined).
 
-update_peer(PeerId, Peer, #{cluster := Nodes} = State) ->
-    State#{cluster => Nodes#{PeerId => Peer}}.
+put_peer(PeerId, Peer, #{cluster := Peers} = State) ->
+    State#{cluster => Peers#{PeerId => Peer}}.
 
 update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
                                             current_term := CurTerm} = State) ->
@@ -2006,7 +2007,7 @@ fetch_term(Idx, #{log := Log}) ->
     ra_log:fetch_term(Idx, Log).
 
 fetch_entries(From, To, #{log := Log0} = State) ->
-    {Entries, Log} = ra_log:take(From, To - From + 1, Log0),
+    {Entries, _, Log} = ra_log:take(From, To - From + 1, Log0),
     {Entries, State#{log => Log}}.
 
 make_cluster(Self, Nodes) ->
@@ -2198,7 +2199,7 @@ apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with({Idx, _, _} = Cmd, Acc) ->
-    % TODO: remove to make more strics, ideally we should not need a catch all
+    % TODO: remove to make more strict, ideally we should not need a catch all
     ?WARN("~s: apply_with: unhandled command: ~W~n",
           [log_id(element(2, Acc)), Cmd, 10]),
     setelement(2, Acc, Idx).
@@ -2392,9 +2393,9 @@ log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
 
 fold_log_from(From, Folder, {St, Log0}) ->
     case ra_log:take(From, ?FOLD_LOG_BATCH_SIZE, Log0) of
-        {[], Log} ->
+        {[], _, Log} ->
             {ok, {St, Log}};
-        {Entries, Log}  ->
+        {Entries, _, Log}  ->
             try
                 St1 = lists:foldl(Folder, St, Entries),
                 fold_log_from(From + ?FOLD_LOG_BATCH_SIZE, Folder, {St1, Log})
@@ -2492,9 +2493,10 @@ heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
     case maps:get(query_index, Peer, 0) < QueryIndex of
         true ->
             {true,
-                {send_rpc, PeerId, #heartbeat_rpc{query_index = QueryIndex,
-                                                  term = Term,
-                                                  leader_id = Id}}};
+             {send_rpc, PeerId,
+              #heartbeat_rpc{query_index = QueryIndex,
+                             term = Term,
+                             leader_id = Id}}};
         false ->
             false
     end.
@@ -2523,9 +2525,9 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
         #{query_index := PeerQueryIndex} = Peer ->
             case QueryIndex > PeerQueryIndex of
                 true  ->
-                    update_peer(PeerId,
-                                Peer#{query_index => QueryIndex},
-                                State0);
+                    put_peer(PeerId,
+                             Peer#{query_index => QueryIndex},
+                             State0);
                 false ->
                     State0
             end
