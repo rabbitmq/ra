@@ -225,7 +225,7 @@
 <tr><td valign="top"><a href="#make_rpcs-1">make_rpcs/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_release_cursor-3">update_release_cursor/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#persist_last_applied-1">persist_last_applied/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#update_peer_status-3">update_peer_status/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#update_peer-3">update_peer/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#register_external_log_reader-2">register_external_log_reader/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_down-5">handle_down/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_node_status-6">handle_node_status/6</a></td><td></td></tr>
@@ -434,12 +434,16 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="update_peer_status-3">update_peer_status/3</a></h3>
+<h3 class="function"><a name="update_peer-3">update_peer/3</a></h3>
 <div class="spec">
-<p><pre>update_peer_status(PeerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
-                   Status :: <a href="#type-ra_peer_status">ra_peer_status()</a>,
-                   State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-                      <a href="#type-ra_server_state">ra_server_state()</a></pre></p>
+<p><pre>update_peer(PeerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+            Update ::
+                #{next_index =&gt; non_neg_integer(),
+                  query_index =&gt; non_neg_integer(),
+                  commit_index_sent =&gt; non_neg_integer(),
+                  status =&gt; <a href="#type-ra_peer_status">ra_peer_status()</a>},
+            State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+               <a href="#type-ra_server_state">ra_server_state()</a></pre></p>
 <p> </p>
 </div>
 
