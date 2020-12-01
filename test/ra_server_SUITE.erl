@@ -19,6 +19,7 @@ all() ->
      recover_restores_cluster_changes,
      election_timeout,
      follower_aer_term_mismatch,
+     follower_aer_term_mismatch_snapshot,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
      append_entries_reply_success,
@@ -140,7 +141,7 @@ setup_log() ->
     meck:expect(ra_log, set_snapshot_state, fun (_, Log) -> Log end),
     meck:expect(ra_log, install_snapshot, fun (_, _, Log) -> {Log, []} end),
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
-    meck:expect(ra_log, snapshot_index_term, fun ra_log_memory: snapshot_index_term/1),
+    meck:expect(ra_log, snapshot_index_term, fun ra_log_memory:snapshot_index_term/1),
     meck:expect(ra_log, take, fun ra_log_memory:take/3),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/2),
     meck:expect(ra_log, append_sync,
@@ -251,7 +252,6 @@ recover_restores_cluster_changes(_Config) ->
 election_timeout(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     Msg = election_timeout,
-    %
     % follower
     {pre_vote, #{current_term := 5, votes := 0,
                  pre_vote_token := Token},
@@ -546,6 +546,39 @@ follower_aer_term_mismatch(_Config) ->
                                        next_index = 3,
                                        last_index = 2,
                                        last_term = 3}, Reply),
+                 ok.
+
+follower_aer_term_mismatch_snapshot(_Config) ->
+    %% case when we have to revert all the way back to a snapshot
+    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 3,
+                                              commit_index => 3
+                                             },
+
+    Log0 = maps:get(log, State0),
+    Meta = #{index => 3,
+             term => 5,
+             cluster => [],
+             machine_version => 1},
+    Data = <<"hi3">>,
+    {Log, _, _} = ra_log_memory:install_snapshot(Meta, Data, Log0),
+    State = maps:put(log, Log, State0),
+
+    AE = #append_entries_rpc{term = 6,
+                             leader_id = n1,
+                             prev_log_index = 3,
+                             prev_log_term = 6, % higher log term
+                             leader_commit = 3},
+
+    % term mismatch scenario follower has index 3 but for different term
+    % rewinds back to last_applied + 1 as next index and enters await condition
+    {await_condition, #{condition := _},
+     [{_, _, {_, Reply}} | _]} = ra_server:handle_follower(AE, State),
+
+    ?assertMatch(#append_entries_reply{term = 6,
+                                       success = false,
+                                       next_index = 4,
+                                       last_index = 3,
+                                       last_term = 5}, Reply),
                  ok.
 
 follower_handles_append_entries_rpc(_Config) ->

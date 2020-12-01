@@ -295,6 +295,8 @@ init(#{id := Id,
       cluster_index_term => SnapshotIndexTerm,
       voted_for => VotedFor,
       commit_index => CommitIndex,
+      %% set this to the first index so that we can apply all entries
+      %% up to the commit index during recovery
       last_applied => FirstIndex,
       persisted_last_applied => LastApplied,
       log => Log0,
@@ -2003,8 +2005,18 @@ has_log_entry_or_snapshot(Idx, Term, Log0) ->
             {term_mismatch, OtherTerm, Log}
     end.
 
-fetch_term(Idx, #{log := Log}) ->
-    ra_log:fetch_term(Idx, Log).
+fetch_term(Idx, #{log := Log0} = State) ->
+    case ra_log:fetch_term(Idx, Log0) of
+        {undefined, Log} ->
+            case ra_log:snapshot_index_term(Log) of
+                {Idx, Term} ->
+                    {Term, State#{log => Log}};
+                _ ->
+                    {undefined, State#{log => Log}}
+            end;
+        {Term, Log} ->
+            {Term, State#{log => Log}}
+    end.
 
 fetch_entries(From, To, #{log := Log0} = State) ->
     {Entries, _, Log} = ra_log:take(From, To - From + 1, Log0),
@@ -2315,15 +2327,15 @@ append_cluster_change(Cluster, From, ReplyMode,
             cluster_index_term => IdxTerm,
             previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
 
-mismatch_append_entries_reply(Term, CommitIndex, State = #{log := Log0}) ->
-    {CITerm, Log} = ra_log:fetch_term(CommitIndex, Log0),
+mismatch_append_entries_reply(Term, CommitIndex, State0) ->
+    {CITerm, State} = fetch_term(CommitIndex, State0),
     % assert CITerm is found
     false = CITerm =:= undefined,
     {#append_entries_reply{term = Term, success = false,
                            next_index = CommitIndex + 1,
                            last_index = CommitIndex,
                            last_term = CITerm},
-     State#{log => Log}}.
+     State}.
 
 append_entries_reply(Term, Success, State = #{log := Log}) ->
     % we can't use the the last received idx
@@ -2351,16 +2363,15 @@ evaluate_quorum(#{commit_index := CI0} = State0, Effects0) ->
               end,
     apply_to(CI, State, Effects).
 
-increment_commit_index(State = #{current_term := CurrentTerm}) ->
-    PotentialNewCommitIndex = agreed_commit(match_indexes(State)),
+increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
+    PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
-    case fetch_term(PotentialNewCommitIndex, State) of
-        {CurrentTerm, Log} ->
-            State#{commit_index => PotentialNewCommitIndex,
-                   log => Log};
-        {_, Log} ->
-            State#{log => Log}
+    case fetch_term(PotentialNewCommitIndex, State0) of
+        {CurrentTerm, State} ->
+            State#{commit_index => PotentialNewCommitIndex};
+        {_, State} ->
+            State
     end.
 
 query_indexes(#{cfg := #cfg{id = Id},
