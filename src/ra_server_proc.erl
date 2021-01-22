@@ -493,8 +493,8 @@ candidate({call, From}, trigger_election, State) ->
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
-            {State1, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {State, Actions} = maybe_set_election_timeout(long, State1, Actions0),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State, Actions} = maybe_set_election_timeout(long, State2, Actions0),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -546,8 +546,8 @@ pre_vote({call, From}, trigger_election, State) ->
 pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
-            {State1, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {State, Actions} = maybe_set_election_timeout(long, State1, Actions0),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State, Actions} = maybe_set_election_timeout(long, State2, Actions0),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
