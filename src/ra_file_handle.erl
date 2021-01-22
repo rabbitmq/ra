@@ -113,7 +113,7 @@ handle_cast(_Msg, State) ->
 handle_info({'DOWN', MRef, process, Pid, _},
             #state{monitors = Monitors0} = State) ->
     case maps:take(Pid, Monitors0) of
-        {MRef, Monitors} ->
+        {^MRef, Monitors} ->
             ets:delete(ra_open_file_metrics, Pid),
             {noreply, State#state{monitors = Monitors}};
         error ->

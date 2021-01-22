@@ -190,7 +190,7 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             %% check if the pivot has changed
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
             case ra_log_segment:segref(Seg) of
-                SegRef ->
+                ^SegRef ->
                     %% it has not changed - we can delete that too
                     %% as we are deleting the last segment - create an empty
                     %% successor

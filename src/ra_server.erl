@@ -414,7 +414,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{match_index => LastIdx,
                                   next_index => NextIdx}, L};
                       % entry exists we can forward
-                      {LastTerm, L} when LastIdx >= MI ->
+                      {^LastTerm, L} when LastIdx >= MI ->
                           ?DEBUG("~s: setting last index to ~b, "
                                  " next_index ~b for ~w",
                                  [LogId, LastIdx, NextIdx, PeerId]),
@@ -731,7 +731,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
     case trunc(maps:size(Nodes) / 2) + 1 of
-        NewVotes ->
+        ^NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
             Noop = {noop, #{ts => os:system_time(millisecond)},
                     ra_machine:version(Mac)},
@@ -875,7 +875,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
     case trunc(maps:size(Nodes) / 2) + 1 of
-        NewVotes ->
+        ^NewVotes ->
             call_for_election(candidate, State);
         _ ->
             {pre_vote, State#{votes => NewVotes}, []}
@@ -1592,7 +1592,7 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
             % The assumption here is that a missing entry means we need
             % to send a snapshot.
             case ra_log:snapshot_index_term(Log) of
-                {PrevIdx, PrevTerm} ->
+                {^PrevIdx, PrevTerm} ->
                     % Previous index is the same as snapshot index
                     make_append_entries_rpc(PeerId, PrevIdx,
                                             PrevTerm, MaxBatchSize,
@@ -1784,7 +1784,7 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
 read_at(Idx, #{log := Log0,
                cfg := #cfg{log_id = LogId}} = RaState) ->
     case ra_log:fetch(Idx, Log0) of
-        {{Idx, _, {'$usr', _, Data, _}}, Log} ->
+        {{^Idx, _, {'$usr', _, Data, _}}, Log} ->
             {ok, Data, RaState#{log => Log}};
         {Cmd, Log} ->
             ?ERROR("~s: failed to read user command at ~b. Got ~w",
@@ -1992,14 +1992,14 @@ has_log_entry_or_snapshot(Idx, Term, Log0) ->
     case ra_log:fetch_term(Idx, Log0) of
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
-                {Idx, Term} ->
+                {^Idx, ^Term} ->
                     {entry_ok, Log};
-                {Idx, OtherTerm} ->
+                {^Idx, OtherTerm} ->
                     {term_mismatch, OtherTerm, Log};
                 _ ->
                     {missing, Log}
             end;
-        {Term, Log} ->
+        {^Term, Log} ->
             {entry_ok, Log};
         {OtherTerm, Log} ->
             {term_mismatch, OtherTerm, Log}
@@ -2009,7 +2009,7 @@ fetch_term(Idx, #{log := Log0} = State) ->
     case ra_log:fetch_term(Idx, Log0) of
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
-                {Idx, Term} ->
+                {^Idx, Term} ->
                     {Term, State#{log => Log}};
                 _ ->
                     {undefined, State#{log => Log}}
@@ -2065,7 +2065,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
             FinalEffs = make_notify_effects(Notifys0, lists:reverse(Effects0)),
             {State, FinalEffs};
         %% assert first item read is from
-        {[{From, _, _} | _] = Entries, State1} ->
+        {[{^From, _, _} | _] = Entries, State1} ->
             {_, AppliedTo, State, MacState, Effects, Notifys, LastTs} =
                 lists:foldl(ApplyFun, {MacMod, LastApplied, State1, MacState0,
                                        Effects0, Notifys0, undefined},
@@ -2155,7 +2155,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
               cluster_change_permitted := ClusterChangePerm0} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
     ClusterChangePerm = case CurrentTerm of
-                            Term ->
+                            ^Term ->
                                 ?DEBUG("~s: enabling ra cluster changes in"
                                        " ~b~n", [LogId, Term]),
                                 true;
@@ -2368,7 +2368,7 @@ increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
-        {CurrentTerm, State} ->
+        {^CurrentTerm, State} ->
             State#{commit_index => PotentialNewCommitIndex};
         {_, State} ->
             State

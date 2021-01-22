@@ -256,11 +256,11 @@ pread_cons(#state{cfg = #cfg{fd = Fd}} = State, Idx,
             {ok, Data} = ra_file_handle:pread(Fd, Offset, Length),
             %% assert data size is same as length
             case byte_size(Data) of
-                Length ->
+                ^Length ->
                     %% we read the correct length
                     %% performc crc check
                     case erlang:crc32(Data) of
-                        Crc ->
+                        ^Crc ->
                             pread_cons(State, Idx-1, FinalIdx, Index, Fun,
                                        [{Idx, Term, Fun(Data)} | Acc]);
                         _ ->

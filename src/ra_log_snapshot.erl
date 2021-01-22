@@ -86,7 +86,7 @@ complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
     {ok, 5} = file:position(Fd, 5),
     ok = file:write(Fd, <<Crc:32/integer>>),
-    Crc = erlang:crc32(PartialCrc0, Chunk),
+    ^Crc = erlang:crc32(PartialCrc0, Chunk),
     ok = file:sync(Fd),
     ok = file:close(Fd),
     ok.
@@ -205,7 +205,7 @@ read_meta_internal(Fd) ->
 
 validate(Crc, Data) ->
     case erlang:crc32(Data) of
-        Crc ->
+        ^Crc ->
             parse_snapshot(Data);
         _ ->
             {error, checksum_error}

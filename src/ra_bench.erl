@@ -71,7 +71,7 @@ run(#{name := Name,
     Wait = ((Secs * 10000) * 4),
     [begin
          receive
-             {done, P} ->
+             {done, ^P} ->
                  io:format("~w is done ~n", [P]),
                  ok
          after  Wait ->

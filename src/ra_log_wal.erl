@@ -579,7 +579,7 @@ maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
     Max = Max0 - ?HEADER_SIZE,
     case file:allocate(Fd, ?HEADER_SIZE, Max) of
         ok ->
-            {ok, Max} = file:position(Fd, Max),
+            {ok, ^Max} = file:position(Fd, Max),
             ok = file:truncate(Fd),
             {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
             Conf;
@@ -820,7 +820,7 @@ validate_checksum(Checksum, Idx, Term, Data) ->
     % building a binary just for the checksum may feel a bit wasteful
     % but this is only called during recovery which should be a rare event
     case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, Data/binary>>) of
-        Checksum ->
+        ^Checksum ->
             ok;
         _ ->
             exit(wal_checksum_validation_failure)

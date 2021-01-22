@@ -43,7 +43,7 @@ new(Name, Fields)
 -spec fetch(name()) -> undefined | counters:counters_ref().
 fetch(Name) ->
     case ets:lookup(?MODULE, Name) of
-        [{Name, Ref, _}] ->
+        [{^Name, Ref, _}] ->
             Ref;
         _ ->
             undefined
@@ -67,7 +67,7 @@ overview() ->
 -spec overview(name()) -> #{atom() => non_neg_integer()}.
 overview(Name) ->
     case ets:lookup(?MODULE, Name) of
-        [{Name, Ref, Fields}] ->
+        [{^Name, Ref, Fields}] ->
               Size = length(Fields),
               Values = [counters:get(Ref, I) || I <- lists:seq(1, Size)],
               maps:from_list(lists:zip(Fields, Values));

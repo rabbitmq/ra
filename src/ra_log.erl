@@ -206,7 +206,7 @@ init(#{uid := UId} = Conf) ->
     LastIdx = State000#?MODULE.last_index,
     % recover the last term
     {LastTerm0, State00} = case LastIdx of
-                               SnapIdx ->
+                               ^SnapIdx ->
                                    {SnapTerm, State000};
                                -1 ->
                                    {0, State000};
@@ -357,10 +357,12 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     % to a leader writes that have not yet
     % been fully flushed
     %
-    % last written cannot even go larger than last_index
+    % last written cannot go larger than last_index
     ToIdx = min(ToIdx0, LastIdx),
+    %%TODO: do we _really_ want to match on Term here? guard should be unnecessary
+    %%as the term in the written event can never be undefined
     case fetch_term(ToIdx, State0) of
-        {Term, State} when is_integer(Term) ->
+        {^Term, State} when is_integer(Term) ->
             % this case truncation shouldn't be too expensive as the cache
             % only contains the unflushed window of entries typically less than
             % 10ms worth of entries
@@ -481,7 +483,7 @@ fetch_term(Idx, #?MODULE{last_index = LastIdx,
     {undefined, State0};
 fetch_term(Idx, #?MODULE{cache = Cache, reader = Reader0} = State0) ->
     case Cache of
-        #{Idx := {Idx, Term, _}} ->
+        #{Idx := {^Idx, Term, _}} ->
             {Term, State0};
         _ ->
             {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
@@ -615,7 +617,7 @@ can_write(#?MODULE{cfg = #cfg{wal = Wal}}) ->
     {boolean(), state()}.
 exists({Idx, Term}, Log0) ->
     case fetch_term(Idx, Log0) of
-        {Term, Log} when is_integer(Term) ->
+        {^Term, Log} when is_integer(Term) ->
             {true, Log};
         {_, Log} ->
             {false, Log}
@@ -923,7 +925,7 @@ recover_range(UId, _SnapIdx) ->
     OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of
                      [] ->
                          [];
-                     [{UId, First, Last, _}] ->
+                     [{^UId, First, Last, _}] ->
                          [{First, Last}]
                  end,
     ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
@@ -960,7 +962,7 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 %% TODO: implent synchronous writes using gen_batch_server:call/3
 await_written_idx(Idx, Term, Log0) ->
     receive
-        {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
+        {ra_log_event, {written, {_, ^Idx, ^Term}} = Evt} ->
             {Log, _} = handle_event(Evt, Log0),
             Log;
         {ra_log_event, {written, _} = Evt} ->

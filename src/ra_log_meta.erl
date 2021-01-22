@@ -64,7 +64,7 @@ handle_batch(Commands, #?MODULE{ref = Ref} = State) ->
                         Inserts0#{Id => update_key(Key, Value, Data)};
                     _ ->
                         case dets:lookup(Ref, Id) of
-                            [{Id, T, V, A}] ->
+                            [{^Id, T, V, A}] ->
                                 Data = {Id, T, V, A},
                                 Inserts0#{Id => update_key(Key, Value, Data)};
                             [] ->
@@ -163,7 +163,7 @@ handle_delete(Id, Ref, Inserts) ->
 update_key(current_term, Value, Data) ->
     case element(2, Data) of
         %% current term matches the new value, nothing to do
-        Value -> Data;
+        ^Value -> Data;
         %% current term has changed. Clear voted_for field as part of the update.
         %% See rabbitmq/ra#111.
         _     ->

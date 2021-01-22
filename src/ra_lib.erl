@@ -267,13 +267,13 @@ collect([], Acc, _Timeout) ->
     Acc;
 collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
     receive
-        {Pid, true} ->
+        {^Pid, true} ->
             erlang:demonitor(MRef, [flush]),
             collect(Next, {[E | Left], Right}, Timeout);
-        {Pid, false} ->
+        {^Pid, false} ->
             erlang:demonitor(MRef, [flush]),
             collect(Next, {Left, [E | Right]}, Timeout);
-        {'DOWN', MRef, process, Pid, _Reason} ->
+        {'DOWN', ^MRef, process, ^Pid, _Reason} ->
             collect(Next, {Left, [E | Right]}, Timeout)
     after Timeout ->
               exit(partition_parallel_timeout)

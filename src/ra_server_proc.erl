@@ -493,8 +493,8 @@ candidate({call, From}, trigger_election, State) ->
 candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
-            {State1, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {State, Actions} = maybe_set_election_timeout(long, State1, Actions0),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State, Actions} = maybe_set_election_timeout(long, State2, Actions0),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -546,8 +546,8 @@ pre_vote({call, From}, trigger_election, State) ->
 pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
-            {State1, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {State, Actions} = maybe_set_election_timeout(long, State1, Actions0),
+            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State, Actions} = maybe_set_election_timeout(long, State2, Actions0),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -638,7 +638,7 @@ follower(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 follower(info, {node_event, Node, down}, State0) ->
     case leader_id(State0) of
-        {_, Node} ->
+        {_, ^Node} ->
             ?DEBUG("~s: Leader node ~w may be down, setting pre-vote timeout",
                    [log_id(State0), Node]),
             {State, Actions} = maybe_set_election_timeout(long, State0, []),
@@ -648,7 +648,7 @@ follower(info, {node_event, Node, down}, State0) ->
     end;
 follower(info, {node_event, Node, up}, State) ->
     case leader_id(State) of
-        {_, Node} when State#state.election_timeout_set ->
+        {_, ^Node} when State#state.election_timeout_set ->
             ?DEBUG("~s: Leader node ~w is back up, cancelling pre-vote timeout",
                    [log_id(State), Node]),
             {keep_state,
@@ -791,7 +791,7 @@ await_condition(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 await_condition(info, {node_event, Node, down}, State) ->
     case leader_id(State) of
-        {_, Node} ->
+        {_, ^Node} ->
             ?WARN("~s: await_condition - Leader node ~w might be down."
                   " Re-entering follower state.",
                   [log_id(State), Node]),
@@ -849,7 +849,7 @@ terminate(Reason, StateName,
             _ = spawn(fun () ->
                               Ref = erlang:monitor(process, Self),
                               receive
-                                  {'DOWN', Ref, _, _, _} ->
+                                  {'DOWN', ^Ref, _, _, _} ->
                                       ok = supervisor:terminate_child(
                                              ra_server_sup_sup,
                                              Parent)
@@ -1285,7 +1285,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
                                    leader_monitor = OldMRef} = New) ->
     OldLeader = leader_id(Old),
     case leader_id(New) of
-        OldLeader when is_reference(OldMRef) ->
+        ^OldLeader when is_reference(OldMRef) ->
             % no change and monitor is still intact
             New;
         undefined ->
@@ -1309,7 +1309,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
 
 aten_register(Node) ->
     case node() of
-        Node -> ok;
+        ^Node -> ok;
         _ ->
             aten:register(Node)
     end.
@@ -1522,7 +1522,7 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
     {_, ServerState, Effects} =
         lists:foldl(
           fun (Comp, {R, S0, E0}) ->
-                  {R, S, E} = ra_server:handle_node_status(R, Comp, Node,
+                  {^R, S, E} = ra_server:handle_node_status(R, Comp, Node,
                                                            Status, InfoList,
                                                            S0),
                   {R, S, E0 ++ E}

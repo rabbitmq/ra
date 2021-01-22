@@ -324,7 +324,7 @@ segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
                                                  fun binary_to_term/1,
                                                  E0),
               Rem = case Start of
-                        Start0 -> undefined;
+                        ^Start0 -> undefined;
                         _ ->
                             {Start0, Start-1}
                     end,

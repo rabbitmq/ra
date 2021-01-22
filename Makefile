@@ -8,6 +8,8 @@ PROJECT = ra
 ESCRIPT_NAME = ra_fifo_cli
 ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
+ERLC_OPTS = -Werror +debug_info +warn_export_vars +warn_shadow_vars +warn_obsolete_guard +warn_unpinned_vars
+
 dep_gen_batch_server = hex 0.8.4
 dep_aten = hex 0.5.6
 DEPS = aten gen_batch_server
