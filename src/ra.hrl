@@ -182,7 +182,8 @@
                                                                 ?FUNCTION_NAME,
                                                                 ?FUNCTION_ARITY},
                                                         file => ?FILE,
-                                                        line => ?LINE}),
+                                                        line => ?LINE,
+                                                        domain => [ra]}),
        ok).
 
 -define(DEFAULT_TIMEOUT, 5000).
