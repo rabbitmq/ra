@@ -13,6 +13,7 @@
 
 
 -include("ra.hrl").
+-include("ra_server.hrl").
 
 %% State functions
 -export([
@@ -830,7 +831,7 @@ handle_event(_EventType, EventContent, StateName, State) ->
 
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
-                 server_state = ServerState} = State) ->
+                 server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
     ?INFO("~s: terminating with ~w in state ~w~n",
           [log_id(State), Reason, StateName]),
     UId = uid(State),
@@ -862,7 +863,7 @@ terminate(Reason, StateName,
 
         _ -> ok
     end,
-    _ = ets:delete(ra_metrics, Key),
+    _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
     ok = ra_counters:delete({Key, self()}),
     ok.
