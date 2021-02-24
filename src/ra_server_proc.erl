@@ -13,6 +13,7 @@
 
 
 -include("ra.hrl").
+-include("ra_server.hrl").
 
 %% State functions
 -export([
@@ -862,7 +863,11 @@ terminate(Reason, StateName,
 
         _ -> ok
     end,
-    _ = ets:delete(ra_metrics, Key),
+    case ServerState of
+      #{cfg := #cfg{metrics_key = MetricsKey}} ->
+        ets:delete(ra_metrics, MetricsKey);
+      _ -> ok
+    end,
     _ = ets:delete(ra_state, Key),
     ok = ra_counters:delete({Key, self()}),
     ok.
