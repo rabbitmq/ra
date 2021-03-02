@@ -130,6 +130,97 @@ Machine = {simple, fun erlang:'+'/2, 0},
 {ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
+### Dynamically joining members example
+
+Ra supports cluster membership change.
+
+In this example, instead of starting a "pre-formed" cluster,
+a local server is started and then members are added by calling `ra:add_member/2`.
+
+Start 3 Erlang nodes:
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra1@hostname.local
+```
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra2@hostname.local
+```
+
+``` shell
+# replace hostname.local with your actual hostname
+rebar3 shell --name ra3@hostname.local
+```
+
+Start the ra application:
+
+``` shell
+(ra1@hostname.local)1> ra:start().
+ok
+```
+
+``` shell
+(ra2@hostname.local)1> ra:start().
+ok
+
+```
+
+``` shell
+(ra3@hostname.local)1> ra:start().
+ok
+```
+
+A single node cluster can be started from any node.
+
+For the purpose of this example, `ra2@hostname.local` is used as the starting member:
+
+``` erlang
+ClusterName = dyn_members,
+Machine = {simple, fun erlang:'+'/2, 0},
+
+% Start a cluster
+{ok, _, _} =  ra:start_cluster(ClusterName, Machine,  [{dyn_members, 'ra2@hostname.local'}]).
+```
+
+After the cluster is formed, members can be added.
+
+Add `ra1@hostname.local` to the cluster:
+
+``` erlang
+% Add member
+{ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra1@hostname.local'}),
+
+% Start the server
+ok = ra:start_server(ClusterName,  {dyn_members, 'ra1@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+
+```
+
+Add `ra3@hostname.local` to the cluster:
+
+``` erlang
+% Add member
+{ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra3@hostname.local'}),
+
+% Start the server
+ok = ra:start_server(ClusterName,  {dyn_members, 'ra3@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+
+```
+
+Check the members from any node:
+
+``` shell
+(ra3@hostname.local)2> ra:members({dyn_members, node()}).
+{ok,[{dyn_members,'ra1@hostname.local'},
+     {dyn_members,'ra2@hostname.local'},
+     {dyn_members,'ra3@hostname.local'}],
+    {dyn_members,'ra2@hostname.local'}}
+
+```
+
+### Other examples
+
 See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 for how to write more sophisiticated state machines by implementing
 the `ra_machine` behaviour.
