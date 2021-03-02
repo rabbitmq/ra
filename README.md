@@ -130,9 +130,11 @@ Machine = {simple, fun erlang:'+'/2, 0},
 {ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
-### Dynamically joining members example
+### Dynamically Changing Cluster Membership
 
-Ra supports cluster membership change.
+Nodes can be added to or removed from a Ra cluster dynamically. Only one
+cluster membership change at a time is allowed: concurrent changes
+will be rejected by design.
 
 In this example, instead of starting a "pre-formed" cluster,
 a local server is started and then members are added by calling `ra:add_member/2`.
@@ -158,18 +160,18 @@ Start the ra application:
 
 ``` shell
 (ra1@hostname.local)1> ra:start().
-ok
+% => ok
 ```
 
 ``` shell
 (ra2@hostname.local)1> ra:start().
-ok
+% => ok
 
 ```
 
 ``` shell
 (ra3@hostname.local)1> ra:start().
-ok
+% => ok
 ```
 
 A single node cluster can be started from any node.
@@ -194,7 +196,6 @@ Add `ra1@hostname.local` to the cluster:
 
 % Start the server
 ok = ra:start_server(ClusterName,  {dyn_members, 'ra1@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
-
 ```
 
 Add `ra3@hostname.local` to the cluster:
@@ -205,18 +206,16 @@ Add `ra3@hostname.local` to the cluster:
 
 % Start the server
 ok = ra:start_server(ClusterName,  {dyn_members, 'ra3@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
-
 ```
 
 Check the members from any node:
 
 ``` shell
 (ra3@hostname.local)2> ra:members({dyn_members, node()}).
-{ok,[{dyn_members,'ra1@hostname.local'},
-     {dyn_members,'ra2@hostname.local'},
-     {dyn_members,'ra3@hostname.local'}],
-    {dyn_members,'ra2@hostname.local'}}
-
+% => {ok,[{dyn_members,'ra1@hostname.local'},
+% =>      {dyn_members,'ra2@hostname.local'},
+% =>      {dyn_members,'ra3@hostname.local'}],
+% =>     {dyn_members,'ra2@hostname.local'}}
 ```
 
 ### Other examples
