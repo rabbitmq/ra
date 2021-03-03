@@ -215,7 +215,7 @@ Check the members from any node:
 % => {ok,[{dyn_members,'ra1@hostname.local'},
 % =>      {dyn_members,'ra2@hostname.local'},
 % =>      {dyn_members,'ra3@hostname.local'}],
-% =>     {dyn_members,'ra2@hostname.local'}}
+% =>      {dyn_members,'ra2@hostname.local'}}
 ```
 
 ### Other examples
