@@ -468,7 +468,7 @@ leader(EventType, Msg, State0) ->
 
 candidate(enter, OldState, State0) ->
     {State1, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
-    {State, Actions} = maybe_set_election_timeout(long, State1, Actions0),
+    {State, Actions} = maybe_set_election_timeout(short, State1, Actions0),
     {keep_state, State, Actions};
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
