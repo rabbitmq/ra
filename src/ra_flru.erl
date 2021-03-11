@@ -95,7 +95,7 @@ size(#?MODULE{items = Items}) ->
 -include_lib("eunit/include/eunit.hrl").
 
 evit_test() ->
-    C0 = new(3, fun(I) -> ?debugFmt("~w evicted~n", [I]) end),
+    C0 = new(3, fun(I) -> ?debugFmt("~w evicted", [I]) end),
     C1 = insert(k1, v1, C0),
     C2 = insert(k2, v2, C1),
     {{k1, v1}, C3} = evict(k1, C2),
@@ -104,7 +104,7 @@ evit_test() ->
 
 
 basics_test() ->
-    C0 = new(3, fun(I) -> ?debugFmt("~w evicted~n", [I]) end),
+    C0 = new(3, fun(I) -> ?debugFmt("~w evicted", [I]) end),
     C1 = insert(k1, v1, C0),
     C2 = insert(k2, v2, C1),
     C3 = insert(k3, v3, C2),

@@ -66,7 +66,7 @@ dump(Term) ->
     dump("Dump", Term).
 
 dump(Prefix, Term) ->
-    io:format("~p: ~p~n", [Prefix, Term]),
+    io:format("~p: ~p", [Prefix, Term]),
     Term.
 
 id(X) -> X.

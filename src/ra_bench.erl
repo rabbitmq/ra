@@ -59,7 +59,7 @@ run(#{name := Name,
       nodes := Nodes,
       degree := Degree} = Conf) ->
 
-    io:format("starting servers on ~w~n", [Nodes]),
+    io:format("starting servers on ~w", [Nodes]),
     {ok, ServerIds, []} = start(Name, Nodes),
     {ok,_, Leader} = ra:members(hd(ServerIds)),
     TotalOps = Secs * Target,
@@ -72,7 +72,7 @@ run(#{name := Name,
     [begin
          receive
              {done, P} ->
-                 io:format("~w is done ~n", [P]),
+                 io:format("~w is done ", [P]),
                  ok
          after  Wait ->
                    exit({timeout, P})
@@ -80,14 +80,14 @@ run(#{name := Name,
      end || P <- Pids],
     End = os:system_time(millisecond),
     Taken = End - Start,
-    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
+    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec",
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
 
     BName = atom_to_binary(Name, utf8),
     [rpc:call(N, ?MODULE, print_metrics, [BName])
      || N <- Nodes],
     _ = ra:delete_cluster(ServerIds),
-    %% 
+    %%
     ok.
 
 start(Name, Nodes) when is_atom(Name) ->
@@ -128,11 +128,11 @@ client_loop(Num, Sent, _Leader, Data) ->
             send_n(Leader, Data, ToSend),
             client_loop(Num - N, Sent - ToSend, Leader, Data);
         {ra_event, _, {rejected, {not_leader, NewLeader, _}}} ->
-            io:format("new leader ~w~n", [NewLeader]),
+            io:format("new leader ~w", [NewLeader]),
             send_n(NewLeader, Data, 1),
             client_loop(Num, Sent, NewLeader, Data);
         {ra_event, Leader, Evt} ->
-            io:format("unexpected ra_event ~w~n", [Evt]),
+            io:format("unexpected ra_event ~w", [Evt]),
             client_loop(Num, Sent, Leader, Data)
     end.
 
@@ -148,9 +148,9 @@ spawn_client(Parent, Leader, Num, DataSize) when Num >= ?PIPE_SIZE ->
       end).
 
 print_metrics(Name) ->
-    io:format("Node ~w:~n", [node()]),
-    io:format("metrics ~p~n~n", [ets:lookup(ra_metrics, Name)]),
-    io:format("counters ~p~n", [ra_counters:overview()]).
+    io:format("Node ~w:", [node()]),
+    io:format("metrics ~p~n", [ets:lookup(ra_metrics, Name)]),
+    io:format("counters ~p", [ra_counters:overview()]).
 
 
 

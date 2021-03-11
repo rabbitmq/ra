@@ -78,7 +78,7 @@ handle_info({ra_event, From, Evt}, #state{state = F0,
             {noreply, State0#state{state = F}};
         {{delivery, _, Dels}, F1} ->
             MsgIds = [X || {X, _} <- Dels],
-            % ?INFO("consumer settling ~w~n", [MsgIds]),
+            % ?INFO("consumer settling ~w", [MsgIds]),
             {ok, F} = ra_fifo_client:settle(State0#state.consumer_tag,
                                             MsgIds, F1),
             case State0#state{state = F,

@@ -374,7 +374,7 @@ local_query_stale(Config) ->
 
     {ok, {_, NonLeaderV}, _} = ra:local_query(NonLeader, fun(S) -> S end, 100000),
     {ok, {_, LeaderV}, _} = ra:local_query(Leader, fun(S) -> S end),
-    ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
+    ct:pal("LeaderV ~p~n NonLeaderV ~p", [LeaderV, NonLeaderV]),
     ?assertNotMatch(LeaderV, NonLeaderV),
     terminate_cluster(Cluster).
 
@@ -397,7 +397,7 @@ consistent_query_stale(Config) ->
 
     {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
     {ok, LeaderV, _} = ra:consistent_query(Leader, fun(S) -> S end),
-    ct:pal("LeaderV ~p~n NonLeaderV ~p~n", [LeaderV, NonLeaderV]),
+    ct:pal("LeaderV ~p~n NonLeaderV ~p", [LeaderV, NonLeaderV]),
     ?assertMatch(LeaderV, NonLeaderV),
     {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
     {ok, V, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
@@ -854,7 +854,7 @@ validate_state_on_node(Name, Expected) ->
                                             fun(X) -> X end).
 
 dump(T) ->
-    ct:pal("DUMP: ~p~n", [T]),
+    ct:pal("DUMP: ~p", [T]),
     T.
 
 nth_server_name(Config, N) when is_integer(N) ->

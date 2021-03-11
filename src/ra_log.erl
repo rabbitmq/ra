@@ -221,7 +221,7 @@ init(#{uid := UId} = Conf) ->
     % and an empty meta data map
     State = maybe_append_first_entry(State0),
     ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
-           " first index ~b~n",
+           " first index ~b",
            [State#?MODULE.cfg#cfg.log_id,
             last_index_term(State),
             State#?MODULE.first_index]),
@@ -670,7 +670,7 @@ delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
     catch
         _:_ = Err ->
             ?WARN("ra_log:delete_everything/1 failed to delete "
-                  "directory ~s~n Error: ~p~n", [Dir, Err])
+                  "directory ~s~n Error: ~p", [Dir, Err])
     end,
     ok.
 

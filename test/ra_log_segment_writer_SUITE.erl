@@ -559,7 +559,7 @@ make_mem_table(UId, Entries) ->
 
 flush() ->
     receive Msg ->
-                ct:pal("flush: ~p~n", [Msg]),
+                ct:pal("flush: ~p", [Msg]),
                 flush()
     after 0 -> ok
     end.

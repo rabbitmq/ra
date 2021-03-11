@@ -512,7 +512,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?DEBUG("wal: opening new file ~ts~n", [Fn]),
+    ?DEBUG("wal: opening new file ~ts", [Fn]),
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelyhood that each erlang node will
     %% flush mem tables at the same time

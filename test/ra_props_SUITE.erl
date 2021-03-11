@@ -49,7 +49,7 @@ end_per_suite(Config) ->
 %% this test mixes associative with non-associative operations to tests that
 %% all nodes apply operations in the same order
 non_assoc_prop([A, B, C], {Ops, Initial}) ->
-    ct:pal("non_assoc_prop Ops: ~p Initial: ~p~n", [Ops, Initial]),
+    ct:pal("non_assoc_prop Ops: ~p Initial: ~p", [Ops, Initial]),
     Expected = lists:foldl(fun non_assoc_apply/2, Initial, Ops),
     % set cluster to
     {ok, _, Leader} = ra:process_command(A, {set, Initial}),
@@ -59,7 +59,7 @@ non_assoc_prop([A, B, C], {Ops, Initial}) ->
     {ok, {_, ARes}, _} = ra:local_query(A, fun id/1),
     {ok, {_, BRes}, _} = ra:local_query(B, fun id/1),
     {ok, {_, CRes}, _} = ra:local_query(C, fun id/1),
-    % ct:pal("Result ~p ~p ~p Expected ~p Initial ~p~n",
+    % ct:pal("Result ~p ~p ~p Expected ~p Initial ~p",
     %        [ARes, BRes, CRes, Expected, Initial]),
     % assert all nodes have the same final state
     Expected == ARes andalso Expected == BRes andalso Expected == CRes.

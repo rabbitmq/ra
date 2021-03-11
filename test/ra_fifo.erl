@@ -697,7 +697,7 @@ update_smallest_raft_index(IncomingRaftIdx, OldIndexes,
                     % effects
                     {State, ok, Effects};
                 {_, {Smallest, Shadow}} when Shadow =/= undefined ->
-                    % ?INFO("RELEASE ~w ~w ~w~n", [IncomingRaftIdx, Smallest,
+                    % ?INFO("RELEASE ~w ~w ~w", [IncomingRaftIdx, Smallest,
                     %                              Shadow]),
                     {State, ok, [{release_cursor, Smallest, Shadow} | Effects]};
                  _ -> % smallest
@@ -1097,7 +1097,7 @@ out_of_order_enqueue_test() ->
     ?assertNoEffect({send_msg, _, {delivery, _, _}, ra_event}, Effects4),
     {_State5, _, Effects5} = enq(5, 2, second, State4),
     % assert two deliveries were now made
-    ?debugFmt("Effects5 ~n~p~n", [Effects5]),
+    ?debugFmt("Effects5 ~n~p", [Effects5]),
     ?ASSERT_EFF({send_msg, _, {delivery, _, [{_, {_, second}},
                                              {_, {_, third}},
                                              {_, {_, fourth}}]},
@@ -1357,7 +1357,7 @@ enq_check_settle_snapshot_recover_test() ->
                 {settle, [2], Cid}
 
               ],
-         % ?debugFmt("~w running commands ~w~n", [?FUNCTION_NAME, C]),
+         % ?debugFmt("~w running commands ~w", [?FUNCTION_NAME, C]),
     run_snapshot_test(?FUNCTION_NAME, Commands).
 
 
@@ -1365,7 +1365,7 @@ run_snapshot_test(Name, Commands) ->
     %% create every incremental permuation of the commands lists
     %% and run the snapshot tests against that
     [begin
-         % ?debugFmt("~w running commands ~w~n", [?FUNCTION_NAME, C]),
+         % ?debugFmt("~w running commands ~w", [?FUNCTION_NAME, C]),
          run_snapshot_test0(Name, C)
      end || C <- prefixes(Commands, 1, [])].
 
@@ -1380,7 +1380,7 @@ run_snapshot_test0(Name, Commands) ->
                                     end, Entries),
          {S, _} = run_log(SnapState, Filtered),
          % assert log can be restored from any release cursor index
-         % ?debugFmt("Name ~p Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p~n",
+         % ?debugFmt("Name ~p Idx ~p S~p~nState~p~nSnapState ~p~nFiltered ~p",
          %           [Name, SnapIdx, S, State, SnapState, Filtered]),
          ?assertEqual(State, S)
      end || {release_cursor, SnapIdx, SnapState} <- Effects],

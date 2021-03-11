@@ -342,14 +342,14 @@ start_profile(Config, Modules) ->
     Dir = ?config(priv_dir, Config),
     Case = ?config(test_case, Config),
     GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p~n", [GzFile]),
+    ct:pal("Profiling to ~p", [GzFile]),
 
     lg:trace(Modules, lg_file_tracer,
              GzFile, #{running => false, mode => profile}).
 
 stop_profile(Config) ->
     Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p~n", [Case]),
+    ct:pal("Stopping profiling for ~p", [Case]),
     lg:stop(),
     % this segfaults
     % timer:sleep(2000),

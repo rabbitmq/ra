@@ -2387,7 +2387,7 @@ meta() ->
       ts => os:system_time(millisecond)}.
 
 dump(T) ->
-    ct:pal("DUMP: ~p~n", [T]),
+    ct:pal("DUMP: ~p", [T]),
     T.
 
 new_peer() ->

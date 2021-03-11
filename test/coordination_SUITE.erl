@@ -170,7 +170,7 @@ delete_one_server_cluster(Config) ->
     NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     receive
         Anything ->
-            ct:pal("got weird message ~p~n", [Anything]),
+            ct:pal("got weird message ~p", [Anything]),
             exit({unexpected, Anything})
     after 250 ->
               ok
@@ -179,7 +179,7 @@ delete_one_server_cluster(Config) ->
     Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
     undefined = rpc:call(Node, ra_directory, uid_of, [ClusterName]),
     undefined = rpc:call(Node, ra_log_meta, fetch, [UId, current_term]),
-    ct:pal("Files  ~p~n", [Files]),
+    ct:pal("Files  ~p", [Files]),
     [] = Files,
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
@@ -198,7 +198,7 @@ delete_two_server_cluster(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     receive
         Anything ->
-            ct:pal("got wierd message ~p~n", [Anything]),
+            ct:pal("got wierd message ~p", [Anything]),
             exit({unexpected, Anything})
     after 250 ->
               ok
@@ -460,7 +460,7 @@ start_follower(N, PrivDir) ->
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting secondary node with ~s on host ~s for node ~s~n", [Pa, Host, node()]),
+    ct:pal("starting secondary node with ~s on host ~s for node ~s", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
     ok = ct_rpc:call(S, logger, set_primary_config,

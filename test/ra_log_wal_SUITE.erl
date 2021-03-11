@@ -159,7 +159,7 @@ write_many(Config) ->
                                                         Batch, Data, Config),
                    io_lib:format("Scenario ~s took ~bms using ~b "
                                  "reductions for ~b writes @ ~b bytes, "
-                                 "batch size ~b~n",
+                                 "batch size ~b",
                                  [Name, Time, Reductions, Num, Data, Batch])
                end || {Name, Num, Check, Batch, Data} <- Tests],
     ct:pal("~s", [Results]),
@@ -201,9 +201,9 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     erlang:garbage_collect(WalPid),
     {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
-    ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
-    ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),
-    ct:pal("Memory:~n~w~n~w~n", [MemBefore, MemAfter]),
+    ct:pal("Binary:~n~w~n~w", [length(BinBefore), length(BinAfter)]),
+    ct:pal("Garbage:~n~w~n~w", [GarbBefore, GarbAfter]),
+    ct:pal("Memory:~n~w~n~w", [MemBefore, MemAfter]),
 
     Reds = RedsAfter - RedsBefore,
     % ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
@@ -216,7 +216,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
     % stop_profile(Config),
-    % ct:pal("Metrics: ~p~n", [Metrics]),
+    % ct:pal("Metrics: ~p", [Metrics]),
     proc_lib:stop(WalPid),
     {Taken div 1000, Reds}.
 
@@ -267,9 +267,9 @@ write_many_by_many(Config) ->
     {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
     {_, MemAfter} = erlang:process_info(WalPid, memory),
 
-    ct:pal("Binary:~n~w~n~w~n", [length(BinBefore), length(BinAfter)]),
-    ct:pal("Garbage:~n~w~n~w~n", [GarbBefore, GarbAfter]),
-    ct:pal("Memory:~n~w~n~w~n", [MemBefore, MemAfter]),
+    ct:pal("Binary:~n~w~n~w", [length(BinBefore), length(BinAfter)]),
+    ct:pal("Garbage:~n~w~n~w", [GarbBefore, GarbAfter]),
+    ct:pal("Memory:~n~w~n~w", [MemBefore, MemAfter]),
 
     Reds = RedsAfter - RedsBefore,
     ct:pal("~b 1024 byte writes took ~p milliseconds~n~n"
@@ -684,14 +684,14 @@ start_profile(Config, Modules) ->
     Dir = ?config(priv_dir, Config),
     Case = ?config(test_case, Config),
     GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p~n", [GzFile]),
+    ct:pal("Profiling to ~p", [GzFile]),
 
     lg:trace(Modules, lg_file_tracer,
              GzFile, #{running => false, mode => profile}).
 
 stop_profile(Config) ->
     Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p~n", [Case]),
+    ct:pal("Stopping profiling for ~p", [Case]),
     lg:stop(),
     % this segfaults
     % timer:sleep(2000),
@@ -747,7 +747,7 @@ tbl_lookup([_ | Tail], Idx) ->
     tbl_lookup(Tail, Idx).
 flush() ->
     receive Msg ->
-                ct:pal("flush: ~p~n", [Msg]),
+                ct:pal("flush: ~p", [Msg]),
                 flush()
     after 0 -> ok
     end.

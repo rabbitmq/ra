@@ -42,16 +42,16 @@ init_per_testcase(TestCase, Config0) ->
     Machine = {module, ra_fifo, #{}},
     ServerId = setup_ra_cluster(Config, Machine),
     %% Make sure nodes are synchronised
-    ct:pal("Members ~p~n", [ra:members(ServerId)]),
+    ct:pal("Members ~p", [ra:members(ServerId)]),
     Config.
 
 end_per_testcase(print, Config) ->
     Config;
 end_per_testcase(_, Config) ->
     Nodes = ?config(nodes, Config),
-    ct:pal("end_per_testcase: Stopping nodes ~p~n", [Nodes]),
+    ct:pal("end_per_testcase: Stopping nodes ~p", [Nodes]),
     erlang_node_helpers:stop_erlang_nodes(Nodes),
-    ct:pal("end_per_testcase: Stopped nodes ~p~n", [Nodes]),
+    ct:pal("end_per_testcase: Stopped nodes ~p", [Nodes]),
     ok.
 
 -type nodes5() :: foo1@localhost |
@@ -86,7 +86,7 @@ prop_enq_drain(Config) ->
       end, [], 10).
 
 print_scenario(Scenario) ->
-    ct:pal("Scenario ~p~n", [Scenario]),
+    ct:pal("Scenario ~p", [Scenario]),
     true.
 
 enq_drain_basic(Config) ->
@@ -102,7 +102,7 @@ enq_drain_basic(Config) ->
     true = do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario).
 
 do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
-    ct:pal("Running ~p~n", [Scenario]),
+    ct:pal("Running ~p", [Scenario]),
     NemConf = #{nodes => Nodes,
                 scenario => Scenario},
     ScenarioTime = scenario_time(Scenario, 5000),
@@ -119,22 +119,22 @@ do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
                  spec => {EnqInterval, custard}},
     {ok, Enq} = enqueuer:start_link(enq_one, EnqConf),
     {ok, Enq2} = enqueuer:start_link(enq_two, EnqConf2),
-    ct:pal("enqueue_checkout wait_on_scenario ~n", []),
+    ct:pal("enqueue_checkout wait_on_scenario ", []),
     ok = nemesis:wait_on_scenario(Nem, ScenarioTime * 2),
     {applied, Applied, _} = enqueuer:wait(Enq, ScenarioTime * 2),
     {applied, Applied2, _} = enqueuer:wait(Enq2, ScenarioTime * 2),
-    ct:pal("enqueuer:wait ~p ~n", [Applied]),
-    ct:pal("enqueuer:wait ~p ~n", [Applied2]),
+    ct:pal("enqueuer:wait ~p ", [Applied]),
+    ct:pal("enqueuer:wait ~p ", [Applied2]),
     proc_lib:stop(Nem),
     proc_lib:stop(Enq),
     validate_machine_state(Servers),
     Received = drain(ClusterName, Servers),
     validate_machine_state(Servers),
-    ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p~n",
+    ct:pal("Expected ~p~nApplied ~p~nReceived ~p~nScenario: ~p",
            [NumMessages, Applied, Received, Scenario]),
     % assert no messages were lost
     Remaining = (Applied ++ Applied2) -- Received,
-    ct:pal("Remaining ~p~n", [Remaining]),
+    ct:pal("Remaining ~p", [Remaining]),
     %% only assert we did not lose any applied entries
     Remaining =:= [].
 
@@ -227,7 +227,7 @@ setup_ra_cluster(Config, Machine) ->
 
     Configs = lists:map(
                 fun(Node) ->
-                        ct:pal("Start app on ~p~n", [Node]),
+                        ct:pal("Start app on ~p", [Node]),
                         C = make_server_config(Name, Nodes, Node, Machine),
                         ok = ct_rpc:call(Node, ?MODULE, node_setup, [DataDir]),
                         ok = ct_rpc:call(Node, application, load, [ra]),
@@ -241,7 +241,7 @@ setup_ra_cluster(Config, Machine) ->
                 end,
                 Nodes),
     lists:map(fun(#{id := {_, Node}} = ServerConfig) ->
-                      ct:pal("Start ra server on ~p~n", [Node]),
+                      ct:pal("Start ra server on ~p", [Node]),
                       ok = ct_rpc:call(Node, ra, start_server, [ServerConfig]),
                       ServerConfig
               end,

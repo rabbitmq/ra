@@ -97,7 +97,7 @@ handle_info(enqueue, #state{tag = Tag, next = Next0,
                     {noreply, State}
             end;
         Err ->
-            ?WARN("Enqueuer: error enqueue ~W~n", [Err, 5]),
+            ?WARN("Enqueuer: error enqueue ~W", [Err, 5]),
             erlang:send_after(10, self(), enqueue),
             {noreply, State0}
     end;

@@ -162,7 +162,7 @@ pick_first_valid(UId, Mod, Dir, [S | Rem]) ->
     case Mod:validate(filename:join(Dir, S)) of
         ok -> S;
         Err ->
-            ?INFO("ra_snapshot: ~s: skipping ~s as did not validate. Err: ~w~n",
+            ?INFO("ra_snapshot: ~s: skipping ~s as did not validate. Err: ~w",
                   [UId, S, Err]),
             pick_first_valid(UId, Mod, Dir, Rem)
     end.

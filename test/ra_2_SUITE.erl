@@ -391,7 +391,7 @@ recover_after_kill(Config) ->
     % give leader time to commit noop
     {ok, MS2, _} = ra:consistent_query(ServerId, fun (S) -> S end),
     ok = ra:stop_server(ServerId),
-    % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p~n",
+    % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p",
     %        [X, X2, MS, MS2, AllDeq]),
     ?assertEqual(MS, MS2),
     ok = ra:restart_server(ServerId),

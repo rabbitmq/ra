@@ -215,7 +215,7 @@ validate_sequential_reads(Config) ->
                          {_, R} = erlang:statistics(exact_reductions),
                          {R - R0, L}
                  end),
-    ct:pal("validate_sequential_reads WARM took ~pms Reductions: ~p~n",
+    ct:pal("validate_sequential_reads WARM took ~pms Reductions: ~p",
            [WarmTaken/1000, WarmReds]),
     % warm reductions should always be less than cold
     ?assert(WarmReds < ColdReds),
@@ -265,7 +265,7 @@ read_opt(Config) ->
                                  ra_log:take(1, 1, Log)
                          end),
     {_, Reds} = erlang:statistics(exact_reductions),
-    ct:pal("read took ~w Reduction ~w~n", [Time / 1000, Reds]),
+    ct:pal("read took ~w Reduction ~w", [Time / 1000, Reds]),
     ok.
 
 
@@ -321,8 +321,8 @@ updated_segment_can_be_read(Config) ->
     % this should return all entries
     {Entries1, C1, _} = ra_log:take(1, 15, Log4),
     ?assertEqual(length(Entries1), C1),
-    ct:pal("Entries: ~p~n", [Entries]),
-    ct:pal("Entries1: ~p~n", [Entries1]),
+    ct:pal("Entries: ~p", [Entries]),
+    ct:pal("Entries1: ~p", [Entries1]),
     ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
     ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     ?assertEqual(15, length(Entries1)),
@@ -679,7 +679,7 @@ written_event_after_snapshot_installation(Config) ->
     %% but only process events for 9
     Log1 = write_n(1, 10, 2, Log0),
     SnapIdx = 10,
-    %% do snapshot in 
+    %% do snapshot in
     Meta = meta(SnapIdx, 2, [n1]),
     Chunk = create_snapshot_chunk(Config, Meta),
     SnapState0 = ra_log:snapshot_state(Log1),
@@ -1098,14 +1098,14 @@ start_profile(Config, Modules) ->
     Dir = ?config(priv_dir, Config),
     Case = ?config(test_case, Config),
     GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p~n", [GzFile]),
+    ct:pal("Profiling to ~p", [GzFile]),
 
     lg:trace(Modules, lg_file_tracer,
              GzFile, #{running => false, mode => profile}).
 
 stop_profile(Config) ->
     Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p~n", [Case]),
+    ct:pal("Stopping profiling for ~p", [Case]),
     lg:stop(),
     % this segfaults
     Dir = ?config(priv_dir, Config),

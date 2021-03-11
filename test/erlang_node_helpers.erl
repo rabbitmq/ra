@@ -38,7 +38,7 @@ add_lib_dir(Node) ->
 wait_for_distribution(Node, 0) ->
     error({distribution_failed_for, Node, no_more_attempts});
 wait_for_distribution(Node, Attempts) ->
-    ct:pal("Waiting for node ~p~n", [Node]),
+    ct:pal("Waiting for node ~p", [Node]),
     case ct_rpc:call(Node, net_kernel, set_net_ticktime, [15]) of
         {badrpc, nodedown} ->
             timer:sleep(100),
@@ -50,7 +50,7 @@ stop_erlang_nodes(Nodes) ->
     [stop_erlang_node(Node) || Node <- Nodes].
 
 stop_erlang_node(Node) ->
-    ct:pal("Stopping node ~p~n", [Node]),
+    ct:pal("Stopping node ~p", [Node]),
     ct_slave:stop(Node),
     wait_for_stop(Node, 100).
 

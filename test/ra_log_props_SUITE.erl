@@ -165,7 +165,7 @@ write_prop(TestCase) ->
                           ra_log:init(#{uid => TestCase})),
            {LogEntries, _, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
-           ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
+           ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p",
                                [LogEntries, Log]),
                      Entries == LogEntries)
        end).
@@ -189,7 +189,7 @@ write_missing_entry_prop(TestCase) ->
               Log = ra_log:init(#{uid => TestCase}),
               Reply = ra_log:write(Head ++ Tail, Log),
               reset(Log),
-              ?WHENFAIL(ct:pal("Reply: ~p~n", [Reply]),
+              ?WHENFAIL(ct:pal("Reply: ~p", [Reply]),
                         case Reply of
                             {error, {integrity_error, _}} -> true;
                             _ -> false
@@ -215,7 +215,7 @@ write_overwrite_entry_prop(TestCase) ->
               reset(Log1),
               ?WHENFAIL(io:format("Head: ~p~n New entry: ~p~n"
                                   "Entries taken from the log: ~p~n"
-                                  "Ra log state: ~p~n",
+                                  "Ra log state: ~p",
                                   [Head, NewEntry, LogEntries, Log1]),
                         ((Head ++ NewEntry) == LogEntries))
           end)).
@@ -235,7 +235,7 @@ multi_write_missing_entry_prop(TestCase) ->
                                 ra_log:init(#{uid => TestCase})),
               Reply = ra_log:write(Tail, Log0),
               reset(Log0),
-              ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
+              ?WHENFAIL(io:format("Reply: ~p", [Reply]),
                         case Reply of
                             {error, {integrity_error, _}} -> true;
                             _ -> false
@@ -265,7 +265,7 @@ append_missing_entry_prop(TestCase) ->
               reset(Log),
               ?WHENFAIL(io:format("Failed: ~p~nHead: ~p~n Tail: ~p~n"
                                   "Entries taken from the log: ~p~n"
-                                  "Ra log state: ~p~n",
+                                  "Ra log state: ~p",
                                   [Failed, Head, Tail, LogEntries, Log]),
                         (Head == LogEntries) and Failed)
           end)).
@@ -281,7 +281,7 @@ write_index_starts_zero_prop(TestCase) ->
            Log = ra_log:init(#{uid => TestCase}),
            Reply = ra_log:write([Entry], Log),
            reset(Log),
-           ?WHENFAIL(io:format("Reply: ~p~n", [Reply]),
+           ?WHENFAIL(io:format("Reply: ~p", [Reply]),
                      case Reply of
                          {error, {integrity_error, _}} -> true;
                          _ -> false
@@ -305,7 +305,7 @@ append_prop(TestCase) ->
                    ra_log:init(#{uid => TestCase})),
            {LogEntries, _, Log} = ra_log:take(1, length(Entries), Log0),
            reset(Log),
-           ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p~n",
+           ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p",
                                [LogEntries, Log]),
                      Entries == LogEntries)
        end).
@@ -331,7 +331,7 @@ append_overwrite_entry_prop(TestCase) ->
                                true
                        end,
               reset(Log),
-              ?WHENFAIL(io:format("Failed: ~p~n", [Failed]),
+              ?WHENFAIL(io:format("Failed: ~p", [Failed]),
                         Failed)
           end)).
 
@@ -352,7 +352,7 @@ append_index_starts_one_prop(TestCase) ->
                            true
                    end,
            reset(Log),
-           ?WHENFAIL(io:format("Failed: ~p Entry: ~p~n", [Failed, Entry]), Failed)
+           ?WHENFAIL(io:format("Failed: ~p Entry: ~p", [Failed, Entry]), Failed)
        end).
 
 take(Config) ->
@@ -371,7 +371,7 @@ take_prop(TestCase) ->
               {Selected, _, Log} = ra_log:take(Start, Num, Log0),
               Expected = lists:sublist(Entries, Start, Num),
               reset(Log),
-              ?WHENFAIL(io:format("Selected: ~p~nExpected: ~p~n",
+              ?WHENFAIL(io:format("Selected: ~p~nExpected: ~p",
                                   [Selected, Expected]),
                         Selected == Expected)
           end)).
@@ -391,7 +391,7 @@ take_out_of_range_prop(TestCase) ->
                                 ra_log:init(#{uid => TestCase})),
               {Reply, _, Log} = ra_log:take(Start, Num, Log0),
               reset(Log),
-              ?WHENFAIL(io:format("Start: ~p Num: ~p~nReply: ~p~n", [Start, Num, Reply]),
+              ?WHENFAIL(io:format("Start: ~p Num: ~p~nReply: ~p", [Start, Num, Reply]),
                         Reply == [])
           end)).
 
@@ -410,7 +410,7 @@ fetch_prop(TestCase) ->
                                 ra_log:init(#{uid => TestCase})),
               {Got, Log} = ra_log:fetch(Idx, Log0),
               reset(Log),
-              ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Got, Entry]),
+              ?WHENFAIL(io:format("Got: ~p Expected: ~p", [Got, Entry]),
                         Entry == Got)
           end)).
 
@@ -429,7 +429,7 @@ fetch_out_of_range_prop(TestCase) ->
                                 ra_log:init(#{uid => TestCase})),
               {Reply, Log} = ra_log:fetch(Start, Log0),
               reset(Log),
-              ?WHENFAIL(io:format("Got: ~p Expected: undefined~n", [Reply]),
+              ?WHENFAIL(io:format("Got: ~p Expected: undefined", [Reply]),
                         Reply == undefined)
           end)).
 
@@ -453,7 +453,7 @@ last_index_term_prop(TestCase) ->
                                  end,
            {Idx, Term} = ra_log:last_index_term(Log),
            reset(Log),
-           ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [{Idx, Term}, {LastIdx, LastTerm}]),
+           ?WHENFAIL(io:format("Got: ~p Expected: ~p", [{Idx, Term}, {LastIdx, LastTerm}]),
                      (LastIdx == Idx) and (LastTerm == Term))
        end).
 
@@ -472,7 +472,7 @@ fetch_term_prop(TestCase) ->
                                 ra_log:init(#{uid => TestCase})),
               {Term, Log} = ra_log:fetch_term(Idx, Log0),
               reset(Log),
-              ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Term, ExpectedTerm]),
+              ?WHENFAIL(io:format("Got: ~p Expected: ~p", [Term, ExpectedTerm]),
                         (ExpectedTerm == Term))
           end)).
 
@@ -491,7 +491,7 @@ fetch_out_of_range_term_prop(TestCase) ->
                                  ra_log:init(#{uid => TestCase})),
               {Term, Log} = ra_log:fetch_term(Start, Log0),
               reset(Log),
-              ?WHENFAIL(io:format("Got: ~p for index: ~p~n", [Term, Start]),
+              ?WHENFAIL(io:format("Got: ~p for index: ~p", [Term, Start]),
                         (undefined == Term) orelse ((0 == Term) and (Start == 0)))
           end)).
 
@@ -509,7 +509,7 @@ next_index_term_prop(TestCase) ->
            {LastIdx, _LastTerm, _} = lists:last(Entries),
            Idx = ra_log:next_index(Log),
            reset(Log),
-           ?WHENFAIL(io:format("Got: ~p Expected: ~p~n", [Idx, LastIdx + 1]),
+           ?WHENFAIL(io:format("Got: ~p Expected: ~p", [Idx, LastIdx + 1]),
                      LastIdx + 1 == Idx)
        end).
 
@@ -581,7 +581,7 @@ last_written_with_wal_prop(TestCase) ->
               Got = ra_log:last_written(Log),
               {Written, _, Log1} = ra_log:take(1, LastIdx, Log),
               reset(Log1),
-              ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p",
                                   [Got, Last, Written, All]),
                         (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
           end)).
@@ -630,7 +630,7 @@ last_written_with_segment_writer_prop(TestCase) ->
               Got = ra_log:last_written(Log),
               {Written, _, Log1} = ra_log:take(1, LastIdx, Log),
               reset(Log1),
-              ?WHENFAIL(ct:pal("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p~n",
+              ?WHENFAIL(ct:pal("Got: ~p, Expected: ~p Written: ~p~n Actions: ~p",
                                   [Got, Last, Written, All]),
                         (Got ==  Last) and (Written == lists:sublist(Entries, 1, LastIdx)))
           end)).
@@ -699,7 +699,7 @@ last_written_with_crashing_segment_writer_prop(TestCase) ->
               %% Request entries available, which should be all generated by this test
               {EIdx, ETerm, _} = lists:last(Entries),
               LastEntry = {EIdx, ETerm},
-              ct:pal("Log1 ~p~nopen ~p~nclosed~p~n", [Log1,
+              ct:pal("Log1 ~p~nopen ~p~nclosed~p", [Log1,
                                                       ets:tab2list(ra_log_open_mem_tables),
                                                       ets:tab2list(ra_log_closed_mem_tables)
                                                      ]),
@@ -707,7 +707,7 @@ last_written_with_crashing_segment_writer_prop(TestCase) ->
               %% We got all the data, can reset now
               basic_reset(Log2),
               ?WHENFAIL(ct:pal("Last written entry: ~p; actually last idx term: ~p;"
-                               " last entry written: ~p~nEntries taken: ~p~n Actions: ~p~n",
+                               " last entry written: ~p~nEntries taken: ~p~n Actions: ~p",
                                [LastWritten, ActuallyLastIdxTerm, LastEntry, Written, Entries]),
                         (LastWritten == ActuallyLastIdxTerm)
                         and (Written == Entries))
@@ -762,7 +762,7 @@ last_written_prop(TestCase) ->
                                 end, {Log0, {0, 0}}, Actions),
               Got = ra_log:last_written(Log),
               reset(Log),
-              ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p~n",
+              ?WHENFAIL(io:format("Got: ~p, Expected: ~p~n Actions: ~p",
                                   [Got, Last, Actions]),
                         Got ==  Last)
           end)).
@@ -778,7 +778,7 @@ flush() ->
 deliver_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
-            ct:pal("ra_log_evt: ~w~n", [Evt]),
+            ct:pal("ra_log_evt: ~w", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_log_events(Log, Timeout)
     after Timeout ->

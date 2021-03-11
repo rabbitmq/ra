@@ -244,7 +244,7 @@ start_or_restart_cluster(ClusterName, Machine,
                  || N <- RemServers],
             {ok, ServerIds, []};
         {error, Err} ->
-            ?ERR("start_or_restart_cluster: got an error: ~p~n", [Err]),
+            ?ERR("start_or_restart_cluster: got an error: ~p", [Err]),
             start_cluster(ClusterName, Machine, ServerIds, Timeout)
     end.
 
@@ -342,7 +342,7 @@ start_cluster([#{cluster_name := ClusterName} | _] =
                 case start_server(C) of
                     ok  -> true;
                     Err ->
-                        ?ERR("ra: failed to start a server ~w, error: ~p~n",
+                        ?ERR("ra: failed to start a server ~w, error: ~p",
                               [C, Err]),
                         false
                 end
@@ -350,7 +350,7 @@ start_cluster([#{cluster_name := ClusterName} | _] =
     case Started of
         [] ->
             ?ERR("ra: failed to form a new cluster ~w.~n "
-                  "No servers were succesfully started.~n",
+                  "No servers were succesfully started.",
                   [ClusterName]),
             {error, cluster_not_formed};
         _ ->
@@ -372,7 +372,7 @@ start_cluster([#{cluster_name := ClusterName} | _] =
                     {ok, StartedIds, NotStartedIds};
                 Err ->
                     ?WARN("ra: failed to form new cluster ~w.~n "
-                          "Error: ~w~n", [ClusterName, Err]),
+                          "Error: ~w", [ClusterName, Err]),
                     _ = [force_delete_server(N) || N <- StartedIds],
                     % we do not have a functioning cluster
                     {error, cluster_not_formed}

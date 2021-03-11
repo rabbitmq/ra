@@ -573,7 +573,7 @@ follower(enter, OldState, #state{server_state = ServerState} = State0) ->
                                {State1, Actions0};
                            false ->
                                ?DEBUG("~s: is not new, setting "
-                                      "election timeout.~n",
+                                      "election timeout.",
                                       [log_id(State0)]),
                                maybe_set_election_timeout(TimeoutLen, State1,
                                                           Actions0)
@@ -587,10 +587,10 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
     case leader_id(State) of
         undefined ->
             ?WARN("~s: leader cast - leader not known. "
-                  "Command is dropped.~n", [log_id(State)]),
+                  "Command is dropped.", [log_id(State)]),
             {keep_state, State, []};
         LeaderId ->
-            ?INFO("~s: follower leader cast - redirecting to ~w ~n",
+            ?INFO("~s: follower leader cast - redirecting to ~w ",
                   [log_id(State), LeaderId]),
             ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
             {keep_state, State, []}
@@ -623,7 +623,7 @@ follower({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, follower}}]};
 follower(info, {'DOWN', MRef, process, _Pid, Info},
          #state{leader_monitor = MRef} = State0) ->
-    ?INFO("~s: Leader monitor down with ~W, setting election timeout~n",
+    ?INFO("~s: Leader monitor down with ~W, setting election timeout",
           [log_id(State0), Info, 8]),
     TimeoutLen = case Info of
                      noconnection ->
@@ -719,7 +719,7 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
     {keep_state, State0, []};
 terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
-    ?DEBUG("~s: terminating leader received ~W~n", [LogName, Msg, 10]),
+    ?DEBUG("~s: terminating leader received ~W", [LogName, Msg, 10]),
     {State, Actions} = case leader(EvtType, Msg, State0) of
                            {next_state, terminating_leader, S, A} ->
                                {S, A};
@@ -733,7 +733,7 @@ terminating_leader(EvtType, Msg, State0) ->
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?DEBUG("~s: is not fully replicated after ~W~n",
+            ?DEBUG("~s: is not fully replicated after ~W",
                    [LogName, Msg, 7]),
             {keep_state, send_rpcs(State), Actions}
     end.
@@ -744,7 +744,7 @@ terminating_follower(enter, OldState, State0) ->
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     LogName = log_id(State0),
-    ?DEBUG("~s: terminating follower received ~W~n", [LogName, Msg, 10]),
+    ?DEBUG("~s: terminating follower received ~W", [LogName, Msg, 10]),
     {State, Actions} = case follower(EvtType, Msg, State0) of
                            {next_state, terminating_follower, S, A} ->
                                {S, A};
@@ -760,7 +760,7 @@ terminating_follower(EvtType, Msg, State0) ->
         true ->
             {stop, {shutdown, delete}, State};
         false ->
-            ?DEBUG("~s: is not fully persisted after ~W~n",
+            ?DEBUG("~s: is not fully persisted after ~W",
                    [log_id(State), Msg, 7]),
             {keep_state, State, Actions}
     end.
@@ -826,13 +826,13 @@ await_condition(EventType, Msg, State0) ->
     end.
 
 handle_event(_EventType, EventContent, StateName, State) ->
-    ?WARN("~s: handle_event unknown ~P~n", [log_id(State), EventContent, 10]),
+    ?WARN("~s: handle_event unknown ~P", [log_id(State), EventContent, 10]),
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
                  server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
-    ?INFO("~s: terminating with ~w in state ~w~n",
+    ?INFO("~s: terminating with ~w in state ~w",
           [log_id(State), Reason, StateName]),
     UId = uid(State),
     _ = ra_server:terminate(ServerState, Reason),
@@ -902,11 +902,11 @@ handle_enter(RaftState, OldRaftState,
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~s: ~s -> ~s in term: ~b machine version: ~b~n",
+            ?NOTICE("~s: ~s -> ~s in term: ~b machine version: ~b",
                     [log_id(State), OldRaftState, RaftState,
                      current_term(State), machine_version(State)]);
         false ->
-            ?DEBUG("~s: ~s -> ~s in term: ~b machine version: ~b~n",
+            ?DEBUG("~s: ~s -> ~s in term: ~b machine version: ~b",
                    [log_id(State), OldRaftState, RaftState,
                     current_term(State), machine_version(State)])
     end,
@@ -933,7 +933,7 @@ handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
                                  ra_server:persist_last_applied(ServerState)},
             {NextState, State, Effects};
         OtherErr ->
-            ?ERR("handle_leader err ~p~n", [OtherErr]),
+            ?ERR("handle_leader err ~p", [OtherErr]),
             exit(OtherErr)
     end.
 
@@ -1299,7 +1299,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             ok = aten:unregister(OldLeaderNode),
             ok = record_leader_change(NewLeader, New),
             % leader has either changed or just been set
-            ?INFO("~s: detected a new leader ~w in term ~b~n",
+            ?INFO("~s: detected a new leader ~w in term ~b",
                   [log_id(New), NewLeader, current_term(New)]),
             [ok = gen_statem:reply(From, {redirect, NewLeader})
              || {From, _Data} <- Pending],
@@ -1364,7 +1364,7 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
     case LeaderMon of
         undefined ->
             ?INFO("~s: leader call - leader not known. "
-                  "Command will be forwarded once leader is known.~n",
+                  "Command will be forwarded once leader is known.",
                   [log_id(State)]),
             {keep_state,
              State#state{pending_commands = [{From, Msg} | Pending]}};
@@ -1380,7 +1380,7 @@ reject_command(Pid, Corr, State) ->
             ok;
         _ ->
             ?INFO("~s: follower received leader command from ~w. "
-                  "Rejecting to ~w ~n", [log_id(State), Pid, LeaderId])
+                  "Rejecting to ~w ", [log_id(State), Pid, LeaderId])
     end,
     send_ra_event(Pid, {not_leader, LeaderId, Corr},
                   id(State), rejected, State).

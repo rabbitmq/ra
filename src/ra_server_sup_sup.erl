@@ -128,7 +128,7 @@ delete_server(NodeId) ->
     end.
 
 delete_server_rpc(RaName) ->
-    ?INFO("Deleting server ~w and its data directory.~n",
+    ?INFO("Deleting server ~w and its data directory.",
           [RaName]),
     %% TODO: better handle and report errors
     UId = ra_directory:uid_of(RaName),
@@ -155,7 +155,7 @@ delete_data_directory(Directory) ->
                              catch
                                  _:_ = Err ->
                                      ?WARN("ra: delete_server/1 failed to delete directory ~s~n"
-                                           "Error: ~p~n", [Directory, Err]),
+                                           "Error: ~p", [Directory, Err]),
                                      error
                              end
                      end,
@@ -170,7 +170,7 @@ delete_data_directory(Directory) ->
 
 remove_all() ->
     _ = [begin
-             ?DEBUG("ra: terminating child ~w~n", [Pid]),
+             ?DEBUG("ra: terminating child ~w", [Pid]),
              supervisor:terminate_child(?MODULE, Pid)
          end
          || {_, Pid, _, _} <- supervisor:which_children(?MODULE)],

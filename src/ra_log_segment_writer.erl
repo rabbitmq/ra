@@ -158,7 +158,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % TODO: test scenario when server crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
-    ?DEBUG("segment_writer: deleting wal file: ~s~n",
+    ?DEBUG("segment_writer: deleting wal file: ~s",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
     %% TODO: this shoudl be a debug option config?
@@ -235,7 +235,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
     case open_file(Dir, SegConf) of
         enoent ->
             ?WARN("segment_writer: skipping segment as directory ~s does "
-                  "not exist~n", [Dir]),
+                  "not exist", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(ServerUId, Tid),
@@ -245,7 +245,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                                    Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
-                           directory ~s disappeared whilst writing~n",
+                           directory ~s disappeared whilst writing",
                            [ServerUId, Dir]),
                     ok;
                 {Segment1, Closed0} ->
@@ -300,7 +300,7 @@ send_segments(ServerUId, Tid, Segments) ->
 clean_closed_mem_tables(UId, Tid) ->
     Tables = ets:lookup(ra_log_closed_mem_tables, UId),
     [begin
-         ?DEBUG("~w: cleaning closed table for '~s' range: ~b-~b~n",
+         ?DEBUG("~w: cleaning closed table for '~s' range: ~b-~b",
                 [?MODULE, UId, From, To]),
          %% delete the entry in the closed table lookup
          true = ets:delete_object(ra_log_closed_mem_tables, O)

@@ -82,7 +82,7 @@ handle_cast({delete_tables, Tids}, State) ->
          catch
              _:Err ->
                  ?WARN("ra_log_ets: failed to delete ets table ~w with ~w "
-                       "This table may need to be cleaned up manually~n",
+                       "This table may need to be cleaned up manually",
                        [Tid, Err]),
                  ok
          end
