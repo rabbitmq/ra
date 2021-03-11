@@ -22,7 +22,8 @@
          segref/1,
          is_same_as/2]).
 
--export([dump_index/1]).
+-export([dump/1,
+         dump_index/1]).
 
 -include("ra.hrl").
 
@@ -360,6 +361,14 @@ dump_index(File) ->
             % to where the data offset starts.
             {0, DataOffset, undefined, #{}}
     end.
+
+dump(File) ->
+    {ok, S0} = open(File, #{mode => read}),
+    {Idx, Last} = range(S0),
+    L = read_cons(S0, Idx, Last - Idx + 1, fun erlang:binary_to_term/1, []),
+    close(S0),
+    L.
+
 
 dump_index_data(<<Idx:64/unsigned, Term:64/unsigned,
                   Offset:64/unsigned, Length:32/unsigned,

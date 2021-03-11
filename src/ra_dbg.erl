@@ -55,13 +55,15 @@ replay_log(WalFile, Module, InitialState, Func) ->
   lists:foldl(WalFunc, InitialState, Wal).
 
 filter_duplicate_entries(WalInReverseOrder) ->
-  {_IndexRegistry, OrderedAndFilteredWal} = lists:foldl(fun({Index, _Term, _Command} = Entry, {IndexRegistry, WalAcc}) ->
-      case maps:is_key(Index, IndexRegistry) of
-        true ->
-          {IndexRegistry, WalAcc};
-        false ->
-          {maps:put(Index, true, IndexRegistry), lists:append([Entry], WalAcc)}
-      end
-    end, {#{}, []}, WalInReverseOrder),
-  OrderedAndFilteredWal.
+    {_IndexRegistry, OrderedAndFilteredWal} =
+    lists:foldl(fun({Index, _Term, _Command} = Entry, {IndexRegistry, WalAcc}) ->
+                        case maps:is_key(Index, IndexRegistry) of
+                            true ->
+                                {IndexRegistry, WalAcc};
+                            false ->
+                                {maps:put(Index, true, IndexRegistry),
+                                 lists:append([Entry], WalAcc)}
+                        end
+                end, {#{}, []}, WalInReverseOrder),
+    OrderedAndFilteredWal.
 

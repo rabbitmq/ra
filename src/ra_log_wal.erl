@@ -733,20 +733,30 @@ dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
     Entries;
 dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
                IdDataLen:16/unsigned, _:IdDataLen/binary,
-               _:32/integer,
+               Crc:32/integer,
                EntryDataLen:32/unsigned,
                Idx:64/unsigned, Term:64/unsigned,
                EntryData:EntryDataLen/binary,
                Rest/binary>>, Entries) ->
     % TODO: recover writers info, i.e. last index seen
-    dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
+    case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, EntryData/binary>>) of
+        Crc ->
+            dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
+        _ ->
+            exit({crc_failed_for, Idx, EntryData})
+    end;
 dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
-               _:32/integer,
+               Crc:32/integer,
                EntryDataLen:32/unsigned,
                Idx:64/unsigned, Term:64/unsigned,
                EntryData:EntryDataLen/binary,
                Rest/binary>>, Entries) ->
-    dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
+    case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, EntryData/binary>>) of
+        Crc ->
+            dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
+        _ ->
+            exit({crc_failed_for, Idx, EntryData})
+    end;
 dump_records(<<>>, Entries) ->
     Entries.
 

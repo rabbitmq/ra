@@ -51,7 +51,10 @@ replay(_Config) ->
   InitialState = ra_fifo:init(Config),
   Pid = spawn(?MODULE, report, [self(), 0]),
   %% check final state and replayed state are the same
-  FinalState = ra_dbg:replay_log(WalFile, ra_fifo, InitialState, fun(_State, _Effects) -> Pid ! command_applied end),
+  FinalState = ra_dbg:replay_log(WalFile, ra_fifo, InitialState,
+                                 fun (_State, _Effects) ->
+                                         Pid ! command_applied
+                                 end),
   %% make sure the callback function has been called correctly
   Count = receive
             X -> X
@@ -62,13 +65,13 @@ replay(_Config) ->
   ok.
 
 filter_entry_duplicate(_Config) ->
-  execute_state_machine(),
-  WalFile = wal_file(),
+    execute_state_machine(),
+    WalFile = wal_file(),
 
-  WalInReverseOrder = ra_log_wal:wal2list(WalFile),
-  Wal = lists:reverse(WalInReverseOrder),
-  Wal = ra_dbg:filter_duplicate_entries(lists:append(WalInReverseOrder, WalInReverseOrder)),
-  ok.
+    WalInReverseOrder = ra_log_wal:wal2list(WalFile),
+    Wal = lists:reverse(WalInReverseOrder),
+    Wal = ra_dbg:filter_duplicate_entries(lists:append(WalInReverseOrder, WalInReverseOrder)),
+    ok.
 
 execute_state_machine() ->
   %% creating a new WAL file with ra_fifo
