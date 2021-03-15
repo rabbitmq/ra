@@ -15,6 +15,8 @@ jobs:
         otp-version: ${{ matrix.otp }}
     - name: XREF
       run: make xref
+    - name: DEPS
+      run: make test-deps
     - name: DIALYZE
       run: make dialyze
     - name: BUILD
