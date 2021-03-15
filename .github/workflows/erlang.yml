@@ -1,21 +1,23 @@
-name: Erlang CI
-
-on:
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
-
+name: Test
+on: push
 jobs:
-
   build:
-
-    runs-on: ubuntu-latest
-
-    container:
-      image: erlang:latest
-
+    runs-on: ubuntu-18.04
+    strategy:
+      matrix:
+        otp: [23.2]
     steps:
-    - uses: actions/checkout@v2
-    - name: Check
-      run: make check
+    - name: CHECKOUT
+      uses: actions/checkout@v2
+    - name: CONFIGURE ERLANG
+      uses: gleam-lang/setup-erlang@v1.1.2
+      with:
+        otp-version: ${{ matrix.otp }}
+    - name: XREF
+      run: make xref
+    - name: DIALYZE
+      run: make dialyze
+    - name: BUILD
+      run: make test-build
+    - name: TEST
+      run: make tests
