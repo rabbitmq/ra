@@ -21,7 +21,7 @@ jobs:
       run: make dialyze
     - name: BUILD
       run: make test-build
-    - name: TEST
+    - name: EUNIT
       run: make eunit
     - name: coordination_SUITE
       run: make ct-coordination
@@ -65,3 +65,5 @@ jobs:
       run: make ct-ra_server
     - name: ra_snapshot_SUITE
       run: make ct-ra_snapshot
+    - name: PROPER
+      run: make proper
