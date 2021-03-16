@@ -371,7 +371,11 @@ bench(Config) ->
                         degree => 3,
                         data_size => 256 * 1000,
                         nodes => Nodes}),
-    [ok = slave:stop(N) || N <- Nodes],
+    [begin
+         ok = slave:stop(N)
+     end || N <- Nodes],
+    %% clean up
+    ra_lib:recursive_delete(PrivDir),
     ok.
 
 test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, CmdTag, Opts0) ->
@@ -457,8 +461,8 @@ search_paths() ->
 
 start_follower(N, PrivDir) ->
     Dir0 = filename:join(PrivDir, N),
-    Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
+    Host = get_current_host(),
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
     ct:pal("starting secondary node with ~s on host ~s for node ~s", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),

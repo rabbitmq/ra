@@ -150,9 +150,9 @@ write_many(Config) ->
              {"100k/8k",  100000, false, 8000,  1024},
              {"200k/4k",  200000, false, 4000,  1024},
              {"200k/8k",  200000, false, 8000,  1024},
-             {"200k/16k", 200000, false, 16000, 1024},
-             {"200k/32k", 200000, false, 32000, 1024},
-             {"200k/64k", 200000, false, 64000, 1024}
+             {"200k/16k", 200000, false, 16000, 1024}
+             % {"200k/32k", 200000, false, 32000, 1024},
+             % {"200k/64k", 200000, false, 64000, 1024}
             ],
     Results = [begin
                    {Time, Reductions} = test_write_many(Name, Num, Check,
@@ -163,6 +163,8 @@ write_many(Config) ->
                                  [Name, Time, Reductions, Num, Data, Batch])
                end || {Name, Num, Check, Batch, Data} <- Tests],
     ct:pal("~s", [Results]),
+    #{dir := Dir0} = ?config(wal_conf, Config),
+    ra_lib:recursive_delete(Dir0),
     ok.
 
 test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) ->

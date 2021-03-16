@@ -16,29 +16,33 @@ all() ->
      {group, tests}
     ].
 
+%% these tests were useful during the early days but it isn't clear how
+%% much they now contribute
+%% TODO: consider refactoring using a more condensed set of properties
+%% that only test clear log invariants (e.g. overwritten entries are never read).
 all_tests() ->
     [
      write,
-     write_missing_entry,
-     multi_write_missing_entry,
-     write_overwrite_entry,
-     write_index_starts_zero,
-     append,
-     append_missing_entry,
-     append_overwrite_entry,
-     append_index_starts_one,
-     take,
-     take_out_of_range,
-     fetch,
-     fetch_out_of_range,
-     last_index_term,
-     fetch_term,
-     fetch_out_of_range_term,
-     next_index_term,
-     last_written,
-     last_written_with_wal,
-     last_written_with_segment_writer,
-     last_written_with_crashing_segment_writer
+     % write_missing_entry,
+     % multi_write_missing_entry,
+     write_overwrite_entry
+     % write_index_starts_zero,
+     % append,
+     % append_missing_entry,
+     % append_overwrite_entry,
+     % append_index_starts_one,
+     % take,
+     % take_out_of_range,
+     % fetch,
+     % fetch_out_of_range,
+     % last_index_term,
+     % fetch_term,
+     % fetch_out_of_range_term,
+     % next_index_term,
+     % last_written,
+     % last_written_with_wal,
+     % last_written_with_segment_writer,
+     % last_written_with_crashing_segment_writer
     ].
 
 groups() ->
@@ -198,7 +202,7 @@ write_missing_entry_prop(TestCase) ->
 
 write_overwrite_entry(Config) ->
     TestCase = ?config(test_case, Config),
-    run_proper(fun write_overwrite_entry_prop/1, [TestCase], 100).
+    run_proper(fun write_overwrite_entry_prop/1, [TestCase], 250).
 
 write_overwrite_entry_prop(TestCase) ->
     ?FORALL(
