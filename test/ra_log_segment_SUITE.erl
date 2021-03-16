@@ -288,38 +288,39 @@ write_many(Config) ->
     Dir = ?config(data_dir, Config),
     Sizes = [10,
              100,
-             1000,
-             10000,
-             100000,
-             256000
+             1000
+             %% commented out to not create insane data on ci
+             % 10000,
+             % 100000,
+             % 256000
             ],
     Result =
     [begin
          {Max,
-         [begin
-              Data = make_data(Size),
-              Name = integer_to_list(Max) ++ "_" ++  integer_to_list(Size) ++ ".seg",
-              Fn = filename:join(Dir, Name),
-              {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 4096 * 2,
-                                                     max_pending => Max}),
-              % start_profile(Config, [ra_log_segment,
-              %                        file,
-              %                        ra_file_handle,
-              %                        prim_file]),
+          [begin
+               Data = make_data(Size),
+               Name = integer_to_list(Max) ++ "_" ++  integer_to_list(Size) ++ ".seg",
+               Fn = filename:join(Dir, Name),
+               {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 4096 * 2,
+                                                      max_pending => Max}),
+               % start_profile(Config, [ra_log_segment,
+               %                        file,
+               %                        ra_file_handle,
+               %                        prim_file]),
 
-              {Taken, Seg} = timer:tc(
-                               fun() ->
-                                       S0 = write_until_full(1, 2, Data, Seg0),
-                                       {ok, S} = ra_log_segment:flush(S0),
-                                       S
-                               end),
-              % stop_profile(Config),
-              % ct:pal("write_many ~b size ~b took ~bms",
-              %        [Max, Size, Taken div 1000]),
+               {Taken, Seg} = timer:tc(
+                                fun() ->
+                                        S0 = write_until_full(1, 2, Data, Seg0),
+                                        {ok, S} = ra_log_segment:flush(S0),
+                                        S
+                                end),
+               % stop_profile(Config),
+               % ct:pal("write_many ~b size ~b took ~bms",
+               %        [Max, Size, Taken div 1000]),
 
-              ok = ra_log_segment:close(Seg),
-              {Size, Taken div 1000}
-          end || Size <- Sizes]}
+               ok = ra_log_segment:close(Seg),
+               {Size, Taken div 1000}
+           end || Size <- Sizes]}
      end || Max <- [64,128,256,512,1024,2048,4096]],
 
     ct:pal("~p", [Result]),
