@@ -1,0 +1,68 @@
+load(
+    "@bazel-erlang//:bazel_erlang_lib.bzl",
+    "erlang_lib",
+    "test_erlang_lib",
+)
+load("@bazel-erlang//:xref.bzl", "xref")
+load("@bazel-erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
+load(":ra.bzl", "ra_suites")
+
+NAME = "ra"
+
+EXTRA_APPS = [
+    "sasl",
+    "crypto",
+]
+
+FIRST_SRCS = [
+    "src/ra_machine.erl",
+    "src/ra_snapshot.erl",
+]
+
+DEPS = [
+    "@gen_batch_server//:bazel_erlang_lib",
+]
+
+RUNTIME_DEPS = [
+    "@aten//:bazel_erlang_lib",
+]
+
+erlang_lib(
+    app_name = NAME,
+    extra_apps = EXTRA_APPS,
+    first_srcs = FIRST_SRCS,
+    runtime_deps = RUNTIME_DEPS,
+    deps = DEPS,
+)
+
+test_erlang_lib(
+    app_name = NAME,
+    extra_apps = EXTRA_APPS,
+    first_srcs = FIRST_SRCS,
+    runtime_deps = RUNTIME_DEPS,
+    deps = DEPS,
+)
+
+xref()
+
+plt(
+    name = "base_plt",
+    apps = DEFAULT_PLT_APPS + EXTRA_APPS + [
+        "eunit",
+        "syntax_tools",
+        "erts",
+        "kernel",
+        "stdlib",
+        "common_test",
+        "inets",
+        "mnesia",
+        "ssh",
+        "ssl",
+    ],
+)
+
+dialyze(
+    plt = ":base_plt",
+)
+
+ra_suites()

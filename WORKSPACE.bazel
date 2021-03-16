@@ -1,0 +1,54 @@
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "bazel-erlang",
+    strip_prefix = "bazel-erlang-master",
+    urls = ["https://github.com/rabbitmq/bazel-erlang/archive/master.zip"],
+)
+
+load("@bazel-erlang//:bazel_erlang.bzl", "bazel_erlang_deps")
+
+bazel_erlang_deps()
+
+load("@bazel-erlang//:github.bzl", "github_bazel_erlang_lib")
+load("@bazel-erlang//:hex_pm.bzl", "hex_pm_bazel_erlang_lib")
+
+hex_pm_bazel_erlang_lib(
+    name = "aten",
+    sha256 = "30721679da07ccb55bb0f407cb0e40c7dc6d1e258f3ebfb789c55982878e4427",
+    version = "0.5.6",
+)
+
+hex_pm_bazel_erlang_lib(
+    name = "gen_batch_server",
+    sha256 = "ff6b0ed0f7be945f38b94ddd4784d128f35ff029c34dad6ca0c6cb17ab7bc9c4",
+    version = "0.8.4",
+)
+
+http_archive(
+    name = "inet_tcp_proxy",
+    build_file_content = """load("@bazel-erlang//:bazel_erlang_lib.bzl", "erlang_lib")
+erlang_lib(
+    app_name = "inet_tcp_proxy_dist",
+    app_version = "0.1.0",
+    app_description = "Erlang distribution proxy to simulate network failures",
+    app_module = "inet_tcp_proxy_dist_app",
+)
+""",
+    strip_prefix = "inet_tcp_proxy-master",
+    urls = ["https://github.com/rabbitmq/inet_tcp_proxy/archive/master.zip"],
+)
+
+github_bazel_erlang_lib(
+    name = "meck",
+    org = "eproxus",
+)
+
+github_bazel_erlang_lib(
+    name = "proper",
+    first_srcs = [
+        "src/vararg.erl",
+        "src/proper_target.erl",
+    ],
+    org = "manopapad",
+)
