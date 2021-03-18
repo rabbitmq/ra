@@ -161,7 +161,9 @@ uid_of(#{directory_rev := Tbl}, ServerName) when is_atom(ServerName) ->
         [] -> undefined;
         [{_, UId}] ->
             UId
-    end.
+    end;
+uid_of(SystemOrNames, {ServerName, _}) when is_atom(ServerName) ->
+    uid_of(SystemOrNames, ServerName).
 
 overview(System) when is_atom(System) ->
     #{directory := Tbl,

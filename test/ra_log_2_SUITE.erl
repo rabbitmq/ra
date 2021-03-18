@@ -81,6 +81,10 @@ init_per_testcase(TestCase, Config) ->
 end_per_testcase(_, _Config) ->
     ok.
 
+-define(N1, {n1, node()}).
+-define(N2, {n2, node()}).
+-define(N3, {n3, node()}).
+
 handle_overwrite(Config) ->
     UId = ?config(uid, Config),
     Log0 = ra_log_init(#{uid => UId}),
@@ -610,7 +614,7 @@ snapshot_installation(Config) ->
                  end,
 
     %% create snapshot chunk
-    Meta = meta(15, 2, [n1]),
+    Meta = meta(15, 2, [?N1]),
     Chunk = create_snapshot_chunk(Config, Meta),
 
     SnapState0 = ra_log:snapshot_state(Log2),
@@ -654,7 +658,7 @@ append_after_snapshot_installation(Config) ->
                                      {9, 2} == ra_log:last_written(L)
                              end),
     %% do snapshot
-    Meta = meta(15, 2, [n1]),
+    Meta = meta(15, 2, [?N1]),
     Chunk = create_snapshot_chunk(Config, Meta),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
@@ -686,7 +690,7 @@ written_event_after_snapshot_installation(Config) ->
     Log1 = write_n(1, 10, 2, Log0),
     SnapIdx = 10,
     %% do snapshot in
-    Meta = meta(SnapIdx, 2, [n1]),
+    Meta = meta(SnapIdx, 2, [?N1]),
     Chunk = create_snapshot_chunk(Config, Meta),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
@@ -728,8 +732,8 @@ update_release_cursor(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                    ?N2 => new_peer()},
                                              1, initial_state, Log1),
 
     Log3 = assert_log_events(Log2,
@@ -746,8 +750,8 @@ update_release_cursor(Config) ->
                  end, 10, 100),
     Log3b = validate_read(128, 150, 2, Log3),
     % update the release cursor all the way
-    {Log4, _} = ra_log:update_release_cursor(149, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log4, _} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
+                                                    ?N2 => new_peer()},
                                              1, initial_state, Log3b),
     Log5 = assert_log_events(Log4,
                              fun (L) ->
@@ -789,8 +793,8 @@ update_release_cursor_with_machine_version(Config) ->
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
     MacVer = 2,
-    {Log2, _} = ra_log:update_release_cursor(127, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                    ?N2 => new_peer()},
                                              MacVer,
                                              initial_state, Log1),
     Log = assert_log_events(Log2,
@@ -841,8 +845,8 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     Log5 = validate_read(1, 155, 2, Log4),
 
     % then update the release cursor
-    {Log6, _} = ra_log:update_release_cursor(154, #{n1 => new_peer(),
-                                                    n2 => new_peer()},
+    {Log6, _} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
+                                                    ?N2 => new_peer()},
                                              1, initial_state, Log5),
     _Log = deliver_all_log_events(Log6, 500),
 
