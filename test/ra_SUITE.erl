@@ -451,9 +451,9 @@ add_member(Config) ->
     Name = ?config(test_name, Config),
     [A, _B] = Cluster = start_local_cluster(2, Name, add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9),
-    C = ra_server:name(Name, "3"),
+    C = {ra_server:name(Name, "3"), node()},
     ok = ra:start_server(default, Name, C, add_machine(), Cluster),
-    {ok, _, _Leader} = ra:add_member(Leader, {C, node()}),
+    {ok, _, _Leader} = ra:add_member(Leader, C),
     {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
