@@ -115,7 +115,7 @@ handle_step(#state{steps = [{app_restart, Servers} | Rem]} = State) ->
     ct:pal("doing app restart of ~w", [Servers]),
     [begin
          rpc:call(N, application, stop, [ra]),
-         rpc:call(N, application, start, [ra]),
+         rpc:call(N, ra, start, []),
          rpc:call(N, ra, restart_server, [Id])
      end || {_, N} = Id <- Servers],
     handle_step(State#state{steps = Rem});

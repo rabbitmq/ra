@@ -9,8 +9,8 @@
 -compile(inline_list_funcs).
 
 -export([
-         init/4,
-         init/5,
+         init/6,
+         init/7,
          close/1,
          update_segments/2,
          handle_log_update/2,
@@ -19,7 +19,10 @@
          update_first_index/2,
          read/3,
          read/4,
-         fetch_term/2
+         fetch_term/2,
+         delete_closed_mem_table_object/2,
+         closed_mem_tables/1,
+         open_mem_table_lookup/1
          ]).
 
 -include("ra.hrl").
@@ -33,7 +36,10 @@
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
               counter :: undefined | counters:counters_ref(),
-              directory :: file:filename()}).
+              directory :: file:filename(),
+              open_mem_tbls ::  atom(),
+              closed_mem_tbls :: atom()
+             }).
 
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
                         File :: string()}.
@@ -51,17 +57,24 @@
 
 %% PUBLIC
 
--spec init(ra_uid(), ra_index(), non_neg_integer(),
-           [segment_ref()]) -> state().
-init(UId, FirstIdx, MaxOpen, SegRefs) ->
-    init(UId, FirstIdx, MaxOpen, SegRefs, undefined).
+-spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+           [segment_ref()], ra_system:names()) -> state().
+init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names) ->
+    init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names, undefined).
 
--spec init(ra_uid(), ra_index(), non_neg_integer(),
-           [segment_ref()], undefined | counters:counters_ref()) -> state().
-init(UId, FirstIdx, MaxOpen, SegRefs, Counter) ->
+-spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+           [segment_ref()], ra_system:names(),
+           undefined | counters:counters_ref()) -> state().
+init(UId, Dir, FirstIdx, MaxOpen, SegRefs,
+     #{open_mem_tbls := OpnMemTbls,
+       closed_mem_tbls := ClsdMemTbls}, Counter)
+  when is_binary(UId) ->
     #?STATE{cfg = #cfg{uid = UId,
                        counter = Counter,
-                       directory = ra_env:server_data_dir(UId)},
+                       directory = Dir,
+                       open_mem_tbls = OpnMemTbls,
+                       closed_mem_tbls = ClsdMemTbls
+                      },
             open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
             first_index = FirstIdx,
             segment_refs = SegRefs}.
@@ -149,17 +162,20 @@ read(_From, _To, State, Entries) ->
 
 retry_read(0, From, To, _Acc, State) ->
     exit({ra_log_reader_reader_retry_exhausted, From, To, State});
-retry_read(N, From, To, Acc, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State) ->
-    % 2. Check ra_log_open_mem_tables
-    % 3. Check ra_log_closed_mem_tables in turn
+retry_read(N, From, To, Acc,
+           #?STATE{cfg = #cfg{uid = UId,
+                              open_mem_tbls = OpenTbl,
+                              closed_mem_tbls = ClosedTbl} = Cfg} = State) ->
+    % 2. Check open mem table
+    % 3. Check closed mem tables in turn
     % 4. Check on disk segments in turn
-    case open_mem_tbl_take(UId, {From, To}, Acc) of
+    case open_mem_tbl_take(OpenTbl, UId, {From, To}, []) of
         {Entries1, {_, C} = Counter0, undefined} ->
             ok = incr_counter(Cfg, Counter0),
             {Entries1, C, State};
         {Entries1, {_, C0} = Counter0, Rem1} ->
             ok = incr_counter(Cfg, Counter0),
-            case catch closed_mem_tbl_take(UId, Rem1, Entries1) of
+            case catch closed_mem_tbl_take(ClosedTbl, UId, Rem1, Entries1) of
                 {Entries2, {_, C1} = Counter1, undefined} ->
                     ok = incr_counter(Cfg, Counter1),
                     {Entries2, C0 + C1, State};
@@ -180,20 +196,38 @@ retry_read(N, From, To, Acc, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State) ->
 
 
 -spec fetch_term(ra_index(), state()) -> {ra_index(), state()}.
-fetch_term(Idx, #?STATE{cfg = #cfg{uid = UId} = Cfg} = State0) ->
+fetch_term(Idx, #?STATE{cfg = #cfg{uid = UId,
+                                   open_mem_tbls = OpenTbl,
+                                   closed_mem_tbls = ClosedTbl} = Cfg} = State0) ->
     incr_counter(Cfg, {?C_RA_LOG_FETCH_TERM, 1}),
-    case ets:lookup(ra_log_open_mem_tables, UId) of
+    case ets:lookup(OpenTbl, UId) of
         [{_, From, To, Tid}] when Idx >= From andalso Idx =< To ->
             Term = ets:lookup_element(Tid, Idx, 2),
             {Term, State0};
         _ ->
-            case closed_mem_table_term_query(Idx, UId) of
+            case closed_mem_table_term_query(ClosedTbl, Idx, UId) of
                 undefined ->
                     segment_term_query(Idx, State0);
                 Term ->
                     {Term, State0}
             end
     end.
+
+-spec delete_closed_mem_table_object(state(), term()) -> true.
+delete_closed_mem_table_object(#?STATE{cfg =
+                                       #cfg{closed_mem_tbls = Tbl}}, Id) ->
+    true = ets:delete_object(Tbl, Id).
+
+-spec closed_mem_tables(state()) -> list().
+closed_mem_tables(#?STATE{cfg = #cfg{uid = UId,
+                                     closed_mem_tbls = Tbl}}) ->
+    closed_mem_tables(Tbl, UId).
+
+-spec open_mem_table_lookup(state()) -> list().
+open_mem_table_lookup(#?STATE{cfg = #cfg{uid = UId,
+                                         open_mem_tbls = Tbl}}) ->
+    ets:lookup(Tbl, UId).
+
 
 %% LOCAL
 
@@ -220,8 +254,8 @@ segment_term_query0(Idx, [_ | Tail], Open, Dir) ->
 segment_term_query0(_Idx, [], Open, _) ->
     {undefined, Open}.
 
-open_mem_tbl_take(Id, {Start0, End}, Acc0) ->
-    case ets:lookup(ra_log_open_mem_tables, Id) of
+open_mem_tbl_take(OpenTbl, Id, {Start0, End}, Acc0) ->
+    case ets:lookup(OpenTbl, Id) of
         [{_, TStart, TEnd, Tid}] ->
             {Entries, Count, Rem} = mem_tbl_take({Start0, End}, TStart, TEnd,
                                                  Tid, 0, Acc0),
@@ -230,8 +264,8 @@ open_mem_tbl_take(Id, {Start0, End}, Acc0) ->
             {Acc0, {?C_RA_LOG_READ_OPEN_MEM_TBL, 0}, {Start0, End}}
     end.
 
-closed_mem_tbl_take(Id, {Start0, End}, Acc0) ->
-    case closed_mem_tables(Id) of
+closed_mem_tbl_take(ClosedTbl, Id, {Start0, End}, Acc0) ->
+    case closed_mem_tables(ClosedTbl, Id) of
         [] ->
             {Acc0, {?C_RA_LOG_READ_CLOSED_MEM_TBL, 0}, {Start0, End}};
         Tables ->
@@ -335,8 +369,8 @@ flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
     ok.
 
-closed_mem_tables(Id) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
+closed_mem_tables(Tbl, Id) ->
+    case ets:lookup(Tbl, Id) of
         [] ->
             [];
         Tables ->
@@ -345,8 +379,8 @@ closed_mem_tables(Id) ->
                        end, Tables)
     end.
 
-closed_mem_table_term_query(Idx, Id) ->
-    case closed_mem_tables(Id) of
+closed_mem_table_term_query(Tbl, Idx, Id) ->
+    case closed_mem_tables(Tbl, Id) of
         [] ->
             undefined;
         Tables ->
@@ -383,44 +417,46 @@ incr_counter(#cfg{counter = undefined}, _) ->
 -include_lib("eunit/include/eunit.hrl").
 
 open_mem_tbl_take_test() ->
-    _ = ets:new(ra_log_open_mem_tables, [named_table]),
+    OTbl = ra_log_open_mem_tables,
+    _ = ets:new(OTbl, [named_table]),
     Tid = ets:new(test_id, []),
-    true = ets:insert(ra_log_open_mem_tables, {test_id, 3, 7, Tid}),
+    true = ets:insert(OTbl, {test_id, 3, 7, Tid}),
     Entries = [{3, 2, "3"}, {4, 2, "4"},
                {5, 2, "5"}, {6, 2, "6"},
                {7, 2, "7"}],
     % seed the mem table
     [ets:insert(Tid, E) || E <- Entries],
 
-    {Entries, _, undefined} = open_mem_tbl_take(test_id, {3, 7}, []),
+    {Entries, _, undefined} = open_mem_tbl_take(OTbl, test_id, {3, 7}, []),
     EntriesPlus8 = Entries ++ [{8, 2, "8"}],
-    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(test_id, {1, 7},
+    {EntriesPlus8, _, {1, 2}} = open_mem_tbl_take(OTbl, test_id, {1, 7},
                                                   [{8, 2, "8"}]),
-    {[{6, 2, "6"}], _, undefined} = open_mem_tbl_take(test_id, {6, 6}, []),
-    {[], _, {1, 2}} = open_mem_tbl_take(test_id, {1, 2}, []),
+    {[{6, 2, "6"}], _, undefined} = open_mem_tbl_take(OTbl, test_id, {6, 6}, []),
+    {[], _, {1, 2}} = open_mem_tbl_take(OTbl, test_id, {1, 2}, []),
 
     ets:delete(Tid),
-    ets:delete(ra_log_open_mem_tables),
+    ets:delete(OTbl),
 
     ok.
 
 closed_mem_tbl_take_test() ->
-    _ = ets:new(ra_log_closed_mem_tables, [named_table, bag]),
+    CTbl = ra_log_closed_mem_tables,
+    _ = ets:new(CTbl, [named_table, bag]),
     Tid1 = ets:new(test_id, []),
     Tid2 = ets:new(test_id, []),
     M1 = erlang:unique_integer([monotonic, positive]),
     M2 = erlang:unique_integer([monotonic, positive]),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, M1, 5, 7, Tid1}),
-    true = ets:insert(ra_log_closed_mem_tables, {test_id, M2, 8, 10, Tid2}),
+    true = ets:insert(CTbl, {test_id, M1, 5, 7, Tid1}),
+    true = ets:insert(CTbl, {test_id, M2, 8, 10, Tid2}),
     Entries1 = [{5, 2, "5"}, {6, 2, "6"}, {7, 2, "7"}],
     Entries2 = [{8, 2, "8"}, {9, 2, "9"}, {10, 2, "10"}],
     % seed the mem tables
     [ets:insert(Tid1, E) || E <- Entries1],
     [ets:insert(Tid2, E) || E <- Entries2],
 
-    {Entries1, _, undefined} = closed_mem_tbl_take(test_id, {5, 7}, []),
-    {Entries2, _, undefined} = closed_mem_tbl_take(test_id, {8, 10}, []),
-    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(test_id, {9, 9}, []),
+    {Entries1, _, undefined} = closed_mem_tbl_take(CTbl, test_id, {5, 7}, []),
+    {Entries2, _, undefined} = closed_mem_tbl_take(CTbl, test_id, {8, 10}, []),
+    {[{9, 2, "9"}], _, undefined} = closed_mem_tbl_take(CTbl, test_id, {9, 9}, []),
     ok.
 
 compact_seg_refs_test() ->
@@ -428,4 +464,5 @@ compact_seg_refs_test() ->
     Refs = [{10, 100, "2"}, {10, 75, "2"}, {10, 50, "2"}, {1, 9, "1"}],
     [{10, 100, "2"}, {1, 9, "1"}] = compact_seg_refs(Refs),
     ok.
+
 -endif.

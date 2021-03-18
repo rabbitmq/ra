@@ -27,7 +27,6 @@ init([]) ->
     %% configure the logger module from the application config
     Logger = application:get_env(ra, logger_module, logger),
     ok = ra_env:configure_logger(Logger),
-
     SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
     RaLogFileMetrics = #{id => ra_metrics_ets,
                          start => {ra_metrics_ets, start_link, []}},
@@ -35,11 +34,11 @@ init([]) ->
                      start => {ra_machine_ets, start_link, []}},
     RaFileHandle = #{id => ra_file_handle,
                      start => {ra_file_handle, start_link, []}},
-    RaSystemSup = #{id => ra_system_sup,
-                    type => supervisor,
-                    start => {ra_system_sup, start_link, []}},
+    RaSystemsSup = #{id => ra_systems_sup,
+                     type => supervisor,
+                     start => {ra_systems_sup, start_link, []}},
     Procs = [RaMachineEts,
              RaLogFileMetrics,
              RaFileHandle,
-             RaSystemSup],
+             RaSystemsSup],
     {ok, {SupFlags, Procs}}.

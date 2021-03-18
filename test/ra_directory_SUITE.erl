@@ -18,6 +18,8 @@
 %%% Common Test callbacks
 %%%===================================================================
 
+-define(SYS, default).
+
 all() ->
     [
      {group, tests}
@@ -36,6 +38,9 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
+    Dir = ?config(priv_dir, Config),
+    Cfg = ra_system:default_config(),
+    ra_system:store(Cfg#{data_dir => Dir}),
     Config.
 
 end_per_suite(_Config) ->
@@ -57,48 +62,38 @@ end_per_testcase(_TestCase, _Config) ->
 %%% Test cases
 %%%===================================================================
 
-basics(Config) ->
-    Dir = ?config(priv_dir, Config),
-    ok = ra_directory:init(Dir),
+basics(_Config) ->
+    ok = ra_directory:init(?SYS),
     UId = <<"test1">>,
     Self = self(),
-    yes = ra_directory:register_name(UId, Self, undefined,
-				     test1, <<"test_cluster_name">>),
+    ok = ra_directory:register_name(?SYS, UId, Self, undefined,
+                                    test1, <<"test_cluster_name">>),
     % registrations should always succeed - no negative test
-    % no = register_name(Name, spawn(fun() -> ok end), test1),
-    Self = ra_directory:where_is(UId),
-    UId = ra_directory:uid_of(test1),
+    Self = ra_directory:where_is(?SYS, UId),
+    UId = ra_directory:uid_of(?SYS, test1),
     % ensure it can be read from another process
     _ = spawn_link(
           fun () ->
-                  UId = ra_directory:uid_of(test1),
+                  UId = ra_directory:uid_of(?SYS, test1),
                   Self ! done
           end),
     receive done -> ok after 500 -> exit(timeout) end,
-    test1 = ra_directory:name_of(UId),
-    <<"test_cluster_name">> = ra_directory:cluster_name_of(UId),
-    _ = ra_directory:send(UId, hi_Name),
-    receive
-        hi_Name -> ok
-    after 100 ->
-              exit(await_msg_timeout)
-    end,
-    UId = ra_directory:unregister_name(UId),
-    undefined = ra_directory:where_is(UId),
-    undefined = ra_directory:name_of(UId),
-    undefined = ra_directory:cluster_name_of(UId),
-    undefined = ra_directory:uid_of(test1),
+    test1 = ra_directory:name_of(?SYS, UId),
+    <<"test_cluster_name">> = ra_directory:cluster_name_of(?SYS, UId),
+    UId = ra_directory:unregister_name(?SYS, UId),
+    undefined = ra_directory:where_is(?SYS, UId),
+    undefined = ra_directory:name_of(?SYS, UId),
+    undefined = ra_directory:cluster_name_of(?SYS, UId),
+    undefined = ra_directory:uid_of(?SYS, test1),
     ok.
 
-persistence(Config) ->
-    Dir = ?config(priv_dir, Config),
-    ok = ra_directory:init(Dir),
+persistence(_Config) ->
+    ok = ra_directory:init(?SYS),
     UId = <<"test1">>,
     Self = self(),
-    yes = ra_directory:register_name(UId, Self, test1),
-    UId = ra_directory:uid_of(test1),
-    ok = ra_directory:deinit(),
-    ok = ra_directory:init(Dir),
-    UId = ra_directory:uid_of(test1),
+    ok = ra_directory:register_name(?SYS, UId, Self, undefined, test1, <<"name">>),
+    UId = ra_directory:uid_of(?SYS, test1),
+    ok = ra_directory:deinit(?SYS),
+    ok = ra_directory:init(?SYS),
+    UId = ra_directory:uid_of(?SYS, test1),
     ok.
-%% Utility

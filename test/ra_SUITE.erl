@@ -86,14 +86,14 @@ init_per_testcase(TestCase, Config) ->
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
-    ra_server_sup_sup:remove_all(),
+    ra_server_sup_sup:remove_all(default),
     Config.
 
 single_server_processes_command(Config) ->
     % ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
-    ok = ra:start_server(Name, N1, add_machine(), []),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     % index is 2 as leaders commit a no-op entry on becoming leaders
     {ok, 5, _} = ra:process_command({N1, node()}, 5, 2000),
@@ -103,7 +103,7 @@ single_server_processes_command(Config) ->
 pipeline_commands(Config) ->
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
-    ok = ra:start_server(Name, N1, add_machine(), []),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
     C1 = make_ref(),
@@ -117,7 +117,7 @@ pipeline_commands(Config) ->
 stop_server_idemp(Config) ->
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
-    ok = ra:start_server(Name, N1, add_machine(), []),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     timer:sleep(100),
     ok = ra:stop_server({N1, node()}),
@@ -167,7 +167,7 @@ start_and_join_then_leave_and_terminate(Config) ->
     _ = issue_op(N2, 5),
     validate_state_on_node(N2, 10),
     % safe server removal
-    ok = ra:leave_and_terminate({N1, node()}, {N2, node()}),
+    ok = ra:leave_and_terminate(default, {N1, node()}, {N2, node()}),
     validate_state_on_node(N1, 10),
     terminate_cluster([N1]),
     ok.
@@ -189,7 +189,7 @@ ramp_up_and_ramp_down(Config) ->
     _ = issue_op(N3, 5),
     validate_state_on_node(N3, 15),
 
-    ok = ra:leave_and_terminate({N3, node()}),
+    ok = ra:leave_and_terminate(default, {N3, node()}, {N3, node()}),
     _ = issue_op(N2, 5),
     validate_state_on_node(N2, 20),
 
@@ -216,7 +216,7 @@ minority(Config) ->
     N1 = nth_server_name(Config, 1),
     N2 = nth_server_name(Config, 2),
     N3 = nth_server_name(Config, 3),
-    ok = ra:start_server(Name, N1, add_machine(), [{N2, node()}, {N3, node()}]),
+    ok = ra:start_server(default, Name, N1, add_machine(), [{N2, node()}, {N3, node()}]),
     ok = ra:trigger_election(N1),
     {timeout, _} = ra:process_command({N1, node()}, 5, 100),
     terminate_cluster([N1]).
@@ -228,18 +228,19 @@ start_servers(Config) ->
     N2 = nth_server_name(Config, 2),
     N3 = nth_server_name(Config, 3),
     % start the first server and wait a bit
-    ok = ra:start_server(Name, {N1, node()}, add_machine(),
-                       [{N2, node()}, {N3, node()}]),
+    ok = ra:start_server(default, Name, {N1, node()}, add_machine(),
+                         [{N2, node()}, {N3, node()}]),
     % start second server
-    ok = ra:start_server(Name, {N2, node()}, add_machine(),
-                       [{N1, node()}, {N3, node()}]),
+    ok = ra:start_server(default, Name, {N2, node()}, add_machine(),
+                         [{N1, node()}, {N3, node()}]),
     % trigger election
     ok = ra:trigger_election(N1, ?DEFAULT_TIMEOUT),
     % a consensus command tells us there is a functioning cluster
     {ok, _, _Leader} = ra:process_command({N1, node()}, 5,
                                           ?PROCESS_COMMAND_TIMEOUT),
     % start the 3rd server and issue another command
-    ok = ra:start_server(Name, {N3, node()}, add_machine(), [{N1, node()}, {N2, node()}]),
+    ok = ra:start_server(default, Name, {N3, node()}, add_machine(),
+                         [{N1, node()}, {N2, node()}]),
     timer:sleep(100),
     % issue command - this is likely to preceed teh rpc timeout so the node
     % then should stash the command until a leader is known
@@ -266,12 +267,12 @@ server_recovery(Config) ->
 
     Name = ?config(test_name, Config),
     % start the first server and wait a bit
-    ok = ra:start_server(Name, {N1, node()}, add_machine(),
-                       [{N2, node()}, {N3, node()}]),
+    ok = ra:start_server(default, Name, {N1, node()}, add_machine(),
+                         [{N2, node()}, {N3, node()}]),
     ok = ra_server_proc:trigger_election(N1, ?DEFAULT_TIMEOUT),
     % start second server
-    ok = ra:start_server(Name, {N2, node()}, add_machine(),
-                       [{N1, node()}, {N3, node()}]),
+    ok = ra:start_server(default, Name, {N2, node()}, add_machine(),
+                         [{N1, node()}, {N3, node()}]),
     % a consensus command tells us there is a functioning 2 node cluster
     {ok, _, Leader} = ra:process_command({N2, node()}, 5,
                                          ?PROCESS_COMMAND_TIMEOUT),
@@ -410,7 +411,7 @@ all_metrics_are_integers(Config) ->
     % ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
     N1 = nth_server_name(Config, 1),
-    ok = ra:start_server(Name, N1, add_machine(), []),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     {ok, 5, _} = ra:process_command({N1, node()}, 5, 2000),
     [{_, M1, M2, M3, M4, M5, M6}] = ets:lookup(ra_metrics, N1),
@@ -450,9 +451,9 @@ add_member(Config) ->
     Name = ?config(test_name, Config),
     [A, _B] = Cluster = start_local_cluster(2, Name, add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9),
-    C = ra_server:name(Name, "3"),
-    ok = ra:start_server(Name, C, add_machine(), Cluster),
-    {ok, _, _Leader} = ra:add_member(Leader, {C, node()}),
+    C = {ra_server:name(Name, "3"), node()},
+    ok = ra:start_server(default, Name, C, add_machine(), Cluster),
+    {ok, _, _Leader} = ra:add_member(Leader, C),
     {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
 
@@ -466,8 +467,8 @@ server_catches_up(Config) ->
 
     Mac = {module, ra_queue, #{}},
     % start two servers
-    ok = ra:start_server(Name, {N1, node()}, Mac, InitialNodes),
-    ok = ra:start_server(Name, {N2, node()}, Mac, InitialNodes),
+    ok = ra:start_server(default, Name, {N1, node()}, Mac, InitialNodes),
+    ok = ra:start_server(default, Name, {N2, node()}, Mac, InitialNodes),
     ok = ra:trigger_election({N1, node()}),
     DecSink = spawn(fun () -> receive marker_pattern -> ok end end),
     {ok, _, Leader} = ra:process_command(N1, {enq, banana}),
@@ -475,7 +476,7 @@ server_catches_up(Config) ->
     {ok, _, Leader} = ra:process_command(Leader, {enq, apple},
                                          ?PROCESS_COMMAND_TIMEOUT),
 
-    ok = ra:start_server(Name, {N3, node()}, Mac, InitialNodes),
+    ok = ra:start_server(default, Name, {N3, node()}, Mac, InitialNodes),
     {ok, _, _Leader} = ra:add_member(Leader, {N3, node()}),
     timer:sleep(1000),
     % at this point the servers should be caught up
@@ -493,7 +494,7 @@ snapshot_installation(Config) ->
     Servers = [{N1, node()}, {N2, node()}, {N3, node()}],
     Mac = {module, ra_queue, #{}},
     % start two servers
-    {ok, [Leader0, _, Down], []}  = ra:start_cluster(Name, Mac, Servers),
+    {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
     ok = ra:stop_server(Down),
     {ok, _, Leader} = ra:members(Leader0),
     %% process enough commands to trigger two snapshots, ra will snapshot
@@ -510,9 +511,9 @@ snapshot_installation(Config) ->
      end || N <- lists:seq(2500, 6000)],
     {ok, _, _} = ra:process_command(Leader, deq),
 
-    N1Dir = ra_env:server_data_dir(ra_directory:uid_of(N1)),
-    N2Dir = ra_env:server_data_dir(ra_directory:uid_of(N2)),
-    N3Dir = ra_env:server_data_dir(ra_directory:uid_of(N3)),
+    N1Dir = ra_env:server_data_dir(default, ra_directory:uid_of(default, N1)),
+    N2Dir = ra_env:server_data_dir(default, ra_directory:uid_of(default, N2)),
+    N3Dir = ra_env:server_data_dir(default, ra_directory:uid_of(default, N3)),
 
     %% start the down node again, catchup should involve sending a snapshot
     ok = ra:restart_server(Down),
@@ -556,7 +557,7 @@ snapshot_installation_with_call_crash(Config) ->
     meck:new(gen_statem, [unstick, passthrough]),
 
     % start two servers
-    {ok, [Leader0, _, Down], []}  = ra:start_cluster(Name, Mac, Servers),
+    {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
     ok = ra:stop_server(Down),
     {ok, _, Leader} = ra:members(Leader0),
     %% process enough commands to trigger two snapshots, ra will snapshot
@@ -607,7 +608,7 @@ try_n_times(Fun, N) ->
 stop_leader_and_wait_for_elections(Config) ->
     Name = ?config(test_name, Config),
     Members = [{n1, node()}, {n2, node()}, {n3, node()}],
-    {ok, _, _} = ra:start_cluster(Name, add_machine(), Members),
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
     % issue command
     {ok, _, Leader} = ra:process_command({n3, node()}, 5),
     % shut down the leader
@@ -731,7 +732,7 @@ post_partition_liveness(Config) ->
     % suite unique servef names
     N1 = nth_server_name(Config, 1),
     N2 = nth_server_name(Config, 2),
-    {ok, [_, _], _}  = ra:start_cluster(Name, add_machine(), [N1, N2]),
+    {ok, [_, _], _}  = ra:start_cluster(default, Name, add_machine(), [N1, N2]),
     {ok, _, Leader}  = ra:members({N1, node()}),
 
     % simulate partition
@@ -760,7 +761,7 @@ post_partition_liveness(Config) ->
 transfer_leadership(Config) ->
     Name = ?config(test_name, Config),
     Members = [{n1, node()}, {n2, node()}, {n3, node()}],
-    {ok, _, _} = ra:start_cluster(Name, add_machine(), Members),
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
     % issue a command
     {ok, _, Leader} = ra:process_command({n3, node()}, 5),
     % transfer leadership
@@ -816,7 +817,7 @@ terminate_cluster(Nodes) ->
 
 new_server(Name, Config) ->
     ClusterName = ?config(test_name, Config),
-    ok = ra:start_server(ClusterName, {Name, node()}, add_machine(), []),
+    ok = ra:start_server(default, ClusterName, {Name, node()}, add_machine(), []),
     ok.
 
 stop_server(Name) ->
@@ -830,14 +831,14 @@ add_member(Ref, New) ->
 start_and_join(Ref, New) ->
     ServerRef = {Ref, node()},
     {ok, _, _} = ra:add_member(ServerRef, {New, node()}),
-    ok = ra:start_server(New, {New, node()}, add_machine(), [ServerRef]),
+    ok = ra:start_server(default, New, {New, node()}, add_machine(), [ServerRef]),
     ok.
 
 start_local_cluster(Num, Name, Machine) ->
     Nodes = [{ra_server:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
 
-    {ok, _, Failed} = ra:start_cluster(Name, Machine, Nodes),
+    {ok, _, Failed} = ra:start_cluster(default, Name, Machine, Nodes),
     ?assert(length(Failed) == 0),
     Nodes.
 

@@ -115,16 +115,16 @@ setup_log() ->
     ok = meck:new(ra_snapshot, [passthrough]),
     ok = meck:new(ra_machine, [passthrough]),
     meck:expect(ra_log, init, fun(C) -> ra_log_memory:init(C) end),
-    meck:expect(ra_log_meta, store, fun (U, K, V) ->
+    meck:expect(ra_log_meta, store, fun (_, U, K, V) ->
                                             put({U, K}, V), ok
                                     end),
-    meck:expect(ra_log_meta, store_sync, fun (U, K, V) ->
+    meck:expect(ra_log_meta, store_sync, fun (_, U, K, V) ->
                                                  put({U, K}, V), ok
                                          end),
-    meck:expect(ra_log_meta, fetch, fun(U, K) ->
+    meck:expect(ra_log_meta, fetch, fun(_, U, K) ->
                                             get({U, K})
                                     end),
-    meck:expect(ra_log_meta, fetch, fun (U, K, D) ->
+    meck:expect(ra_log_meta, fetch, fun (_, U, K, D) ->
                                             ra_lib:default(get({U, K}), D)
                                     end),
     meck:expect(ra_snapshot, begin_accept,
@@ -181,15 +181,15 @@ init_test(_Config) ->
     InitConf = #{cluster_name => init,
                  id => Id,
                  uid => UId,
-                 log_init_args => #{data_dir => "", uid => <<>>},
+                 log_init_args => #{uid => <<>>},
                  machine => {module, ?FUNCTION_NAME, #{}},
                  initial_members => []}, % init without known peers
     % new
     #{current_term := 0,
       voted_for := undefined} = ra_server_init(InitConf),
     % previous data
-    ok = ra_log_meta:store(UId, voted_for, some_server),
-    ok = ra_log_meta:store(UId, current_term, CurrentTerm),
+    ok = ra_log_meta:store(ra_log_meta, UId, voted_for, some_server),
+    ok = ra_log_meta:store(ra_log_meta, UId, current_term, CurrentTerm),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
     #{current_term := 5,
       voted_for := some_server} = ra_server_init(InitConf),
@@ -212,7 +212,7 @@ recover_restores_cluster_changes(_Config) ->
     InitConf = #{cluster_name => ?FUNCTION_NAME,
                  id => n1,
                  uid => <<"n1">>,
-                 log_init_args => #{data_dir => "", uid => <<>>},
+                 log_init_args => #{uid => <<>>},
                  machine => {simple, fun erlang:'+'/2, 0},
                  initial_members => []}, % init without known peers
     % new
@@ -240,9 +240,9 @@ recover_restores_cluster_changes(_Config) ->
     % ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
     meck:expect(ra_log_meta, fetch,
-                fun (_, last_applied, 0) ->
+                fun (_, _, last_applied, 0) ->
                         element(1, ra_log:last_index_term(Log0));
-                    (_, _, Def) ->
+                    (_, _, _, Def) ->
                         Def
                 end),
 
@@ -1375,7 +1375,7 @@ is_new(_Config) ->
              id => {ra, node()},
              uid => <<"ra">>,
              initial_members => [],
-             log_init_args => #{data_dir => "", uid => <<>>},
+             log_init_args => #{uid => <<>>},
              machine => {simple, fun erlang:'+'/2, 0}},
     NewState = ra_server:init(Args),
     {leader, State, _} = ra_server:handle_leader(usr_cmd(1), NewState),
@@ -1661,7 +1661,8 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
     N2NextIndex = 3,
     Log = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
-                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
+                      end, ra_log:init(#{system_config => ra_system:default_config(),
+                                         uid => <<>>}),
                       [{1, 1, {noop, meta(), 1}},
                        {2, 2, {'$usr', meta(), {enq, apple}, after_log_append}},
                        {3, 5, {2, {'$usr', meta(), {enq, pear}, after_log_append}}}]),
@@ -1675,7 +1676,8 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                machine_version = 0,
                machine_versions = [{0, 0}],
                effective_machine_version = 0,
-               effective_machine_module = ra_machine_simple
+               effective_machine_module = ra_machine_simple,
+               system_config = ra_system:default_config()
               },
     Leader0 = #{cfg => Cfg,
                 cluster =>
@@ -1714,7 +1716,8 @@ leader_receives_install_snapshot_result(_Config) ->
     Term = 1,
     Log0 = lists:foldl(fun(E, L) ->
                               ra_log:append_sync(E, L)
-                      end, ra_log:init(#{data_dir => "", uid => <<>>}),
+                      end, ra_log:init(#{system_config => ra_system:default_config(),
+                                         uid => <<>>}),
                       [{1, 1, {noop, meta(), MacVer}},
                        {2, 1, {noop, meta(), MacVer}},
                        {3, 1, {'$usr', meta(), {enq,apple}, after_log_append}},
@@ -1728,7 +1731,8 @@ leader_receives_install_snapshot_result(_Config) ->
                machine_version = 0,
                machine_versions = [{0, 0}],
                effective_machine_version = 1,
-               effective_machine_module = ra_machine_simple
+               effective_machine_module = ra_machine_simple,
+               system_config = ra_system:default_config()
               },
     Leader = #{cfg => Cfg,
                cluster =>
@@ -2307,7 +2311,7 @@ init_servers(ServerIds, Machine) ->
                                  id => ServerId,
                                  uid => atom_to_binary(ServerId, utf8),
                                  initial_members => ServerIds,
-                                 log_init_args => #{data_dir => "", uid => <<>>},
+                                 log_init_args => #{uid => <<>>},
                                  machine => Machine},
                         Acc#{ServerId => {follower, ra_server_init(Args), []}}
                 end, #{}, ServerIds).
@@ -2326,13 +2330,14 @@ empty_state(NumServers, Id) ->
                      id => Id,
                      uid => atom_to_binary(Id, utf8),
                      initial_members => Servers,
-                     log_init_args => #{data_dir => "", uid => <<>>},
+                     log_init_args => #{uid => <<>>},
                      machine => {simple, fun (E, _) -> E end, <<>>}}). % just keep last applied value
 
 base_state(NumServers, MacMod) ->
     Log0 = lists:foldl(fun(E, L) ->
                                ra_log:append(E, L)
-                       end, ra_log:init(#{data_dir => "", uid => <<>>}),
+                       end, ra_log:init(#{system_config => ra_system:default_config(),
+                                          uid => <<>>}),
                        [{1, 1, usr(<<"hi1">>)},
                         {2, 3, usr(<<"hi2">>)},
                         {3, 5, usr(<<"hi3">>)}]),
@@ -2353,7 +2358,8 @@ base_state(NumServers, MacMod) ->
                machine_version = 0,
                machine_versions = [{0, 0}],
                effective_machine_version = 0,
-               effective_machine_module = MacMod
+               effective_machine_module = MacMod,
+               system_config = ra_system:default_config()
               },
     #{cfg => Cfg,
       leader_id => n1,

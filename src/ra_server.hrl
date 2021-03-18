@@ -20,5 +20,6 @@
          effective_machine_version :: ra_machine:version(),
          effective_machine_module :: module(),
          max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer(),
-         counter :: undefined | counters:counters_ref()
+         counter :: undefined | counters:counters_ref(),
+         system_config :: ra_system:config()
         }).

@@ -12,6 +12,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(info, true).
+-define(SYS, ?MODULE).
 
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends
@@ -49,19 +50,32 @@ groups() ->
      {tests, [], all_tests()}
     ].
 
-init_per_group(_, Config) ->
+init_per_suite(Config) ->
     PrivDir = ?config(priv_dir, Config),
+    SysDir = filename:join(PrivDir, ?SYS),
     {ok, _} = ra:start([{data_dir, PrivDir},
                         {segment_max_entries, 128}]),
+    SysCfg = #{name => ?SYS,
+               names => ra_system:derive_names(?SYS),
+               segment_max_entries => 128,
+               data_dir => SysDir},
+    ct:pal("SYS CFG ~p", [SysCfg]),
+    {ok, _} = ra_system:start(SysCfg),
     application:ensure_all_started(lg),
-    Config.
+    [{sys_cfg, SysCfg} | Config].
 
-end_per_group(_, Config) ->
+end_per_suite(Config) ->
     _ = application:stop(ra),
     Config.
 
+init_per_group(_, Config) ->
+    Config.
+
+end_per_group(_, Config) ->
+    Config.
+
 init_per_testcase(TestCase, Config) ->
-    ra_server_sup_sup:remove_all(),
+    ra_server_sup_sup:remove_all(?SYS),
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
@@ -87,20 +101,20 @@ dequeue(Server) ->
     Res.
 
 start_stopped_server(Config) ->
-    %% ra:start_server should fail if the node already exists
+    %% ra:start_server should fail if the server already exists
     ClusterName = ?config(cluster_name, Config),
     PrivDir = ?config(priv_dir, Config),
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
     Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
-    ok = ra:start_server(Conf),
+    ok = ra:start_server(?SYS, Conf),
     ok = ra:trigger_election(ServerId),
     ok = enqueue(ServerId, msg1),
     %%
-    {error, {already_started, _}} = ra:start_server(Conf),
-    ok = ra:stop_server(ServerId),
-    {error, not_new} = ra:start_server(Conf),
-    ok = ra:restart_server(ServerId),
+    {error, {already_started, _}} = ra:start_server(?SYS, Conf),
+    ok = ra:stop_server(?SYS, ServerId),
+    {error, not_new} = ra:start_server(?SYS, Conf),
+    ok = ra:restart_server(?SYS, ServerId),
     ok.
 
 
@@ -110,21 +124,21 @@ server_is_force_deleted(Config) ->
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
     Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
-    _ = ra:start_server(Conf),
+    _ = ra:start_server(?SYS, Conf),
     ok = ra:trigger_election(ServerId),
     ok = enqueue(ServerId, msg1),
     % force roll over
-    ok = ra_log_wal:force_roll_over(ra_log_wal),
-    Pid = ra_directory:where_is(UId),
-    ok = ra:force_delete_server(ServerId),
+    ok = force_roll_over(),
+    Pid = ra_directory:where_is(?SYS, UId),
+    ok = ra:force_delete_server(?SYS, ServerId),
 
     validate_ets_table_deletes([UId], [Pid], [ServerId]),
     % start a node with the same nodeid but different uid
     % simulating the case where a queue got deleted then re-declared shortly
     % afterwards
     UId2 = ?config(uid2, Config),
-    ok = ra:start_server(Conf#{uid => UId2,
-                               log_init_args => #{data_dir => PrivDir,
+    ok = ra:start_server(?SYS, Conf#{uid => UId2,
+                               log_init_args => #{
                                                   uid => UId2}}),
     ok = ra:trigger_election(ServerId),
     case dequeue(ServerId) of
@@ -133,7 +147,7 @@ server_is_force_deleted(Config) ->
             exit(unexpected_dequeue_result)
     end,
 
-    ok = ra:force_delete_server(ServerId),
+    ok = ra:force_delete_server(?SYS, ServerId),
     ok.
 
 force_deleted_server_mem_tables_are_cleaned_up(Config) ->
@@ -142,21 +156,26 @@ force_deleted_server_mem_tables_are_cleaned_up(Config) ->
     ServerId = ?config(server_id, Config),
     UId = ?config(uid, Config),
     Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
-    _ = ra:start_server(Conf),
+    _ = ra:start_server(?SYS, Conf),
     ok = ra:trigger_election(ServerId),
     ok = enqueue(ServerId, msg1),
 
-    ok = ra:force_delete_server(ServerId),
+    ok = ra:force_delete_server(?SYS, ServerId),
 
-    [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
+    #{names := #{open_mem_tbls := OpnMemTbls,
+                 closed_mem_tbls := ClosedMemTbls,
+                 wal := Wal,
+                 segment_writer := SegWriter}} = ra_system:fetch(?SYS),
+
+    [{_, _, _, Tid}] = ets:lookup(OpnMemTbls, UId),
     % force roll over after
-    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ok = ra_log_wal:force_roll_over(Wal),
     timer:sleep(100),
-    ra_log_segment_writer:await(),
+    ra_log_segment_writer:await(SegWriter),
 
     %% validate there are no mem tables for this server anymore
     ?assertMatch(undefined, ets:info(Tid)),
-    ?assertMatch([], ets:lookup(ra_log_closed_mem_tables, UId)),
+    ?assertMatch([], ets:lookup(ClosedMemTbls, UId)),
 
     ok.
 
@@ -173,7 +192,7 @@ leave_and_delete_server(Config) ->
     %% a command first
     {ok, ok, _Leader} = ra:process_command(ServerId1, {enq, msg1}),
     ?assert(undefined =/= whereis(element(1, ServerId2))),
-    ok = ra:leave_and_delete_server(Peers, ServerId2, 2000),
+    ok = ra:leave_and_delete_server(?SYS, Peers, ServerId2, 2000),
     ?assertEqual(undefined, whereis(element(1, ServerId2))),
     {ok, _} = ra:delete_cluster(Peers),
     ok.
@@ -186,12 +205,12 @@ cluster_is_deleted(Config) ->
     Peers = [ServerId1, ServerId2, ServerId3],
     ok = start_cluster(ClusterName, Peers),
     % timer:sleep(100),
-    UIds = [ ra_directory:uid_of(Name) || {Name, _} <- Peers],
-    Pids = [ ra_directory:where_is(Name) || {Name, _} <- Peers],
+    UIds = [ ra_directory:uid_of(?SYS, Name) || {Name, _} <- Peers],
+    Pids = [ ra_directory:where_is(?SYS, Name) || {Name, _} <- Peers],
     Leader = ra_leaderboard:lookup_leader(ClusterName),
     ?assert(lists:member(Leader, Peers)),
     %% redeclaring the same cluster should fail
-    {error, cluster_not_formed} = ra:start_cluster(ClusterName,
+    {error, cluster_not_formed} = ra:start_cluster(?SYS, ClusterName,
                                                    {module, ?MODULE, #{}},
                                                    Peers),
     {ok, _} = ra:delete_cluster(Peers),
@@ -242,8 +261,8 @@ cluster_is_deleted_with_server_down(Config) ->
     ok = start_cluster(ClusterName, Peers),
     timer:sleep(100),
     [begin
-         UId = ra_directory:uid_of(Name),
-         ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+         UId = ra_directory:uid_of(?SYS, Name),
+         ?assert(filelib:is_dir(filename:join([data_dir(), UId])))
      end || {Name, _} <- Peers],
 
     % check data dirs exist for all nodes
@@ -254,7 +273,7 @@ cluster_is_deleted_with_server_down(Config) ->
     {ok, _} = ra:delete_cluster(Peers),
     timer:sleep(100),
     % start node again
-    ra:restart_server(ServerId3),
+    ra:restart_server(?SYS, ServerId3),
     % validate all nodes have been shut down and terminated
     ok = validate_process_down(element(1, ServerId1), 10),
     ok = validate_process_down(element(1, ServerId2), 10),
@@ -262,8 +281,8 @@ cluster_is_deleted_with_server_down(Config) ->
 
     % validate there are no data dirs anymore
     [ begin
-          UId = ra_directory:uid_of(Name),
-          ?assert(false =:= filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+          UId = ra_directory:uid_of(?SYS, Name),
+          ?assert(false =:= filelib:is_dir(filename:join([data_dir(), UId])))
       end || {Name, _} <- Peers],
     ok.
 
@@ -276,14 +295,14 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     ok = start_cluster(ClusterName, Peers),
     % check data dirs exist for all nodes
     [begin
-         UId = ra_directory:uid_of(Name),
-         ?assert(filelib:is_dir(filename:join([ra_env:data_dir(), UId])))
+         UId = ra_directory:uid_of(?SYS, Name),
+         ?assert(filelib:is_dir(filename:join([data_dir(), UId])))
      end || {Name, _} <- Peers],
-    ra:stop_server(ServerId2),
-    ra:stop_server(ServerId3),
+    ra:stop_server(?SYS, ServerId2),
+    ra:stop_server(?SYS, ServerId3),
     {error, {no_more_servers_to_try, Err}} = ra:delete_cluster(lists:reverse(Peers), 250),
     ct:pal("Err~p", [Err]),
-    ra:stop_server(ServerId1),
+    ra:stop_server(?SYS, ServerId1),
     ok.
 
 server_restart_after_application_restart(Config) ->
@@ -292,11 +311,14 @@ server_restart_after_application_restart(Config) ->
     ok = start_cluster(ClusterName, [ServerId]),
     ok= enqueue(ServerId, msg1),
     application:stop(ra),
-    application:start(ra),
+    ra:start(),
+    %% start system
+    {ok, _} = ra_system:start(?config(sys_cfg, Config)),
+    %
     % restart node
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     ok= enqueue(ServerId, msg2),
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     ok.
 
 
@@ -327,7 +349,7 @@ restarted_server_does_not_reissue_side_effects(Config) ->
     after 1000 ->
               ok
     end,
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     ok.
 
 recover(Config) ->
@@ -336,12 +358,12 @@ recover(Config) ->
     ok = start_cluster(ClusterName, [ServerId]),
     ok = enqueue(ServerId, msg1),
     ra:members(ServerId),
-    ra:stop_server(ServerId),
-    ra:restart_server(ServerId),
+    ra:stop_server(?SYS, ServerId),
+    ra:restart_server(?SYS, ServerId),
     ra:members(ServerId),
     msg1 = dequeue(ServerId),
 
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     ok.
 
 supervision_tree(Config) ->
@@ -376,10 +398,11 @@ recover_after_kill(Config) ->
     % timer:sleep(100),
     exit(whereis(Name), kill),
     application:stop(ra),
-    application:start(ra),
-    ra:restart_server(ServerId),
+    ra:start(),
+    {ok, _} = ra_system:start(?config(sys_cfg, Config)),
+    ra:restart_server(?SYS, ServerId),
     ra:members(ServerId),
-    %% this should by the default release cursor interval of 128
+    %% this should by the ?SYS release cursor interval of 128
     %% create a new snapshot
     {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
     {ok, MS, _} = ra:consistent_query(ServerId, fun (S) -> S end),
@@ -390,11 +413,9 @@ recover_after_kill(Config) ->
     timer:sleep(200),
     % give leader time to commit noop
     {ok, MS2, _} = ra:consistent_query(ServerId, fun (S) -> S end),
-    ok = ra:stop_server(ServerId),
-    % ct:pal("Indexes ~p ~p~nMS: ~p ~n MS2: ~p~nDequeued ~p",
-    %        [X, X2, MS, MS2, AllDeq]),
+    ok = ra:stop_server(?SYS, ServerId),
     ?assertEqual(MS, MS2),
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     {ok, _, _} = ra:members(ServerId, 30000),
     {ok, MS3, _} = ra:consistent_query(ServerId, fun (S) -> S end),
     ct:pal("~p ~p", [MS2, MS3]),
@@ -410,8 +431,8 @@ start_server_uid_validation(Config) ->
              initial_members => [ServerId],
              log_init_args => #{uid => UId},
              machine => {module, ?MODULE, #{}}},
-    {error, invalid_uid} = ra:start_server(Conf),
-    {error, invalid_uid} = ra:start_server(Conf#{uid => <<"">>}),
+    {error, invalid_uid} = ra:start_server(?SYS, Conf),
+    {error, invalid_uid} = ra:start_server(?SYS, Conf#{uid => <<"">>}),
     ok.
 
 custom_ra_event_formatter(Config) ->
@@ -424,7 +445,7 @@ custom_ra_event_formatter(Config) ->
              log_init_args => #{uid => UId},
              ra_event_formatter => {?MODULE, format_ra_event, [my_arg]},
              machine => {module, ?MODULE, #{}}},
-    ok = ra:start_server(Conf),
+    ok = ra:start_server(?SYS, Conf),
     ra:trigger_election(ServerId),
     _ = ra:members(ServerId),
     ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
@@ -446,7 +467,7 @@ config_modification_at_restart(Config) ->
              initial_members => [ServerId],
              log_init_args => #{uid => UId},
              machine => {module, ?MODULE, #{}}},
-    ok = ra:start_server(Conf),
+    ok = ra:start_server(?SYS, Conf),
     ra:trigger_election(ServerId),
     _ = ra:members(ServerId),
     ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
@@ -457,11 +478,11 @@ config_modification_at_restart(Config) ->
               exit(ra_event_timeout)
     end,
 
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
 
     %% add an event formatter at restart
     AddConfig = #{ra_event_formatter => {?MODULE, format_ra_event, [my_arg]}},
-    ok = ra:restart_server(ServerId, AddConfig),
+    ok = ra:restart_server(?SYS, ServerId, AddConfig),
     ra:members(ServerId),
     ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
     receive
@@ -473,9 +494,9 @@ config_modification_at_restart(Config) ->
     end,
 
     %% do another restart
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     %% add an event formatter at restart
-    ok = ra:restart_server(ServerId, #{}),
+    ok = ra:restart_server(?SYS, ServerId, #{}),
     ra:members(ServerId),
     ra:pipeline_command(ServerId, {enq, msg1}, make_ref()),
     receive
@@ -500,7 +521,7 @@ segment_writer_handles_server_deletion(Config) ->
          _ = ra:pipeline_command(ServerId, {enq, N})
      end || N <- lists:seq(1, 1023)],
     _ = enqueue(ServerId, final),
-    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ok = force_roll_over(),
     MRef = erlang:monitor(process, whereis(ra_log_segment_writer)),
     timer:sleep(5),
     ra:delete_cluster([ServerId]),
@@ -515,6 +536,7 @@ segment_writer_handles_server_deletion(Config) ->
     ok.
 
 external_reader(Config) ->
+    ok = logger:set_primary_config(level, all),
     ServerId = ?config(server_id, Config),
     ClusterName = ?config(cluster_name, Config),
     ok = start_cluster(ClusterName, [ServerId]),
@@ -525,7 +547,7 @@ external_reader(Config) ->
      end || N <- lists:seq(1, 1023)],
     _ = enqueue(ServerId, final),
     R0 = ra:register_external_log_reader(ServerId),
-    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ok = force_roll_over(),
     receive
         {ra_event, _, {machine, {ra_log_update, _, _, _} = E}} ->
             R1 = ra_log_reader:handle_log_update(E, R0),
@@ -554,11 +576,11 @@ add_member_without_quorum(Config) ->
     {ok, _, Leader} = ra:members(hd(InitialCluster)),
     ok = enqueue(Leader, msg1),
     Followers = lists:delete(Leader, InitialCluster),
-    [ra:stop_server(F) || F <- Followers],
+    [ra:stop_server(?SYS, F) || F <- Followers],
     ServerId4 = ?config(server_id4, Config),
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, InitialCluster),
-    ok = ra:start_server(Conf4),
+    ok = ra:start_server(?SYS, Conf4),
     %% this works because the leader is still up to append a cluster change to its log
     %% the change won't be applied/replicated though, because there's no quorum
     {ok, _, _} = ra:add_member(Leader, ServerId4),
@@ -568,7 +590,7 @@ add_member_without_quorum(Config) ->
     {error, cluster_change_not_permitted} = ra:remove_member(Leader, ServerId1),
     %% start one follower
     timer:sleep(1000),
-    ok = ra:restart_server(hd(Followers)),
+    ok = ra:restart_server(?SYS, hd(Followers)),
     timer:sleep(1000),
     ok = enqueue(Leader, msg1),
     {error, already_member} = ra:add_member(Leader, ServerId4),
@@ -636,7 +658,7 @@ validate_process_down(Name, Num) ->
     end.
 
 start_cluster(ClusterName, ServerIds, Config) ->
-    {ok, Started, _} = ra:start_cluster(ClusterName,
+    {ok, Started, _} = ra:start_cluster(?SYS, ClusterName,
                                         {module, ?MODULE, Config},
                                         ServerIds),
     ?assertEqual(lists:sort(ServerIds), lists:sort(Started)),
@@ -680,3 +702,10 @@ flush() ->
     after 0 ->
               ok
     end.
+
+data_dir() ->
+    maps:get(data_dir, ra_system:fetch(?SYS)).
+
+force_roll_over() ->
+    #{names := #{wal := Wal}} = ra_system:fetch(?SYS),
+    ra_log_wal:force_roll_over(Wal).

@@ -88,7 +88,9 @@
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
               wal :: atom(),
-              counter :: undefined | counters:counters_ref()}).
+              segment_writer :: atom(),
+              counter :: undefined | counters:counters_ref(),
+              names :: ra_system:names()}).
 
 -record(?MODULE,
         {cfg = #cfg{},
@@ -110,9 +112,8 @@
 -opaque state() :: #?MODULE{}.
 
 -type ra_log_init_args() :: #{uid := ra_uid(),
+                              system_config => ra_system:config(),
                               log_id => unicode:chardata(),
-                              data_dir => string(),
-                              wal => atom(),
                               snapshot_interval => non_neg_integer(),
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
@@ -129,30 +130,24 @@
               effect/0
              ]).
 
-pre_init(#{uid := UId} = Conf) ->
-    Dir = case Conf of
-              #{data_dir := D} -> D;
-              _ ->
-                  ra_env:server_data_dir(UId)
-          end,
+pre_init(#{uid := UId,
+           system_config := #{data_dir := DataDir}
+          } = Conf) ->
+    Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     SnapshotsDir = filename:join(Dir, "snapshots"),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
-init(#{uid := UId} = Conf) ->
-    %% overriding the data_dir is only here for test compatibility
-    %% as it needs to match what the segment writer has it makes no real
-    %% sense to make it independently configurable
-    Dir = case Conf of
-              #{data_dir := D} -> D;
-              _ ->
-                  ra_env:server_data_dir(UId)
-          end,
+init(#{uid := UId,
+       system_config := #{data_dir := DataDir,
+                          names := #{wal := Wal,
+                                     segment_writer := SegWriter} = Names}
+      } = Conf) ->
+    Dir = server_data_dir(DataDir, UId),
     MaxOpen = maps:get(max_open_segments, Conf, 5),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
-    Wal = maps:get(wal, Conf, ra_log_wal),
     %% this has to be patched by ra_server
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
@@ -170,15 +165,18 @@ init(#{uid := UId} = Conf) ->
                               undefined -> {-1, -1};
                               Curr -> Curr
                           end,
+    Reader0 = ra_log_reader:init(UId, Dir, 0, MaxOpen, [], Names, Counter),
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, SnapIdx) of
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, Reader0, SegWriter) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
-    Reader = ra_log_reader:init(UId, FirstIdx, MaxOpen, SegRefs, Counter),
+    %% TODO: can there be obsolete segments returned here?
+    {Reader1, []} = ra_log_reader:update_first_index(FirstIdx, Reader0),
+    Reader = ra_log_reader:update_segments(SegRefs, Reader1),
     % recover last snapshot file
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -193,9 +191,11 @@ init(#{uid := UId} = Conf) ->
                log_id = LogId,
                snapshot_interval = SnapInterval,
                wal = Wal,
+               segment_writer = SegWriter,
                resend_window_seconds = ResendWindow,
                snapshot_module = SnapModule,
-               counter = Counter},
+               counter = Counter,
+               names = Names},
     State000 = #?MODULE{cfg = Cfg,
                         first_index = max(SnapIdx + 1, FirstIdx),
                         last_index = max(SnapIdx, LastIdx0),
@@ -289,7 +289,7 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
     {error, {integrity_error, Msg}}.
 
 -spec take(ra_index(), non_neg_integer(), state()) ->
-    {[log_entry()], non_neg_integer(), state()}.
+    {[log_entry()], NumRead :: non_neg_integer(), state()}.
 take(Start, Num, #?MODULE{cfg = Cfg,
                           first_index = FirstIdx,
                           reader = Reader0,
@@ -392,10 +392,10 @@ handle_event({written, {FromIdx, _, _}},
            [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
 handle_event({segments, Tid, NewSegs},
-             #?MODULE{cfg = #cfg{uid = UId},
+             #?MODULE{cfg = #cfg{names = Names},
                       reader = Reader0,
                       readers = Readers} = State0) ->
-    ClosedTables = closed_mem_tables(UId),
+    ClosedTables = ra_log_reader:closed_mem_tables(Reader0),
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
@@ -408,14 +408,14 @@ handle_event({segments, Tid, NewSegs},
 
     DeleteFun =
     fun () ->
-            TidsToDelete = [begin
-                                %% first delete the entry in the
-                                %% closed table lookup
-                                true = ets:delete_object(ra_log_closed_mem_tables,
-                                                         ClosedTbl),
-                                T
-                            end || {_, _, _, _, T} = ClosedTbl <- Obsolete],
-            ok = ra_log_ets:delete_tables(TidsToDelete)
+            TidsToDelete =
+            [begin
+                 %% first delete the entry in the
+                 %% closed table lookup
+                 true = ra_log_reader:delete_closed_mem_table_object(Reader, ClosedTbl),
+                 T
+             end || {_, _, _, _, T} = ClosedTbl <- Obsolete],
+            ok = ra_log_ets:delete_tables(Names, TidsToDelete)
     end,
 
     case Readers of
@@ -677,7 +677,9 @@ delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
 -spec release_resources(non_neg_integer(), state()) -> state().
 release_resources(MaxOpenSegments,
                   #?MODULE{cfg = #cfg{uid = UId,
-                                      counter = Counter},
+                                      directory = Dir,
+                                      counter = Counter,
+                                      names = Names},
                            first_index = FstIdx,
                            reader = Reader} = State) ->
     ActiveSegs = ra_log_reader:segment_refs(Reader),
@@ -685,18 +687,21 @@ release_resources(MaxOpenSegments,
     % deliberately ignoring return value
     _ = ra_log_reader:close(Reader),
     %% open a new segment with the new max open segment value
-    State#?MODULE{reader = ra_log_reader:init(UId, FstIdx, MaxOpenSegments,
-                                              ActiveSegs, Counter)}.
+    State#?MODULE{reader = ra_log_reader:init(UId, Dir, FstIdx, MaxOpenSegments,
+                                              ActiveSegs, Names, Counter)}.
 
 -spec register_reader(pid(), state()) ->
     {state(), effects()}.
-register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId},
+register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId,
+                                         directory = Dir,
+                                         names = Names},
                               first_index = Idx,
                               reader = Reader,
                               readers = Readers} = State) ->
     SegRefs = ra_log_reader:segment_refs(Reader),
+    NewReader = ra_log_reader:init(UId, Dir, Idx, 1, SegRefs, Names),
     {State#?MODULE{readers = [Pid | Readers]},
-     [{reply, {ok, UId, Idx, SegRefs}},
+     [{reply, {ok, NewReader}},
       {monitor, process, log, Pid}]}.
 
 readers(#?MODULE{readers = Readers}) ->
@@ -715,6 +720,7 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
 %% deletes all segments where the last index is lower or equal to
 %% the Idx argumement
 delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
+                                         segment_writer = SegWriter,
                                          uid = UId},
                               readers = Readers,
                               reader = Reader0} = State0) ->
@@ -723,10 +729,12 @@ delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
             State = State0#?MODULE{reader = Reader},
             {State, log_update_effects(Readers, undefined, State)};
         {Reader, [Pivot | _] = Obsolete} ->
-            Pid = spawn(fun () ->
-                          ok = log_update_wait_n(length(Readers)),
-                          ok = ra_log_segment_writer:truncate_segments(UId, Pivot)
-                  end),
+            Pid = spawn(
+                    fun () ->
+                            ok = log_update_wait_n(length(Readers)),
+                            ok = ra_log_segment_writer:truncate_segments(SegWriter,
+                                                                         UId, Pivot)
+                    end),
             Active = ra_log_reader:segment_refs(Reader),
             ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
                    [LogId, length(Obsolete), Idx, length(Active)]),
@@ -915,20 +923,20 @@ write_snapshot(Meta, MacRef,
     {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
-recover_range(UId, _SnapIdx) ->
+recover_range(UId, Reader, SegWriter) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_servers are part of the same
     % supervision tree
     % 1. check closed mem_tables to extend
-    OpenRanges = case ets:lookup(ra_log_open_mem_tables, UId) of
+    OpenRanges = case ra_log_reader:open_mem_table_lookup(Reader) of
                      [] ->
                          [];
                      [{UId, First, Last, _}] ->
                          [{First, Last}]
                  end,
-    ClosedRanges = [{F, L} || {_, _, F, L, _} <- closed_mem_tables(UId)],
+    ClosedRanges = [{F, L} || {_, _, F, L, _} <- ra_log_reader:closed_mem_tables(Reader)],
     % 2. check segments
-    SegFiles = ra_log_segment_writer:my_segments(UId),
+    SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
     SegRefs = lists:foldl(
                 fun (S, Acc) ->
                    {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
@@ -970,17 +978,6 @@ await_written_idx(Idx, Term, Log0) ->
               throw(ra_log_append_timeout)
     end.
 
-closed_mem_tables(Id) ->
-    case ets:lookup(ra_log_closed_mem_tables, Id) of
-        [] ->
-            [];
-        Tables ->
-            lists:sort(fun (A, B) ->
-                               element(2, A) > element(2, B)
-                       end, Tables)
-    end.
-
-
 log_update_wait_n(0) ->
     ok;
 log_update_wait_n(N) ->
@@ -997,6 +994,9 @@ incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
 incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
+server_data_dir(Dir, UId) ->
+    Me = ra_lib:to_list(UId),
+    filename:join(Dir, Me).
 %%%% TESTS
 
 -ifdef(TEST).

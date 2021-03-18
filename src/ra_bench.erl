@@ -104,7 +104,7 @@ start(Name, Nodes) when is_atom(Name) ->
                      initial_members => ServerIds,
                      machine => {module, ?MODULE, #{}}}
                end || N <- Nodes],
-    ra:start_cluster(Configs).
+    ra:start_cluster(default, Configs).
 
 prepare() ->
     _ = application:ensure_all_started(ra),
