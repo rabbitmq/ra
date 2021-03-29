@@ -75,22 +75,22 @@ filter_entry_duplicate(_Config) ->
 
 execute_state_machine() ->
   %% creating a new WAL file with ra_fifo
-  Nodes = [{ra_dbg, node()}],
+  [Srv] = Nodes = [{ra_dbg, node()}],
   ClusterId = ra_dbg,
   Config = #{name => ClusterId},
   Machine = {module, ra_fifo, Config},
   ra:start(),
   {ok, _, _} = ra:start_cluster(default, ClusterId, Machine, Nodes),
 
-  {ok, _, _} = ra:process_command(ra_dbg, {enqueue, self(), 1, <<"1">>}),
-  {ok, _, _} = ra:process_command(ra_dbg, {enqueue, self(), 2, <<"2">>}),
-  {ok, _, _} = ra:process_command(ra_dbg, {enqueue, self(), 3, <<"3">>}),
+  {ok, _, _} = ra:process_command(Srv, {enqueue, self(), 1, <<"1">>}),
+  {ok, _, _} = ra:process_command(Srv, {enqueue, self(), 2, <<"2">>}),
+  {ok, _, _} = ra:process_command(Srv, {enqueue, self(), 3, <<"3">>}),
 
   ConsumerId = {<<"ctag1">>, self()},
-  {ok, {dequeue, {MsgId, _}}, _} = ra:process_command(ra_dbg, {checkout, {dequeue, unsettled}, ConsumerId}),
+  {ok, {dequeue, {MsgId, _}}, _} = ra:process_command(Srv, {checkout, {dequeue, unsettled}, ConsumerId}),
 
-  {ok, _, _} = ra:process_command(ra_dbg, {settle, [MsgId], ConsumerId}),
-  {ok, FinalState, _} = ra:consistent_query(ra_dbg, fun(State) -> State end),
+  {ok, _, _} = ra:process_command(Srv, {settle, [MsgId], ConsumerId}),
+  {ok, FinalState, _} = ra:consistent_query(Srv, fun(State) -> State end),
   {Config, FinalState}.
 
 wal_file() ->

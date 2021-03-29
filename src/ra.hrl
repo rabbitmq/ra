@@ -37,7 +37,7 @@
 %%
 %% Ra servers need to be registered stable names (names that are reachable
 %% after node restart). Pids are not stable in this sense.
--type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
+-type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
 -type ra_peer_status() :: normal | {sending_snapshot, pid()} | suspended.
 

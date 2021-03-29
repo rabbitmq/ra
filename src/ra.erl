@@ -438,7 +438,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 -spec start_server(atom(), ra_cluster_name(), ra_server_id(),
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
-start_server(System, ClusterName, ServerId, Machine, ServerIds)
+start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
   when is_atom(System) ->
     UId = new_uid(ra_lib:to_binary(ClusterName)),
     Conf = #{cluster_name => ClusterName,
