@@ -79,6 +79,7 @@ init_per_testcase(TestCase, Config) ->
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
+    ServerName5 = list_to_atom(atom_to_list(TestCase) ++ "5"),
     [
      {modname, TestCase},
      {cluster_name, TestCase},
@@ -89,7 +90,9 @@ init_per_testcase(TestCase, Config) ->
      {uid3, atom_to_binary(ServerName3, utf8)},
      {server_id3, {ServerName3, node()}},
      {uid4, atom_to_binary(ServerName4, utf8)},
-     {server_id4, {ServerName4, node()}}
+     {server_id4, {ServerName4, node()}},
+     {uid5, atom_to_binary(ServerName5, utf8)},
+     {server_id5, {ServerName5, node()}}
      | Config].
 
 enqueue(Server, Msg) ->

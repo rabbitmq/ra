@@ -212,7 +212,7 @@ leader_call(ServerLoc, Msg, Timeout) ->
 statem_call(ServerIds, Msg, Timeout)
   when is_list(ServerIds) ->
     multi_statem_call(ServerIds, Msg, [], Timeout);
-statem_call(ServerId, Msg, Timeout) ->
+statem_call({_, _} = ServerId, Msg, Timeout) ->
     case gen_statem_safe_call(ServerId, Msg, Timeout) of
         {redirect, Leader} ->
             statem_call(Leader, Msg, Timeout);
@@ -226,7 +226,7 @@ statem_call(ServerId, Msg, Timeout) ->
             Reply
     end.
 
-multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
+multi_statem_call([{_, _} = ServerId | ServerIds], Msg, Errs, Timeout) ->
     case statem_call(ServerId, Msg, Timeout) of
         {Tag, _} = E
           when Tag == error orelse Tag == timeout ->

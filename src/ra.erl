@@ -528,8 +528,8 @@ delete_cluster(ServerIds, Timeout) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
-add_member(ServerLoc, ServerId) ->
-    add_member(ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
+add_member(ServerLoc, {_, _} = NewServerId) ->
+    add_member(ServerLoc, NewServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `add_member/2' but also accepts a timeout.
 %% @see add_member/2
@@ -539,9 +539,9 @@ add_member(ServerLoc, ServerId) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
-add_member(ServerLoc, ServerId, Timeout) ->
+add_member(ServerLoc, {_, _} = NewServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
-                           {'$ra_join', ServerId, after_log_append},
+                           {'$ra_join', NewServerId, after_log_append},
                            Timeout).
 
 
@@ -563,8 +563,8 @@ add_member(ServerLoc, ServerId, Timeout) ->
     ra_cmd_ret() |
     {error, not_member} |
     {error, cluster_change_not_permitted}.
-remove_member(ServerRef, ServerId) ->
-    remove_member(ServerRef, ServerId, ?DEFAULT_TIMEOUT).
+remove_member(ServerLoc, ServerId) ->
+    remove_member(ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `remove_member/2' but also accepts a timeout.
 %% @see remove_member/2
@@ -574,7 +574,7 @@ remove_member(ServerRef, ServerId) ->
     ra_cmd_ret() |
     {error, not_member} |
     {error, cluster_change_not_permitted}.
-remove_member(ServerRef, ServerId, Timeout) ->
+remove_member(ServerRef, {_, _} = ServerId, Timeout) ->
     ra_server_proc:command(ServerRef,
                            {'$ra_leave', ServerId, after_log_append},
                            Timeout).
@@ -594,7 +594,7 @@ trigger_election(ServerId) ->
 %% @doc Same as `trigger_election/2' but also accepts a timeout.
 %% @end
 -spec trigger_election(ra_server_id(), timeout()) -> ok.
-trigger_election(ServerId, Timeout) ->
+trigger_election({_, _} = ServerId, Timeout) ->
     ra_server_proc:trigger_election(ServerId, Timeout).
 
 %% @doc A safe way to remove an active server from its cluster.
@@ -608,8 +608,8 @@ trigger_election(ServerId, Timeout) ->
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()], ra_server_id()) ->
     ok | timeout | {error, noproc | system_not_started}.
-leave_and_terminate(System, ServerRef, ServerId) ->
-    leave_and_terminate(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
+leave_and_terminate(System, ServerLoc, ServerId) ->
+    leave_and_terminate(System, ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leave_and_terminate/2' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
@@ -621,9 +621,9 @@ leave_and_terminate(System, ServerRef, ServerId) ->
                           ra_server_id() | [ra_server_id()],
                           ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc | system_not_started}.
-leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
+leave_and_terminate(System, ServerLoc, {_, _} = ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
-    case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
+    case ra_server_proc:command(ServerLoc, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
             timeout;
@@ -648,8 +648,8 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id()) ->
     ok | timeout | {error, noproc}.
-leave_and_delete_server(System, ServerRef, ServerId) ->
-    leave_and_delete_server(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
+leave_and_delete_server(System, ServerLoc, ServerId) ->
+    leave_and_delete_server(System, ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leave_and_delete_server/2' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
@@ -660,9 +660,9 @@ leave_and_delete_server(System, ServerRef, ServerId) ->
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
-leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
+leave_and_delete_server(System, ServerLoc, {_, _} = ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
-    case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
+    case ra_server_proc:command(ServerLoc, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
             timeout;
@@ -692,8 +692,7 @@ overview() ->
 %% node.
 %% @end
 -spec overview(atom()) -> map() | system_not_started.
-overview(System) ->
-
+overview(System) when is_atom(System) ->
     #{names := #{segment_writer := SegWriter,
                  open_mem_tbls := OpenTbls,
                  closed_mem_tbls := ClosedTbls}} = ra_system:fetch(System),
@@ -719,30 +718,30 @@ overview(System) ->
 %% If there is no majority of Ra servers online, this function will return
 %% a timeout.
 %%
-%% @param ServerId the server id to send the command to
+%% @param ServerLoc the server locator to send the command to
 %% @param Command an arbitrary term that the state machine can handle
 %% @param Timeout the time to wait before returning {timeout, ServerId}
 %% @end
--spec process_command(ServerId :: ra_server_id() | [ra_server_id()],
+-spec process_command(ServerLoc :: ra_server_id() | [ra_server_id()],
                       Command :: term(),
                       Timeout :: timeout()) ->
     {ok, Reply :: term(), Leader :: ra_server_id()} |
     {error, term()} |
     {timeout, ra_server_id()}.
-process_command(ServerId, Cmd, Timeout) ->
-    ra_server_proc:command(ServerId, usr(Cmd, await_consensus), Timeout).
+process_command(ServerLoc, Cmd, Timeout) ->
+    ra_server_proc:command(ServerLoc, usr(Cmd, await_consensus), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
-%% @param ServerId the server id to send the command to
+%% @param ServerLoc the server id to send the command to
 %% @param Command an arbitrary term that the state machine can handle
 %% @end
--spec process_command(ServerId :: ra_server_id() | [ra_server_id()],
+-spec process_command(ServerLoc :: ra_server_id() | [ra_server_id()],
                       Command :: term()) ->
     {ok, Reply :: term(), Leader :: ra_server_id()} |
     {error, term()} |
     {timeout, ra_server_id()}.
-process_command(ServerId, Command) ->
-    process_command(ServerId, Command, ?DEFAULT_TIMEOUT).
+process_command(ServerLoc, Command) ->
+    process_command(ServerLoc, Command, ?DEFAULT_TIMEOUT).
 
 
 %% @doc Submits a command to the ra server using a gen_statem:cast, passing
