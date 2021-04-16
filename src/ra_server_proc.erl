@@ -391,18 +391,21 @@ leader(EventType, flush_commands,
     end,
     {keep_state, State#state{delayed_commands = DelQ}, Actions};
 leader({call, From}, {local_query, QueryFun},
-       #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, id(State), ServerState),
+       #state{conf = Conf,
+              server_state = ServerState} = State) ->
+    Reply = perform_local_query(QueryFun, id(State), ServerState, Conf),
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {state_query, Spec},
        #state{server_state = ServerState} = State) ->
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 leader({call, From}, {consistent_query, QueryFun},
-       #state{server_state = ServerState0} = State0) ->
+       #state{conf = Conf,
+              server_state = ServerState0} = State0) ->
     {leader, ServerState1, Effects} =
         ra_server:handle_leader({consistent_query, From, QueryFun},
                                 ServerState0),
+    incr_counter(Conf, ?C_RA_SRV_CONSISTENT_QUERIES, 1),
     {State1, Actions} =
         ?HANDLE_EFFECTS(Effects, {call, From},
                         State0#state{server_state = ServerState1}),
@@ -482,8 +485,8 @@ candidate(cast, {command, _Priority,
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 candidate({call, From}, {local_query, QueryFun},
-          #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, not_known, ServerState),
+          #state{conf = Conf, server_state = ServerState} = State) ->
+    Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
@@ -530,8 +533,8 @@ pre_vote(cast, {command, _Priority,
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 pre_vote({call, From}, {local_query, QueryFun},
-          #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, not_known, ServerState),
+          #state{conf = Conf, server_state = ServerState} = State) ->
+    Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
@@ -604,12 +607,12 @@ follower(cast, {command, _Priority,
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
 follower({call, From}, {local_query, QueryFun},
-         #state{server_state = ServerState} = State) ->
+         #state{conf = Conf, server_state = ServerState} = State) ->
     Leader = case ra_server:leader_id(ServerState) of
                  undefined -> not_known;
                  L -> L
              end,
-    Reply = perform_local_query(QueryFun, Leader, ServerState),
+    Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
     {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
@@ -771,8 +774,8 @@ terminating_follower(EvtType, Msg, State0) ->
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 await_condition({call, From}, {local_query, QueryFun},
-                #state{server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, follower, ServerState),
+                #state{conf = Conf, server_state = ServerState} = State) ->
+    Reply = perform_local_query(QueryFun, follower, ServerState, Conf),
     {keep_state, State, [{reply, From, Reply}]};
 await_condition(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
@@ -971,7 +974,8 @@ handle_receive_snapshot(Msg, State) ->
 handle_await_condition(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
 
-perform_local_query(QueryFun, Leader, ServerState) ->
+perform_local_query(QueryFun, Leader, ServerState, Conf) ->
+    incr_counter(Conf, ?C_RA_SRV_LOCAL_QUERIES, 1),
     try ra_server:machine_query(QueryFun, ServerState) of
         Result ->
             {ok, Result, Leader}

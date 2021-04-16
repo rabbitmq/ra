@@ -233,6 +233,7 @@
 -define(C_RA_SRV_RELEASE_CURSORS, ?C_RA_LOG_RESERVED + 16).
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
+-define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -254,7 +255,8 @@
          snapshots_sent,
          release_cursors,
          aer_received_follower_empty,
-         term_and_voted_for_updates
+         term_and_voted_for_updates,
+         local_queries
 
          ]).
 
