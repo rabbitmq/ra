@@ -27,7 +27,6 @@ The following Raft features are implemented:
 ### Build Status
 
 ![Actions](https://github.com/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
-[![Build Status](https://travis-ci.org/rabbitmq/ra.svg?branch=master)](https://travis-ci.org/rabbitmq/ra)
 
 ## Supported Erlang/OTP Versions
 
