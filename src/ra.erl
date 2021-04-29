@@ -90,9 +90,11 @@
 %% export some internal types
 -type index() :: ra_index().
 -type server_id() :: ra_server_id().
+-type cluster_name() :: ra_cluster_name().
 
 -export_type([index/0,
               server_id/0,
+              cluster_name/0,
               query_fun/0,
               from/0]).
 
