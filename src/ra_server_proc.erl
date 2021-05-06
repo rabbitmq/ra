@@ -876,7 +876,7 @@ terminate(Reason, StateName,
     end,
     _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
-    ok = ra_counters:delete({Key, self()}),
+    ok = seshat_counters:delete(ra, {Key, self()}),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -1367,7 +1367,7 @@ config_defaults(RegName) ->
       tick_timeout => ?TICK_INTERVAL_MS,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS),
+      counter => seshat_counters:new(ra, {RegName, self()}, ?RA_COUNTER_FIELDS),
       system_config => ra_system:default_config()
      }.
 

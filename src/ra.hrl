@@ -190,19 +190,6 @@
 
 -define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
 
--define(RA_LOG_COUNTER_FIELDS,
-        [write_ops,
-         write_resends,
-         read_ops,
-         read_cache,
-         read_open_mem_tbl,
-         read_closed_mem_tbl,
-         read_segment,
-         fetch_term,
-         snapshots_written,
-         snapshot_installed,
-         reserved_1
-         ]).
 -define(C_RA_LOG_WRITE_OPS, 1).
 -define(C_RA_LOG_WRITE_RESENDS, 2).
 -define(C_RA_LOG_READ_OPS, 3).
@@ -214,6 +201,42 @@
 -define(C_RA_LOG_SNAPSHOTS_WRITTEN, 9).
 -define(C_RA_LOG_SNAPSHOTS_INSTALLED, 10).
 -define(C_RA_LOG_RESERVED, 11).
+-define(RA_LOG_COUNTER_FIELDS,
+        [{write_ops, ?C_RA_LOG_WRITE_OPS, counter, "Total number of write ops"},
+         {write_resends, ?C_RA_LOG_WRITE_RESENDS, counter, "Total number of write resends"},
+         {read_ops, ?C_RA_LOG_READ_OPS, counter, "Total number of read ops"},
+         {read_cache, ?C_RA_LOG_READ_CACHE, counter, "Total number of cache reads"},
+         {read_open_mem_tbl, ?C_RA_LOG_READ_OPEN_MEM_TBL, counter, "Total number of opened memory tables"},
+         {read_closed_mem_tbl, ?C_RA_LOG_READ_CLOSED_MEM_TBL, counter, "Total number of closed memory tables"},
+         {read_segment, ?C_RA_LOG_READ_SEGMENT, counter, "Total number of read segments"},
+         {fetch_term, ?C_RA_LOG_FETCH_TERM, counter, "Total number of terms fetched"},
+         {snapshots_written, ?C_RA_LOG_SNAPSHOTS_WRITTEN, counter, "Total number of snapshots written"},
+         {snapshot_installed, ?C_RA_LOG_SNAPSHOTS_INSTALLED, counter, "Total number of snapshots installed"},
+         {reserved_1, ?C_RA_LOG_RESERVED, counter, "Reserved counter"}
+         ]).
+
+-define(RA_SRV_COUNTER_FIELDS,
+        [
+         {aer_received_follower, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, counter, "Total number of append entries received"},
+         {aer_replies_success, ?C_RA_SRV_AER_REPLIES_SUCCESS, counter, "Total number of successful append entries"},
+         {aer_replies_fail, ?C_RA_SRV_AER_REPLIES_FAILED, counter, "Total number of failed append entries"},
+         {commands, ?C_RA_SRV_COMMANDS, counter, "Total number of commands"},
+         {command_flushes, ?C_RA_SRV_COMMAND_FLUSHES, counter, "Total number of command batches"},
+         {aux_commands, ?C_RA_SRV_AUX_COMMANDS, counter, "Total number of aux commands"},
+         {consistent_queries, ?C_RA_SRV_CONSISTENT_QUERIES, counter, "Total number of consistent queries"},
+         {rpcs_sent, ?C_RA_SRV_RPCS_SENT, counter, "Total number of rpcs"},
+         {msgs_sent, ?C_RA_SRV_MSGS_SENT, counter, "All messages sent (exept messages sent to wal)"},
+         {dropped_sends, ?C_RA_SRV_DROPPED_SENDS, counter, "Total number of message sends that return noconnect or nosuspend are dropped"},
+         {send_msg_effects_sent, ?C_RA_SRV_SEND_MSG_EFFS_SENT, counter, "Total number of message effects sent"},
+         {pre_vote_elections, ?C_RA_SRV_PRE_VOTE_ELECTIONS, counter, "Total number of pre-vote elections"},
+         {elections, ?C_RA_SRV_ELECTIONS, counter, "Total number of elections"},
+         {forced_gcs, ?C_RA_SRV_GCS, counter, "Number of garbage collection runs"},
+         {snapshots_sent, ?C_RA_SRV_SNAPSHOTS_SENT, counter, "Total number of snapshots sent"},
+         {release_cursors, ?C_RA_SRV_RELEASE_CURSORS, counter, "Total number of updates of the release cursor"},
+         {aer_received_follower_empty, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, counter, "Total number of empty append entries received"},
+         {term_and_voted_for_updates, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, counter, "Total number of updates of term and voted for"},
+         {local_queries, ?C_RA_SRV_LOCAL_QUERIES, counter, "Total number of local queries"}
+         ]).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).
@@ -234,30 +257,5 @@
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 -define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
-
-
--define(RA_SRV_COUNTER_FIELDS,
-        [
-         aer_received_follower,
-         aer_replies_success,
-         aer_replies_fail,
-         commands,
-         command_flushes,
-         aux_commands,
-         consistent_queries,
-         rpcs_sent,
-         msgs_sent, %% all messages sent (exept messages sent to wal)
-         dropped_sends, %% any message sends that return noconnect or nosuspend are dropped
-         send_msg_effects_sent,
-         pre_vote_elections,
-         elections,
-         forced_gcs,
-         snapshots_sent,
-         release_cursors,
-         aer_received_follower_empty,
-         term_and_voted_for_updates,
-         local_queries
-
-         ]).
 
 -define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).

@@ -33,15 +33,16 @@
 
 -define(AWAIT_TIMEOUT, 30000).
 
--define(COUNTER_FIELDS,
-        [mem_tables,
-         segments,
-         entries
-         ]).
-
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
 -define(C_ENTRIES, 3).
+-define(COUNTER_FIELDS,
+        [
+         {mem_tables, ?C_MEM_TABLES, counter, "Number of in-memory tables"},
+         {segments, ?C_SEGMENTS, counter, "Number of segments"},
+         {entries, ?C_ENTRIES, counter, "Number of entries"}
+        ]
+       ).
 
 %%% ra_log_segment_writer
 %%% receives a set of closed mem_segments from the wal
@@ -97,7 +98,7 @@ await(SegWriter)  ->
 init([#{data_dir := DataDir,
         system := System} = Conf]) ->
     process_flag(trap_exit, true),
-    CRef = ra_counters:new(?MODULE, ?COUNTER_FIELDS),
+    CRef = seshat_counters:new(ra, ?MODULE, ?COUNTER_FIELDS),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{system = System,
                 data_dir = DataDir,

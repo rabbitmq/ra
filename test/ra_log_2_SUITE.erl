@@ -138,10 +138,10 @@ receive_segment(Config) ->
     ok.
 
 read_one(Config) ->
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    seshat_counters:new(ra, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     UId = ?config(uid, Config),
     Log0 = ra_log_init(#{uid => UId,
-                         counter => ra_counters:fetch(?FUNCTION_NAME)}),
+                         counter => seshat_counters:fetch(ra, ?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
@@ -151,7 +151,7 @@ read_one(Config) ->
     #{?FUNCTION_NAME := #{read_cache := M1,
                           read_open_mem_tbl := M2,
                           read_closed_mem_tbl := M3,
-                          read_segment := M4}} = ra_counters:overview(),
+                          read_segment := M4}} = seshat_counters:overview(ra),
     % read two entries
     ?assertEqual(1, M1 + M2 + M3 + M4),
     ra_log:close(Log),
@@ -176,9 +176,9 @@ take_after_overwrite_and_init(Config) ->
 
 validate_sequential_reads(Config) ->
     UId = ?config(uid, Config),
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    seshat_counters:new(ra, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(#{uid => UId,
-                         counter => ra_counters:fetch(?FUNCTION_NAME),
+                         counter => seshat_counters:fetch(ra, ?FUNCTION_NAME),
                          max_open_segments => 100}),
     % write a few entries
     Log1 = append_and_roll(1, 500, 1, Log0),
@@ -197,7 +197,7 @@ validate_sequential_reads(Config) ->
     #{?FUNCTION_NAME := #{read_cache := M1,
                           read_open_mem_tbl := M2,
                           read_closed_mem_tbl := M3,
-                          read_segment := M4} = O} = ra_counters:overview(),
+                          read_segment := M4} = O} = seshat_counters:overview(ra),
     ?assertEqual(1000, M1 + M2 + M3 + M4),
 
     ct:pal("validate_sequential_reads COLD took ~pms Reductions: ~p~nMetrics: ~p",
@@ -228,9 +228,9 @@ validate_sequential_reads(Config) ->
 
 validate_reads_for_overlapped_writes(Config) ->
     UId = ?config(uid, Config),
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    seshat_counters:new(ra, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(#{uid => UId,
-                         counter => ra_counters:fetch(?FUNCTION_NAME)
+                         counter => seshat_counters:fetch(ra, ?FUNCTION_NAME)
                         }),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
@@ -249,7 +249,7 @@ validate_reads_for_overlapped_writes(Config) ->
     #{?FUNCTION_NAME := #{read_cache := M1,
                           read_open_mem_tbl := M2,
                           read_closed_mem_tbl := M3,
-                          read_segment := M4}} = ra_counters:overview(),
+                          read_segment := M4}} = seshat_counters:overview(ra),
     ?assertEqual(550, M1 + M2 + M3 + M4),
     ra_log:close(Log8),
     ok.
@@ -309,9 +309,9 @@ written_event_after_snapshot(Config) ->
 
 updated_segment_can_be_read(Config) ->
     UId = ?config(uid, Config),
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    seshat_counters:new(ra, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(#{uid => UId,
-                         counter => ra_counters:fetch(?FUNCTION_NAME),
+                         counter => seshat_counters:fetch(ra, ?FUNCTION_NAME),
                          snapshot_interval => 1}),
     %% append a few entrie
     Log2 = append_and_roll(1, 5, 1, Log0),
@@ -327,7 +327,7 @@ updated_segment_can_be_read(Config) ->
     ?assertEqual(length(Entries1), C1),
     ct:pal("Entries: ~p", [Entries]),
     ct:pal("Entries1: ~p", [Entries1]),
-    ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
+    ct:pal("Counters ~p", [seshat_counters:overview(ra)]),
     ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     ?assertEqual(15, length(Entries1)),
     % l18 = length(Entries1),

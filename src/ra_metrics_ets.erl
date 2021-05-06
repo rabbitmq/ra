@@ -40,7 +40,7 @@ init([]) ->
                    {write_concurrency, true},
                    public],
     _ = ets:new(ra_log_metrics, [set | TableFlags]),
-    _ = ra_counters:init(),
+    seshat_counters:new_group(ra),
     _ = ra_leaderboard:init(),
 
     %% Table for ra processes to record their current snapshot index so that

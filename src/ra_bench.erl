@@ -150,7 +150,7 @@ spawn_client(Parent, Leader, Num, DataSize) when Num >= ?PIPE_SIZE ->
 print_metrics(Name) ->
     io:format("Node ~w:", [node()]),
     io:format("metrics ~p~n", [ets:lookup(ra_metrics, Name)]),
-    io:format("counters ~p", [ra_counters:overview()]).
+    io:format("counters ~p", [seshat_counters:overview(ra)]).
 
 
 

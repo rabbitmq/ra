@@ -702,7 +702,7 @@ overview(System) ->
     #{node => node(),
       servers => ra_directory:overview(System),
       %% TODO:filter counter keys by system
-      counters => ra_counters:overview(),
+      counters => seshat_counters:overview(ra),
       wal => #{status => lists:nth(5, element(4, sys:get_status(ra_log_wal))),
                open_mem_tables => ets:info(OpenTbls, size),
                closed_mem_tables => ets:info(ClosedTbls, size)},

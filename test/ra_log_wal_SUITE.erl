@@ -61,8 +61,8 @@ init_per_group(Group, Config) ->
     SysCfg = (ra_system:default_config())#{data_dir => Dir},
     ra_system:store(SysCfg),
     ra_directory:init(?SYS),
-    ra_counters:init(),
-    % application:ensure_all_started(lg),
+    application:ensure_all_started(seshat),
+    seshat_counters:new_group(ra),
     {SyncMethod, WriteStrat} =
         case Group of
             fsync ->
@@ -86,7 +86,7 @@ init_per_testcase(TestCase, Config) ->
     Sys = ?config(sys_cfg, Config),
     Dir = filename:join([PrivDir, G, M, TestCase]),
     {ok, Ets} = ra_log_ets:start_link(Sys),
-    ra_counters:init(),
+    seshat_counters:new_group(ra),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
                                     TestCase, TestCase),

@@ -42,8 +42,9 @@ groups() ->
      {tests, [], all_tests()}
     ].
 
-init_per_group(tests, Config) ->
+init_per_group(tests, Config) ->    
     ra_env:configure_logger(logger),
+    application:ensure_all_started(seshat),
     Config.
 
 end_per_group(tests, Config) ->
@@ -55,7 +56,7 @@ init_per_testcase(TestCase, Config) ->
     Dir = filename:join(PrivDir, TestCase),
     ra_system:store(ra_system:default_config()),
     ra_directory:init(default),
-    ra_counters:init(),
+    seshat_counters:new_group(ra),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
                                     TestCase, TestCase),

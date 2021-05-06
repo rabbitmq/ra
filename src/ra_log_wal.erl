@@ -30,15 +30,15 @@
 -define(MAGIC, "RAWA").
 -define(HEADER_SIZE, 5).
 
--define(COUNTER_FIELDS,
-        [wal_files,
-         batches,
-         writes
-         ]).
-
 -define(C_WAL_FILES, 1).
 -define(C_BATCHES, 2).
 -define(C_WRITES, 3).
+-define(COUNTER_FIELDS,
+        [{wal_files, ?C_WAL_FILES, counter, "Number of write-ahead log files"},
+         {batches, ?C_BATCHES, counter, "Number of batches"},
+         {writes, ?C_WRITES, counter, "Number of writes"}
+         ]).
+
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
 % The pid is used for the immediate writer notification
@@ -235,7 +235,7 @@ init(#{dir := Dir} = Conf0) ->
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
-    CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
+    CRef = seshat_counters:new(ra, WalName, ?COUNTER_FIELDS),
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
