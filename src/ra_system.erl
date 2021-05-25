@@ -47,7 +47,8 @@
 
 -spec start(ra_system:config()) -> supervisor:startchild_ret().
 start(#{name := Name} = Config) ->
-    ?INFO("ra: starting system ~s with config: ~p", [Name, Config]),
+    ?INFO("ra: starting system ~s", [Name]),
+    ?DEBUG("ra: starting system ~s with config: ~p", [Name, Config]),
     ra_systems_sup:start_system(Config).
 
 -spec start_default() -> supervisor:startchild_ret().
