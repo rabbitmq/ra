@@ -271,7 +271,15 @@ read_opt(Config) ->
                                  ra_log:take(1, 1, Log)
                          end),
     {_, Reds} = erlang:statistics(exact_reductions),
-    ct:pal("read took ~w Reduction ~w", [Time / 1000, Reds]),
+    ct:pal("read took ~wms Reduction ~w", [Time / 1000, Reds]),
+    {Time2, _} = timer:tc(fun () ->
+                                 _ = erlang:statistics(exact_reductions),
+                                 ra_log_init(#{uid => UId,
+                                               mode => read})
+                         end),
+    {_, Reds2} = erlang:statistics(exact_reductions),
+
+    ct:pal("read init took ~wms Reduction ~w", [Time2 / 1000, Reds2]),
     ok.
 
 
