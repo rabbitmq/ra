@@ -6,6 +6,7 @@
 %%
 -module(coordination_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -export([
@@ -89,17 +90,17 @@ start_stop_restart_delete_on_remote(Config) ->
     % ensure application is started
     NodeId = {c1, S1},
     Conf = conf(NodeId, [NodeId]),
-    ok = ra:start_server(Conf),
+    ok = ra:start_server(?SYS, Conf),
     ok = ra:trigger_election(NodeId),
     % idempotency
-    {error, {already_started, _}} = ra:start_server(Conf),
-    ok = ra:stop_server(NodeId),
-    ok = ra:restart_server(NodeId),
+    {error, {already_started, _}} = ra:start_server(?SYS, Conf),
+    ok = ra:stop_server(?SYS, NodeId),
+    ok = ra:restart_server(?SYS, NodeId),
     % idempotency
-    {error, {already_started, _}} = ra:restart_server(NodeId),
-    ok = ra:stop_server(NodeId),
+    {error, {already_started, _}} = ra:restart_server(?SYS, NodeId),
+    ok = ra:stop_server(?SYS, NodeId),
     % idempotency
-    ok = ra:stop_server(NodeId),
+    ok = ra:stop_server(?SYS, NodeId),
     ok = ra:force_delete_server(?SYS, NodeId),
     % idempotency
     ok = ra:force_delete_server(?SYS, NodeId),

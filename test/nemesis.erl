@@ -24,6 +24,8 @@
 
 -include("src/ra.hrl").
 
+-define(SYS, default).
+
 -type scenario() :: [{wait, non_neg_integer()} |
                      {part, [node()], non_neg_integer()} |
                      {app_restart, [ra_server_id()]} |
@@ -116,7 +118,7 @@ handle_step(#state{steps = [{app_restart, Servers} | Rem]} = State) ->
     [begin
          rpc:call(N, application, stop, [ra]),
          rpc:call(N, ra, start, []),
-         rpc:call(N, ra, restart_server, [Id])
+         rpc:call(N, ra, restart_server, [?SYS, Id])
      end || {_, N} = Id <- Servers],
     handle_step(State#state{steps = Rem});
 handle_step(#state{steps = []}) ->

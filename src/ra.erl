@@ -40,13 +40,10 @@
          delete_cluster/1,
          delete_cluster/2,
          % server management
-         start_server/1,
          start_server/2,
          start_server/5,
-         restart_server/1,
          restart_server/2,
          restart_server/3,
-         stop_server/1,
          stop_server/2,
          force_delete_server/2,
          trigger_election/1,
@@ -61,7 +58,6 @@
          leave_and_delete_server/3,
          leave_and_delete_server/4,
          %% troubleshooting
-         overview/0,
          overview/1,
          %% helpers
          new_uid/1,
@@ -131,18 +127,6 @@ start(Params) when is_list(Params) ->
 start_in(DataDir) ->
     start([{data_dir, DataDir}]).
 
-%% @doc Restarts a previously successfully started ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, Error}' where error can be
-%% `not_found', `system_not_started' or `name_not_registered' when the
-%% ra server has never before been started on the Erlang node.
-%% @end
--spec restart_server(ra_server_id()) ->
-    ok | {error, term()}.
-restart_server(ServerId) ->
-    %% TODO: this is a bad overlaod
-    restart_server(default, ServerId).
-
 %% @doc Restarts a previously successfully started ra server
 %% @param System the system identifier
 %% @param ServerId the ra_server_id() of the server
@@ -183,15 +167,6 @@ restart_server(System, ServerId, AddConfig)
         {error, _} = Err -> Err;
         {'EXIT', Err} -> {error, Err}
     end.
-
-%% @doc Stops a ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, nodedown}'
-%% @end
--spec stop_server(ra_server_id()) ->
-    ok | {error, nodedown | system_not_started}.
-stop_server(ServerId) ->
-    stop_server(default, ServerId).
 
 %% @doc Stops a ra server
 %% @param System the system name
@@ -451,15 +426,6 @@ start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
              machine => Machine},
     start_server(System, Conf).
 
-%% @doc Starts a ra server in the default system
-%% @param Conf a ra_server_config() configuration map.
-%% @returns `{ok | error, Error}'
-%% @end
--spec start_server(ra_server:ra_server_config()) ->
-    ok | {error, term()}.
-start_server(Conf) ->
-    start_server(default, Conf).
-
 %% @doc Starts a ra server
 %% @param The system name
 %% @param Conf a ra_server_config() configuration map.
@@ -681,14 +647,6 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 new_uid(Source) when is_binary(Source) ->
     Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(Source), 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
-
-
-%% @doc Returns a map of overview data of the default Ra system on the current Erlang
-%% node.
-%% @end
--spec overview() -> map() | system_not_started.
-overview() ->
-    overview(default).
 
 %% @doc Returns a map of overview data of the Ra system on the current Erlang
 %% node.

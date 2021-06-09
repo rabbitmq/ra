@@ -269,7 +269,7 @@ cluster_is_deleted_with_server_down(Config) ->
     % Wildcard = lists:flatten(filename:join([PrivDir, "**"])),
     % assert there are three matching data dirs
 
-    ok = ra:stop_server(ServerId3),
+    ok = ra:stop_server(?SYS, ServerId3),
     {ok, _} = ra:delete_cluster(Peers),
     timer:sleep(100),
     % start node again
@@ -616,7 +616,7 @@ initial_members_query(Config) ->
     ServerId4 = ?config(server_id4, Config),
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, InitialCluster),
-    ok = ra:start_server(Conf4),
+    ok = ra:start_server(?SYS, Conf4),
     {ok, _, _} = ra:add_member(Leader, ServerId4),
     {ok, InitialMembers2, _} = ra:initial_members(Leader),
     ?assertEqual(lists:sort(Members),

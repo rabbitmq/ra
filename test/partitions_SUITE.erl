@@ -5,11 +5,14 @@
 %% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(partitions_SUITE).
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("proper/include/proper.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(SYS, default).
 
 all() -> [
           {group, tests}
@@ -231,7 +234,8 @@ setup_ra_cluster(Config, Machine) ->
                         ct:pal("Start app on ~p", [Node]),
                         C = make_server_config(Name, Nodes, Node, Machine),
                         ok = ct_rpc:call(Node, ?MODULE, node_setup, [DataDir]),
-                        ok = ct_rpc:call(Node, application, load, [ra]),
+                        _ = ct_rpc:call(Node, application, stop, [ra]),
+                        _ = ct_rpc:call(Node, application, load, [ra]),
                         ok = ct_rpc:call(Node, application, set_env,
                                          [ra, data_dir, [DataDir]]),
                         ok = ct_rpc:call(Node, application, set_env,
@@ -244,7 +248,7 @@ setup_ra_cluster(Config, Machine) ->
                 Nodes),
     lists:map(fun(#{id := {_, Node}} = ServerConfig) ->
                       ct:pal("Start ra server on ~p", [Node]),
-                      ok = ct_rpc:call(Node, ra, start_server, [ServerConfig]),
+                      ok = ct_rpc:call(Node, ra, start_server, [?SYS, ServerConfig]),
                       ServerConfig
               end,
               Configs),

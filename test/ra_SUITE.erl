@@ -13,6 +13,7 @@
 -include("src/ra.hrl").
 
 -define(PROCESS_COMMAND_TIMEOUT, 6000).
+-define(SYS, default).
 
 all() ->
     [
@@ -120,10 +121,10 @@ stop_server_idemp(Config) ->
     ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     timer:sleep(100),
-    ok = ra:stop_server(N1),
+    ok = ra:stop_server(?SYS, N1),
     % should not raise exception
-    ok = ra:stop_server(N1),
-    {error, nodedown} = ra:stop_server({element(1, N1), random@node}),
+    ok = ra:stop_server(?SYS, N1),
+    {error, nodedown} = ra:stop_server(?SYS, {element(1, N1), random@node}),
     ok.
 
 leader_steps_down_after_replicating_new_cluster(Config) ->
@@ -206,7 +207,7 @@ ramp_up_and_ramp_down(Config) ->
     validate_state_on_node(N1, 25),
     %% Stop and restart to ensure membership changes can be recovered.
     ok = stop_server(N1),
-    ok = ra:restart_server(N1),
+    ok = ra:restart_server(?SYS, N1),
     _ = issue_op(N1, 5),
     validate_state_on_node(N1, 30),
     terminate_cluster([N1]).
@@ -253,7 +254,7 @@ start_servers(Config) ->
              end,
     gen_statem:stop(Target, normal, 2000),
     %% simpel check to ensure overview at least doesn't crash
-    ra:overview(),
+    ra:overview(?SYS),
     % issue command to confirm n3 joined the cluster successfully
     {ok, _, _} = ra:process_command(N3, 5, ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
@@ -358,14 +359,14 @@ local_query_stale(Config) ->
     {ok, {_, 5}, _} = ra:local_query(Leader, fun(S) -> S end),
 
     NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
-    ra:stop_server(NonLeader),
+    ra:stop_server(?SYS, NonLeader),
 
     Correlation = make_ref(),
     [ra:pipeline_command(Leader, 1, Correlation) || _ <- lists:seq(1, 5000)],
 
     wait_for_applied({Correlation, 5005}),
 
-    ra:restart_server(NonLeader),
+    ra:restart_server(?SYS, NonLeader),
 
     {ok, {_, NonLeaderV}, _} = ra:local_query(NonLeader, fun(S) -> S end, 100000),
     {ok, {_, LeaderV}, _} = ra:local_query(Leader, fun(S) -> S end),
@@ -381,14 +382,14 @@ consistent_query_stale(Config) ->
     {ok, 5, _} = ra:consistent_query(Leader, fun(S) -> S end),
 
     NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
-    ra:stop_server(NonLeader),
+    ra:stop_server(?SYS, NonLeader),
 
     Correlation = make_ref(),
     [ra:pipeline_command(Leader, 1, Correlation) || _ <- lists:seq(1, 5000)],
 
     wait_for_applied({Correlation, 5005}),
 
-    ra:restart_server(NonLeader),
+    ra:restart_server(?SYS, NonLeader),
 
     {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
     {ok, LeaderV, _} = ra:consistent_query(Leader, fun(S) -> S end),
@@ -489,7 +490,7 @@ snapshot_installation(Config) ->
     Mac = {module, ra_queue, #{}},
     % start two servers
     {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
-    ok = ra:stop_server(Down),
+    ok = ra:stop_server(?SYS, Down),
     {ok, _, Leader} = ra:members(Leader0),
     %% process enough commands to trigger two snapshots, ra will snapshot
     %% every ~4000 log entries or so by default
@@ -510,7 +511,7 @@ snapshot_installation(Config) ->
     N3Dir = ra_env:server_data_dir(default, ra_directory:uid_of(default, N3)),
 
     %% start the down node again, catchup should involve sending a snapshot
-    ok = ra:restart_server(Down),
+    ok = ra:restart_server(?SYS, Down),
 
     %% assert all contains snapshots
     TryFun = fun(Dir) ->
@@ -549,7 +550,7 @@ snapshot_installation_with_call_crash(Config) ->
 
     % start two servers
     {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
-    ok = ra:stop_server(Down),
+    ok = ra:stop_server(?SYS, Down),
     {ok, _, Leader} = ra:members(Leader0),
     %% process enough commands to trigger two snapshots, ra will snapshot
     %% every ~4000 log entries or so by default
@@ -566,7 +567,7 @@ snapshot_installation_with_call_crash(Config) ->
                                           meck:passthrough([A, B, C])
                                   end),
     %% start the down node again, catchup should involve sending a snapshot
-    ok = ra:restart_server(Down),
+    ok = ra:restart_server(?SYS, Down),
 
     timer:sleep(2500),
     meck:unload(gen_statem),
@@ -661,9 +662,9 @@ follower_catchup(Config) ->
                  machine => add_machine(),
                  await_condition_timeout => 1000}
            end,
-    ok = ra:start_server(Conf(N1, [N2], <<"N1">>)),
+    ok = ra:start_server(?SYS, Conf(N1, [N2], <<"N1">>)),
     % start second servern
-    ok = ra:start_server(Conf(N2, [N1], <<"N2">>)),
+    ok = ra:start_server(?SYS, Conf(N2, [N1], <<"N2">>)),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
     % a consensus command tells us there is a functioning cluster
@@ -801,7 +802,7 @@ await_msg_or_fail(Msg, ExitWith) ->
     end.
 
 terminate_cluster(Nodes) ->
-    [ra:stop_server(P) || P <- Nodes].
+    [ra:stop_server(?SYS, P) || P <- Nodes].
 
 new_server(Name, Config) ->
     ClusterName = ?config(test_name, Config),
@@ -809,7 +810,7 @@ new_server(Name, Config) ->
     ok.
 
 stop_server(Name) ->
-    ok = ra:stop_server(Name),
+    ok = ra:stop_server(?SYS, Name),
     ok.
 
 add_member(Ref, New) ->
