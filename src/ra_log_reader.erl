@@ -29,10 +29,6 @@
 
 -define(STATE, ?MODULE).
 
--define(METRICS_OPEN_MEM_TBL_POS, 3).
--define(METRICS_CLOSED_MEM_TBL_POS, 4).
--define(METRICS_SEGMENT_POS, 5).
-
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
               counter :: undefined | counters:counters_ref(),
@@ -414,7 +410,6 @@ incr_counter(#cfg{counter = undefined}, _) ->
     ok.
 
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 open_mem_tbl_take_test() ->
     OTbl = ra_log_open_mem_tables,
