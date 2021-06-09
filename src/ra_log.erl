@@ -39,7 +39,7 @@
          read_config/1,
 
          delete_everything/1,
-         release_resources/2,
+         release_resources/3,
 
          % external reader
          register_reader/2,
@@ -113,10 +113,10 @@
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
-                              counter => counters:counters_ref()}.
+                              counter => counters:counters_ref(),
+                              initial_access_pattern => sequential | random}.
 
 -export_type([state/0,
-              % reader/0,
               ra_log_init_args/0,
               ra_meta_key/0,
               segment_ref/0,
@@ -160,7 +160,9 @@ init(#{uid := UId,
                               undefined -> {-1, -1};
                               Curr -> Curr
                           end,
-    Reader0 = ra_log_reader:init(UId, Dir, 0, MaxOpen, [], Names, Counter),
+    AccessPattern = maps:get(initial_access_pattern, Conf, random),
+    Reader0 = ra_log_reader:init(UId, Dir, 0, MaxOpen, AccessPattern, [],
+                                 Names, Counter),
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
@@ -371,10 +373,10 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
                                   max(LastWrittenTerm0, Term)},
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
-        {_X, State} ->
+        {OtherTerm, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
-                   [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, _X]),
+                   [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
             {State, []}
     end;
 handle_event({written, {FromIdx, _, _}},
@@ -669,8 +671,10 @@ delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
     end,
     ok.
 
--spec release_resources(non_neg_integer(), state()) -> state().
+-spec release_resources(non_neg_integer(),
+                        sequential | random, state()) -> state().
 release_resources(MaxOpenSegments,
+                  AccessPattern,
                   #?MODULE{cfg = #cfg{uid = UId,
                                       directory = Dir,
                                       counter = Counter,
@@ -683,6 +687,7 @@ release_resources(MaxOpenSegments,
     _ = ra_log_reader:close(Reader),
     %% open a new segment with the new max open segment value
     State#?MODULE{reader = ra_log_reader:init(UId, Dir, FstIdx, MaxOpenSegments,
+                                              AccessPattern,
                                               ActiveSegs, Names, Counter)}.
 
 -spec register_reader(pid(), state()) ->
@@ -995,7 +1000,6 @@ server_data_dir(Dir, UId) ->
 %%%% TESTS
 
 -ifdef(TEST).
-% -include_lib("eunit/include/eunit.hrl").
 
 cache_take0_test() ->
     Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},

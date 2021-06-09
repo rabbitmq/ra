@@ -146,7 +146,7 @@ setup_log() ->
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory:snapshot_index_term/1),
     meck:expect(ra_log, take, fun ra_log_memory:take/3),
-    meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/2),
+    meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/3),
     meck:expect(ra_log, append_sync,
                 fun({Idx, Term, _} = E, L) ->
                         L1 = ra_log_memory:append(E, L),
