@@ -81,14 +81,26 @@ open(Filename) ->
            Options :: ra_log_segment_options()) ->
     {ok, state()} | {error, term()}.
 open(Filename, Options) ->
-    AbsFilename = filename:absname(Filename),
-    FileExists = filelib:is_file(AbsFilename),
     Mode = maps:get(mode, Options, append),
+    FileExists = case Mode of
+                     append ->
+                         case prim_file:read_file_info(Filename) of
+                             {ok, _} -> true;
+                             _ ->
+                                 false
+                         end;
+                     read ->
+                         %% assume file exists
+                         %% it will fail to open later if it does not
+                         true
+                 end,
     Modes = case Mode of
-                append -> [read, write, raw, binary];
-                read -> [read, raw, read_ahead, binary]
+                append ->
+                    [read, write, raw, binary];
+                read ->
+                    [read, raw, binary]
             end,
-    case ra_file_handle:open(AbsFilename, Modes) of
+    case ra_file_handle:open(Filename, Modes) of
         {ok, Fd} ->
             process_file(FileExists, Mode, Filename, Fd, Options);
         Err -> Err
@@ -103,6 +115,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
+            Mode = maps:get(mode, Options, append),
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
                                    max_pending = MaxPending,
@@ -117,7 +130,10 @@ process_file(true, Mode, Filename, Fd, Options) ->
                     index_write_offset = IndexOffset,
                     range = Range,
                     % TODO: we don't need an index in memory in append mode
-                    index = Index}};
+                    index = case Mode of
+                                read -> Index;
+                                append -> undefined
+                            end}};
         Err ->
             Err
     end;
@@ -288,7 +304,7 @@ max_count(#state{cfg = #cfg{max_count = Max}}) ->
 
 -spec filename(state()) -> file:filename().
 filename(#state{cfg = #cfg{filename = Fn}}) ->
-    filename:absname(Fn).
+    Fn.
 
 -spec segref(state()) -> maybe(ra_log:segment_ref()).
 segref(#state{range = undefined}) ->
@@ -328,9 +344,8 @@ update_range({First, _Last}, Idx) ->
 
 recover_index(Fd, Version, MaxCount) ->
     IndexSize = MaxCount * index_record_size(Version),
-    {ok, ?HEADER_SIZE} = ra_file_handle:position(Fd, ?HEADER_SIZE),
     DataOffset = ?HEADER_SIZE + IndexSize,
-    case ra_file_handle:read(Fd, IndexSize) of
+    case ra_file_handle:pread(Fd, ?HEADER_SIZE, IndexSize) of
         {ok, Data} ->
             parse_index_data(Version, Data, DataOffset);
         eof ->
@@ -440,8 +455,7 @@ write_header(MaxCount, Fd) ->
     ok = ra_file_handle:sync(Fd).
 
 read_header(Fd) ->
-    {ok, 0} = ra_file_handle:position(Fd, 0),
-    case ra_file_handle:read(Fd, ?HEADER_SIZE) of
+    case ra_file_handle:pread(Fd, 0, ?HEADER_SIZE) of
         {ok, Buffer} ->
             case Buffer of
                 <<?MAGIC, Version:16/unsigned, MaxCount:16/unsigned>>

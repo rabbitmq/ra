@@ -48,11 +48,6 @@
 
 -include("ra.hrl").
 
--define(METRICS_CACHE_POS, 2).
--define(METRICS_OPEN_MEM_TBL_POS, 3).
--define(METRICS_CLOSED_MEM_TBL_POS, 4).
--define(METRICS_SEGMENT_POS, 5).
-
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
 -define(SNAPSHOT_INTERVAL, 4096).
 -define(LOG_APPEND_TIMEOUT, 5000).
@@ -939,18 +934,18 @@ recover_range(UId, Reader, SegWriter) ->
     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
     SegRefs = lists:foldl(
                 fun (S, Acc) ->
-                   {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
-                   %% if a server recovered when a segment had been opened
-                   %% but never had any entries written the segref would be
-                   %% undefined
-                   case ra_log_segment:segref(Seg) of
-                       undefined ->
-                           ok = ra_log_segment:close(Seg),
-                           Acc;
-                       SegRef ->
-                           ok = ra_log_segment:close(Seg),
-                           [SegRef | Acc]
-                   end
+                        {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
+                        %% if a server recovered when a segment had been opened
+                        %% but never had any entries written the segref would be
+                        %% undefined
+                        case ra_log_segment:segref(Seg) of
+                            undefined ->
+                                ok = ra_log_segment:close(Seg),
+                                Acc;
+                            SegRef ->
+                                ok = ra_log_segment:close(Seg),
+                                [SegRef | Acc]
+                        end
                 end, [], SegFiles),
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
     Ranges = OpenRanges ++ ClosedRanges ++ SegRanges,
@@ -1000,7 +995,7 @@ server_data_dir(Dir, UId) ->
 %%%% TESTS
 
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
+% -include_lib("eunit/include/eunit.hrl").
 
 cache_take0_test() ->
     Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},
