@@ -254,7 +254,6 @@ validate_reads_for_overlapped_writes(Config) ->
 
 read_opt(Config) ->
     Log0 = ra_log_init(Config),
-    % Log0 = ra_log:release_resources(2, undefined, Log00),
     % write a segment and roll 1 - 299 - term 1
     Num = 4096 * 2,
     Log1 = write_and_roll(1, Num, 1, Log0, 50),
@@ -282,7 +281,20 @@ read_opt(Config) ->
                          end),
     {_, Reds3} = erlang:statistics(exact_reductions),
     ct:pal("read all took ~wms Reduction ~w", [Time3 / 1000, Reds3]),
+
+    {Time4, _} = timer:tc(fun () ->
+                                 _ = erlang:statistics(exact_reductions),
+                                 read_one_by_one(1, Num, Log)
+                         end),
+    {_, Reds4} = erlang:statistics(exact_reductions),
+    ct:pal("read one by one took ~wms Reduction ~w", [Time4 / 1000, Reds4]),
     ok.
+
+read_one_by_one(Max, Max, L0)  ->
+    ra_log:close(L0);
+read_one_by_one(Next, Max, L0) ->
+    {_, _, L} = ra_log:take(Next, 1, L0),
+    read_one_by_one(Next + 1, Max, L).
 
 
 written_event_after_snapshot(Config) ->
@@ -1030,7 +1042,7 @@ assert_log_events(Log0, AssertPred, Timeout) ->
 wait_for_segments(Log0, Timeout) ->
     receive
         {ra_log_event, {segments, _, _} = Evt} ->
-            ct:pal("log evt: ~p", [Evt]),
+            % ct:pal("log evt: ~p", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_all_log_events(Log, 100)
     after Timeout ->

@@ -163,6 +163,16 @@ read(_From, _To, State, Entries) ->
 
 retry_read(0, From, To, _Acc, State) ->
     exit({ra_log_reader_reader_retry_exhausted, From, To, State});
+retry_read(_N, From, To, Acc,
+           #?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = _SegRefs,
+               cfg = #cfg{uid = _UId} = Cfg} = State)
+  when To =< SEnd ->
+    case catch segment_take(State, {From, To}, Acc) of
+        {Open, undefined, Entries} ->
+            C = To - From + 1,
+            incr_counter(Cfg, {?C_RA_LOG_READ_SEGMENT, C}),
+            {Entries, C, State#?MODULE{open_segments = Open}}
+    end;
 retry_read(N, From, To, Acc,
            #?STATE{cfg = #cfg{uid = UId,
                               open_mem_tbls = OpenTbl,
