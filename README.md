@@ -32,10 +32,10 @@ The following Raft features are implemented:
 
 Ra supports the following Erlang/OTP versions:
 
+ * `24.x`
  * `23.x`
- * `22.x`
 
-22.x and later versions use [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/) which
+Modern Erlang releases provide [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/) which
 algorithms such as Raft significantly benefit from.
 
 
