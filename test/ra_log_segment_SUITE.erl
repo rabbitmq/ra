@@ -23,6 +23,7 @@ all_tests() ->
     [
      open_close_persists_max_count,
      write_then_read,
+     read_cons,
      write_close_open_write,
      full_file,
      try_read_missing,
@@ -237,6 +238,27 @@ write_then_read(Config) ->
     [{2, 2, Data}] = ra_log_segment:read(SegR, 2, 2),
     {1, 2} = ra_log_segment:range(SegR),
     ok = ra_log_segment:close(SegR),
+    ok.
+
+read_cons(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data = make_data(1024),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, Data),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, Data),
+    {ok, Seg3} = ra_log_segment:append(Seg2, 3, 2, Data),
+    {ok, Seg} = ra_log_segment:sync(Seg3),
+    ok = ra_log_segment:close(Seg),
+
+    %% end of setup
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
+    [{3, 2, Data}] = Read = ra_log_segment:read(SegR, 3, 1),
+    %% validate a larger range still returns results
+    [{1, 2, Data}, {2, 2, Data}, {3, 2, Data}] = ra_log_segment:read_cons(SegR, 1, 2,
+                                                                          fun ra_lib:id/1, Read),
+    ok = ra_log_segment:close(SegR),
+
     ok.
 
 try_read_missing(Config) ->

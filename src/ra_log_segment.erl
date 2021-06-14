@@ -34,6 +34,7 @@
 -define(DEFAULT_MAX_PENDING, 1024).
 -define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
 -define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
+-define(READ_AHEAD_B, 64000).
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
                               Offset :: non_neg_integer(), % 32 bit
@@ -48,6 +49,7 @@
               filename :: file:filename_all(),
               fd :: maybe(file:io_device()),
               index_size :: pos_integer(),
+              access_pattern :: sequential | random,
               mode = append :: read | append}).
 
 -record(state,
@@ -61,12 +63,14 @@
          range :: maybe({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
-         pending_count = 0 :: non_neg_integer()
+         pending_count = 0 :: non_neg_integer(),
+         cache :: undefined | {non_neg_integer(), non_neg_integer(), binary()}
         }).
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
                                     max_pending => non_neg_integer(),
-                                    mode => append | read}.
+                                    mode => append | read,
+                                    access_pattern => sequential | random}.
 -opaque state() :: #state{}.
 
 -export_type([state/0,
@@ -115,6 +119,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
+            AccessPattern = maps:get(access_pattern, Options, random),
             Mode = maps:get(mode, Options, append),
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
@@ -122,6 +127,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
                                    filename = Filename,
                                    mode = Mode,
                                    index_size = IndexSize,
+                                   access_pattern = AccessPattern,
                                    fd = Fd},
                     data_start = ?HEADER_SIZE + IndexSize,
                     data_offset = DataOffset,
@@ -129,7 +135,8 @@ process_file(true, Mode, Filename, Fd, Options) ->
                     index_offset = IndexOffset,
                     index_write_offset = IndexOffset,
                     range = Range,
-                    % TODO: we don't need an index in memory in append mode
+                    cache = undefined,
+                    % we don't need an index in memory in append mode
                     index = case Mode of
                                 read -> Index;
                                 append -> undefined
@@ -148,7 +155,8 @@ process_file(false, Mode, Filename, Fd, Options) ->
                            filename = Filename,
                            mode = Mode,
                            index_size = IndexSize,
-                           fd = Fd},
+                           fd = Fd,
+                           access_pattern = random},
                 index_write_offset = ?HEADER_SIZE,
                 index_offset = ?HEADER_SIZE,
                 data_start = ?HEADER_SIZE + IndexSize,
@@ -253,7 +261,7 @@ read(State, Idx, Num) ->
 read_cons(#state{cfg = #cfg{fd = _Fd, mode = read},
                  index = Index} = State, Idx,
           Num, Fun, Acc) ->
-    pread_cons(State, Idx + Num - 1, Idx, Index, Fun, Acc).
+    pread_cons(State, Idx, Idx + Num - 1, Index, Fun, Acc).
 
 -spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
 term_query(#state{index = Index}, Idx) ->
@@ -264,34 +272,31 @@ term_query(#state{index = Index}, Idx) ->
     end.
 
 pread_cons(_Fd, Idx, FinalIdx, _, _Fun, Acc)
-  when Idx < FinalIdx ->
+  when Idx > FinalIdx ->
     Acc;
-pread_cons(#state{cfg = #cfg{fd = Fd}} = State, Idx,
+pread_cons(#state{cfg = #cfg{fd = _Fd}} = State0, Idx,
            FinalIdx, Index, Fun, Acc) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
-            {ok, Data} = ra_file_handle:pread(Fd, Offset, Length),
-            %% assert data size is same as length
-            case byte_size(Data) of
-                Length ->
-                    %% we read the correct length
+            case pread(State0, Offset, Length) of
+                {ok, Data, State} ->
                     %% performc crc check
                     case erlang:crc32(Data) of
                         Crc ->
-                            pread_cons(State, Idx-1, FinalIdx, Index, Fun,
-                                       [{Idx, Term, Fun(Data)} | Acc]);
+                            [{Idx, Term, Fun(Data)} |
+                             pread_cons(State, Idx+1, FinalIdx, Index, Fun, Acc)];
                         _ ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
                                   State#state.cfg#cfg.filename})
                     end;
-                _ReadSize ->
+                {error, partial_data} ->
                     %% we did not read the correct number of bytes suggesting
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
-                          State#state.cfg#cfg.filename})
+                          State0#state.cfg#cfg.filename})
             end;
         _ ->
-            pread_cons(State, Idx-1, FinalIdx, Index, Fun, Acc)
+            pread_cons(State0, Idx+1, FinalIdx, Index, Fun, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).
@@ -469,6 +474,38 @@ read_header(Fd) ->
         {error, _} = Err ->
             Err
     end.
+
+pread(#state{cfg = #cfg{access_pattern = random,
+                        fd = Fd}} = State, Pos, Length) ->
+    %% no cache
+    {ok, Data} = ra_file_handle:pread(Fd, Pos, Length),
+    case byte_size(Data)  of
+        Length ->
+            {ok, Data, State};
+        _ ->
+            {error, partial_data}
+    end;
+pread(#state{cfg = #cfg{fd = _Fd},
+             cache = {CPos, CLen, Bin}} = State, Pos, Length)
+  when Pos >= CPos andalso
+       Pos + Length =< (CPos + CLen) ->
+    %% read fits inside cache
+    {ok, binary:part(Bin, Pos - CPos, Length), State};
+pread(#state{cfg = #cfg{fd = Fd},
+             cache = undefined} = State, Pos, Length) ->
+    CacheLen = max(Length, ?READ_AHEAD_B),
+    {ok, Cache} = ra_file_handle:pread(Fd, Pos, CacheLen),
+    case byte_size(Cache) >= Length  of
+        true ->
+            pread(State#state{cache = {Pos, byte_size(Cache), Cache}},
+                  Pos, Length);
+        false ->
+            {error, partial_data}
+    end;
+pread(#state{cache = {_, _, _}} = State, Pos, Length) ->
+    %% invalidate cache
+    pread(State#state{cache = undefined}, Pos, Length).
+
 
 offset_size(2) -> 64;
 offset_size(1) -> 32.
