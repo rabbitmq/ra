@@ -47,7 +47,8 @@ start_server(System, #{id := NodeId,
         true ->
             rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]);
         false ->
-            rpc:call(Node, ?MODULE, start_server_rpc, [UId, Config])
+            %% v1 compatibility
+            rpc:call(Node, ?MODULE, start_server, [Config])
     end.
 
 
