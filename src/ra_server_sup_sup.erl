@@ -43,7 +43,13 @@ start_server(System, #{id := NodeId,
                        uid := UId} = Config)
   when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(NodeId),
-    rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]).
+    case rpc:call(Node, erlang, function_exported, [?MODULE, start_server_rpc, 3]) of
+        true ->
+            rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]);
+        false ->
+            rpc:call(Node, ?MODULE, start_server_rpc, [UId, Config])
+    end.
+
 
 -spec restart_server(atom(), ra_server_id(), ra_server:mutable_config()) ->
     supervisor:startchild_ret() | {error, system_not_started}.
