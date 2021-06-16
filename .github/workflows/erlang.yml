@@ -25,47 +25,7 @@ jobs:
       run: make test-build
     - name: EUNIT
       run: make eunit
-    - name: coordination_SUITE
-      run: make ct-coordination
-    - name: partitions_SUITE
-      run: make ct-partitions
-    - name: ra_2_SUITE
-      run: make ct-ra_2
-    - name: ra_SUITE
-      run: make ct-ra
-    - name: ra_dbg_SUITE
-      run: make ct-ra_dbg
-    - name: ra_directory_SUITE
-      run: make ct-ra_directory
-    - name: ra_log_2_SUITE
-      run: make ct-ra_log_2
-    - name: ra_log_SUITE
-      run: make ct-ra_log
-    - name: ra_log_ets_SUITE
-      run: make ct-ra_log_ets
-    - name: ra_log_meta_SUITE
-      run: make ct-ra_log_meta
-    - name: ra_log_props_SUITE
-      run: make ct-ra_log_props
-    - name: ra_log_segment_SUITE
-      run: make ct-ra_log_segment
-    - name: ra_log_segment_writer_SUITE
-      run: make ct-ra_log_segment_writer
-    - name: ra_log_snapshot_SUITE
-      run: make ct-ra_log_snapshot
-    - name: ra_log_wal_SUITE
-      run: make ct-ra_log_wal
-    - name: ra_machine_ets_SUITE
-      run: make ct-ra_machine_ets
-    - name: ra_machine_int_SUITE
-      run: make ct-ra_machine_int
-    - name: ra_machine_version_SUITE
-      run: make ct-ra_machine_version
-    - name: ra_props_SUITE
-      run: make ct-ra_props
-    - name: ra_server_SUITE
-      run: make ct-ra_server
-    - name: ra_snapshot_SUITE
-      run: make ct-ra_snapshot
+    - name: COMMON TEST
+      run: make ct
     - name: PROPER
       run: make proper
