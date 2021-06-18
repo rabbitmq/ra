@@ -741,11 +741,14 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
+                               log_id = LogId,
                                machine = Mac},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
+    ?DEBUG("~s: vote granted for term ~b votes ~b",
+          [LogId, Term, NewVotes]),
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
