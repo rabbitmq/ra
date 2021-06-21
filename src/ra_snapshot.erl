@@ -55,7 +55,7 @@
          %% typically <data_dir>/snapshots
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
-         directory = file:filename(),
+         directory :: file:filename(),
          pending :: maybe({pid(), ra_idxterm()}),
          accepting :: maybe(#accept{}),
          current :: maybe(ra_idxterm())}).

@@ -5,14 +5,14 @@
 %% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_machine_version_SUITE).
-
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -export([
          ]).
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("common_test/include/ct.hrl").
 
 -define(SYS, default).
 
@@ -109,8 +109,8 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
                                           _ -> 1
                                       end
                               end),
-    ra:stop_server(Leader),
-    ra:restart_server(Leader),
+    ra:stop_server(?SYS, Leader),
+    ra:restart_server(?SYS, Leader),
     %% assert Leader node has correct machine version
     {ok, _, Leader2} = ra:members(hd(Followers)),
     ?assertNotEqual(Leader, Leader2),
@@ -124,10 +124,10 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
                                           _  -> 1
                                       end
                               end),
-    ra:stop_server(Leader2),
-    ra:restart_server(Leader2),
+    ra:stop_server(?SYS, Leader2),
+    ra:restart_server(?SYS, Leader2),
     %% need to stop last follower as it can still be elected now
-    ra:stop_server(LastFollower),
+    ra:stop_server(?SYS, LastFollower),
     %% this last leader must now be a version 2 not 1
     {ok, _, Leader3} = ra:members(Leader2, 60000),
 
@@ -154,10 +154,10 @@ unversioned_machine_never_sees_machine_version_command(Config) ->
     %% assert state_v1
     {ok, {_, init_state}, _} = ra:leader_query(ServerId,
                                                fun (S) -> S end),
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     %% increment version
     % meck:expect(Mod, version, fun () -> 2 end),
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
     {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
@@ -176,7 +176,7 @@ unversioned_can_change_to_versioned(Config) ->
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
     {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun (S) -> S end),
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     meck:expect(Mod, version, fun () -> 1 end),
     meck:expect(Mod, which_module, fun (_) -> Mod end),
     meck:expect(Mod, apply, fun (_, dummy, S) ->
@@ -189,7 +189,7 @@ unversioned_can_change_to_versioned(Config) ->
                                     {state_v1, ok}
                             end),
     %% increment version
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
     {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
@@ -220,10 +220,10 @@ server_upgrades_machine_state_on_noop_command(Config) ->
                                                     ct:pal("leader_query ~w", [S]),
                                                    S
                                              end),
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     %% increment version
     meck:expect(Mod, version, fun () -> 2 end),
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
     {ok, {_, state_v2}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
@@ -245,7 +245,7 @@ server_applies_with_new_module(Config) ->
     %% assert state_v1
     {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun (S) -> S end),
 
-    ok = ra:stop_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     %% simulate module upgrade
     Mod0 = mod_v0,
     meck:new(Mod0, [non_strict]),
@@ -265,12 +265,12 @@ server_applies_with_new_module(Config) ->
                                 (_, {machine_version, 0, 1}, init_state) ->
                                     {state_v1, ok}
                             end),
-    ok = ra:restart_server(ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     %% increment version
     {ok, ok, _} = ra:process_command(ServerId, dummy2),
     {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
-    ok = ra:stop_server(ServerId),
-    ok = ra:restart_server(ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     _ = ra:members(ServerId),
     {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
     ok.
@@ -305,11 +305,11 @@ lower_version_does_not_apply_until_upgraded(Config) ->
                                       end
                               end),
     timer:sleep(200),
-    ra:stop_server(Leader),
+    ra:stop_server(?SYS, Leader),
     {ok, _, Leader2} = ra:members(Followers),
     [LastFollower] = lists:delete(Leader2, Followers),
     ct:pal("Leader2 ~w LastFollower ~w", [Leader2, LastFollower]),
-    ra:restart_server(Leader),
+    ra:restart_server(?SYS, Leader),
     meck:expect(Mod, version, fun () ->
                                       New = [whereis(element(1, Leader)),
                                              whereis(element(1, Leader2))],
@@ -318,20 +318,20 @@ lower_version_does_not_apply_until_upgraded(Config) ->
                                           _  -> 1
                                       end
                               end),
-    ra:stop_server(Leader2),
+    ra:stop_server(?SYS, Leader2),
     timer:sleep(500),
     {ok, _, Leader3} = ra:members(LastFollower),
     ct:pal("Leader3 ~w LastFollower ~w", [Leader3, LastFollower]),
-    ra:restart_server(Leader2),
+    ra:restart_server(?SYS, Leader2),
 
     case Leader3 of
         LastFollower ->
             %% if last follower happened to be elected
             ct:pal("Leader3 is LastFollower", []),
-            ra:stop_server(Leader3),
+            ra:stop_server(?SYS, Leader3),
             %% allow time for a different member to be elected
             timer:sleep(1000),
-            ra:restart_server(Leader3);
+            ra:restart_server(?SYS, Leader3);
         _ -> ok
     end,
 
@@ -350,8 +350,8 @@ lower_version_does_not_apply_until_upgraded(Config) ->
     %% applied the last command
     {ok, {{LFIdx, _}, init_state}, _} = ra:local_query(LastFollower, fun ra_lib:id/1),
 
-    ra:stop_server(LastFollower),
-    ra:restart_server(LastFollower),
+    ra:stop_server(?SYS, LastFollower),
+    ra:restart_server(?SYS, LastFollower),
 
     {ok, {{LFIdx, _}, init_state}, _} = ra:local_query(LastFollower, fun ra_lib:id/1),
 

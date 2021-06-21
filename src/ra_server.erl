@@ -251,7 +251,10 @@ init(#{id := Id,
                                     system_config => SystemConfig,
                                     uid => UId,
                                     counter => Counter,
-                                    log_id => LogId}),
+                                    log_id => LogId,
+                                    %% use sequential access pattern during
+                                    %% recovery
+                                    initial_access_pattern => sequential}),
     ok = ra_log:write_config(Config, Log0),
     MetaName = meta_name(SystemConfig),
     CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term, 0),
@@ -321,6 +324,7 @@ recover(#{cfg := #cfg{log_id = LogId,
           last_applied := LastApplied} = State0) ->
     ?DEBUG("~s: recovering state machine version ~b:~b from index ~b to ~b",
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex]),
+    Before = erlang:system_time(millisecond),
     {#{log := Log0} = State, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
@@ -331,7 +335,12 @@ recover(#{cfg := #cfg{log_id = LogId,
                          setelement(5, apply_with(E, S), [])
                  end,
                  State0, []),
-    Log = ra_log:release_resources(1, Log0),
+    After = erlang:system_time(millisecond),
+    ?DEBUG("~s: recovery of state machine version ~b:~b "
+           "from index ~b to ~b took ~bms",
+           [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
+    %% disable segment read cache by setting random accesss pattern
+    Log = ra_log:release_resources(1, random, Log0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value
            commit_latency => 0}.
@@ -732,11 +741,14 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
+                               log_id = LogId,
                                machine = Mac},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
+    ?DEBUG("~s: vote granted for term ~b votes ~b",
+          [LogId, Term, NewVotes]),
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
@@ -1395,12 +1407,12 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
 % Internal
 
 become(leader, #{cluster := Cluster, log := Log0} = State) ->
-    Log = ra_log:release_resources(maps:size(Cluster) + 1, Log0),
+    Log = ra_log:release_resources(maps:size(Cluster) + 2, random, Log0),
     State#{log => Log};
 become(follower, #{log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
     %% time
-    State#{log => ra_log:release_resources(1, Log0)};
+    State#{log => ra_log:release_resources(1, random, Log0)};
 become(_RaftState, State) ->
     State.
 

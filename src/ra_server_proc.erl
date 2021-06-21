@@ -305,7 +305,6 @@ recover(enter, OldState, State0) ->
     {keep_state, State, Actions};
 recover(_EventType, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
-    true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     %% we have to issue the next_event here so that the recovered state is
     %% only passed through very briefly
@@ -322,6 +321,7 @@ recovered(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 recovered(internal, next, #state{server_state = ServerState} = State) ->
+    true = erlang:garbage_collect(),
     _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     next_state(follower, State, set_tick_timer(State, [])).
 

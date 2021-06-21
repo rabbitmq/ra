@@ -10,7 +10,7 @@
 
 -export([
          init/6,
-         init/7,
+         init/8,
          close/1,
          update_segments/2,
          handle_log_update/2,
@@ -29,16 +29,14 @@
 
 -define(STATE, ?MODULE).
 
--define(METRICS_OPEN_MEM_TBL_POS, 3).
--define(METRICS_CLOSED_MEM_TBL_POS, 4).
--define(METRICS_SEGMENT_POS, 5).
-
+-type access_pattern() :: sequential | random.
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
               counter :: undefined | counters:counters_ref(),
               directory :: file:filename(),
               open_mem_tbls ::  atom(),
-              closed_mem_tbls :: atom()
+              closed_mem_tbls :: atom(),
+              access_pattern = random :: access_pattern()
              }).
 
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
@@ -51,6 +49,7 @@
 
 -opaque state() :: #?STATE{}.
 
+
 -export_type([
               state/0
               ]).
@@ -60,12 +59,13 @@
 -spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
            [segment_ref()], ra_system:names()) -> state().
 init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names) ->
-    init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names, undefined).
+    init(UId, Dir, FirstIdx, MaxOpen, random, SegRefs, Names, undefined).
 
 -spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+           access_pattern(),
            [segment_ref()], ra_system:names(),
            undefined | counters:counters_ref()) -> state().
-init(UId, Dir, FirstIdx, MaxOpen, SegRefs,
+init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
      #{open_mem_tbls := OpnMemTbls,
        closed_mem_tbls := ClsdMemTbls}, Counter)
   when is_binary(UId) ->
@@ -73,7 +73,8 @@ init(UId, Dir, FirstIdx, MaxOpen, SegRefs,
                        counter = Counter,
                        directory = Dir,
                        open_mem_tbls = OpnMemTbls,
-                       closed_mem_tbls = ClsdMemTbls
+                       closed_mem_tbls = ClsdMemTbls,
+                       access_pattern = AccessPattern
                       },
             open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
             first_index = FirstIdx,
@@ -232,12 +233,14 @@ open_mem_table_lookup(#?STATE{cfg = #cfg{uid = UId,
 %% LOCAL
 
 segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
-                                 cfg = #cfg{directory = Dir},
+                                 cfg = Cfg,
                                  open_segments = OpenSegs} = State) ->
-    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Dir),
+    {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Cfg),
     {Result, State#?MODULE{open_segments = Open}}.
 
-segment_term_query0(Idx, [{From, To, Filename} | _], Open0, Dir)
+segment_term_query0(Idx, [{From, To, Filename} | _], Open0,
+                    #cfg{directory = Dir,
+                         access_pattern = AccessPattern})
   when Idx >= From andalso Idx =< To ->
     case ra_flru:fetch(Filename, Open0) of
         {ok, Seg, Open} ->
@@ -245,12 +248,13 @@ segment_term_query0(Idx, [{From, To, Filename} | _], Open0, Dir)
             {Term, Open};
         error ->
             AbsFn = filename:join(Dir, Filename),
-            {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read}),
+            {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read,
+                                                     access_pattern => AccessPattern}),
             Term = ra_log_segment:term_query(Seg, Idx),
             {Term, ra_flru:insert(Filename, Seg, Open0)}
     end;
-segment_term_query0(Idx, [_ | Tail], Open, Dir) ->
-    segment_term_query0(Idx, Tail, Open, Dir);
+segment_term_query0(Idx, [_ | Tail], Open, Cfg) ->
+    segment_term_query0(Idx, Tail, Open, Cfg);
 segment_term_query0(_Idx, [], Open, _) ->
     {undefined, Open}.
 
@@ -323,7 +327,8 @@ segment_take(#?STATE{segment_refs = [],
     {Open, undefined, Entries0};
 segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
                      open_segments = OpenSegs,
-                     cfg = #cfg{directory = Dir}},
+                     cfg = #cfg{directory = Dir,
+                                access_pattern = AccessPattern}},
              {RStart, REnd}, Entries0) ->
     Range = {RStart, min(SEnd, REnd)},
     lists:foldl(
@@ -341,7 +346,8 @@ segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
                           {S, Open1};
                       error ->
                           AbsFn = filename:join(Dir, Fn),
-                          case ra_log_segment:open(AbsFn, #{mode => read}) of
+                          case ra_log_segment:open(AbsFn, #{mode => read,
+                                                            access_pattern => AccessPattern}) of
                               {ok, S} ->
                                   {S, ra_flru:insert(Fn, S, Open0)};
                               {error, Err} ->
@@ -414,7 +420,6 @@ incr_counter(#cfg{counter = undefined}, _) ->
     ok.
 
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 open_mem_tbl_take_test() ->
     OTbl = ra_log_open_mem_tables,

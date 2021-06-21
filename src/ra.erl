@@ -40,12 +40,15 @@
          delete_cluster/1,
          delete_cluster/2,
          % server management
+         % deprecated
          start_server/1,
          start_server/2,
          start_server/5,
+         % deprecated
          restart_server/1,
          restart_server/2,
          restart_server/3,
+         % deprecated
          stop_server/1,
          stop_server/2,
          force_delete_server/2,
@@ -61,6 +64,7 @@
          leave_and_delete_server/3,
          leave_and_delete_server/4,
          %% troubleshooting
+         % deprecated
          overview/0,
          overview/1,
          %% helpers
@@ -71,6 +75,12 @@
          cast_aux_command/2,
          register_external_log_reader/1
         ]).
+
+%% xref should pick these up
+-deprecated({start_server, 1}).
+-deprecated({restart_server, 1}).
+-deprecated({stop_server, 1}).
+-deprecated({overview, 0}).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
@@ -136,6 +146,7 @@ start_in(DataDir) ->
 %% @returns `{ok | error, Error}' where error can be
 %% `not_found', `system_not_started' or `name_not_registered' when the
 %% ra server has never before been started on the Erlang node.
+%% DEPRECATED: use restart_server/2
 %% @end
 -spec restart_server(ra_server_id()) ->
     ok | {error, term()}.
@@ -187,6 +198,7 @@ restart_server(System, ServerId, AddConfig)
 %% @doc Stops a ra server in the default system
 %% @param ServerId the ra_server_id() of the server
 %% @returns `{ok | error, nodedown}'
+%% DEPRECATED: use stop_server/2
 %% @end
 -spec stop_server(ra_server_id()) ->
     ok | {error, nodedown | system_not_started}.
@@ -454,6 +466,7 @@ start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
 %% @doc Starts a ra server in the default system
 %% @param Conf a ra_server_config() configuration map.
 %% @returns `{ok | error, Error}'
+%% DEPRECATED: use start_server/2
 %% @end
 -spec start_server(ra_server:ra_server_config()) ->
     ok | {error, term()}.
@@ -685,6 +698,7 @@ new_uid(Source) when is_binary(Source) ->
 
 %% @doc Returns a map of overview data of the default Ra system on the current Erlang
 %% node.
+%% DEPRECATED: user overview/1
 %% @end
 -spec overview() -> map() | system_not_started.
 overview() ->

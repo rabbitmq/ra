@@ -6,6 +6,7 @@
 %%
 -module(ra_machine_int_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -export([
@@ -207,15 +208,15 @@ leader_monitors(Config) ->
     _ = ra:members(ServerId),
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(Name)),
-    ra:stop_server(ServerId),
-    _ = ra:restart_server(ServerId),
+    ra:stop_server(?SYS, ServerId),
+    _ = ra:restart_server(?SYS, ServerId),
     ra:members(ServerId),
     % check monitors are re-applied after restart
     timer:sleep(200),
     {monitored_by, [MonitoredByAfter]} = erlang:process_info(self(),
                                                              monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
-    ra:stop_server(ServerId),
+    ra:stop_server(?SYS, ServerId),
     ok.
 
 follower_takes_over_monitor(Config) ->
@@ -249,7 +250,7 @@ follower_takes_over_monitor(Config) ->
     {monitored_by, [MonitoredBy]} = erlang:process_info(self(), monitored_by),
     ?assert(MonitoredBy =:= whereis(LeaderName)),
 
-    ok = ra:stop_server(ServerId1),
+    ok = ra:stop_server(?SYS, ServerId1),
     % give the election process a bit of time before issuing a command
     timer:sleep(200),
     {ok, _, _} = ra:process_command(ServerId2, dummy),
@@ -259,9 +260,9 @@ follower_takes_over_monitor(Config) ->
                                                              monitored_by),
     ?assert((MonitoredByAfter =:= whereis(Name2)) or
             (MonitoredByAfter =:= whereis(Name3))),
-    ra:stop_server(ServerId1),
-    ra:stop_server(ServerId2),
-    ra:stop_server(ServerId3),
+    ra:stop_server(?SYS, ServerId1),
+    ra:stop_server(?SYS, ServerId2),
+    ra:stop_server(?SYS, ServerId3),
     ok.
 
 deleted_cluster_emits_eol_effect(Config) ->
