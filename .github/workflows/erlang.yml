@@ -4,6 +4,7 @@ jobs:
   build:
     runs-on: ubuntu-18.04
     strategy:
+      fail-fast: false
       matrix:
         otp:
         - "23.2"
@@ -38,6 +39,7 @@ jobs:
   build-bazel:
     runs-on: ubuntu-18.04
     strategy:
+      fail-fast: false
       matrix:
         otp:
         - "23.2"
@@ -63,3 +65,9 @@ jobs:
     - name: TEST
       run: |
         bazelisk test //...
+    - name: CAPTURE TEST LOGS ON FAILURE
+      uses: actions/upload-artifact@v2-preview
+      if: failure()
+      with:
+        name: bazel-testlogs-${{matrix.otp}}
+        path: bazel-testlogs/*
