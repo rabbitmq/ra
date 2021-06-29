@@ -32,7 +32,7 @@
 
 <h3 class="function"><a name="record-3">record/3</a></h3>
 <div class="spec">
-<p><pre>record(ClusterName :: term(),
+<p><pre>record(ClusterName :: <a href="ra.html#type-cluster_name">ra:cluster_name()</a>,
        Leader :: <a href="ra.html#type-server_id">ra:server_id()</a>,
        Members :: [<a href="ra.html#type-server_id">ra:server_id()</a>]) -&gt;
           ok</pre></p>
@@ -41,19 +41,20 @@
 
 <h3 class="function"><a name="clear-1">clear/1</a></h3>
 <div class="spec">
-<p><pre>clear(ClusterName :: term()) -&gt; ok</pre></p>
+<p><pre>clear(ClusterName :: <a href="ra.html#type-cluster_name">ra:cluster_name()</a>) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="lookup_leader-1">lookup_leader/1</a></h3>
 <div class="spec">
-<p><pre>lookup_leader(ClusterName :: term()) -&gt; <a href="ra.html#type-server_id">ra:server_id()</a> | undefined</pre></p>
+<p><pre>lookup_leader(ClusterName :: <a href="ra.html#type-cluster_name">ra:cluster_name()</a>) -&gt;
+                 <a href="ra.html#type-server_id">ra:server_id()</a> | undefined</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="lookup_members-1">lookup_members/1</a></h3>
 <div class="spec">
-<p><pre>lookup_members(ClusterName :: term()) -&gt;
+<p><pre>lookup_members(ClusterName :: <a href="ra.html#type-cluster_name">ra:cluster_name()</a>) -&gt;
                   [<a href="ra.html#type-server_id">ra:server_id()</a>] | undefined</pre></p>
 <p> </p>
 </div>

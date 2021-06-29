@@ -19,14 +19,14 @@
  
   <h3><a name="Callbacks">Callbacks</a></h3>
  
-  <p><code>-callback init(Conf :: <a href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt; state()'</code></p>
+  <p><code>-callback init(Conf :: <a docgen-rel="seetype" docgen-href="#machine_init_args/0" href="#type-machine_init_args"><code>machine_init_args()</code></a>) -&gt; state()'</code></p>
  
   <p>Initialize a new machine state.</p>
  
   <p><br>
   <code>-callback apply(Meta :: command_meta_data(),
-                        <a href="#type-command"><code>command()</code></a>, State) -&gt;
-     {State, <a href="#type-reply"><code>reply()</code></a>, <a href="#type-effects"><code>effects()</code></a>} | {State, <a href="#type-reply"><code>reply()</code></a>}</code></p>
+                        <a docgen-rel="seetype" docgen-href="#command/0" href="#type-command"><code>command()</code></a>, State) -&gt;
+     {State, <a docgen-rel="seetype" docgen-href="#reply/0" href="#type-reply"><code>reply()</code></a>, <a docgen-rel="seetype" docgen-href="#effects/0" href="#type-effects"><code>effects()</code></a>} | {State, <a docgen-rel="seetype" docgen-href="#reply/0" href="#type-reply"><code>reply()</code></a>}</code></p>
  
   <p>Applies each entry to the state machine.</p>
  
@@ -75,7 +75,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
     {down, pid(), term()} |
     {nodeup | nodedown, node()} |
     {timeout, term()}</pre></p>
-<p>  These commands may be passed to the <a href="#apply-2"><code>apply/2</code></a> function in reaction
+<p>  These commands may be passed to the <a docgen-rel="seemfa" docgen-href="#apply/2" href="#apply-2"><code>apply/2</code></a> function in reaction
   to monitor effects</p>
 
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
@@ -112,7 +112,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
 <p><pre>effects() = [<a href="#type-effect">effect()</a>]</pre></p>
-<p>  See: <a href="effect.html"><code>effect</code></a></p>
+<p>  See: <a docgen-rel="seeerl" docgen-href="effect" href="effect.html"><code>effect</code></a></p>
 
 <h3 class="typedecl"><a name="type-locator">locator()</a></h3>
 <p><pre>locator() = pid() | atom() | {atom(), node()}</pre></p>
@@ -122,7 +122,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p><pre>machine() = 
     {machine, module(), AddInitArgs :: #{term() =&gt; term()}}</pre></p>
 <p>  Machine configuration.
-  the <code>module()</code> should implement the <a href="ra_machine.html"><code>ra_machine</code></a> behaviour.</p>
+  the <code>module()</code> should implement the <a docgen-rel="seeerl" docgen-href="ra_machine" href="ra_machine.html"><code>ra_machine</code></a> behaviour.</p>
 
 <h3 class="typedecl"><a name="type-milliseconds">milliseconds()</a></h3>
 <p><pre>milliseconds() = non_neg_integer()</pre></p>
@@ -131,8 +131,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="typedecl"><a name="type-reply">reply()</a></h3>
 <p><pre>reply() = term()</pre></p>
 <p>  an arbitrary term that can be returned to the caller, _if_ the caller
-  used <a href="ra.html#process_command-2"><code>ra:process_command/2</code></a> or
-  <a href="ra.html#process_command-3"><code>ra:process_command/3</code></a></p>
+  used <a docgen-rel="seemfa" docgen-href="ra#process_command/2" href="ra.html#process_command-2"><code>ra:process_command/2</code></a> or
+  <a docgen-rel="seemfa" docgen-href="ra#process_command/3" href="ra.html#process_command-3"><code>ra:process_command/3</code></a></p>
 
 <h3 class="typedecl"><a name="type-send_msg_opt">send_msg_opt()</a></h3>
 <p><pre>send_msg_opt() = 

@@ -84,7 +84,7 @@
     {simple, <a href="#type-simple_apply_fun">simple_apply_fun</a>(term()), InitialState :: term()}</pre></p>
 <p>  The machine configuration.
   This is how ra knows which module to use to invoke the ra_machine callbacks
-  and the config to pass to the <a href="ra_machine.html#init-1"><code>ra_machine:init/1</code></a> implementation.
+  and the config to pass to the <a docgen-rel="seemfa" docgen-href="ra_machine#init/1" href="ra_machine.html#init-1"><code>ra_machine:init/1</code></a> implementation.
   The simple machine config is version that can only be used for simple state
   machines that cannot access any of the advanced features.</p>
 
@@ -145,14 +145,15 @@
       log_init_args := <a href="ra_log.html#type-ra_log_init_args">ra_log:ra_log_init_args()</a>,
       initial_members := [<a href="#type-ra_server_id">ra_server_id()</a>],
       machine := <a href="#type-machine_conf">machine_conf()</a>,
-      friendly_name =&gt; <a href="unicode.html#type-chardata">unicode:chardata()</a>,
+      friendly_name =&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/unicode.html#type-chardata">unicode:chardata()</a>,
       metrics_key =&gt; term(),
       broadcast_time =&gt; non_neg_integer(),
       tick_timeout =&gt; non_neg_integer(),
       await_condition_timeout =&gt; non_neg_integer(),
       max_pipeline_count =&gt; non_neg_integer(),
       ra_event_formatter =&gt; {module(), atom(), [term()]},
-      counter =&gt; <a href="counters.html#type-counters_ref">counters:counters_ref()</a>}</pre></p>
+      counter =&gt; <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref">counters:counters_ref()</a>,
+      system_config =&gt; <a href="ra_system.html#type-config">ra_system:config()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_server_state">ra_server_state()</a></h3>
@@ -179,7 +180,7 @@
       pre_vote_token =&gt; reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats :=
-          <a href="queue.html#type-queue">queue:queue</a>({non_neg_integer(), <a href="#type-consistent_query_ref">consistent_query_ref()</a>}),
+          <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/queue.html#type-queue">queue:queue</a>({non_neg_integer(), <a href="#type-consistent_query_ref">consistent_query_ref()</a>}),
       pending_consistent_queries := [<a href="#type-consistent_query_ref">consistent_query_ref()</a>],
       commit_latency =&gt; <a href="#type-maybe">maybe</a>(non_neg_integer())}</pre></p>
 
@@ -218,6 +219,7 @@
 <tr><td valign="top"><a href="#id-1">id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#log_id-1">log_id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#uid-1">uid/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#system_config-1">system_config/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_id-1">leader_id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#machine_version-1">machine_version/1</a></td><td></td></tr>
@@ -376,13 +378,19 @@
 
 <h3 class="function"><a name="log_id-1">log_id/1</a></h3>
 <div class="spec">
-<p><pre>log_id(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="unicode.html#type-chardata">unicode:chardata()</a></pre></p>
+<p><pre>log_id(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/unicode.html#type-chardata">unicode:chardata()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="uid-1">uid/1</a></h3>
 <div class="spec">
 <p><pre>uid(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="#type-ra_uid">ra_uid()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="system_config-1">system_config/1</a></h3>
+<div class="spec">
+<p><pre>system_config(X1 :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt; <a href="ra_system.html#type-config">ra_system:config()</a></pre></p>
 <p> </p>
 </div>
 

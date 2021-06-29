@@ -16,10 +16,14 @@
 <h2><a name="description">Description</a></h2>The primary module for interacting with ra servers and clusters.
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-cluster_name">cluster_name()</a></h3>
+<p><pre>cluster_name() = <a href="#type-ra_cluster_name">ra_cluster_name()</a></pre></p>
+
+
 <h3 class="typedecl"><a name="type-environment_param">environment_param()</a></h3>
 <p><pre>environment_param() = 
-    {data_dir, <a href="file.html#type-filename">file:filename()</a>} |
-    {wal_data_dir, <a href="file.html#type-filename">file:filename()</a>} |
+    {data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>} |
+    {wal_data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()} |
@@ -48,19 +52,21 @@
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start-1">start/1</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start_in-1">start_in/1</a></td><td>Starts the ra application with a provided data directory.</td></tr>
-<tr><td valign="top"><a href="#restart_server-1">restart_server/1</a></td><td>Restarts a previously successfully started ra server.</td></tr>
+<tr><td valign="top"><a href="#restart_server-1">restart_server/1</a></td><td>Restarts a previously successfully started ra server in the default system.</td></tr>
 <tr><td valign="top"><a href="#restart_server-2">restart_server/2</a></td><td>Restarts a previously successfully started ra server.</td></tr>
-<tr><td valign="top"><a href="#stop_server-1">stop_server/1</a></td><td>Stops a ra server.</td></tr>
-<tr><td valign="top"><a href="#force_delete_server-1">force_delete_server/1</a></td><td>Deletes a ra server
+<tr><td valign="top"><a href="#restart_server-3">restart_server/3</a></td><td>Restarts a previously successfully started ra server.</td></tr>
+<tr><td valign="top"><a href="#stop_server-1">stop_server/1</a></td><td>Stops a ra server in the default system.</td></tr>
+<tr><td valign="top"><a href="#stop_server-2">stop_server/2</a></td><td>Stops a ra server.</td></tr>
+<tr><td valign="top"><a href="#force_delete_server-2">force_delete_server/2</a></td><td>Deletes a ra server
   The server is forcefully deleted.</td></tr>
-<tr><td valign="top"><a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a></td><td>Starts or restarts a ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_or_restart_cluster-4">start_or_restart_cluster/4</a></td><td>Same as <code>start_or_restart_cluster/3</code> but accepts a custom timeout.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_or_restart_cluster-4">start_or_restart_cluster/4</a></td><td>Starts or restarts a ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_or_restart_cluster-5">start_or_restart_cluster/5</a></td><td>Same as <code>start_or_restart_cluster/4</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-4">start_cluster/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-1">start_cluster/1</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td>Same as <code>start_cluster/1</code> but accepts a custom timeout.</td></tr>
-<tr><td valign="top"><a href="#start_server-4">start_server/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Same as <code>start_cluster/1</code> but accepts a custom timeout.</td></tr>
+<tr><td valign="top"><a href="#start_server-5">start_server/5</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server in the default system.</td></tr>
+<tr><td valign="top"><a href="#start_server-2">start_server/2</a></td><td>Starts a ra server.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-2">delete_cluster/2</a></td><td>Same as <code>delete_cluster/1</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#add_member-2">add_member/2</a></td><td>Add a ra server id to a ra cluster's membership configuration.</td></tr>
@@ -69,15 +75,15 @@
 <tr><td valign="top"><a href="#remove_member-3">remove_member/3</a></td><td>Same as <code>remove_member/2</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Makes the server to enter a pre-vote state and attempt to become the leader.</td></tr>
 <tr><td valign="top"><a href="#trigger_election-2">trigger_election/2</a></td><td>Same as <code>trigger_election/2</code> but also accepts a timeout.</td></tr>
-<tr><td valign="top"><a href="#leave_and_terminate-1">leave_and_terminate/1</a></td><td>A safe way for a an active server to remove itself from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_terminate-2">leave_and_terminate/2</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_terminate-3">leave_and_terminate/3</a></td><td>Same as <code>leave_and_terminate/2</code> but also accepts a timeout.</td></tr>
-<tr><td valign="top"><a href="#leave_and_delete_server-1">leave_and_delete_server/1</a></td><td>A safe way for a an active server to force remove itself from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_delete_server-2">leave_and_delete_server/2</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_delete_server-3">leave_and_delete_server/3</a></td><td>Same as <code>leave_and_delete_server/2</code> but also accepts a timeout.</td></tr>
+<tr><td valign="top"><a href="#leave_and_terminate-3">leave_and_terminate/3</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
+<tr><td valign="top"><a href="#leave_and_terminate-4">leave_and_terminate/4</a></td><td>Same as <code>leave_and_terminate/2</code> but also accepts a timeout.</td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_server-3">leave_and_delete_server/3</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_server-4">leave_and_delete_server/4</a></td><td>Same as <code>leave_and_delete_server/2</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#new_uid-1">new_uid/1</a></td><td>generates a random uid using the provided source material for the first
   6 characters.</td></tr>
-<tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>Returns a map of overview data of the Ra system on the current Erlang
+<tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>Returns a map of overview data of the default Ra system on the current Erlang
+  node.</td></tr>
+<tr><td valign="top"><a href="#overview-1">overview/1</a></td><td>Returns a map of overview data of the Ra system on the current Erlang
   node.</td></tr>
 <tr><td valign="top"><a href="#process_command-3">process_command/3</a></td><td>Submits a command to a ra server.</td></tr>
 <tr><td valign="top"><a href="#process_command-2">process_command/2</a></td><td>Same as <code>process_command/3</code> with the default timeout of 5000 ms.</td></tr>
@@ -121,7 +127,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start_in-1">start_in/1</a></h3>
 <div class="spec">
-<p><pre>start_in(DataDir :: <a href="file.html#type-filename">file:filename()</a>) -&gt;
+<p><pre>start_in(DataDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>) -&gt;
             {ok, [Started]} | {error, term()}</pre>
 <ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
 <p> </p>
@@ -135,16 +141,31 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><tt>ServerId</tt>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code> where error can be
+  <code>not_found</code>, <code>system_not_started</code> or <code>name_not_registered</code> when the
+  ra server has never before been started on the Erlang node.
+  DEPRECATED: use restart_server/2</p>
+</div><p>Restarts a previously successfully started ra server in the default system</p>
+
+<h3 class="function"><a name="restart_server-2">restart_server/2</a></h3>
+<div class="spec">
+<p><pre>restart_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+                  ok | {error, term()}</pre></p>
+<p><tt>System</tt>: the system identifier<br>
+<tt>ServerId</tt>: the ra_server_id() of the server<br>
+</p>
+<p>returns: <code>{ok | error, Error}</code> where error can be
   <code>not_found</code> or <code>name_not_registered</code> when the ra server has never before
   been started on the Erlang node.</p>
 </div><p>Restarts a previously successfully started ra server</p>
 
-<h3 class="function"><a name="restart_server-2">restart_server/2</a></h3>
+<h3 class="function"><a name="restart_server-3">restart_server/3</a></h3>
 <div class="spec">
-<p><pre>restart_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>restart_server(System :: atom(),
+               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
                AddConfig :: <a href="ra_server.html#type-mutable_config">ra_server:mutable_config()</a>) -&gt;
                   ok | {error, term()}</pre></p>
-<p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><tt>System</tt>: the system identifier<br>
+<tt>ServerId</tt>: the ra_server_id() of the server<br>
 <tt>AddConfig</tt>: additional config parameters to be merged into the
   original config.<br>
 </p>
@@ -155,15 +176,27 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="stop_server-1">stop_server/1</a></h3>
 <div class="spec">
-<p><pre>stop_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt; ok | {error, nodedown}</pre></p>
+<p><pre>stop_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+               ok | {error, nodedown | system_not_started}</pre></p>
 <p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+</p>
+<p>returns: <code>{ok | error, nodedown}</code>
+  DEPRECATED: use stop_server/2</p>
+</div><p>Stops a ra server in the default system</p>
+
+<h3 class="function"><a name="stop_server-2">stop_server/2</a></h3>
+<div class="spec">
+<p><pre>stop_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+               ok | {error, nodedown | system_not_started}</pre></p>
+<p><tt>System</tt>: the system name<br>
+<tt>ServerId</tt>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, nodedown}</code></p>
 </div><p>Stops a ra server</p>
 
-<h3 class="function"><a name="force_delete_server-1">force_delete_server/1</a></h3>
+<h3 class="function"><a name="force_delete_server-2">force_delete_server/2</a></h3>
 <div class="spec">
-<p><pre>force_delete_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>force_delete_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
                        ok | {error, term()} | {badrpc, term()}</pre></p>
 <p><tt>ServerId</tt>: the ra_server_id() of the server<br>
 </p>
@@ -171,9 +204,10 @@ an optional process-scoped term as correlation identifier.</td></tr>
 </div><p>Deletes a ra server
   The server is forcefully deleted.</p>
 
-<h3 class="function"><a name="start_or_restart_cluster-3">start_or_restart_cluster/3</a></h3>
+<h3 class="function"><a name="start_or_restart_cluster-4">start_or_restart_cluster/4</a></h3>
 <div class="spec">
-<p><pre>start_or_restart_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+<p><pre>start_or_restart_cluster(System :: atom(),
+                         ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
                          Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
                          ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                             {ok,
@@ -181,27 +215,27 @@ an optional process-scoped term as correlation identifier.</td></tr>
                              [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 <tt>ServerIds</tt>: The list of ra server ids.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
   started. A cluster can be successfully started if more than half of the
   servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
  
   <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
  
   If there was no existing cluster and a new cluster could not be formed
   any servers that did manage to start are
   forcefully deleted.</p>
-</div><p><p>Starts or restarts a ra cluster.</p>
- 
+</div><p>Starts or restarts a ra cluster.
  </p>
 
-<h3 class="function"><a name="start_or_restart_cluster-4">start_or_restart_cluster/4</a></h3>
+<h3 class="function"><a name="start_or_restart_cluster-5">start_or_restart_cluster/5</a></h3>
 <div class="spec">
-<p><pre>start_or_restart_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+<p><pre>start_or_restart_cluster(System :: atom(),
+                         ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
                          Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
                          RemServers :: [<a href="#type-ra_server_id">ra_server_id()</a>],
                          Timeout :: non_neg_integer()) -&gt;
@@ -210,85 +244,40 @@ an optional process-scoped term as correlation identifier.</td></tr>
                              [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 <tt>Timeout</tt>: The time to wait for any server to restart or start<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
   started. A cluster can be successfully started if more than half of the
   servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
  
   <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
  
   If there was no existing cluster and a new cluster could not be formed
   any servers that did manage to start are
   forcefully deleted.</p>
-</div><p>Same as <code>start_or_restart_cluster/3</code> but accepts a custom timeout.</p>
+</div><p>Same as <code>start_or_restart_cluster/4</code> but accepts a custom timeout.</p>
 <p><b>See also:</b> <a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a>.</p>
 
-<h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
+<h3 class="function"><a name="start_cluster-4">start_cluster/4</a></h3>
 <div class="spec">
-<p><pre>start_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+<p><pre>start_cluster(System :: atom(),
+              ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
               Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
               ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                  {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                  {error, cluster_not_formed}</pre></p>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 <tt>ServerIds</tt>: The list of ra server ids.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
   started. A cluster can be successfully started if more than half of the
   servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
- 
-  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
- 
-  If a cluster could not be formed any servers that did manage to start are
-  forcefully deleted.</p>
-</div><p>Starts a new distributed ra cluster.
- </p>
-
-<h3 class="function"><a name="start_cluster-4">start_cluster/4</a></h3>
-<div class="spec">
-<p><pre>start_cluster(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
-              Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-              ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>],
-              Timeout :: non_neg_integer()) -&gt;
-                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
-                 {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-<tt>ServerIds</tt>: The list of ra server ids.<br>
-<tt>Timeout</tt>: The time to wait for each server to start<br>
-</p>
-<p>returns: <p>
-  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
-  started. A cluster can be successfully started if more than half of the
-  servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
- 
-  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
- 
-  If a cluster could not be formed any servers that did manage to start are
-  forcefully deleted.</p>
-</div><p>Starts a new distributed ra cluster.
- </p>
-
-<h3 class="function"><a name="start_cluster-1">start_cluster/1</a></h3>
-<div class="spec">
-<p><pre>start_cluster(ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>]) -&gt;
-                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
-                 {error, cluster_not_formed}</pre></p>
-<p><tt>ServerConfigs</tt>: a list of initial server configurations<br>
-</p>
-<p>returns: <p>
-  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
-  started. A cluster can be successfully started if more than half of the
-  servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
  
   <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
  
@@ -299,7 +288,29 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start_cluster-2">start_cluster/2</a></h3>
 <div class="spec">
-<p><pre>start_cluster(ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>],
+<p><pre>start_cluster(System :: atom(),
+              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>]) -&gt;
+                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+<p><tt>ServerConfigs</tt>: a list of initial server configurations<br>
+</p>
+<p>returns: <p>
+  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
+  started. A cluster can be successfully started if more than half of the
+  servers provided could be started. Servers that could not be started need to
+  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
+ 
+  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
+ 
+  If a cluster could not be formed any servers that did manage to start are
+  forcefully deleted.</p>
+</div><p>Starts a new distributed ra cluster.
+ </p>
+
+<h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
+<div class="spec">
+<p><pre>start_cluster(System :: atom(),
+              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>],
               Timeout :: non_neg_integer()) -&gt;
                  {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
                  {error, cluster_not_formed}</pre></p>
@@ -308,22 +319,23 @@ an optional process-scoped term as correlation identifier.</td></tr>
 </p>
 </div><p>Same as <code>start_cluster/1</code> but accepts a custom timeout.</p>
 
-<h3 class="function"><a name="start_server-4">start_server/4</a></h3>
+<h3 class="function"><a name="start_server-5">start_server/5</a></h3>
 <div class="spec">
-<p><pre>start_server(ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
+<p><pre>start_server(System :: atom(),
+             ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
              ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
              Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
              ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                 ok | {error, term()}</pre></p>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>ServerId</tt>: the ra_server_id() of the server<br>
-<tt>Machine</tt>: The <a href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
   started. A cluster can be successfully started if more than half of the
   servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a href="#start_server-1"><code>start_server/1</code></a></p>
+  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
  
   <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
  
@@ -335,6 +347,17 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="start_server-1">start_server/1</a></h3>
 <div class="spec">
 <p><pre>start_server(Conf :: <a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>) -&gt;
+                ok | {error, term()}</pre></p>
+<p><tt>Conf</tt>: a ra_server_config() configuration map.<br>
+</p>
+<p>returns: <code>{ok | error, Error}</code>
+  DEPRECATED: use start_server/2</p>
+</div><p>Starts a ra server in the default system</p>
+
+<h3 class="function"><a name="start_server-2">start_server/2</a></h3>
+<div class="spec">
+<p><pre>start_server(System :: atom(),
+             Conf :: <a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>) -&gt;
                 ok | {error, term()}</pre></p>
 <p><tt>Conf</tt>: a ra_server_config() configuration map.<br>
 </p>
@@ -446,20 +469,13 @@ command to the log.</p>
 <p> </p>
 </div><p>Same as <code>trigger_election/2</code> but also accepts a timeout.</p>
 
-<h3 class="function"><a name="leave_and_terminate-1">leave_and_terminate/1</a></h3>
+<h3 class="function"><a name="leave_and_terminate-3">leave_and_terminate/3</a></h3>
 <div class="spec">
-<p><tt>leave_and_terminate(ServerId) -&gt; any()</tt></p>
-<p> </p>
-</div><p>A safe way for a an active server to remove itself from its cluster.
-  The server is first removed, then asked to terminate.
-  Use this when a node knows that it is being permanently decommissioned.</p>
-<p><b>See also:</b> <a href="#remove_member-2">remove_member/2</a>.</p>
-
-<h3 class="function"><a name="leave_and_terminate-2">leave_and_terminate/2</a></h3>
-<div class="spec">
-<p><pre>leave_and_terminate(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>leave_and_terminate(System :: atom(),
+                    ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                     ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                       ok | timeout | {error, noproc}</pre></p>
+                       ok | timeout |
+                       {error, noproc | system_not_started}</pre></p>
 <p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
 <tt>ServerId</tt>: the ra server to remove<br>
 </p>
@@ -469,12 +485,14 @@ command to the log.</p>
   or is permanently lost.</p>
 <p><b>See also:</b> <a href="#leave_and_terminate-3">leave_and_terminate/3</a>.</p>
 
-<h3 class="function"><a name="leave_and_terminate-3">leave_and_terminate/3</a></h3>
+<h3 class="function"><a name="leave_and_terminate-4">leave_and_terminate/4</a></h3>
 <div class="spec">
-<p><pre>leave_and_terminate(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>leave_and_terminate(System :: atom(),
+                    ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                     ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
                     Timeout :: timeout()) -&gt;
-                       ok | timeout | {error, noproc}</pre></p>
+                       ok | timeout |
+                       {error, noproc | system_not_started}</pre></p>
 <p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
 <tt>ServerId</tt>: the ra server to remove<br>
 <tt>Timeout</tt>: timeout to use<br>
@@ -482,23 +500,15 @@ command to the log.</p>
 </div><p>Same as <code>leave_and_terminate/2</code> but also accepts a timeout.</p>
 <p><b>See also:</b> <a href="#leave_and_terminate-2">leave_and_terminate/2</a>.</p>
 
-<h3 class="function"><a name="leave_and_delete_server-1">leave_and_delete_server/1</a></h3>
+<h3 class="function"><a name="leave_and_delete_server-3">leave_and_delete_server/3</a></h3>
 <div class="spec">
-<p><tt>leave_and_delete_server(ServerId) -&gt; any()</tt></p>
-<p> </p>
-</div><p>A safe way for a an active server to force remove itself from its cluster.
-  The server will be force removed after a membership transition command was
-  added to the log.
-  Use this when a node knows that it is being permanently decommissioned.</p>
-<p><b>See also:</b> <a href="#leave_and_delete_server-3">leave_and_delete_server/3</a>, <a href="#leave_and_terminate-2">leave_and_terminate/2</a>.</p>
-
-<h3 class="function"><a name="leave_and_delete_server-2">leave_and_delete_server/2</a></h3>
-<div class="spec">
-<p><pre>leave_and_delete_server(ServerRef ::
+<p><pre>leave_and_delete_server(System :: atom(),
+                        ServerRef ::
                             <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                         ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
                            ok | timeout | {error, noproc}</pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
+<p><tt>System</tt>: the system identifier<br>
+<tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
 <tt>ServerId</tt>: the ra server to force remove<br>
 </p>
 </div><p>A safe way to remove an active server from its cluster.
@@ -509,9 +519,10 @@ command to the log.</p>
   or is permanently lost.</p>
 <p><b>See also:</b> <a href="#leave_and_delete_server-3">leave_and_delete_server/3</a>.</p>
 
-<h3 class="function"><a name="leave_and_delete_server-3">leave_and_delete_server/3</a></h3>
+<h3 class="function"><a name="leave_and_delete_server-4">leave_and_delete_server/4</a></h3>
 <div class="spec">
-<p><pre>leave_and_delete_server(ServerRef ::
+<p><pre>leave_and_delete_server(System :: atom(),
+                        ServerRef ::
                             <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
                         ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
                         Timeout :: timeout()) -&gt;
@@ -532,7 +543,15 @@ command to the log.</p>
 
 <h3 class="function"><a name="overview-0">overview/0</a></h3>
 <div class="spec">
-<p><pre>overview() -&gt; map()</pre></p>
+<p><pre>overview() -&gt; map() | system_not_started</pre></p>
+<p> </p>
+</div><p>Returns a map of overview data of the default Ra system on the current Erlang
+  node.
+  DEPRECATED: user overview/1</p>
+
+<h3 class="function"><a name="overview-1">overview/1</a></h3>
+<div class="spec">
+<p><pre>overview(System :: atom()) -&gt; map() | system_not_started</pre></p>
 <p> </p>
 </div><p>Returns a map of overview data of the Ra system on the current Erlang
   node.</p>

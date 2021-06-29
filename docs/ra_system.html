@@ -1,0 +1,118 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_system</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_system</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-config">config()</a></h3>
+<p><pre>config() = 
+    #{name := atom(),
+      names := <a href="#type-names">names()</a>,
+      data_dir := <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
+      wal_data_dir =&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
+      segment_max_entries =&gt; non_neg_integer(),
+      wal_max_size_bytes =&gt; non_neg_integer(),
+      wal_compute_checksums =&gt; boolean(),
+      wal_max_batch_size =&gt; non_neg_integer(),
+      wal_max_entries =&gt; non_neg_integer(),
+      wal_write_strategy =&gt; default | o_sync,
+      wal_sync_method =&gt; datasync | sync,
+      wal_hibernate_after =&gt; non_neg_integer(),
+      snapshot_chunk_size =&gt; non_neg_integer(),
+      receive_snapshot_timeout =&gt; non_neg_integer()}</pre></p>
+
+
+<h3 class="typedecl"><a name="type-names">names()</a></h3>
+<p><pre>names() = 
+    #{wal := atom(),
+      wal_sup := atom(),
+      log_sup := atom(),
+      log_ets := atom(),
+      log_meta := atom(),
+      open_mem_tbls := atom(),
+      closed_mem_tbls := atom(),
+      segment_writer := atom(),
+      server_sup := atom(),
+      directory := atom(),
+      directory_rev := atom()}</pre></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_default-0">start_default/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#default_config-0">default_config/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#derive_names-1">derive_names/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#store-1">store/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#fetch-1">fetch/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#lookup_name-2">lookup_name/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="start-1">start/1</a></h3>
+<div class="spec">
+<p><pre>start(Config :: <a href="ra_system.html#type-config">ra_system:config()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="start_default-0">start_default/0</a></h3>
+<div class="spec">
+<p><pre>start_default() -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="default_config-0">default_config/0</a></h3>
+<div class="spec">
+<p><pre>default_config() -&gt; <a href="ra_system.html#type-config">ra_system:config()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="derive_names-1">derive_names/1</a></h3>
+<div class="spec">
+<p><tt>derive_names(SysName) -&gt; any()</tt></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="store-1">store/1</a></h3>
+<div class="spec">
+<p><pre>store(Config :: <a href="#type-config">config()</a>) -&gt; ok</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="fetch-1">fetch/1</a></h3>
+<div class="spec">
+<p><pre>fetch(Name :: atom()) -&gt; <a href="#type-config">config()</a> | undefined</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="fetch-2">fetch/2</a></h3>
+<div class="spec">
+<p><pre>fetch(Name :: atom(), Node :: atom()) -&gt;
+         <a href="#type-config">config()</a> | undefined | {badrpc, term()}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="lookup_name-2">lookup_name/2</a></h3>
+<div class="spec">
+<p><pre>lookup_name(System :: atom(), Key :: atom()) -&gt;
+               {ok, atom()} | {error, system_not_started}</pre></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

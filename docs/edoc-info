@@ -2,4 +2,4 @@
 {application,ra}.
 {modules,[ra,ra_counters,ra_dbg,ra_directory,ra_env,ra_leaderboard,
           ra_log_pre_init,ra_log_reader,ra_machine,ra_monitors,ra_server,
-          ra_snapshot]}.
+          ra_snapshot,ra_system]}.

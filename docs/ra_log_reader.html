@@ -15,6 +15,10 @@
 
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-access_pattern">access_pattern()</a></h3>
+<p><pre>access_pattern() = sequential | random</pre></p>
+<p>  holds static or rarely changing fields</p>
+
 <h3 class="typedecl"><a name="type-segment_ref">segment_ref()</a></h3>
 <p><pre>segment_ref() = 
     {From :: <a href="#type-ra_index">ra_index()</a>, To :: <a href="#type-ra_index">ra_index()</a>, File :: string()}</pre></p>
@@ -25,8 +29,8 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-4">init/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-5">init/5</a></td><td></td></tr>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-6">init/6</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-8">init/8</a></td><td></td></tr>
 <tr><td valign="top"><a href="#close-1">close/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#update_segments-2">update_segments/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_log_update-2">handle_log_update/2</a></td><td></td></tr>
@@ -36,27 +40,35 @@
 <tr><td valign="top"><a href="#read-3">read/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read-4">read/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch_term-2">fetch_term/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#delete_closed_mem_table_object-2">delete_closed_mem_table_object/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#closed_mem_tables-1">closed_mem_tables/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#open_mem_table_lookup-1">open_mem_table_lookup/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="init-4">init/4</a></h3>
+<h3 class="function"><a name="init-6">init/6</a></h3>
 <div class="spec">
 <p><pre>init(UId :: <a href="#type-ra_uid">ra_uid()</a>,
+     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
      FirstIdx :: <a href="#type-ra_index">ra_index()</a>,
      MaxOpen :: non_neg_integer(),
-     SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>]) -&gt;
+     SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
+     Names :: <a href="ra_system.html#type-names">ra_system:names()</a>) -&gt;
         <a href="#type-state">state()</a></pre></p>
 <p> </p>
 </div>
 
-<h3 class="function"><a name="init-5">init/5</a></h3>
+<h3 class="function"><a name="init-8">init/8</a></h3>
 <div class="spec">
 <p><pre>init(UId :: <a href="#type-ra_uid">ra_uid()</a>,
+     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
      FirstIdx :: <a href="#type-ra_index">ra_index()</a>,
      MaxOpen :: non_neg_integer(),
+     AccessPattern :: <a href="#type-access_pattern">access_pattern()</a>,
      SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
-     Counter :: undefined | <a href="counters.html#type-counters_ref">counters:counters_ref()</a>) -&gt;
+     X7 :: <a href="ra_system.html#type-names">ra_system:names()</a>,
+     Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref">counters:counters_ref()</a>) -&gt;
         <a href="#type-state">state()</a></pre></p>
 <p> </p>
 </div>
@@ -127,6 +139,25 @@
 <div class="spec">
 <p><pre>fetch_term(Idx :: <a href="#type-ra_index">ra_index()</a>, State0 :: <a href="#type-state">state()</a>) -&gt;
               {<a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="delete_closed_mem_table_object-2">delete_closed_mem_table_object/2</a></h3>
+<div class="spec">
+<p><pre>delete_closed_mem_table_object(X1 :: <a href="#type-state">state()</a>, Id :: term()) -&gt;
+                                  true</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="closed_mem_tables-1">closed_mem_tables/1</a></h3>
+<div class="spec">
+<p><pre>closed_mem_tables(X1 :: <a href="#type-state">state()</a>) -&gt; list()</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="open_mem_table_lookup-1">open_mem_table_lookup/1</a></h3>
+<div class="spec">
+<p><pre>open_mem_table_lookup(X1 :: <a href="#type-state">state()</a>) -&gt; list()</pre></p>
 <p> </p>
 </div>
 <hr>
