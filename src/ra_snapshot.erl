@@ -208,7 +208,6 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                         directory = Dir} = State) ->
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    ok = ra_lib:make_dir(SnapDir),
     %% call prepare then write_snapshot
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
@@ -216,6 +215,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
     %% write the snapshot in a separate process
     Self = self(),
     Pid = spawn(fun () ->
+                        ok = ra_lib:make_dir(SnapDir),
                         ok = Mod:write(SnapDir, Meta, Ref),
                         Self ! {ra_log_event,
                                 {snapshot_written, {Idx, Term}}},
