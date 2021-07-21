@@ -680,12 +680,7 @@ follower_catchup(Config) ->
         {ra_event, _, {applied, [{Corr, _}]}} ->
             exit(unexpected_consensus)
     after 1000 ->
-            case get_gen_statem_status(Follower) of
-                await_condition ->
-                    ok;
-                FollowerStatus0 ->
-                    exit({unexpected_follower_status, FollowerStatus0})
-            end
+              wait_for_gen_statem_status(Follower, await_condition, 30000)
     end,
     meck:unload(),
     % we wait for the condition to time out - then the follower will re-issue
@@ -693,13 +688,8 @@ follower_catchup(Config) ->
     % the next_index and a subsequent resend of missing entries
     receive
         {ra_event, _, {applied, [{Corr, _}]}} ->
-            case get_gen_statem_status(Follower) of
-                follower ->
-                    ok;
-                FollowerStatus1 ->
-                    exit({unexpected_follower_status, FollowerStatus1})
-            end,
-            ok
+              wait_for_gen_statem_status(Follower, follower, 30000),
+              ok
     after 6000 ->
               flush(),
               exit(consensus_not_achieved)
@@ -765,6 +755,18 @@ transfer_leadership(Config) ->
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),
     proplists:get_value(raft_state, lists:last(Items)).
+
+wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout)
+  when Timeout >= 0 ->
+    case get_gen_statem_status(Ref) of
+        ExpectedStatus ->
+            ok;
+        OtherStatus when Timeout >= 0 ->
+            timer:sleep(500),
+            wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout - 500);
+        OtherStatus ->
+            exit({unexpected_gen_statem_status, OtherStatus})
+    end.
 
 % implements a simple queue machine
 queue_apply({enqueue, Msg}, State =#{queue := Q0, pending_dequeues := []}) ->
