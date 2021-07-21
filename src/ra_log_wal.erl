@@ -703,9 +703,9 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                                      writes = NumWrites},
                       conf = #conf{open_mem_tbls_name = OpnTbl} = Cfg
                       } = State00) ->
-    % TS = os:system_time(microsecond),
+    % TS = erlang:system_time(microsecond),
     State0 = flush_pending(State00),
-    % SyncTS = os:system_time(microsecond),
+    % SyncTS = erlang:system_time(microsecond),
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
     State = State0#state{batch = undefined},
 

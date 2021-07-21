@@ -1198,7 +1198,7 @@ handle_effect(_RaftState, start_election_timeout, _, State, Actions) ->
     maybe_set_election_timeout(long, State, Actions);
 handle_effect(follower, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     %% record last time leader seen
-    State = State0#state{leader_last_seen = os:system_time(millisecond),
+    State = State0#state{leader_last_seen = erlang:system_time(millisecond),
                          election_timeout_set = false},
     %% always cancel state timeout when a valid leader message has been
     %% received just in case a timeout is currently active
@@ -1459,10 +1459,10 @@ read_chunks_and_send_rpc(RPC0,
     end.
 
 make_command(Type, {call, From}, Data, Mode) ->
-    Ts = os:system_time(millisecond),
+    Ts = erlang:system_time(millisecond),
     {Type, #{from => From, ts => Ts}, Data, Mode};
 make_command(Type, _, Data, Mode) ->
-    Ts = os:system_time(millisecond),
+    Ts = erlang:system_time(millisecond),
     {Type, #{ts => Ts}, Data, Mode}.
 
 maybe_set_election_timeout(_TimeoutLen,

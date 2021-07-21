@@ -752,7 +752,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     case trunc(maps:size(Nodes) / 2) + 1 of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
-            Noop = {noop, #{ts => os:system_time(millisecond)},
+            Noop = {noop, #{ts => erlang:system_time(millisecond)},
                     ra_machine:version(Mac)},
             State = State1#{leader_id => Id},
             {leader, maps:without([votes], State),
@@ -1273,7 +1273,7 @@ process_new_leader_queries(#{pending_consistent_queries := Pending,
 -spec tick(ra_server_state()) -> effects().
 tick(#{cfg := #cfg{effective_machine_module = MacMod},
        machine_state := MacState}) ->
-    Now = os:system_time(millisecond),
+    Now = erlang:system_time(millisecond),
     ra_machine:tick(MacMod, Now, MacState).
 
 -spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
@@ -1716,7 +1716,7 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
 handle_down(leader, machine, Pid, Info, State)
   when is_pid(Pid) ->
     %% commit command to be processed by state machine
-    handle_leader({command, {'$usr', #{ts => os:system_time(millisecond)},
+    handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
                             {down, Pid, Info}, noreply}},
                   State);
 handle_down(leader, snapshot_sender, Pid, Info,
@@ -1759,7 +1759,7 @@ handle_node_status(leader, machine, Node, Status, _Infos, State)
     %% commit command to be processed by state machine
     %% TODO: provide an option where the machine or aux can be provided with
     %% the node down reason
-    Meta = #{ts => os:system_time(millisecond)},
+    Meta = #{ts => erlang:system_time(millisecond)},
     handle_leader({command, {'$usr', Meta, {Status, Node}, noreply}}, State);
 handle_node_status(RaftState, aux, Node, Status, _Infos, State)
   when is_atom(Node) ->
@@ -2097,7 +2097,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                                 undefined ->
                                     0;
                                 _ when is_integer(LastTs) ->
-                                    os:system_time(millisecond) - LastTs
+                                    erlang:system_time(millisecond) - LastTs
                             end,
             %% due to machine versioning all entries may not have been applied
             apply_to(ApplyTo, ApplyFun, Notifys, Effects,

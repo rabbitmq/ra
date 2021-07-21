@@ -64,7 +64,7 @@ run(#{name := Name,
     {ok,_, Leader} = ra:members(hd(ServerIds)),
     TotalOps = Secs * Target,
     Each = TotalOps div Degree,
-    Start = os:system_time(millisecond),
+    Start = erlang:system_time(millisecond),
     DataSize = maps:get(data_size, Conf, ?DATA_SIZE),
     Pids =  [spawn_client(self(), Leader, Each, DataSize) || _ <- lists:seq(1, Degree)],
     %% wait for each pid
@@ -78,7 +78,7 @@ run(#{name := Name,
                    exit({timeout, P})
          end
      end || P <- Pids],
-    End = os:system_time(millisecond),
+    End = erlang:system_time(millisecond),
     Taken = End - Start,
     io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec",
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
