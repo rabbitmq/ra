@@ -841,8 +841,8 @@ handle_event(_EventType, EventContent, StateName, State) ->
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
                  server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
-    ?INFO("~s: terminating with ~w in state ~w",
-          [log_id(State), Reason, StateName]),
+    ?DEBUG("~s: terminating with ~w in state ~w",
+           [log_id(State), Reason, StateName]),
     #{names := #{server_sup := SrvSup,
                  log_meta := MetaName} = Names} =
         ra_server:system_config(ServerState),
