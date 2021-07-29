@@ -65,9 +65,13 @@ jobs:
     - name: TEST
       run: |
         bazelisk test //...
+    - name: RESOVLE TEST LOGS PATH
+      run: |
+        echo "::set-output name=LOGS_PATH::$(readlink -f bazel-testlogs)"
+      id: resolve-test-logs-path
     - name: CAPTURE TEST LOGS ON FAILURE
       uses: actions/upload-artifact@v2-preview
       if: failure()
       with:
         name: bazel-testlogs-${{matrix.otp}}
-        path: bazel-testlogs/*
+        path: ${{ steps.resolve-test-logs-path.outputs.LOGS_PATH }}/*
