@@ -935,19 +935,40 @@ consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, consistent, Timeout).
 
 %% @doc Returns a list of cluster members
+%%
+%% Except if `{local, ServerId}` is passed, the query is sent to the specified
+%% server which may redirect it to the leader if it is a follower. It may
+%% timeout if there is currently no leader (i.e. an election is in progress).
+%%
+%% With `{local, ServerId}`, the query is always handled by the specified
+%% server. It means the returned list might be out-of-date compared to what the
+%% leader would have returned.
+%%
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
--spec members(ra_server_id() | [ra_server_id()]) ->
+-spec members(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId) ->
     members(ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Returns a list of cluster members
+%%
+%% Except if `{local, ServerId}` is passed, the query is sent to the specified
+%% server which may redirect it to the leader if it is a follower. It may
+%% timeout if there is currently no leader (i.e. an election is in progress).
+%%
+%% With `{local, ServerId}`, the query is always handled by the specified
+%% server. It means the returned list might be out-of-date compared to what the
+%% leader would have returned.
+%%
 %% @param ServerId the Ra server(s) to send the query to
 %% @param Timeout the timeout to use
 %% @end
--spec members(ra_server_id() | [ra_server_id()], timeout()) ->
+-spec members(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
+              timeout()) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+members({local, ServerId}, Timeout) ->
+    ra_server_proc:local_state_query(ServerId, members, Timeout);
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 

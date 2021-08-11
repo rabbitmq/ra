@@ -46,6 +46,7 @@
          cast_command/3,
          query/4,
          state_query/3,
+         local_state_query/3,
          trigger_election/2,
          ping/2,
          log_fold/4,
@@ -81,6 +82,10 @@
                                     {error, term()} |
                                     {timeout, ra_server_id()}.
 
+-type ra_local_call_ret(Result) :: {ok, Result, LocalServer::ra_server_id()} |
+                                   {error, term()} |
+                                   {timeout, ra_server_id()}.
+
 -type ra_cmd_ret() :: ra_leader_call_ret(term()).
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
@@ -108,6 +113,7 @@
 -type server_loc() :: ra_server_id() | [ra_server_id()].
 
 -export_type([ra_leader_call_ret/1,
+              ra_local_call_ret/1,
               ra_cmd_ret/0,
               safe_call_ret/1,
               ra_event_reject_detail/0,
@@ -193,6 +199,15 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
 state_query(ServerLoc, Spec, Timeout) ->
     leader_call(ServerLoc, {state_query, Spec}, Timeout).
 
+-spec local_state_query(server_loc(),
+                        all |
+                        members |
+                        initial_members |
+                        machine, timeout()) ->
+    ra_local_call_ret(term()).
+local_state_query(ServerLoc, Spec, Timeout) ->
+    local_call(ServerLoc, {state_query, Spec}, Timeout).
+
 -spec trigger_election(ra_server_id(), timeout()) -> ok.
 trigger_election(ServerId, Timeout) ->
     gen_statem:call(ServerId, trigger_election, Timeout).
@@ -208,6 +223,9 @@ ping(ServerId, Timeout) ->
 
 leader_call(ServerLoc, Msg, Timeout) ->
     statem_call(ServerLoc, {leader_call, Msg}, Timeout).
+
+local_call(ServerLoc, Msg, Timeout) ->
+    statem_call(ServerLoc, {local_call, Msg}, Timeout).
 
 statem_call(ServerIds, Msg, Timeout)
   when is_list(ServerIds) ->
@@ -332,6 +350,8 @@ leader(enter, OldState, State0) ->
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
+    leader(EventType, Msg, State);
+leader(EventType, {local_call, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
@@ -479,6 +499,8 @@ candidate(enter, OldState, State0) ->
 candidate({call, From}, {leader_call, Msg},
           #state{pending_commands = Pending} = State) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+candidate(EventType, {local_call, Msg}, State) ->
+    candidate(EventType, Msg, State);
 candidate(cast, {command, _Priority,
                  {_CmdType, _Data, {notify, Corr, Pid}}},
           State) ->
@@ -487,6 +509,10 @@ candidate(cast, {command, _Priority,
 candidate({call, From}, {local_query, QueryFun},
           #state{conf = Conf, server_state = ServerState} = State) ->
     Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
+    {keep_state, State, [{reply, From, Reply}]};
+candidate({call, From}, {state_query, Spec},
+          #state{server_state = ServerState} = State) ->
+    Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
@@ -527,6 +553,8 @@ pre_vote(enter, OldState, #state{leader_monitor = MRef} = State0) ->
 pre_vote({call, From}, {leader_call, Msg},
           State = #state{pending_commands = Pending}) ->
     {keep_state, State#state{pending_commands = [{From, Msg} | Pending]}};
+pre_vote(EventType, {local_call, Msg}, State) ->
+    pre_vote(EventType, Msg, State);
 pre_vote(cast, {command, _Priority,
                 {_CmdType, _Data, {notify, Corr, Pid}}},
          State) ->
@@ -535,6 +563,10 @@ pre_vote(cast, {command, _Priority,
 pre_vote({call, From}, {local_query, QueryFun},
           #state{conf = Conf, server_state = ServerState} = State) ->
     Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
+    {keep_state, State, [{reply, From, Reply}]};
+pre_vote({call, From}, {state_query, Spec},
+         #state{server_state = ServerState} = State) ->
+    Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
@@ -587,6 +619,8 @@ follower(enter, OldState, #state{server_state = ServerState} = State0) ->
     {keep_state, State, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
+follower(EventType, {local_call, Msg}, State) ->
+    follower(EventType, Msg, State);
 follower(_, {command, Priority, {_CmdType, Data, noreply}},
          State) ->
     % forward to leader
@@ -613,6 +647,10 @@ follower({call, From}, {local_query, QueryFun},
                  L -> L
              end,
     Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
+    {keep_state, State, [{reply, From, Reply}]};
+follower({call, From}, {state_query, Spec},
+         #state{server_state = ServerState} = State) ->
+    Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
@@ -773,9 +811,15 @@ terminating_follower(EvtType, Msg, State0) ->
 
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
+await_condition(EventType, {local_call, Msg}, State) ->
+    await_condition(EventType, Msg, State);
 await_condition({call, From}, {local_query, QueryFun},
                 #state{conf = Conf, server_state = ServerState} = State) ->
     Reply = perform_local_query(QueryFun, follower, ServerState, Conf),
+    {keep_state, State, [{reply, From, Reply}]};
+await_condition({call, From}, {state_query, Spec},
+                #state{server_state = ServerState} = State) ->
+    Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 await_condition(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
