@@ -104,7 +104,7 @@
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
 
--type send_msg_opt() :: [ra_event | cast | local] | ra_event | cast | local.
+-type send_msg_opt() :: ra_event | cast | local.
 %% ra_event: the message will be wrapped up and sent as a ra event
 %% e.g: `{ra_event, ra_server_id(), Msg}'
 %%
