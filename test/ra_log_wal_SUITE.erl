@@ -31,6 +31,7 @@ all_tests() ->
      truncate_write,
      out_of_seq_writes,
      roll_over,
+     roll_over_with_data_larger_than_max_size,
      roll_over_entry_limit,
      recover,
      recover_overwrite_in_same_batch,
@@ -427,6 +428,46 @@ roll_over(Config) ->
     % TODO: validate we can read first and last written
     ?assert(undefined =/= mem_tbl_read(UId, 1)),
     ?assert(undefined =/= mem_tbl_read(UId, 5)),
+    meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
+roll_over_with_data_larger_than_max_size(Config) ->
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    NumWrites = 2,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await,
+                fun(_) -> ok end),
+    % configure max_wal_size_bytes
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites * 10,
+                                            segment_writer => self()}),
+    % write entries each larger than the WAL max size to trigger roll over
+    Data = crypto:strong_rand_bytes(64 * 1024),
+    [begin
+         ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+     end || Idx <- lists:seq(1, NumWrites)],
+    % wait for writes
+    receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
+    after 5000 -> throw(written_timeout)
+    end,
+
+    % validate we receive the new mem tables notifications as if we were
+    % the writer process
+    receive
+        {'$gen_cast', {mem_tables, [{UId, _Fst, _Lst, Tid}], _}} ->
+            [{UId, _, _, CurrentTid}] = ets:lookup(ra_log_open_mem_tables, UId),
+            % the current tid is not the same as the rolled over one
+            ?assert(Tid =/= CurrentTid),
+            % ensure closed mem tables contain the previous mem_table
+            [{UId, _, _, _, Tid}] = ets:lookup(ra_log_closed_mem_tables, UId)
+    after 2000 ->
+              throw(new_mem_tables_timeout)
+    end,
+
+    % TODO: validate we can read first and last written
+    ?assertNotEqual(undefined, mem_tbl_read(UId, 1)),
+    ?assertNotEqual(undefined, mem_tbl_read(UId, 2)),
     meck:unload(),
     proc_lib:stop(Pid),
     ok.
