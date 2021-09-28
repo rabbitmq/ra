@@ -384,7 +384,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
     DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
-    case should_roll_wal(DataSize, State00) of
+    case should_roll_wal(State00) of
         true ->
             State = roll_over(State00),
             % TODO: there is some redundant computation performed by
@@ -884,13 +884,21 @@ merge_conf_defaults(Conf) ->
 to_binary(Term) ->
     term_to_binary(Term).
 
-should_roll_wal(DataSize, #state{conf = #conf{max_entries = MaxEntries},
-                                 file_size = FileSize,
-                                 wal = #wal{max_size = MaxWalSize,
-                                            entry_count = Count}}) ->
+should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
+                       file_size = FileSize,
+                       wal = #wal{max_size = MaxWalSize,
+                                  entry_count = Count}}) ->
     TooManyEntries = case MaxEntries of
                          undefined -> false;
                          _ ->
                              Count + 1 > MaxEntries
                      end,
-    FileSize + DataSize > MaxWalSize orelse TooManyEntries.
+    %% Initially, MaxWalSize was a hard limit for the file size: if FileSize +
+    %% DataSize went over that limit, we would use a new file. This was an
+    %% issue when DataSize was larger than the limit alone.
+    %%
+    %% The chosen solution is to only consider the current file size in the
+    %% calculation. It means that after DataSize bytes are written, the file
+    %% will be larger than the configured maximum size. But at least it will
+    %% accept Ra commands larger than the max WAL size.
+    FileSize > MaxWalSize orelse TooManyEntries.
