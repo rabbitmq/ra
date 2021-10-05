@@ -88,22 +88,22 @@ After Ra nodes form a cluster, state machine commands can be performed.
 Here's what a small example looks like:
 
 ``` erlang
-%% The Ra application has to be started before it can be used.
-ra:start(),
-
 %% All servers in a Ra cluster are named processes on Erlang nodes.
 %% The Erlang nodes must have distribution enabled and be able to
 %% communicate with each other.
 %% See https://learnyousomeerlang.com/distribunomicon if you are new to Erlang/OTP.
 
 %% These Erlang nodes will host Ra nodes. They are the "seed" and assumed to
-%% be running or come online shortly after Ra cluster formation is started with ra:start_cluster/3.
+%% be running or come online shortly after Ra cluster formation is started with ra:start_cluster/4.
 ErlangNodes = ['ra1@hostname.local', 'ra2@hostname.local', 'ra3@hostname.local'],
 
 %% This will check for Erlang distribution connectivity. If Erlang nodes
 %% cannot communicate with each other, Ra nodes would not be able to cluster or communicate
 %% either.
 [io:format("Attempting to communicate with node ~s, response: ~s~n", [N, net_adm:ping(N)]) || N <- ErlangNodes],
+
+%% The Ra application has to be started on all nodes before it can be used.
+[rpc:call(N, ra, start, []) || N <- ErlangNodes],
 
 %% Create some Ra server IDs to pass to the configuration. These IDs will be
 %% used to address Ra nodes in Ra API functions.
@@ -120,7 +120,7 @@ Machine = {simple, fun erlang:'+'/2, 0},
 %%
 %% Repeated startup attempts will fail even if the cluster is formed, has elected a leader
 %% and is fully functional.
-{ok, ServersStarted, _ServersNotStarted} = ra:start_cluster(ClusterName, Machine, ServerIds),
+{ok, ServersStarted, _ServersNotStarted} = ra:start_cluster(default, ClusterName, Machine, ServerIds),
 
 %% Add a number to the state machine.
 %% Simple state machines always return the full state after each operation.
@@ -183,7 +183,7 @@ ClusterName = dyn_members,
 Machine = {simple, fun erlang:'+'/2, 0},
 
 % Start a cluster
-{ok, _, _} =  ra:start_cluster(ClusterName, Machine,  [{dyn_members, 'ra2@hostname.local'}]).
+{ok, _, _} =  ra:start_cluster(default, ClusterName, Machine, [{dyn_members, 'ra2@hostname.local'}]).
 ```
 
 After the cluster is formed, members can be added.
@@ -195,7 +195,7 @@ Add `ra1@hostname.local` to the cluster:
 {ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra1@hostname.local'}),
 
 % Start the server
-ok = ra:start_server(ClusterName,  {dyn_members, 'ra1@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+ok = ra:start_server(default, ClusterName, {dyn_members, 'ra1@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
 ```
 
 Add `ra3@hostname.local` to the cluster:
@@ -205,7 +205,7 @@ Add `ra3@hostname.local` to the cluster:
 {ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra3@hostname.local'}),
 
 % Start the server
-ok = ra:start_server(ClusterName,  {dyn_members, 'ra3@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+ok = ra:start_server(default, ClusterName, {dyn_members, 'ra3@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
 ```
 
 Check the members from any node:
