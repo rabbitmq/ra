@@ -4,6 +4,7 @@ jobs:
   build:
     runs-on: ubuntu-18.04
     strategy:
+      fail-fast: false
       matrix:
         otp:
         - "23.2"
@@ -35,3 +36,42 @@ jobs:
       with:
         name: ct-logs-${{matrix.otp}}
         path: logs/*
+  build-bazel:
+    runs-on: ubuntu-18.04
+    strategy:
+      fail-fast: false
+      matrix:
+        otp:
+        - "23.2"
+        - "24.0"
+    steps:
+    - name: CHECKOUT
+      uses: actions/checkout@v2
+    - name: CONFIGURE ERLANG
+      uses: gleam-lang/setup-erlang@v1.1.2
+      with:
+        otp-version: ${{ matrix.otp }}
+    - name: CONFIGURE BAZEL
+      run: |
+        ERLANG_HOME="$(dirname $(dirname $(which erl)))"
+        cat << EOF >> .bazelrc
+          build --@bazel-erlang//:erlang_version=${{ matrix.erlang_version }}
+          build --@bazel-erlang//:erlang_home=${ERLANG_HOME}
+
+          build --incompatible_strict_action_env
+
+          build --test_strategy=exclusive
+        EOF
+    - name: TEST
+      run: |
+        bazelisk test //...
+    - name: RESOVLE TEST LOGS PATH
+      run: |
+        echo "::set-output name=LOGS_PATH::$(readlink -f bazel-testlogs)"
+      id: resolve-test-logs-path
+    - name: CAPTURE TEST LOGS ON FAILURE
+      uses: actions/upload-artifact@v2-preview
+      if: failure()
+      with:
+        name: bazel-testlogs-${{matrix.otp}}
+        path: ${{ steps.resolve-test-logs-path.outputs.LOGS_PATH }}/*

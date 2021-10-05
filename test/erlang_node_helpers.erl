@@ -27,7 +27,7 @@ start_erlang_node(Node, Config) ->
                                              [{return, list}]),
                         "-pa \"" ++ DistModPath ++ "\" -proto_dist " ++ DistArg
                 end,
-    ct_slave:start(Node, [{erl_flags, StartArgs}]),
+    {ok, _} = ct_slave:start(Node, [{erl_flags, StartArgs}]),
     wait_for_distribution(Node, 50),
     add_lib_dir(Node),
     Node.
