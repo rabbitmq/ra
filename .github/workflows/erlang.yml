@@ -13,7 +13,7 @@ jobs:
     - name: CHECKOUT
       uses: actions/checkout@v2
     - name: CONFIGURE ERLANG
-      uses: gleam-lang/setup-erlang@v1.1.2
+      uses: gleam-lang/setup-erlang@v1.1.3
       with:
         otp-version: ${{ matrix.otp }}
     - name: XREF
@@ -48,7 +48,7 @@ jobs:
     - name: CHECKOUT
       uses: actions/checkout@v2
     - name: CONFIGURE ERLANG
-      uses: gleam-lang/setup-erlang@v1.1.2
+      uses: gleam-lang/setup-erlang@v1.1.3
       with:
         otp-version: ${{ matrix.otp }}
     - name: CONFIGURE BAZEL
