@@ -7,8 +7,8 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "23.2"
-        - "24.0"
+        - "23.3"
+        - "24.1"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
@@ -42,8 +42,8 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "23.2"
-        - "24.0"
+        - "23.3"
+        - "24.1"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
