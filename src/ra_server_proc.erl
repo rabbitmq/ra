@@ -347,6 +347,7 @@ leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     ok = record_leader_change(id(State0), State0),
     {keep_state, State#state{leader_last_seen = undefined,
+                             delayed_commands = queue:new(),
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
@@ -616,7 +617,7 @@ follower(enter, OldState, #state{server_state = ServerState} = State0) ->
                                maybe_set_election_timeout(TimeoutLen, State1,
                                                           Actions0)
                        end,
-    {keep_state, State, Actions};
+    {keep_state, State#state{delayed_commands = queue:new()}, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(EventType, {local_call, Msg}, State) ->
