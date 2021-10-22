@@ -750,6 +750,7 @@ transfer_leadership(Config) ->
     {ok, _, NewLeader} = ra:process_command(NextInLine, 5),
     ?assertEqual(NewLeader, NextInLine),
     ?assertEqual(already_leader, ra:transfer_leadership(NewLeader, NewLeader)),
+    ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
     terminate_cluster(Members).
 
 get_gen_statem_status(Ref) ->
