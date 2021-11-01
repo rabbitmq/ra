@@ -16,8 +16,8 @@ load("@bazel-erlang//:hex_pm.bzl", "hex_pm_bazel_erlang_lib")
 
 hex_pm_bazel_erlang_lib(
     name = "aten",
-    sha256 = "30721679da07ccb55bb0f407cb0e40c7dc6d1e258f3ebfb789c55982878e4427",
-    version = "0.5.6",
+    sha256 = "8b623c8be27b59a911d16ab0af41777b504c147bc0d60a29015fab58321c04b0",
+    version = "0.5.7",
 )
 
 hex_pm_bazel_erlang_lib(
