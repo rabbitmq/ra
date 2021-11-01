@@ -718,6 +718,13 @@ handle_leader({transfer_leadership, Leader},
     ?DEBUG("~s: transfer leadership requested but already leader",
            [LogId]),
     {leader, State, [{reply, already_leader}]};
+handle_leader({transfer_leadership, Member},
+              #{cfg := #cfg{log_id = LogId},
+                cluster := Members} = State)
+  when not is_map_key(Member, Members) ->
+    ?DEBUG("~s: transfer leadership requested but unknown member ~w",
+           [LogId, Member]),
+    {leader, State, [{reply, {error, unknown_member}}]};
 handle_leader({transfer_leadership, ServerId},
               #{cfg := #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~s: transfer leadership to ~w requested",
