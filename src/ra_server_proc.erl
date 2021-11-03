@@ -528,7 +528,7 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
             {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {State, Actions} = maybe_set_election_timeout(long, State2, Actions0),
+            {State, Actions} = maybe_set_election_timeout(medium, State2, Actions0),
             {keep_state, State, Actions};
         {follower, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -1324,6 +1324,11 @@ election_timeout_action(really_short, #conf{broadcast_time = Timeout}) ->
     {state_timeout, T, election_timeout};
 election_timeout_action(short, #conf{broadcast_time = Timeout}) ->
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT) + Timeout,
+    {state_timeout, T, election_timeout};
+election_timeout_action(medium, #conf{broadcast_time = Timeout,
+                                      aten_poll_interval = Poll}) ->
+    %% this is roughly in between broadcast time and aten poll interval
+    T = rand:uniform(Poll) + Timeout,
     {state_timeout, T, election_timeout};
 election_timeout_action(long, #conf{broadcast_time = Timeout,
                                     aten_poll_interval = Poll}) ->

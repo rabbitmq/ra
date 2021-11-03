@@ -350,8 +350,9 @@ leaderboard(Config) ->
          ?assertEqual(Leader, L)
      end || {_, N} <- NodeIds],
 
-    NewLeader = hd(lists:delete(Leader, Started)),
-    ok = ra:transfer_leadership(Leader, NewLeader),
+    NextLeader = hd(lists:delete(Leader, Started)),
+    ok = ra:transfer_leadership(Leader, NextLeader),
+    {ok, _, NewLeader} = ra:members(hd(Started)),
 
     timer:sleep(500),
     [begin
