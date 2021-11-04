@@ -545,7 +545,6 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             next_state(leader, State, Actions ++ NextEvents)
     end.
 
-
 pre_vote(enter, OldState, #state{leader_monitor = MRef} = State0) ->
     _ = stop_monitor(MRef),
     {State1, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
@@ -1195,15 +1194,18 @@ handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
               end),
     {State0, Actions};
 handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
-              State, Actions) ->
+              #state{conf = #conf{aten_poll_interval = Poll}} = State, Actions) ->
     % transient election processes
-    T = {dirty_timeout, 500},
+    %% set the timeout to the aten poll interval which is the approximate maximum
+    %% election timeout value
+    Timeout = {dirty_timeout, Poll},
     Me = self(),
     [begin
-         _ = spawn(fun () -> Reply = gen_statem:call(N, M, T),
-                             ok = gen_statem:cast(Me, Reply)
+         _ = spawn(fun () ->
+                           Reply = gen_statem:call(ServerId, Request, Timeout),
+                           ok = gen_statem:cast(Me, Reply)
                    end)
-     end || {N, M} <- VoteRequests],
+     end || {ServerId, Request} <- VoteRequests],
     {State, Actions};
 handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
               #state{server_state = ServerState0} = State0, Actions0) ->
