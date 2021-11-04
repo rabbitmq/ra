@@ -771,21 +771,45 @@ success or otherwise.</p>
 
 <h3 class="function"><a name="members-1">members/1</a></h3>
 <div class="spec">
-<p><pre>members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
+<p><pre>members(ServerId ::
+            <a href="#type-ra_server_id">ra_server_id()</a> |
+            [<a href="#type-ra_server_id">ra_server_id()</a>] |
+            {local, <a href="#type-ra_server_id">ra_server_id()</a>}) -&gt;
            <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>])</pre></p>
 <p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
 </p>
-</div><p>Returns a list of cluster members</p>
+</div><p><p>Returns a list of cluster members</p>
+ 
+  <p>Except if <code>{local, ServerId}</code> is passed, the query is sent to the specified  
+server which may redirect it to the leader if it is a follower. It may  
+timeout if there is currently no leader (i.e. an election is in progress).</p>
+ 
+  With <code>{local, ServerId}</code>, the query is always handled by the specified
+  server. It means the returned list might be out-of-date compared to what the
+  leader would have returned.
+ </p>
 
 <h3 class="function"><a name="members-2">members/2</a></h3>
 <div class="spec">
-<p><pre>members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>members(ServerId ::
+            <a href="#type-ra_server_id">ra_server_id()</a> |
+            [<a href="#type-ra_server_id">ra_server_id()</a>] |
+            {local, <a href="#type-ra_server_id">ra_server_id()</a>},
         Timeout :: timeout()) -&gt;
            <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>])</pre></p>
 <p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
 <tt>Timeout</tt>: the timeout to use<br>
 </p>
-</div><p>Returns a list of cluster members</p>
+</div><p><p>Returns a list of cluster members</p>
+ 
+  <p>Except if <code>{local, ServerId}</code> is passed, the query is sent to the specified  
+server which may redirect it to the leader if it is a follower. It may  
+timeout if there is currently no leader (i.e. an election is in progress).</p>
+ 
+  With <code>{local, ServerId}</code>, the query is always handled by the specified
+  server. It means the returned list might be out-of-date compared to what the
+  leader would have returned.
+ </p>
 
 <h3 class="function"><a name="initial_members-1">initial_members/1</a></h3>
 <div class="spec">

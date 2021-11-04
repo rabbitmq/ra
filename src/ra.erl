@@ -936,11 +936,11 @@ consistent_query(ServerId, QueryFun, Timeout) ->
 
 %% @doc Returns a list of cluster members
 %%
-%% Except if `{local, ServerId}` is passed, the query is sent to the specified
+%% Except if `{local, ServerId}' is passed, the query is sent to the specified
 %% server which may redirect it to the leader if it is a follower. It may
 %% timeout if there is currently no leader (i.e. an election is in progress).
 %%
-%% With `{local, ServerId}`, the query is always handled by the specified
+%% With `{local, ServerId}', the query is always handled by the specified
 %% server. It means the returned list might be out-of-date compared to what the
 %% leader would have returned.
 %%
@@ -953,11 +953,11 @@ members(ServerId) ->
 
 %% @doc Returns a list of cluster members
 %%
-%% Except if `{local, ServerId}` is passed, the query is sent to the specified
+%% Except if `{local, ServerId}' is passed, the query is sent to the specified
 %% server which may redirect it to the leader if it is a follower. It may
 %% timeout if there is currently no leader (i.e. an election is in progress).
 %%
-%% With `{local, ServerId}`, the query is always handled by the specified
+%% With `{local, ServerId}', the query is always handled by the specified
 %% server. It means the returned list might be out-of-date compared to what the
 %% leader would have returned.
 %%
