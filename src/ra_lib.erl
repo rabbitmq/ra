@@ -39,8 +39,13 @@
          retry/2,
          retry/3,
          write_file/2,
-         lists_chunk/2
+         lists_chunk/2,
+         is_dir/1,
+         is_file/1,
+         ensure_dir/1
         ]).
+
+-include_lib("kernel/include/file.hrl").
 
 ceiling(X) when X < 0 ->
     trunc(X);
@@ -145,9 +150,9 @@ zpad_extract_num(Fn) ->
     list_to_integer(NumStr).
 
 recursive_delete(Dir) ->
-    case filelib:is_dir(Dir) of
+    case is_dir(Dir) of
         true ->
-            case file:list_dir(Dir) of
+            case prim_file:list_dir(Dir) of
                 {ok, Files} ->
                     Fun =
                     fun(F) -> recursive_delete(filename:join([Dir, F])) end,
@@ -175,9 +180,9 @@ delete(File, Type) ->
     end.
 
 do_delete(File, regular) ->
-    file:delete(File);
+    prim_file:delete(File);
 do_delete(Dir, directory) ->
-    file:del_dir(Dir).
+    prim_file:del_dir(Dir).
 
 -spec throw_error(string(), list()) -> no_return().
 throw_error(Format, Args) ->
@@ -213,10 +218,14 @@ make_uid(Prefix0) ->
 -spec make_dir(file:name_all()) ->
     ok | {error, file:posix() | badarg}.
 make_dir(Dir) ->
-    handle_ensure_dir(filelib:ensure_dir(Dir), Dir).
+    case is_dir(Dir) of
+        true -> ok;
+        false ->
+            handle_ensure_dir(ensure_dir(Dir), Dir)
+    end.
 
 handle_ensure_dir(ok, Dir) ->
-    handle_make_dir(file:make_dir(Dir));
+    handle_make_dir(prim_file:make_dir(Dir));
 handle_ensure_dir(Error, _Dir) ->
     Error.
 
@@ -336,6 +345,53 @@ lists_take(_N, [], Acc) ->
     {lists:reverse(Acc), []};
 lists_take(N, [H | T], Acc) ->
     lists_take(N-1, T, [H | Acc]).
+
+
+is_dir(Dir) ->
+    case prim_file:read_file_info(Dir) of
+        {ok, #file_info{type=directory}} ->
+            true;
+        _ ->
+            false
+    end.
+
+is_file(File) ->
+    case prim_file:read_file_info(File) of
+        {ok, #file_info{type = directory}} ->
+            true;
+        {ok, #file_info{type = regular}} ->
+            true;
+        _ ->
+            false
+    end.
+
+
+
+%% raw copy of ensure_dir
+ensure_dir("/") ->
+    ok;
+ensure_dir(F) ->
+    Dir = filename:dirname(F),
+    case is_dir(Dir) of
+        true ->
+            ok;
+        false when Dir =:= F ->
+            %% Protect against infinite loop
+            {error, einval};
+        false ->
+            _ = ensure_dir(Dir),
+            case prim_file:make_dir(Dir) of
+                {error, eexist} = EExist ->
+                    case is_dir(Dir) of
+                        true ->
+                            ok;
+                        false ->
+                            EExist
+                    end;
+                Err ->
+                    Err
+            end
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

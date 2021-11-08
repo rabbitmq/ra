@@ -370,7 +370,7 @@ recover(Config) ->
     %                        ra_log_reader,
     %                        ra_log_segment_writer,
     %                        filelib,
-    %                        file
+    %                        ra_file_handle
     %                        ]),
     {Time, _} = timer:tc(fun () -> ra:restart_server(?SYS, ServerId) end),
     ct:pal("Server restart took ~b", [Time div 1000]),

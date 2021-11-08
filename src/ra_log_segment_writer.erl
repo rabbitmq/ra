@@ -114,8 +114,7 @@ handle_call(overview, _From, State) ->
 
 segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
-    SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
-    SegFiles.
+    segment_files(Dir).
 
 handle_cast({mem_tables, Tables, WalFile}, State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
@@ -148,7 +147,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
-    _ = file:delete(WalFile),
+    _ = prim_file:delete(WalFile),
     %% ensure we release any bin refs that might have been acquired during
     %% segment write
     true = erlang:garbage_collect(),
@@ -168,7 +167,7 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             {noreply, State0};
         [Pivot | Remove] ->
             %% remove all old files
-            _ = [_ = file:delete(F) || F <- Remove],
+            _ = [_ = prim_file:delete(F) || F <- Remove],
             %% check if the pivot has changed
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
             case ra_log_segment:segref(Seg) of
@@ -179,7 +178,7 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
                     _ = ra_log_segment:close(
                           open_successor_segment(Seg, SegConf)),
                     _ = ra_log_segment:close(Seg),
-                    _ = file:delete(Pivot),
+                    _ = prim_file:delete(Pivot),
                     {noreply, State0};
                 _ ->
                     %% the segment has changed - leave it in place
@@ -330,8 +329,12 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     end.
 
 find_segment_files(Dir) ->
-    lists:reverse(
-      lists:sort(filelib:wildcard(filename:join(Dir, "*.segment")))).
+    lists:reverse(segment_files(Dir)).
+
+segment_files(Dir) ->
+    {ok, Files0} = prim_file:list_dir(Dir),
+    Files = [F || F <- Files0, filename:extension(F) == ".segment"],
+    lists:sort(Files).
 
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_segment:filename(CurSeg),
@@ -365,7 +368,7 @@ open_file(Dir, SegConf) ->
             %% and retry.
             ?WARN("segment_writer: missing header in segment file ~s "
                   "deleting file and retrying recovery", [File]),
-            _ = file:delete(File),
+            _ = prim_file:delete(File),
             open_file(Dir, SegConf);
         {error, enoent} ->
             ?WARN("segment_writer: failed to open segment file ~s "

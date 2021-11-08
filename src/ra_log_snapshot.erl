@@ -140,7 +140,7 @@ read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
      file_err()}.
 recover(Dir) ->
     File = filename(Dir),
-    case file:read_file(File) of
+    case prim_file:read_file(File) of
         {ok, <<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer, Data/binary>>} ->
             validate(Crc, Data);
         {ok, <<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>} ->

@@ -651,11 +651,10 @@ read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
-    case filelib:is_file(ConfigPath) of
-        true ->
-            {ok, [C]} = file:consult(ConfigPath),
+    case file:consult(ConfigPath) of
+        {ok, [C]} ->
             {ok, C};
-        false ->
+        {error, enoent} ->
             not_found
     end.
 
