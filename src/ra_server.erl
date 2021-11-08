@@ -255,7 +255,14 @@ init(#{id := Id,
                                     %% use sequential access pattern during
                                     %% recovery
                                     initial_access_pattern => sequential}),
-    ok = ra_log:write_config(Config, Log0),
+    %% only write config if it is different from what is already on disk
+    case Config of
+        #{has_changed := false} ->
+            ok;
+        _ ->
+            ok = ra_log:write_config(Config, Log0)
+    end,
+
     MetaName = meta_name(SystemConfig),
     CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term, 0),
     LastApplied = ra_log_meta:fetch(MetaName, UId, last_applied, 0),
