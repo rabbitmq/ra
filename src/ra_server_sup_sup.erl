@@ -84,10 +84,17 @@ restart_server_rpc(System, {RaName, Node}, AddConfig)
         _ ->
             case recover_config(System, RaName) of
                 {ok, Config0} ->
-                    Config = maps:merge(Config0,
-                                        maps:with(?MUTABLE_CONFIG_KEYS, AddConfig)),
+                    MutConfig = maps:with(?MUTABLE_CONFIG_KEYS, AddConfig),
                     {ok, Name} = ra_system:lookup_name(System, server_sup),
-                    supervisor:start_child({Name, Node}, [Config]);
+                    case maps:merge(Config0, MutConfig) of
+                        Config0 ->
+                            %% the config has not changed
+                            Config = Config0#{has_changed => false},
+                            supervisor:start_child({Name, Node}, [Config]);
+                        Config1 ->
+                            Config = Config1#{has_changed => true},
+                            supervisor:start_child({Name, Node}, [Config])
+                    end;
                 Err ->
                     Err
             end

@@ -79,7 +79,7 @@ init_per_testcase(TestCase, Config) ->
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
-    [
+    [{test_case, TestCase},
      {modname, TestCase},
      {cluster_name, TestCase},
      {uid, atom_to_binary(TestCase, utf8)},
@@ -359,8 +359,24 @@ recover(Config) ->
     ok = enqueue(ServerId, msg1),
     ra:members(ServerId),
     ra:stop_server(?SYS, ServerId),
-    ra:restart_server(?SYS, ServerId),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    timer:sleep(1000),
+    % start_profile(Config, [ra_server,
+    %                        ra_server_prop,
+    %                        ra_system,
+    %                        ra_log,
+    %                        ra_lib,
+    %                        ra_snapshot,
+    %                        ra_log_reader,
+    %                        ra_log_segment_writer,
+    %                        filelib,
+    %                        file
+    %                        ]),
+    {Time, _} = timer:tc(fun () -> ra:restart_server(?SYS, ServerId) end),
+    ct:pal("Server restart took ~b", [Time div 1000]),
+    % stop_profile(Config),
     ra:members(ServerId),
+
     msg1 = dequeue(ServerId),
 
     ok = ra:stop_server(?SYS, ServerId),
@@ -709,3 +725,23 @@ data_dir() ->
 force_roll_over() ->
     #{names := #{wal := Wal}} = ra_system:fetch(?SYS),
     ra_log_wal:force_roll_over(Wal).
+
+start_profile(Config, Modules) ->
+    Dir = ?config(priv_dir, Config),
+    Case = ?config(test_case, Config),
+    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
+    ct:pal("Profiling to ~p", [GzFile]),
+
+    lg:trace(Modules, lg_file_tracer,
+             GzFile, #{running => false, mode => profile}).
+
+stop_profile(Config) ->
+    Case = ?config(test_case, Config),
+    ct:pal("Stopping profiling for ~p", [Case]),
+    lg:stop(),
+    % this segfaults
+    Dir = ?config(priv_dir, Config),
+    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
+    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
+    ok.
+
