@@ -332,9 +332,13 @@ find_segment_files(Dir) ->
     lists:reverse(segment_files(Dir)).
 
 segment_files(Dir) ->
-    {ok, Files0} = prim_file:list_dir(Dir),
-    Files = [F || F <- Files0, filename:extension(F) == ".segment"],
-    lists:sort(Files).
+    case prim_file:list_dir(Dir) of
+        {ok, Files0} ->
+            Files = [filename:join(Dir, F) || F <- Files0, filename:extension(F) == ".segment"],
+            lists:sort(Files);
+        {error, enoent} ->
+            []
+    end.
 
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_segment:filename(CurSeg),
