@@ -74,12 +74,17 @@ register_name(System, UId, Pid, ParentPid, ServerName, ClusterName)
                   ParentPid, ServerName, ClusterName);
 register_name(#{
                 directory := Directory,
-                directory_rev := DirRev}, UId, Pid, ParentPid,
+                directory_rev := DirRev} = System, UId, Pid, ParentPid,
               ServerName, ClusterName) ->
     true = ets:insert(Directory, {UId, Pid, ParentPid, ServerName,
                                   ClusterName}),
-    ok = dets:insert(DirRev, {ServerName, UId}),
-    ok.
+    case uid_of(System, ServerName) of
+        undefined ->
+            ok = dets:insert(DirRev, {ServerName, UId});
+        _ ->
+            %% no need to insert into dets table if already there
+            ok
+    end.
 
 -spec unregister_name(atom() | ra_system:names(), ra_uid()) -> ra_uid().
 unregister_name(System, UId) when is_atom(System) ->
