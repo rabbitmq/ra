@@ -49,7 +49,8 @@ all_tests() ->
      written_event_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
-     external_reader
+     external_reader,
+     write_config
     ].
 
 groups() ->
@@ -941,6 +942,16 @@ external_reader(Config) ->
     end,
     timer:sleep(2000),
     flush(),
+    ok.
+
+write_config(Config) ->
+
+    Log0 = ra_log_init(Config),
+    C = #{},
+    ra_log:write_config(C, Log0),
+
+    ?assertMatch({ok, C}, ra_log:read_config(Log0)),
+
     ok.
 
 validate_read(To, To, _Term, Log0) ->

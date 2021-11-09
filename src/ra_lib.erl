@@ -42,7 +42,8 @@
          lists_chunk/2,
          is_dir/1,
          is_file/1,
-         ensure_dir/1
+         ensure_dir/1,
+         consult/1
         ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -365,6 +366,20 @@ is_file(File) ->
             false
     end.
 
+
+consult(Path) ->
+    {ok, Data} = prim_file:read_file(Path),
+    Str = erlang:binary_to_list(Data),
+    tokens(Str).
+
+tokens(Str) ->
+    case erl_scan:string(Str) of
+        {ok, Tokens, _EndLoc} ->
+            % ct:pal("TOKENS ~p", [Tokens]),
+            erl_parse:parse_term(Tokens);
+        {error, _, _} = Err ->
+            Err
+    end.
 
 
 %% raw copy of ensure_dir

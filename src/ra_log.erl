@@ -651,8 +651,8 @@ read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
-    case file:consult(ConfigPath) of
-        {ok, [C]} ->
+    case ra_lib:consult(ConfigPath) of
+        {ok, C} ->
             {ok, C};
         {error, enoent} ->
             not_found
