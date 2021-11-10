@@ -647,16 +647,13 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
+-spec read_config(state() | file:filename()) ->
+    {ok, ra_server:config()} | {error, term()}.
 read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, "config"),
-    case ra_lib:consult(ConfigPath) of
-        {ok, C} ->
-            {ok, C};
-        {error, enoent} ->
-            not_found
-    end.
+    ra_lib:consult(ConfigPath).
 
 -spec delete_everything(state()) -> ok.
 delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->

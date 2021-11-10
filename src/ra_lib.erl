@@ -367,22 +367,22 @@ is_file(File) ->
     end.
 
 
+-spec consult(file:filename()) ->
+    {ok, term()} | {error, term()}.
 consult(Path) ->
-    case is_file(Path) of
-        true ->
-            {ok, Data} = prim_file:read_file(Path),
+    case prim_file:read_file(Path) of
+        {ok, Data} ->
             Str = erlang:binary_to_list(Data),
             tokens(Str);
-        false ->
-            {error, enoent}
+        Err ->
+            Err
     end.
 
 tokens(Str) ->
     case erl_scan:string(Str) of
         {ok, Tokens, _EndLoc} ->
-            % ct:pal("TOKENS ~p", [Tokens]),
             erl_parse:parse_term(Tokens);
-        {error, Err, _} ->
+        {error, Err, _ErrLoc} ->
             {error, Err}
     end.
 

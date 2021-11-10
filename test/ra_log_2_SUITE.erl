@@ -946,9 +946,14 @@ external_reader(Config) ->
 
 write_config(Config) ->
 
+    C = #{cluster_name => ?MODULE,
+          id => {?MODULE, node()},
+          uid => <<"blah">>,
+          log_init_args => #{uid => <<"blah">>},
+          initial_members => [],
+          machine => {module, ?MODULE, #{}}},
     Log0 = ra_log_init(Config),
-    C = #{},
-    ra_log:write_config(C, Log0),
+    ok = ra_log:write_config(C, Log0),
 
     ?assertMatch({ok, C}, ra_log:read_config(Log0)),
 
