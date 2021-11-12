@@ -133,8 +133,8 @@ init(UId, Module, SnapshotsDir) ->
     State = #?MODULE{uid = UId,
                      module = Module,
                      directory = SnapshotsDir},
-    true = filelib:is_dir(SnapshotsDir),
-    {ok, Snaps0} = file:list_dir(SnapshotsDir),
+    true = ra_lib:is_dir(SnapshotsDir),
+    {ok, Snaps0} = prim_file:list_dir(SnapshotsDir),
     Snaps = lists:reverse(lists:sort(Snaps0)),
     %% /snapshots/term_index/
     case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
