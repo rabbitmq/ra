@@ -38,6 +38,7 @@ all_tests() ->
      deleted_cluster_emits_eol_effect,
      machine_state_enter_effects,
      meta_data,
+     append_effect,
      timer_effect,
      log_effect,
      aux_eval,
@@ -341,6 +342,30 @@ meta_data(Config) ->
     ?assert(Ts > T),
     ?assert(Idx > 0),
     ?assert(Term > 0),
+    ok.
+
+append_effect(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, cmd, State) ->
+                                    %% timer for 1s
+                                    {State, ok, [{append, {cmd2, "yo"}}]};
+                                (_, {cmd2, "yo"}, State) ->
+                                    {State, ok, [{send_msg, Self, got_cmd2}]}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    receive
+        got_cmd2 ->
+            ok
+    after 1000 ->
+              flush(),
+              exit(cmd2_timeout)
+    end,
     ok.
 
 timer_effect(Config) ->
