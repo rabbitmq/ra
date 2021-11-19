@@ -1107,6 +1107,9 @@ handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
         false ->
             {State, Actions}
     end;
+handle_effect(leader, {append, Cmd}, _EvtType, State, Actions) ->
+    Evt = {command, normal, {'$usr', Cmd, noreply}},
+    {State, [{next_event, cast, Evt} | Actions]};
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
               State = #state{server_state = SS0}, Actions)
   when is_list(Idxs) ->
