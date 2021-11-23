@@ -126,6 +126,7 @@
     {mod_call, module(), Function :: atom(), [term()]} |
     %% appends a user command to the raft log
     {append, term()} |
+    {append, term(), ra_server:command_reply_mode()} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, process, pid()} |

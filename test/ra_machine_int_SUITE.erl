@@ -39,6 +39,7 @@ all_tests() ->
      machine_state_enter_effects,
      meta_data,
      append_effect,
+     append_effect_with_notify,
      timer_effect,
      log_effect,
      aux_eval,
@@ -359,6 +360,38 @@ append_effect(Config) ->
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    receive
+        got_cmd2 ->
+            ok
+    after 1000 ->
+              flush(),
+              exit(cmd2_timeout)
+    end,
+    ok.
+
+append_effect_with_notify(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, cmd, State) ->
+                                    %% timer for 1s
+                                    Notify = {notify, 42, Self},
+                                    {State, ok, [{append, {cmd2, "yo"}, Notify}]};
+                                (_, {cmd2, "yo"}, State) ->
+                                    {State, ok, [{send_msg, Self, got_cmd2}]}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    receive
+        {ra_event, _, {applied, [{42, ok}]}} = Evt ->
+            ct:pal("Got ~p", [Evt])
+    after 1000 ->
+              flush(),
+              exit(ra_event_timeout)
+    end,
     receive
         got_cmd2 ->
             ok
