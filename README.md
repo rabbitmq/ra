@@ -230,7 +230,7 @@ in a separate repository.
 
 ## Documentation
 
-* [API reference](https://rabbitmq.github.io/ra/)
+* [API reference](https://hex.pm/packages/ra)
 * How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 * Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
 
