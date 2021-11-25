@@ -14,7 +14,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export([open/2, close/1, sync/1, datasync/1, write/2, read/2, position/2]).
+-export([open/2, close/1, sync/1, datasync/1, none/1, write/2, read/2, position/2]).
 -export([pwrite/2, pwrite/3, pread/2, pread/3]).
 
 -define(SERVER, ?MODULE).
@@ -37,6 +37,10 @@ sync(Fd) ->
 
 datasync(Fd) ->
     update(io_sync, fun() -> file:datasync(Fd) end).
+
+%% called when wal does not sync at all
+none(_Fd) ->
+    ok.
 
 write(Fd, Bytes) ->
     update(io_write, iolist_size(Bytes), fun() -> file:write(Fd, Bytes) end).
