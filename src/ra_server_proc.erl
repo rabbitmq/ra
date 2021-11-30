@@ -1443,7 +1443,7 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
             {keep_state, State, {reply, From, {redirect, Leader}}}
     end.
 
-reject_command(Pid, Corr, State) ->
+reject_command(Pid, Corr, #state{leader_monitor = _Mon} = State) ->
     Id = id(State),
     LeaderId = leader_id(State),
     case LeaderId of
@@ -1456,10 +1456,10 @@ reject_command(Pid, Corr, State) ->
             ok;
         _ ->
             ?INFO("~s: follower received leader command from ~w. "
-                  "Rejecting to ~w ", [log_id(State), Pid, LeaderId])
-    end,
-    send_ra_event(Pid, {not_leader, LeaderId, Corr},
-                  id(State), rejected, State).
+                  "Rejecting to ~w ", [log_id(State), Pid, LeaderId]),
+            send_ra_event(Pid, {not_leader, LeaderId, Corr},
+                          id(State), rejected, State)
+    end.
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->
      State#state{server_state = ra_server:persist_last_applied(NS)}.
