@@ -1444,10 +1444,15 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
     end.
 
 reject_command(Pid, Corr, State) ->
+    Id = id(State),
     LeaderId = leader_id(State),
     case LeaderId of
         undefined ->
             %% don't log these as they may never be resolved
+            ok;
+        Id ->
+            %% this can happend during an explicit leader change
+            %% best not rejecting them to oneself!
             ok;
         _ ->
             ?INFO("~s: follower received leader command from ~w. "
