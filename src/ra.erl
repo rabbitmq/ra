@@ -834,7 +834,7 @@ pipeline_command(ServerId, Command, Correlation) ->
 %% @doc Sends a command to the ra server using a gen_statem:cast without
 %% any correlation identifier.
 %% Effectively the same as
-%% `ra:pipeline_command(ServerId, Command, low, no_correlation)'
+%% `ra:pipeline_command(ServerId, Command, no_correlation, low)'
 %% This is the least reliable way to interact with a ra system ("fire and forget")
 %% and should only be used for commands that are of little importance
 %% and/or where waiting for a response is prohibitively slow.
