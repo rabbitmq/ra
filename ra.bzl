@@ -1,5 +1,5 @@
-load("@bazel-erlang//:bazel_erlang_lib.bzl", "erlc")
-load("@bazel-erlang//:ct.bzl", "ct_suite")
+load("@rules_erlang//:erlc.bzl", "erlc")
+load("@rules_erlang//:ct.bzl", "ct_suite")
 
 TEST_ERLC_OPTS = [
     "-DTEST",
@@ -21,7 +21,7 @@ def ra_suites():
         srcs = helpers,
         hdrs = hdrs,
         deps = [
-            ":test_bazel_erlang_lib",
+            ":test_erlang_app",
         ],
         dest = "test",
         testonly = True,
@@ -33,13 +33,13 @@ def ra_suites():
             erlc_opts = TEST_ERLC_OPTS,
             name = name,
             runtime_deps = [
-                "@gen_batch_server//:bazel_erlang_lib",
-                "@aten//:bazel_erlang_lib",
-                "@inet_tcp_proxy//:bazel_erlang_lib",
-                "@meck//:bazel_erlang_lib",
+                "@gen_batch_server//:erlang_app",
+                "@aten//:erlang_app",
+                "@inet_tcp_proxy//:erlang_app",
+                "@meck//:erlang_app",
             ],
             deps = [
-                "@proper//:bazel_erlang_lib",
+                "@proper//:erlang_app",
             ],
             additional_hdrs = hdrs,
             additional_beam = [
