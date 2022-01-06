@@ -1304,8 +1304,13 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
            machine_state := MacState,
            aux_state := Aux
           } = State) ->
-    O0 = maps:with([current_term, commit_index, last_applied,
-                    cluster, leader_id, voted_for], State),
+    O0 = maps:with([current_term,
+                    commit_index,
+                    commit_latency,
+                    last_applied,
+                    cluster,
+                    leader_id,
+                    voted_for], State),
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
@@ -1332,7 +1337,7 @@ metrics(#{cfg := #cfg{metrics_key = Key},
                   undefined -> 0;
                   {I, _} -> I
               end,
-    CL = case  State of
+    CL = case State of
              #{commit_latency := L} ->
                  L;
              _ ->

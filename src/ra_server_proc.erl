@@ -264,6 +264,7 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
+    process_flag(message_queue_data, off_heap),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Key),
@@ -1147,6 +1148,9 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {State, Actions0 ++ Actions};
 handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     %% should only be done by leader
+    %% TODO: handle send failure in a way that retains correlation notification
+    %% order
+    %% TODO: add counter for applied notifications
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
