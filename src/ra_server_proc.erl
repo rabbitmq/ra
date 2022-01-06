@@ -1073,6 +1073,13 @@ handle_effect(_, {send_rpc, To, Rpc}, _,
             %% for noconnects just allow it to pipeline and catch up later
             {State0, Actions}
     end;
+handle_effect(_, {notify2, Nots}, _, State, Actions) ->
+    Id = id(State),
+    maps:foreach(
+      fun (Pid, Corrs) ->
+              ok = send_ra_event(Pid, lists:reverse(Corrs), Id, applied, State)
+      end, Nots),
+    {State, Actions};
 handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
@@ -1153,6 +1160,7 @@ handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
     %% TODO: add counter for applied notifications
     ok = send_ra_event(Who, Correlations, id(State), applied, State),
     {State, Actions};
+
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
     _ = gen_cast(To, Msg, State),
@@ -1462,7 +1470,7 @@ reject_command(Pid, Corr, #state{leader_monitor = _Mon} = State) ->
             ?INFO("~s: follower received leader command from ~w. "
                   "Rejecting to ~w ", [log_id(State), Pid, LeaderId]),
             send_ra_event(Pid, {not_leader, LeaderId, Corr},
-                          id(State), rejected, State)
+                          Id, rejected, State)
     end.
 
 maybe_persist_last_applied(#state{server_state = NS} = State) ->

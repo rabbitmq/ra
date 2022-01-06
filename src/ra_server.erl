@@ -2131,10 +2131,14 @@ apply_to(_ApplyTo, _, Notifys, Effects, State)
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State, FinalEffs}.
 
-make_notify_effects(Nots, Prior) ->
-    maps:fold(fun (Pid, Corrs, Acc) ->
-                      [{notify, Pid, lists:reverse(Corrs)} | Acc]
-              end, Prior, Nots).
+make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
+    [{notify2, Nots} | Prior];
+    % maps:fold(fun (Pid, Corrs, Acc) ->
+    %                   [{notify, Pid, lists:reverse(Corrs)} | Acc]
+    %           end, Prior, No
+    %           ts).
+make_notify_effects(_Nots, Prior) ->
+    Prior.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
