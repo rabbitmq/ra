@@ -66,6 +66,7 @@ jobs:
       run: |
         bazelisk test //...
     - name: RESOVLE TEST LOGS PATH
+      if: failure()
       run: |
         echo "::set-output name=LOGS_PATH::$(readlink -f bazel-testlogs)"
       id: resolve-test-logs-path
