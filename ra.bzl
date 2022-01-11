@@ -23,6 +23,7 @@ def ra_suites():
         deps = [
             ":test_bazel_erlang_lib",
         ],
+        dest = "test",
         testonly = True,
     )
 
