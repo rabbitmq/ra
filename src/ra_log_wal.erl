@@ -66,7 +66,10 @@
     default |
     % like delay writes but tries to open the file using synchronous io
     % (O_SYNC) rather than a write(2) followed by an fsync.
-    o_sync.
+    o_sync |
+    %% low latency mode where writers are notifies _before_ syncing
+    %% but after writing.
+    sync_after_notify.
 
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
@@ -79,7 +82,7 @@
                max_entries :: undefined | non_neg_integer(),
                recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
-               sync_method = datasync :: sync | datasync,
+               sync_method = datasync :: sync | datasync | none,
                counter :: counters:counters_ref(),
                open_mem_tbls_name :: atom(),
                closed_mem_tbls_name :: atom(),
@@ -682,6 +685,14 @@ start_batch(#state{conf = #conf{counter = CRef}} = State) ->
     State#state{batch = #batch{}}.
 
 
+post_notify_flush(#state{wal = #wal{fd = Fd},
+                         conf =  #conf{write_strategy = sync_after_notify,
+                                       sync_method = SyncMeth}}) ->
+    ok = ra_file_handle:SyncMeth(Fd);
+post_notify_flush(_State) ->
+    ok.
+
+
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend} = Batch,
                      conf =  #conf{write_strategy = WriteStrategy,
@@ -692,7 +703,7 @@ flush_pending(#state{wal = #wal{fd = Fd},
             ok = ra_file_handle:write(Fd, Pend),
             ok = ra_file_handle:SyncMeth(Fd),
             ok;
-        o_sync ->
+        _ ->
             ok = ra_file_handle:write(Fd, Pend)
     end,
     State0#state{batch = Batch#batch{pending = []}}.
@@ -726,6 +737,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                          Pid ! {ra_log_event, {written, {From, To, Term}}},
                          ok
                  end, Waiting),
+    ok = post_notify_flush(State),
     State.
 
 wal2list(File) ->

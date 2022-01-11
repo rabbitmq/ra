@@ -16,7 +16,9 @@ all() ->
     [
      {group, default},
      {group, fsync},
-     {group, o_sync}
+     {group, o_sync},
+     {group, sync_after_notify},
+     {group, no_sync}
     ].
 
 
@@ -47,7 +49,9 @@ groups() ->
      {default, [], all_tests()},
      %% uses fsync instead of the default fdatasync
      {fsync, [], all_tests()},
-     {o_sync, [], all_tests()}
+     {o_sync, [], all_tests()},
+     {sync_after_notify, [], all_tests()},
+     {no_sync, [], all_tests()}
     ].
 
 -define(SYS, default).
@@ -68,9 +72,9 @@ init_per_group(Group, Config) ->
         case Group of
             fsync ->
                 {sync, default};
-            o_sync ->
-                {datasync, Group};
-            default ->
+            no_sync ->
+                {none, default};
+            _ ->
                 {datasync, Group}
         end,
     [{write_strategy, WriteStrat},

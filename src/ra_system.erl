@@ -33,8 +33,8 @@
                     wal_compute_checksums => boolean(),
                     wal_max_batch_size => non_neg_integer(),
                     wal_max_entries => non_neg_integer(),
-                    wal_write_strategy => default | o_sync,
-                    wal_sync_method => datasync | sync,
+                    wal_write_strategy => default | o_sync | sync_after_notify,
+                    wal_sync_method => datasync | sync | none,
                     wal_hibernate_after => non_neg_integer(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer()
