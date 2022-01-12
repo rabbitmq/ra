@@ -7,7 +7,6 @@
 %% @hidden
 -module(ra_file_handle).
 
--include("ra.hrl").
 -behaviour(gen_server).
 
 -export([start_link/0]).
@@ -16,6 +15,7 @@
 
 -export([open/2, close/1, sync/1, datasync/1, none/1, write/2, read/2, position/2]).
 -export([pwrite/2, pwrite/3, pread/2, pread/3]).
+-export([sample/1]).
 
 -define(SERVER, ?MODULE).
 -define(TABLE, ra_io_metrics).
@@ -84,6 +84,17 @@ timer_tc(Thunk) ->
     Diff = erlang:convert_time_unit(T2 - T1, native, micro_seconds),
     {Diff, Res}.
 
+
+sample(T) ->
+    A = ets:tab2list(?TABLE),
+    timer:sleep(T),
+    B = ets:tab2list(?TABLE),
+
+    lists:zipwith(fun
+                      ({{Op, C}, AVal}, {{Op, C}, BVal}) ->
+                          {{Op, count}, BVal - AVal}
+                  end, A, B).
+
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
@@ -131,3 +142,4 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
