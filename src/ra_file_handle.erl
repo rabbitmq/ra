@@ -92,7 +92,7 @@ sample(T) ->
 
     lists:zipwith(fun
                       ({{Op, C}, AVal}, {{Op, C}, BVal}) ->
-                          {{Op, count}, BVal - AVal}
+                          {{Op, C}, BVal - AVal}
                   end, A, B).
 
 start_link() ->
