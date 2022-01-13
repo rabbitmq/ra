@@ -80,6 +80,7 @@
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
                max_entries :: undefined | non_neg_integer(),
+               garbage_collect = true :: boolean(),
                recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync | none,
@@ -127,7 +128,9 @@
                       sync_method => sync | datasync,
                       recovery_chunk_size  => non_neg_integer(),
                       hibernate_after => non_neg_integer(),
-                      max_batch_size => non_neg_integer()
+                      max_batch_size => non_neg_integer(),
+                      garbage_collect => boolean(),
+                      min_heap_size => non_neg_integer()
                      }.
 
 -export_type([wal_conf/0,
@@ -227,17 +230,21 @@ init(#{dir := Dir} = Conf0) ->
       compute_checksums := ComputeChecksums,
       write_strategy := WriteStrategy,
       sync_method := SyncMethod,
+      garbage_collect := Gc,
+      min_heap_size := MinHeapSize,
       names := #{wal := WalName,
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~s init, open tbls: ~w, closed tbls: ~w",
-            [WalName, OpenTblsName, ClosedTblsName]),
+    ?NOTICE("WAL: ~s init, open tbls: ~w, closed tbls: ~w~n"
+            "Explicit Gc: ~w, Min heap size: ~w",
+            [WalName, OpenTblsName, ClosedTblsName, Gc, MinHeapSize]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
+    process_flag(min_heap_size, MinHeapSize),
     CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
@@ -253,6 +260,7 @@ init(#{dir := Dir} = Conf0) ->
                  recovery_chunk_size = RecoveryChunkSize,
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
+                 garbage_collect = Gc,
                  counter = CRef,
                  open_mem_tbls_name = OpenTblsName,
                  closed_mem_tbls_name = ClosedTblsName,
@@ -261,10 +269,14 @@ init(#{dir := Dir} = Conf0) ->
 
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
-handle_batch(Ops, State0) ->
+handle_batch(Ops, #state{conf = #conf{garbage_collect = Gc}} = State0) ->
     State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
-    {ok, [garbage_collect], complete_batch(State)}.
+    Actions = case Gc of
+                  true -> [garbage_collect];
+                  false -> []
+              end,
+    {ok, Actions, complete_batch(State)}.
 
 terminate(_Reason, State) ->
     _ = cleanup(State),
@@ -272,11 +284,13 @@ terminate(_Reason, State) ->
 
 format_status(#state{conf = #conf{write_strategy = Strat,
                                   compute_checksums = Cs,
+                                  garbage_collect = Gc,
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      file_size = FSize,
                      wal = #wal{filename = Fn}}) ->
     #{write_strategy => Strat,
+      garbage_collect => Gc,
       compute_checksums => Cs,
       writers => maps:size(Writers),
       filename => filename:basename(Fn),

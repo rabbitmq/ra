@@ -63,6 +63,8 @@ make_wal_conf(#{data_dir := DataDir,
     Strategy = maps:get(wal_write_strategy, Cfg, default),
     SyncMethod = maps:get(wal_sync_method, Cfg, datasync),
     HibAfter = maps:get(wal_hibernate_after, Cfg, undefined),
+    Gc = maps:get(wal_garbage_collect, Cfg, true),
+    MinHeapSize = maps:get(wal_min_heap_size, Cfg, 233),
     #{name => WalName,
       names => Names,
       dir => WalDir,
@@ -73,5 +75,7 @@ make_wal_conf(#{data_dir := DataDir,
       max_entries => MaxEntries,
       sync_method => SyncMethod,
       max_batch_size => MaxBatchSize,
-      hibernate_after => HibAfter
+      hibernate_after => HibAfter,
+      garbage_collect => Gc,
+      min_heap_size => MinHeapSize
      }.

@@ -36,6 +36,8 @@
                     wal_write_strategy => default | o_sync | sync_after_notify,
                     wal_sync_method => datasync | sync | none,
                     wal_hibernate_after => non_neg_integer(),
+                    wal_garbage_collect => boolean(),
+                    wal_min_heap_size => non_neg_integer(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer()
                    }.
@@ -74,6 +76,8 @@ default_config() ->
       wal_max_batch_size => WalMaxBatchSize,
       wal_max_entries => WalMaxEntries,
       wal_write_strategy => WalWriteStrategy,
+      wal_garbage_collect => true,
+      wal_min_heap_size => 233,
       wal_sync_method => WalSyncMethod,
       segment_max_entries => SegmentMaxEntries,
       names =>

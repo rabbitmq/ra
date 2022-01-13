@@ -63,7 +63,8 @@ init_per_group(Group, Config) ->
     ok = application:set_env(ra, data_dir, ?config(priv_dir, Config)),
     ra_env:configure_logger(logger),
     Dir = ?config(priv_dir, Config),
-    SysCfg = (ra_system:default_config())#{data_dir => Dir},
+    SysCfg = (ra_system:default_config())#{data_dir => Dir,
+                                           wal_garbage_collect => false},
     ra_system:store(SysCfg),
     ra_directory:init(?SYS),
     ra_counters:init(),
@@ -99,6 +100,8 @@ init_per_testcase(TestCase, Config) ->
                 name => ra_log_wal,
                 names => maps:get(names, Sys),
                 write_strategy => G,
+                garbage_collect => false,
+                min_heap_size => 8196,
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics, [named_table, public, {write_concurrency, true}]),
@@ -163,7 +166,7 @@ write_to_unavailable_wal_returns_error(Config) ->
 
 write_many(Config) ->
     Tests = [
-             {"10k/8k",   10000,  false, 8000,  1024},
+             {"10k/8k",   10000,  false, 4000,  1024},
              {"100k/8k",  100000, false, 8000,  1024},
              {"200k/4k",  200000, false, 4000,  1024},
              {"200k/8k",  200000, false, 8000,  1024},
@@ -176,7 +179,7 @@ write_many(Config) ->
                                                         Batch, Data, Config),
                    io_lib:format("Scenario ~s took ~bms using ~b "
                                  "reductions for ~b writes @ ~b bytes, "
-                                 "batch size ~b",
+                                 "batch size ~b~n",
                                  [Name, Time, Reductions, Num, Data, Batch])
                end || {Name, Num, Check, Batch, Data} <- Tests],
     ct:pal("~s", [Results]),
@@ -196,7 +199,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
     Writes = lists:seq(1, NumWrites),
-    {_, GarbBefore} = erlang:process_info(WalPid, garbage_collection),
+    {_, GarbBefore} = erlang:process_info(WalPid, garbage_collection_info),
     {_, MemBefore} = erlang:process_info(WalPid, memory),
     {_, BinBefore} = erlang:process_info(WalPid, binary),
     {reductions, RedsBefore} = erlang:process_info(WalPid, reductions),
@@ -215,13 +218,13 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
           end),
     timer:sleep(100),
     {_, BinAfter} = erlang:process_info(WalPid, binary),
-    {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection),
+    {_, GarbAfter} = erlang:process_info(WalPid, garbage_collection_info),
     {_, MemAfter} = erlang:process_info(WalPid, memory),
     erlang:garbage_collect(WalPid),
     {reductions, RedsAfter} = erlang:process_info(WalPid, reductions),
 
     ct:pal("Binary:~n~w~n~w", [length(BinBefore), length(BinAfter)]),
-    ct:pal("Garbage:~n~w~n~w", [GarbBefore, GarbAfter]),
+    ct:pal("Garbage:~n~p~n~p", [GarbBefore, GarbAfter]),
     ct:pal("Memory:~n~w~n~w", [MemBefore, MemAfter]),
 
     Reds = RedsAfter - RedsBefore,
@@ -230,7 +233,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     %        [NumWrites, Taken / 1000, Reds]),
 
     % assert memory use after isn't absurdly larger than before
-    ?assert(MemAfter < (MemBefore * 3)),
+    % ?assert(MemAfter < (MemBefore * 3)),
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),
