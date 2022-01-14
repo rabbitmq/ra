@@ -236,7 +236,7 @@ init(#{dir := Dir} = Conf0) ->
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~s init, open tbls: ~w, closed tbls: ~w~n"
+    ?NOTICE("WAL: ~s init, open tbls: ~w, closed tbls: ~w"
             "Explicit Gc: ~w, Min heap size: ~w",
             [WalName, OpenTblsName, ClosedTblsName, Gc, MinHeapSize]),
     process_flag(trap_exit, true),
