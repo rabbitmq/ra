@@ -234,6 +234,7 @@
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 -define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
+-define(C_RA_SRV_DROPPED_AERS, ?C_RA_LOG_RESERVED + 20).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -256,8 +257,8 @@
          release_cursors,
          aer_received_follower_empty,
          term_and_voted_for_updates,
-         local_queries
-
+         local_queries,
+         aer_dropped
          ]).
 
 -define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).

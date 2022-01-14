@@ -959,7 +959,7 @@ handle_follower(#append_entries_rpc{term = Term,
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
             % filter entries already seen
-            {Log1, Entries} = drop_existing({Log0, Entries0}),
+            {Log1, Entries} = drop_existing({Log0, Entries0}, Cfg),
             case Entries of
                 [] ->
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
@@ -2462,12 +2462,13 @@ fold_log_from(From, Folder, {St, Log0}) ->
             end
     end.
 
-drop_existing({Log0, []}) ->
+drop_existing({Log0, []}, _Cfg) ->
     {Log0, []};
-drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
+drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}, Cfg) ->
     case ra_log:exists({Idx, Trm}, Log0) of
         {true, Log} ->
-            drop_existing({Log, Tail});
+            ok = incr_counter(Cfg, ?C_RA_SRV_DROPPED_AERS, 1),
+            drop_existing({Log, Tail}, Cfg);
         {false, Log} ->
             {Log, Entries}
     end.
