@@ -274,10 +274,10 @@ closed_mem_tbl_take(ClosedTbl, Id, {Start0, End}, Acc0) ->
             {Acc0, {?C_RA_LOG_READ_CLOSED_MEM_TBL, 0}, {Start0, End}};
         Tables ->
             {Entries, Count, Rem} =
-            lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
-                                mem_tbl_take(Range, TblSt, TblEnd,
-                                             Tid, Count, Ac)
-                        end, {Acc0, 0, {Start0, End}}, Tables),
+                lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Count, Range}) ->
+                                    mem_tbl_take(Range, TblSt, TblEnd,
+                                                 Tid, Count, Ac)
+                            end, {Acc0, 0, {Start0, End}}, Tables),
             {Entries, {?C_RA_LOG_READ_CLOSED_MEM_TBL, Count}, Rem}
     end.
 

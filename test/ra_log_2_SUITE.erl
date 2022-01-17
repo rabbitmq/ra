@@ -897,7 +897,7 @@ external_reader(Config) ->
             fun () ->
                     receive
                         {ra_log_reader_state, R1} = Evt ->
-                            {Es, _, R2} = ra_log_reader:read(0, 220, R1),
+                            {Es, Len1, R2} = ra_log_reader:read(0, 220, R1),
                             Len1 = length(Es),
                             ct:pal("Es ~w", [Len1]),
                             Self ! {got, Evt, Es},
@@ -905,10 +905,10 @@ external_reader(Config) ->
                                 {ra_log_update, _, F, _} = Evt2 ->
                                     %% reader before update has been processed
                                     %% should work
-                                    {Stale, _, _} = ra_log_reader:read(F, 220, R2),
+                                    {Stale, Len1, _} = ra_log_reader:read(F, 220, R2),
                                     ?assertEqual(Len1, length(Stale)),
                                     R3 = ra_log_reader:handle_log_update(Evt2, R2),
-                                    {Es2, _, _R4} = ra_log_reader:read(F, 220, R3),
+                                    {Es2, Len1, _R4} = ra_log_reader:read(F, 220, R3),
                                     ct:pal("Es2 ~w", [length(Es2)]),
                                     ?assertEqual(Len1, length(Es2)),
                                     Self ! {got, Evt2, Es2}

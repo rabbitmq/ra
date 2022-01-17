@@ -1655,6 +1655,12 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                           commit_index := CommitIndex} = State) ->
     Next = PrevIdx + 1,
     {Entries, NumRead, Log} = ra_log:take(Next, Num, Log0),
+    %% assertion
+    case length(Entries) == NumRead of
+        true -> ok;
+        false ->
+            exit({assertion, length(Entries), NumRead})
+    end,
     NextIndex = Next + NumRead,
     {NextIndex,
      {send_rpc, PeerId,

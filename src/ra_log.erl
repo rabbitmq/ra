@@ -812,25 +812,25 @@ cache_without(Idx, Idx, Cache) ->
 cache_without(FromIdx, ToIdx, Cache) ->
     cache_without(FromIdx + 1, ToIdx, maps:remove(FromIdx, Cache)).
 
-cache_take(Start, Num, #?MODULE{cfg = Cfg,
-                                cache = Cache,
-                                last_index = LastIdx}) ->
-    Highest = min(LastIdx, Start + Num - 1),
+cache_take(StartIdx, Num, #?MODULE{cfg = Cfg,
+                                   cache = Cache,
+                                   last_index = LastIdx}) ->
+    HighestIdx = min(LastIdx, StartIdx + Num - 1),
     % cache needs to be queried in reverse to ensure
     % we can bail out when an item is not found
-    case cache_take0(Highest, Start, Cache, []) of
+    case cache_take0(HighestIdx, StartIdx, Cache, []) of
         [] ->
-            {[], 0, {Start, Highest}};
-        [Last | _] = Entries when element(1, Last) =:= Start ->
-            NumRead = Highest - Start + 1,
+            {[], 0, {StartIdx, HighestIdx}};
+        [Last | _] = Entries when element(1, Last) =:= StartIdx ->
+            NumRead = HighestIdx - StartIdx + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
             % there is no remainder - everything was in the cache
             {Entries, NumRead, undefined};
         [Last | _] = Entries ->
             LastEntryIdx = element(1, Last),
-            NumRead = Highest - LastEntryIdx + 1,
+            NumRead = HighestIdx - LastEntryIdx + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
-            {Entries, NumRead, {Start, LastEntryIdx - 1}}
+            {Entries, NumRead, {StartIdx, LastEntryIdx - 1}}
     end.
 
 cache_take0(Next, Last, _Cache, Acc)
@@ -1001,7 +1001,7 @@ cache_take0_test() ->
     Cache = #{1 => {1, 9, a}, 2 => {2, 9, b}, 3 => {3, 9, c}},
     State = #?MODULE{cache = Cache, last_index = 3, first_index = 1},
     % no remainder
-    {[{2, 9, b}], 1, undefined} = cache_take(2, 1, State),
+    {[{2, 9, b}], 1, undefined} = cache_take(2, 3, State),
     {[{2, 9, b}, {3, 9, c}], 2, undefined} = cache_take(2, 2, State),
     {[{1, 9, a}, {2, 9, b}, {3, 9, c}], 3, undefined} = cache_take(1, 3, State),
     % small remainder

@@ -25,14 +25,14 @@ all_tests() ->
      write,
      % write_missing_entry,
      % multi_write_missing_entry,
-     write_overwrite_entry
+     write_overwrite_entry,
      % write_index_starts_zero,
      % append,
      % append_missing_entry,
      % append_overwrite_entry,
      % append_index_starts_one,
-     % take,
-     % take_out_of_range,
+     take,
+     take_out_of_range
      % fetch,
      % fetch_out_of_range,
      % last_index_term,
