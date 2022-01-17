@@ -161,16 +161,16 @@ read(From, To, State, Entries) when From =< To ->
 read(_From, _To, State, Entries) ->
     {Entries, 0, State}.
 
-retry_read(0, From, To, _Acc, State) ->
+retry_read(0, From, To, _Entries0, State) ->
     exit({ra_log_reader_reader_retry_exhausted, From, To, State});
-retry_read(N, From, To, Acc,
+retry_read(N, From, To, Entries0,
            #?STATE{cfg = #cfg{uid = UId,
                               open_mem_tbls = OpenTbl,
                               closed_mem_tbls = ClosedTbl} = Cfg} = State) ->
     % 2. Check open mem table
     % 3. Check closed mem tables in turn
     % 4. Check on disk segments in turn
-    case open_mem_tbl_take(OpenTbl, UId, {From, To}, []) of
+    case open_mem_tbl_take(OpenTbl, UId, {From, To}, Entries0) of
         {Entries1, {_, C} = Counter0, undefined} ->
             ok = incr_counter(Cfg, Counter0),
             {Entries1, C, State};
@@ -191,7 +191,7 @@ retry_read(N, From, To, Acc,
                 {ets_miss, _Index} ->
                     %% this would happend if a mem table was deleted after
                     %% an external reader had read the range
-                    retry_read(N-1, From, To, Acc, State)
+                    retry_read(N-1, From, To, Entries0, State)
             end
     end.
 
