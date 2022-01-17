@@ -25,6 +25,7 @@ all_tests() ->
      write_then_overwrite,
      append_integrity_error,
      take,
+     take_cache,
      last
     ].
 
@@ -228,6 +229,15 @@ take(Config) ->
     {[], 0, _} = ra_log:take(5, 0, Log5),
     ok.
 
+take_cache(Config) ->
+    Log0 = ?config(ra_log, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    Log1 = ra_log:append_sync({Idx, Term, <<"one">>}, Log0),
+    Idx2 = Idx +1,
+    Log = ra_log:append({Idx2, Term, <<"two">>}, Log1),
+    {[?IDX(Idx), ?IDX(Idx2)], 2, _Log2} = ra_log:take(1, 2, Log),
+    ok.
 
 last(Config) ->
     Log0 = ?config(ra_log, Config),
