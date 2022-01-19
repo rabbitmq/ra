@@ -55,8 +55,8 @@ jobs:
       run: |
         ERLANG_HOME="$(dirname $(dirname $(which erl)))"
         cat << EOF >> .bazelrc
-          build --@bazel-erlang//:erlang_version=${{ matrix.erlang_version }}
-          build --@bazel-erlang//:erlang_home=${ERLANG_HOME}
+          build --@rules_erlang//:erlang_version=${{ matrix.erlang_version }}
+          build --@rules_erlang//:erlang_home=${ERLANG_HOME}
 
           build --incompatible_strict_action_env
 
