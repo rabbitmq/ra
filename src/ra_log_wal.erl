@@ -64,7 +64,7 @@
 -type wal_write_strategy() ::
     % writes all pending in one write(2) call then calls fsync(1)
     default |
-    % like delay writes but tries to open the file using synchronous io
+    % like default but tries to open the file using synchronous io
     % (O_SYNC) rather than a write(2) followed by an fsync.
     o_sync |
     %% low latency mode where writers are notifies _before_ syncing
