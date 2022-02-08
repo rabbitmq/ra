@@ -1267,8 +1267,13 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
         {true, State} ->
             {follower, State, [{next_event, Msg}]};
         {false, State} ->
-            % log_unhandled_msg(await_condition, Msg, State),
-            {await_condition, State, []}
+            case Msg of
+              #pre_vote_rpc{} = PreVote ->
+              process_pre_vote(await_condition, PreVote, State);
+            _ ->
+              log_unhandled_msg(await_condition, Msg, State),
+              {await_condition, State, []}
+            end
     end.
 
 -spec process_new_leader_queries(ra_server_state()) ->
