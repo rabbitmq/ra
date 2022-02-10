@@ -359,19 +359,21 @@ cleanup(#state{wal = #wal{fd = Fd}}) ->
     ok.
 
 serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
-    T = case Trunc of true -> 1; false -> 0 end,
     case Cache of
+        #{UId := <<_:1, BinId:23/bitstring>>} when Trunc ->
+            {<<1:1/unsigned, BinId/bitstring>>, 2, WriterCache};
         #{UId := BinId} ->
-            {<<T:1/unsigned, BinId/bitstring>>, 2, WriterCache};
+            {BinId, 3, WriterCache};
         _ ->
             % TODO: check overflows of Next
-            % cache the last 23 bits of the header word
-            BinId = <<1:1/unsigned, Next:22/unsigned>>,
+            % cache the header index binary to avoid re-creating it every time
+            % sets Truncate  = false initially as this is the most common case
+            T = case Trunc of true -> 1; false -> 0 end,
+            BinId = <<0:1/unsigned, 1:1/unsigned, Next:22/unsigned>>,
             IdDataLen = byte_size(UId),
-            Prefix = <<T:1/unsigned, 0:1/unsigned, Next:22/unsigned,
-                       IdDataLen:16/unsigned>>,
-            MarkerId = [Prefix, UId],
-            {MarkerId, 4 + IdDataLen,
+            Header = <<T:1/unsigned, 0:1/unsigned, Next:22/unsigned,
+                       IdDataLen:16/unsigned, UId/binary>>,
+            {Header, byte_size(Header),
              {Next + 1, Cache#{UId => BinId}}}
     end.
 
@@ -900,11 +902,6 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
                        file_size = FileSize,
                        wal = #wal{max_size = MaxWalSize,
                                   entry_count = Count}}) ->
-    TooManyEntries = case MaxEntries of
-                         undefined -> false;
-                         _ ->
-                             Count + 1 > MaxEntries
-                     end,
     %% Initially, MaxWalSize was a hard limit for the file size: if FileSize +
     %% DataSize went over that limit, we would use a new file. This was an
     %% issue when DataSize was larger than the limit alone.
@@ -913,4 +910,8 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
     %% calculation. It means that after DataSize bytes are written, the file
     %% will be larger than the configured maximum size. But at least it will
     %% accept Ra commands larger than the max WAL size.
-    FileSize > MaxWalSize orelse TooManyEntries.
+    FileSize > MaxWalSize orelse case MaxEntries of
+                                     undefined -> false;
+                                     _ ->
+                                         Count + 1 > MaxEntries
+                                 end.
