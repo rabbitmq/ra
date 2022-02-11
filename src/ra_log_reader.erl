@@ -90,6 +90,7 @@ update_segments(NewSegmentRefs,
                 #?STATE{open_segments = Open0,
                         segment_refs = SegmentRefs0} = State) ->
     SegmentRefs = compact_seg_refs(NewSegmentRefs ++ SegmentRefs0),
+    % SegmentRefs = NewSegmentRefs ++ SegmentRefs0,
     %% check if any of the updated segrefs refer to open segments
     %% we close these segments so that they can be re-opened with updated
     %% indexes if needed

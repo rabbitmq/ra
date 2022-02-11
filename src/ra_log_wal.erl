@@ -264,7 +264,7 @@ init(#{dir := Dir} = Conf0) ->
 handle_batch(Ops, State0) ->
     State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
-    {ok, [garbage_collect], complete_batch(State)}.
+    {ok, [], complete_batch(State)}.
 
 terminate(_Reason, State) ->
     _ = cleanup(State),
@@ -460,15 +460,7 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                                          tid = _Tid,
                                          from = From,
                                          inserts = Inserts0} = W} ->
-                      TblStart = case Truncate of
-                                     true ->
-                                         Idx;
-                                     false ->
-                                         % take the min of the First item in
-                                         % case we are overwriting before
-                                         % the previously first seen entry
-                                         min(TblStart0, Idx)
-                                 end,
+                      TblStart = table_start(Truncate, Idx, TblStart0),
                       Inserts = [{Idx, Term, Entry} | Inserts0],
                       Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
                                                       tbl_start = TblStart,
@@ -479,13 +471,8 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                       %% no batch_writer
                       {Tid, TblStart} =
                           case ets:lookup(OpnMemTbl, UId) of
-                              [{_UId, TblStart0, _To, T}] ->
-                                  {T, case Truncate of
-                                          true ->
-                                              Idx;
-                                          false ->
-                                              min(TblStart0, Idx)
-                                      end};
+                              [{_UId, TblStart0, _TblEnd, T}] ->
+                                  {T, table_start(Truncate, Idx, TblStart0)};
                               _ ->
                                   %% there is no table so need
                                   %% to open one
@@ -515,14 +502,7 @@ update_mem_table(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
     case ets:lookup(OpnMemTbl, UId) of
         [{_UId, From0, _To, Tid}] ->
             true = ets:insert(Tid, {Idx, Term, Entry}),
-            From = case Truncate of
-                       true ->
-                           Idx;
-                       false ->
-                           % take the min of the First item in case we are
-                           % overwriting before the previously first seen entry
-                           min(From0, Idx)
-                   end,
+            From = table_start(Truncate, Idx, From0),
             % update Last idx for current tbl
             % this is how followers overwrite previously seen entries
             % TODO: OPTIMISATION
@@ -530,8 +510,7 @@ update_mem_table(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
             % a local cache of unflushed entries it is sufficient to update
             % ra_log_open_mem_tables before completing the batch.
             % Instead the `From` and `To` could be kept in the batch.
-            _ = ets:update_element(OpnMemTbl, UId,
-                                   [{2, From}, {3, Idx}]);
+            _ = ets:update_element(OpnMemTbl, UId, [{2, From}, {3, Idx}]);
         [] ->
             % open new ets table
             Tid = open_mem_table(Cfg, UId),
@@ -589,7 +568,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         end;
 open_wal(File, Max, #conf{file_modes = Modes} = Conf0) ->
     {ok, Fd} = prepare_file(File, Modes),
-    Conf = maybe_pre_allocate(Conf0, Fd, Max),
+    Conf = Conf0, %%maybe_pre_allocate(Conf0, Fd, Max),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
@@ -615,28 +594,28 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
-    Max = Max0 - ?HEADER_SIZE,
-    case file:allocate(Fd, ?HEADER_SIZE, Max) of
-        ok ->
-            {ok, Max} = file:position(Fd, Max),
-            ok = file:truncate(Fd),
-            {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
-            Conf;
-        {error, _} ->
-            %% fallocate may not be supported, fall back to fsync instead
-            %% of fdatasync
-            ?INFO("wal: preallocation may not be supported by the file system"
-                  " falling back to fsync instead of fdatasync", []),
-            Conf#conf{sync_method = sync}
-    end;
-maybe_pre_allocate(Conf, _Fd, _Max) ->
-    Conf.
+% maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
+%     Max = Max0 - ?HEADER_SIZE,
+%     case file:allocate(Fd, ?HEADER_SIZE, Max) of
+%         ok ->
+%             {ok, Max} = file:position(Fd, Max),
+%             ok = file:truncate(Fd),
+%             {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+%             Conf;
+%         {error, _} ->
+%             %% fallocate may not be supported, fall back to fsync instead
+%             %% of fdatasync
+%             ?INFO("wal: preallocation may not be supported by the file system"
+%                   " falling back to fsync instead of fdatasync", []),
+%             Conf#conf{sync_method = sync}
+%     end;
+% maybe_pre_allocate(Conf, _Fd, _Max) ->
+%     Conf.
 
 close_file(undefined) ->
     ok;
 close_file(Fd) ->
-    ok = ra_file_handle:sync(Fd),
+    % ok = ra_file_handle:sync(Fd),
     ra_file_handle:close(Fd).
 
 close_open_mem_tables(MemTables,
@@ -677,7 +656,7 @@ open_mem_table(#conf{names = Names}, UId) ->
     % lookup the locally registered name of the process to use as ets
     % name
     ServerName = ra_directory:name_of(Names, UId),
-    Tid = ets:new(ServerName, [set, {read_concurrency, true}, public]),
+    Tid = ets:new(ServerName, [set, {write_concurrency, true}, public]),
     % immediately give away ownership to ets process
     true = ra_log_ets:give_away(Names, Tid),
     Tid.
@@ -915,3 +894,10 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
                                      _ ->
                                          Count + 1 > MaxEntries
                                  end.
+
+table_start(false, Idx, TblStart) ->
+    %% take the smaller of the existing first item
+    %% in case we are overwriting a previous entry
+    min(TblStart, Idx);
+table_start(true, Idx, _TblStart) ->
+    Idx.

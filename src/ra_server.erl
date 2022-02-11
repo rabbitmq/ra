@@ -523,7 +523,6 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
     {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
-
     {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
     {leader, State, Effects};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
@@ -2622,7 +2621,11 @@ consistent_query_reply({From, QueryFun, _ReadCommitIndex},
     Result = ra_machine:query(MacMod, QueryFun, MacState),
     {reply, From, {ok, Result, Id}}.
 
-process_pending_consistent_queries(#{cluster_change_permitted := false} = State0, Effects0) ->
+process_pending_consistent_queries(#{cluster_change_permitted := false} = State0,
+                                   Effects0) ->
+    {State0, Effects0};
+process_pending_consistent_queries(#{pending_consistent_queries := []} = State0,
+                                   Effects0) ->
     {State0, Effects0};
 process_pending_consistent_queries(#{cluster_change_permitted := true,
                                      pending_consistent_queries := Pending} = State0,
