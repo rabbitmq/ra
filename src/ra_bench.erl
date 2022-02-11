@@ -16,6 +16,9 @@
 -include("ra.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
+
+-define(PIPE_SIZE, 500).
+
 -export([
          init/1,
          apply/3,
@@ -24,6 +27,8 @@
          % stop_profile/0
 
          prepare/0,
+         run/3,
+         run/2,
          run/1,
          run/0,
          print_metrics/1
@@ -44,29 +49,53 @@ apply(#{index := I}, {noop, _}, State) ->
             {State, ok}
     end.
 
+run(Name, Nodes) ->
+    run(Name, Nodes, ?PIPE_SIZE).
+
+run(Name, Nodes, Pipe)
+  when is_atom(Name)
+       andalso is_list(Nodes) ->
+    run(#{name => Name,
+          seconds => 30,
+          target => 20000, % commands / sec
+          degree => 5,
+          pipe => Pipe,
+          nodes => Nodes}).
+
 run() ->
     run(#{name => noop,
           seconds => 10,
-          target => 500,
+          target => 20000, % commands / sec
           degree => 5,
           nodes => [node() | nodes()]}).
 
 -define(DATA_SIZE, 256).
 
+run(Nodes) when is_list(Nodes) ->
+    run(#{name => noop,
+          seconds => 30,
+          target => 20000, % commands / sec
+          degree => 5,
+          nodes => Nodes});
 run(#{name := Name,
       seconds := Secs,
       target := Target,
       nodes := Nodes,
       degree := Degree} = Conf) ->
 
-    io:format("starting servers on ~w", [Nodes]),
+    Pipe = maps:get(pipe, Conf, ?PIPE_SIZE),
+    io:format("running ra benchmark config: ~p~n", [Conf]),
+    io:format("starting servers on ~w~n", [Nodes]),
     {ok, ServerIds, []} = start(Name, Nodes),
-    {ok,_, Leader} = ra:members(hd(ServerIds)),
+    {ok, _, Leader} = ra:members(hd(ServerIds)),
     TotalOps = Secs * Target,
-    Each = TotalOps div Degree,
-    Start = erlang:system_time(millisecond),
+    Each = max(Pipe, TotalOps div Degree),
     DataSize = maps:get(data_size, Conf, ?DATA_SIZE),
-    Pids =  [spawn_client(self(), Leader, Each, DataSize) || _ <- lists:seq(1, Degree)],
+    Pids =  [spawn_client(self(), Leader, Each, DataSize, Pipe)
+             || _ <- lists:seq(1, Degree)],
+    io:format("running bench mark...~n", []),
+    Start = erlang:system_time(millisecond),
+    [P ! go || P <- Pids],
     %% wait for each pid
     Wait = ((Secs * 10000) * 4),
     [begin
@@ -80,7 +109,7 @@ run(#{name := Name,
      end || P <- Pids],
     End = erlang:system_time(millisecond),
     Taken = End - Start,
-    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec",
+    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
 
     BName = atom_to_binary(Name, utf8),
@@ -108,6 +137,7 @@ start(Name, Nodes) when is_atom(Name) ->
 
 prepare() ->
     _ = application:ensure_all_started(ra),
+    ra_system:start_default(),
     % error_logger:logfile(filename:join(ra_env:data_dir(), "log.log")),
     ok.
 
@@ -116,7 +146,6 @@ send_n(Leader, Data, N) ->
     ra:pipeline_command(Leader, {noop, Data}, make_ref(), low),
     send_n(Leader, Data, N-1).
 
--define(PIPE_SIZE, 200).
 
 client_loop(0, 0, _Leader, _Data) ->
     ok;
@@ -128,29 +157,32 @@ client_loop(Num, Sent, _Leader, Data) ->
             send_n(Leader, Data, ToSend),
             client_loop(Num - N, Sent - ToSend, Leader, Data);
         {ra_event, _, {rejected, {not_leader, NewLeader, _}}} ->
-            io:format("new leader ~w", [NewLeader]),
+            io:format("new leader ~w~n", [NewLeader]),
             send_n(NewLeader, Data, 1),
             client_loop(Num, Sent, NewLeader, Data);
         {ra_event, Leader, Evt} ->
-            io:format("unexpected ra_event ~w", [Evt]),
+            io:format("unexpected ra_event ~w~n", [Evt]),
             client_loop(Num, Sent, Leader, Data)
     end.
 
-spawn_client(Parent, Leader, Num, DataSize) when Num >= ?PIPE_SIZE ->
+spawn_client(Parent, Leader, Num, DataSize, Pipe) ->
     Data = crypto:strong_rand_bytes(DataSize),
     spawn_link(
       fun () ->
               %% first send one 1000 noop commands
               %% then top up as they are applied
-              send_n(Leader, Data, ?PIPE_SIZE),
-              ok = client_loop(Num, Num - ?PIPE_SIZE, Leader, Data),
-              Parent ! {done, self()}
+              receive
+                  go ->
+                      send_n(Leader, Data, Pipe),
+                      ok = client_loop(Num, Num - Pipe, Leader, Data),
+                      Parent ! {done, self()}
+              end
       end).
 
 print_metrics(Name) ->
-    io:format("Node ~w:", [node()]),
+    io:format("Node: ~w~n", [node()]),
     io:format("metrics ~p~n", [ets:lookup(ra_metrics, Name)]),
-    io:format("counters ~p", [ra_counters:overview()]).
+    io:format("counters ~p~n", [ra_counters:overview()]).
 
 
 
