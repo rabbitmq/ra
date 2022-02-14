@@ -381,22 +381,19 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
                   wal = #wal{writer_name_cache = Cache0,
                              entry_count = Count} = Wal} = State00) ->
-    EntryData = to_binary(Data0),
-    EntryDataLen = byte_size(EntryData),
-    {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
-    % fixed overhead =
-    % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
-    DataSize = HeaderLen + 24 + EntryDataLen,
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
     case should_roll_wal(State00) of
         true ->
             State = roll_over(State00),
-            % TODO: there is some redundant computation performed by
-            % recursing here it probably doesn't matter as it only happens
-            % when a wal file fills up
             write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
+            EntryData = to_binary(Data0),
+            EntryDataLen = byte_size(EntryData),
+            {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
+            % fixed overhead =
+            % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
+            DataSize = HeaderLen + 24 + EntryDataLen,
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache,
                                                  entry_count = Count + 1}},
             Entry = [<<Idx:64/unsigned,
@@ -675,7 +672,7 @@ post_notify_flush(_State) ->
 
 
 flush_pending(#state{wal = #wal{fd = Fd},
-                     batch = #batch{pending = Pend} = Batch,
+                     batch = #batch{pending = Pend},
                      conf =  #conf{write_strategy = WriteStrategy,
                                    sync_method = SyncMeth}} = State0) ->
 
@@ -687,22 +684,21 @@ flush_pending(#state{wal = #wal{fd = Fd},
         _ ->
             ok = ra_file_handle:write(Fd, Pend)
     end,
-    State0#state{batch = Batch#batch{pending = []}}.
+    State0#state{batch = undefined}.
 
 complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
                                      writes = NumWrites},
                       conf = #conf{open_mem_tbls_name = OpnTbl} = Cfg
-                      } = State00) ->
+                      } = State0) ->
     % TS = erlang:system_time(microsecond),
-    State0 = flush_pending(State00),
+    State = flush_pending(State0),
     % SyncTS = erlang:system_time(microsecond),
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
-    State = State0#state{batch = undefined},
 
     %% process writers
-    _ = maps:map(fun (Pid, #batch_writer{tbl_start = TblStart,
+    maps:foreach(fun (Pid, #batch_writer{tbl_start = TblStart,
                                          uid = UId,
                                          from = From,
                                          to = To,
