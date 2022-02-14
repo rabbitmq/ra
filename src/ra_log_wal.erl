@@ -303,7 +303,7 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     % First we recover all the tables using a temporary lookup table.
     % Then we update the actual lookup tables atomically.
     RecoverTid = ets:new(ra_log_recover_mem_tables,
-                         [set, {read_concurrency, true}, private]),
+                         [set, {write_concurrency, true}, private]),
     % compute all closed mem table lookups required so we can insert them
     % all at once, atomically
     % It needs to be atomic so that readers don't accidentally

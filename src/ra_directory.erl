@@ -46,8 +46,7 @@ init(Dir, #{directory := Name,
             directory_rev := NameRev}) ->
     _ = ets:new(Name, [named_table,
                           public,
-                          {read_concurrency, true},
-                          {write_concurrency, true}
+                          {read_concurrency, true}
                          ]),
     ok = ra_lib:make_dir(Dir),
     Dets = filename:join(Dir, "names.dets"),
