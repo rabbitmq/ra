@@ -72,7 +72,7 @@ run() ->
 
 print_counter(Last, Counter) ->
     V = counters:get(Counter, 1),
-    io:format("counter ~b~n", [ V - Last]),
+    io:format("ops/sec: ~b~n", [ V - Last]),
     timer:sleep(1000),
     print_counter(V, Counter).
 
