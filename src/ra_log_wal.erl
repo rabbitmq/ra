@@ -87,7 +87,8 @@
                open_mem_tbls_name :: atom(),
                closed_mem_tbls_name :: atom(),
                names :: ra_system:names(),
-               explicit_gc = false :: boolean()
+               explicit_gc = false :: boolean(),
+               pre_allocate = false :: boolean()
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -124,6 +125,7 @@
                       max_entries => non_neg_integer(),
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
+                      pre_allocate => boolean(),
                       write_strategy => wal_write_strategy(),
                       sync_method => sync | datasync,
                       recovery_chunk_size  => non_neg_integer(),
@@ -227,6 +229,7 @@ init(#{dir := Dir} = Conf0) ->
       recovery_chunk_size := RecoveryChunkSize,
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
+      pre_allocate := PreAllocate,
       write_strategy := WriteStrategy,
       sync_method := SyncMethod,
       garbage_collect := Gc,
@@ -260,7 +263,8 @@ init(#{dir := Dir} = Conf0) ->
                  open_mem_tbls_name = OpenTblsName,
                  closed_mem_tbls_name = ClosedTblsName,
                  names = Names,
-                 explicit_gc = Gc},
+                 explicit_gc = Gc,
+                 pre_allocate = PreAllocate},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -599,7 +603,9 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
+maybe_pre_allocate(#conf{pre_allocate = true,
+                         write_strategy = Strat} = Conf, Fd, Max0)
+  when Strat /= o_sync ->
     Max = Max0 - ?HEADER_SIZE,
     case file:allocate(Fd, ?HEADER_SIZE, Max) of
         ok ->
@@ -612,7 +618,7 @@ maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
             %% of fdatasync
             ?INFO("wal: preallocation may not be supported by the file system"
                   " falling back to fsync instead of fdatasync", []),
-            Conf#conf{sync_method = sync}
+            Conf#conf{pre_allocate = false}
     end;
 maybe_pre_allocate(Conf, _Fd, _Max) ->
     Conf.
@@ -875,6 +881,7 @@ merge_conf_defaults(Conf) ->
                  max_entries => undefined,
                  recovery_chunk_size => ?WAL_RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
+                 pre_allocate => false,
                  write_strategy => default,
                  garbage_collect => false,
                  sync_method => datasync}, Conf).
