@@ -86,7 +86,8 @@
                counter :: counters:counters_ref(),
                open_mem_tbls_name :: atom(),
                closed_mem_tbls_name :: atom(),
-               names :: ra_system:names()
+               names :: ra_system:names(),
+               explicit_gc = false :: boolean()
               }).
 
 -record(wal, {fd :: maybe(file:io_device()),
@@ -127,7 +128,8 @@
                       sync_method => sync | datasync,
                       recovery_chunk_size  => non_neg_integer(),
                       hibernate_after => non_neg_integer(),
-                      max_batch_size => non_neg_integer()
+                      max_batch_size => non_neg_integer(),
+                      garbage_collect => boolean()
                      }.
 
 -export_type([wal_conf/0,
@@ -227,6 +229,7 @@ init(#{dir := Dir} = Conf0) ->
       compute_checksums := ComputeChecksums,
       write_strategy := WriteStrategy,
       sync_method := SyncMethod,
+      garbage_collect := Gc,
       names := #{wal := WalName,
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
@@ -256,15 +259,20 @@ init(#{dir := Dir} = Conf0) ->
                  counter = CRef,
                  open_mem_tbls_name = OpenTblsName,
                  closed_mem_tbls_name = ClosedTblsName,
-                 names = Names},
+                 names = Names,
+                 explicit_gc = Gc},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
-handle_batch(Ops, State0) ->
+handle_batch(Ops, #state{conf = #conf{explicit_gc = Gc}} = State0) ->
     State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
     %% process all ops
-    {ok, [], complete_batch(State)}.
+    Actions = case Gc of
+                  true -> [garbage_collect];
+                  false -> []
+              end,
+    {ok, Actions, complete_batch(State)}.
 
 terminate(_Reason, State) ->
     _ = cleanup(State),
@@ -698,7 +706,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
 
     %% process writers
-    maps:foreach(fun (Pid, #batch_writer{tbl_start = TblStart,
+    maps_foreach(fun (Pid, #batch_writer{tbl_start = TblStart,
                                          uid = UId,
                                          from = From,
                                          to = To,
@@ -868,6 +876,7 @@ merge_conf_defaults(Conf) ->
                  recovery_chunk_size => ?WAL_RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
                  write_strategy => default,
+                 garbage_collect => false,
                  sync_method => datasync}, Conf).
 
 to_binary(Term) ->
@@ -897,3 +906,12 @@ table_start(false, Idx, TblStart) ->
     min(TblStart, Idx);
 table_start(true, Idx, _TblStart) ->
     Idx.
+
+%% because OTP 23 support
+maps_foreach(Fun, {K, V, I}) ->
+    Fun(K, V),
+    maps_foreach(Fun, maps:next(I));
+maps_foreach(_Fun, none) ->
+    ok;
+maps_foreach(Fun, Map) when is_map(Map) ->
+    maps_foreach(Fun, maps:next(maps:iterator(Map))).

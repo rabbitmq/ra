@@ -190,6 +190,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     Conf = Conf0#{dir => Dir},
     WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => ComputeChecksums,
+                                               garbage_collect => true,
                                                max_batch_size => BatchSize}),
     Data = crypto:strong_rand_bytes(DataSize),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
@@ -230,7 +231,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     %        [NumWrites, Taken / 1000, Reds]),
 
     % assert memory use after isn't absurdly larger than before
-    % ?assert(MemAfter < (MemBefore * 3)),
+    ?assert(MemAfter < (MemBefore * 3)),
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),

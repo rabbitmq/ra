@@ -36,6 +36,7 @@
                     wal_write_strategy => default | o_sync | sync_after_notify,
                     wal_sync_method => datasync | sync | none,
                     wal_hibernate_after => non_neg_integer(),
+                    wal_garbage_collect => boolean(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer()
                    }.
@@ -68,6 +69,7 @@ default_config() ->
     WalSyncMethod = application:get_env(ra, wal_sync_method, datasync),
     DataDir = ra_env:data_dir(),
     WalDataDir = application:get_env(ra, wal_data_dir, DataDir),
+    WalGarbageCollect = application:get_env(ra, wal_garbage_collect, false),
     #{name => default,
       data_dir => DataDir,
       wal_data_dir => WalDataDir,
@@ -76,6 +78,7 @@ default_config() ->
       wal_max_batch_size => WalMaxBatchSize,
       wal_max_entries => WalMaxEntries,
       wal_write_strategy => WalWriteStrategy,
+      wal_garbage_collect => WalGarbageCollect,
       wal_sync_method => WalSyncMethod,
       segment_max_entries => SegmentMaxEntries,
       names =>
