@@ -64,6 +64,7 @@ make_wal_conf(#{data_dir := DataDir,
     SyncMethod = maps:get(wal_sync_method, Cfg, datasync),
     HibAfter = maps:get(wal_hibernate_after, Cfg, undefined),
     Gc = maps:get(wal_garbage_collect, Cfg, false),
+    PreAlloc = maps:get(wal_pre_allocate, Cfg, false),
     #{name => WalName,
       names => Names,
       dir => WalDir,
@@ -75,5 +76,6 @@ make_wal_conf(#{data_dir := DataDir,
       sync_method => SyncMethod,
       max_batch_size => MaxBatchSize,
       hibernate_after => HibAfter,
-      garbage_collect => Gc
+      garbage_collect => Gc,
+      pre_allocate => PreAlloc
      }.
