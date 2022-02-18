@@ -120,7 +120,6 @@ handle_cast({mem_tables, [Table], WalFile}, State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, 1),
     ok = do_segment(Table, State),
     _ = prim_file:delete(WalFile),
-    % true = erlang:garbage_collect(),
     {noreply, State};
 handle_cast({mem_tables, Tables, WalFile}, State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
@@ -154,9 +153,6 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
     _ = prim_file:delete(WalFile),
-    %% ensure we release any bin refs that might have been acquired during
-    %% segment write
-    true = erlang:garbage_collect(),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             #state{segment_conf = SegConf} = State0) ->
@@ -229,7 +225,6 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
             _ = clean_closed_mem_tables(System, ServerUId, Tid),
             ok;
         Segment0 ->
-            put(entry, term_to_binary(entry())),
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                    Segment0, State) of
                 undefined ->
@@ -293,9 +288,6 @@ clean_closed_mem_tables(System, UId, Tid) ->
          true = ets:delete_object(ClosedTbl, O)
      end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
-% ra_log_segment_append(Seg0, _Idx, _Term, _Data) ->
-%     {ok, Seg0}.
-
 append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
     StartIdx = start_index(UId, StartIdx0),
     % EndIdx + 1 because FP
@@ -306,7 +298,6 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
     {Seg, Closed};
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
-    % Data = get(entry),
     Data = term_to_binary(Data0),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
@@ -393,23 +384,3 @@ open_file(Dir, SegConf) ->
                   "error: ~W. Exiting", [File, Err, 10]),
             exit(Err)
     end.
-
-entry() ->
-    {'$usr',#{ts => 1644577079641},
-     {noop,<<85,198,248,145,222,249,132,39,202,193,26,232,27,79,165,136,
-             53,62,154,18,1,43,196,165,99,193,108,103,87,145,118,185,152,
-             172,130,44,87,236,78,64,231,38,105,158,234,105,204,74,179,12,
-             112,153,145,127,45,155,61,144,217,33,201,99,78,238,230,202,9,
-             241,160,219,83,118,83,195,84,92,173,99,163,199,165,20,161,53,
-             51,11,34,211,27,106,96,126,11,3,230,207,197,47,210,67,8,230,
-             117,239,161,122,58,85,60,5,0,217,48,248,227,216,161,34,59,
-             102,215,177,201,142,40,236,22,143,6,255,87,111,69,64,164,133,
-             52,202,136,186,61,180,248,11,43,251,212,77,167,163,33,165,
-             162,111,83,15,181,139,196,219,142,40,149,250,20,125,41,126,
-             95,32,36,144,154,219,120,99,236,96,34,17,91,135,85,167,148,
-             242,108,222,220,184,86,134,181,243,53,143,10,248,106,21,32,
-             142,228,117,100,42,215,234,11,76,180,97,210,151,21,62,168,59,
-             195,53,29,26,128,93,243,226,136,227,215,9,237,31,152,226,208,
-             222,128,56,162,242,168,65,61,70,191,138,252,125,190,124,59,
-             129,97,1,134,194>>},
-     {notify,make_ref(),self()}}.

@@ -230,7 +230,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     %        [NumWrites, Taken / 1000, Reds]),
 
     % assert memory use after isn't absurdly larger than before
-    ?assert(MemAfter < (MemBefore * 3)),
+    % ?assert(MemAfter < (MemBefore * 3)),
 
     % assert we aren't regressing on reductions used
     ?assert(Reds < 52023339 * 1.1),

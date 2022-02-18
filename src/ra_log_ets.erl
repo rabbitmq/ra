@@ -49,7 +49,6 @@ init([#{data_dir := DataDir,
                    closed_mem_tbls := ClosedTbl} = Names}]) ->
     process_flag(trap_exit, true),
     TableFlags =  [named_table,
-                   % {read_concurrency, true},
                    {write_concurrency, true},
                    public],
     % create mem table lookup table to be used to map ra cluster name

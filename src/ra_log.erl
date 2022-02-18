@@ -362,12 +362,6 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
              %% delaying truncate_cache until the next event allows any entries
              %% that became committed to be read from cache rather than ETS
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
-            % this case truncation shouldn't be too expensive as the cache
-            % only contains the unflushed window of entries typically less than
-            % 10ms worth of entries
-            % truncate_cache(FromIdx, ToIdx,
-            %                State#?MODULE{last_written_index_term = {ToIdx, Term}},
-            %                []);
         {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by

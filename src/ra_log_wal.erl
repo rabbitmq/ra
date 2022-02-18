@@ -565,7 +565,7 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
         end;
 open_wal(File, Max, #conf{file_modes = Modes} = Conf0) ->
     {ok, Fd} = prepare_file(File, Modes),
-    Conf = Conf0, %%maybe_pre_allocate(Conf0, Fd, Max),
+    Conf = maybe_pre_allocate(Conf0, Fd, Max),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
@@ -591,23 +591,23 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-% maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
-%     Max = Max0 - ?HEADER_SIZE,
-%     case file:allocate(Fd, ?HEADER_SIZE, Max) of
-%         ok ->
-%             {ok, Max} = file:position(Fd, Max),
-%             ok = file:truncate(Fd),
-%             {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
-%             Conf;
-%         {error, _} ->
-%             %% fallocate may not be supported, fall back to fsync instead
-%             %% of fdatasync
-%             ?INFO("wal: preallocation may not be supported by the file system"
-%                   " falling back to fsync instead of fdatasync", []),
-%             Conf#conf{sync_method = sync}
-%     end;
-% maybe_pre_allocate(Conf, _Fd, _Max) ->
-%     Conf.
+maybe_pre_allocate(#conf{sync_method = datasync} = Conf, Fd, Max0) ->
+    Max = Max0 - ?HEADER_SIZE,
+    case file:allocate(Fd, ?HEADER_SIZE, Max) of
+        ok ->
+            {ok, Max} = file:position(Fd, Max),
+            ok = file:truncate(Fd),
+            {ok, ?HEADER_SIZE} = file:position(Fd, ?HEADER_SIZE),
+            Conf;
+        {error, _} ->
+            %% fallocate may not be supported, fall back to fsync instead
+            %% of fdatasync
+            ?INFO("wal: preallocation may not be supported by the file system"
+                  " falling back to fsync instead of fdatasync", []),
+            Conf#conf{sync_method = sync}
+    end;
+maybe_pre_allocate(Conf, _Fd, _Max) ->
+    Conf.
 
 close_file(undefined) ->
     ok;
