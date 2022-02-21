@@ -19,6 +19,7 @@
          update_first_index/2,
          read/3,
          read/4,
+         sparse_read/3,
          fetch_term/2,
          delete_closed_mem_table_object/2,
          closed_mem_tables/1,
@@ -161,6 +162,31 @@ read(From, To, State, Entries) when From =< To ->
 read(_From, _To, State, Entries) ->
     {Entries, 0, State}.
 
+-spec sparse_read(state(), [ra_index()], [log_entry()]) ->
+    {[log_entry()], state()}.
+sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes0, Entries0) ->
+    case open_mem_tbl_sparse_read(Cfg, Indexes0, Entries0) of
+        {Entries1, OpenC, []} ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPEN_MEM_TBL, OpenC),
+            {Entries1, State};
+        {Entries1, OpenC, Rem1} ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPEN_MEM_TBL, OpenC),
+            case catch closed_mem_tbl_sparse_read(Cfg, Rem1, Entries1) of
+                {Entries2, ClosedC, []} ->
+                    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CLOSED_MEM_TBL, ClosedC),
+                    {Entries2, State};
+                {Entries2, ClosedC, Rem2} ->
+                    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CLOSED_MEM_TBL, ClosedC),
+                    {Open, _, SegC, Entries} = (catch segment_sparse_read(State, Rem2, Entries2)),
+                    ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
+                    {Entries, State#?MODULE{open_segments = Open}}
+                % {ets_miss, _Index} ->
+                %     %% this would happend if a mem table was deleted after
+                %     %% an external reader had read the range
+                %     sparse_read(N-1, From, To, Entries0, State)
+            end
+    end.
+
 retry_read(0, From, To, _Entries0, State) ->
     exit({ra_log_reader_reader_retry_exhausted, From, To, State});
 retry_read(N, From, To, Entries0,
@@ -258,6 +284,33 @@ segment_term_query0(Idx, [_ | Tail], Open, Cfg) ->
 segment_term_query0(_Idx, [], Open, _) ->
     {undefined, Open}.
 
+open_mem_tbl_sparse_read(#cfg{uid = UId, open_mem_tbls = OpenTbl},
+                         Indexes, Acc0) ->
+    case ets:lookup(OpenTbl, UId) of
+        [{_, TStart, TEnd, Tid}] ->
+            mem_tbl_sparse_read(Indexes, TStart, TEnd, Tid, 0, Acc0);
+        [] ->
+            {Acc0, 0, Indexes}
+    end.
+
+closed_mem_tbl_sparse_read(#cfg{uid = UId,
+                                closed_mem_tbls = ClosedTbl}, Indexes, Acc0) ->
+    case closed_mem_tables(ClosedTbl, UId) of
+        [] ->
+            {Acc0, 0, Indexes};
+        Tables ->
+            lists:foldl(fun({_, _, TblSt, TblEnd, Tid}, {Ac, Num, Idxs}) ->
+                                mem_tbl_sparse_read(Idxs, TblSt, TblEnd, Tid, Num, Ac)
+                        end, {Acc0, 0, Indexes}, Tables)
+    end.
+
+mem_tbl_sparse_read([I | Rem], TblStart, TblEnd, Tid, C, Entries0)
+  when I >= TblStart andalso I =< TblEnd ->
+    [Entry] = ets:lookup(Tid, I),
+    mem_tbl_sparse_read(Rem, TblStart, TblEnd, Tid, C + 1, [Entry | Entries0]);
+mem_tbl_sparse_read(Rem, _TblStart, _TblEnd, _Tid, C, Entries0) ->
+    {Entries0, C, Rem}.
+
 open_mem_tbl_take(OpenTbl, Id, {Start0, End}, Acc0) ->
     case ets:lookup(OpenTbl, Id) of
         [{_, TStart, TEnd, Tid}] ->
@@ -327,8 +380,7 @@ segment_take(#?STATE{segment_refs = [],
     {Open, undefined, Entries0};
 segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
                      open_segments = OpenSegs,
-                     cfg = #cfg{directory = Dir,
-                                access_pattern = AccessPattern}},
+                     cfg = Cfg},
              {RStart, REnd}, Entries0) ->
     Range = {RStart, min(SEnd, REnd)},
     lists:foldl(
@@ -340,22 +392,7 @@ segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
               Acc;
          ({From, To, Fn}, {Open0, {Start0, End}, E0})
            when To >= End ->
-              {Seg, Open} =
-                  case ra_flru:fetch(Fn, Open0) of
-                      {ok, S, Open1} ->
-                          {S, Open1};
-                      error ->
-                          AbsFn = filename:join(Dir, Fn),
-                          case ra_log_segment:open(AbsFn, #{mode => read,
-                                                            access_pattern => AccessPattern}) of
-                              {ok, S} ->
-                                  {S, ra_flru:insert(Fn, S, Open0)};
-                              {error, Err} ->
-                                  exit({ra_log_failed_to_open_segment, Err,
-                                        AbsFn})
-                          end
-                  end,
-
+              {Seg, Open} = get_segment(Cfg, Open0, Fn),
               % actual start point cannot be prior to first segment
               % index
               Start = max(Start0, From),
@@ -371,9 +408,65 @@ segment_take(#?STATE{segment_refs = [{_From, SEnd, _Fn} | _] = SegRefs,
               {Open, Rem, Entries}
       end, {OpenSegs, Range, Entries0}, SegRefs).
 
+segment_sparse_read(#?STATE{open_segments = Open}, [], Entries0) ->
+    {Open, [], 0, Entries0};
+segment_sparse_read(#?STATE{segment_refs = SegRefs,
+                            open_segments = OpenSegs,
+                            cfg = Cfg}, Indexes, Entries0) ->
+    lists:foldl(
+      fun(_, {_, [], _, _} = Acc) ->
+              %% we're done reading
+              throw(Acc);
+         ({From, To, Fn}, {Open0, [NextIdx | _] = Idxs, C, En0})
+           when NextIdx >= From andalso NextIdx =< To ->
+              {Seg, Open} = get_segment(Cfg, Open0, Fn),
+              {ReadIdxs, RemIdxs} =
+                  sparse_read_split(fun (I) ->
+                                            I >= From andalso I =< To
+                                    end, Idxs, []),
+              {_Cache, ReadSparseCount, Entries} =
+                  ra_log_segment:read_sparse(Seg, ReadIdxs,
+                                             fun binary_to_term/1, []),
+              {Open, RemIdxs, C +  ReadSparseCount,
+               lists:reverse(Entries, En0)};
+         (_Segref, Acc) ->
+              Acc
+      end, {OpenSegs, Indexes, 0, Entries0}, SegRefs).
+
 flru_handler({_, Seg}) ->
     _ = ra_log_segment:close(Seg),
     ok.
+
+%% like lists:splitwith but without reversing the accumulator
+sparse_read_split(Fun, [E | Rem] = All, Acc) ->
+    case Fun(E) of
+        true ->
+            sparse_read_split(Fun, Rem, [E | Acc]);
+        false ->
+            {Acc, All}
+    end;
+sparse_read_split(_Fun, [], Acc) ->
+    {Acc, []}.
+
+
+get_segment(#cfg{directory = Dir,
+                 access_pattern = AccessPattern}, Open0, Fn) ->
+    case ra_flru:fetch(Fn, Open0) of
+        {ok, S, Open1} ->
+            {S, Open1};
+        error ->
+            AbsFn = filename:join(Dir, Fn),
+            case ra_log_segment:open(AbsFn,
+                                     #{mode => read,
+                                       access_pattern => AccessPattern})
+            of
+                {ok, S} ->
+                    {S, ra_flru:insert(Fn, S, Open0)};
+                {error, Err} ->
+                    exit({ra_log_failed_to_open_segment, Err,
+                          AbsFn})
+            end
+    end.
 
 closed_mem_tables(Tbl, Id) ->
     case ets:lookup(Tbl, Id) of
@@ -413,6 +506,11 @@ compact_seg_refs(SegRefs) ->
                     false -> [S | Acc]
                 end
         end, [], SegRefs)).
+
+incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:add(Cnt, Ix, N);
+incr_counter(#cfg{counter = undefined}, _, _) ->
+    ok.
 
 incr_counter(#cfg{counter = Cnt}, {Ix, N}) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

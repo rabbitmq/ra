@@ -1118,19 +1118,9 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
   when is_list(Idxs) ->
     %% Useful to implement a batch send of data obtained from the log.
     %% 1) Retrieve all data from the list of indexes
-    {Data, SS} = lists:foldr(
-                   fun(Idx, {Data0, Acc0}) ->
-                           case ra_server:read_at(Idx, Acc0) of
-                               {ok, D, Acc} ->
-                                   {[D | Data0], Acc};
-                               {error, _} ->
-                                   %% this is unrecoverable
-                                   exit({failed_to_read_index_for_log_effect,
-                                         Idx})
-                           end
-                   end, {[], SS0}, Idxs),
-    %% 2) Apply the fun to the list of data as a whole and deal with any effects
-    case Fun(Data) of
+    {ok, Cmds, SS} = ra_server:log_read(Idxs, SS0),
+    %% 2) Apply the fun to the list of commands as a whole and deal with any effects
+    case Fun(Cmds) of
         [] ->
             {State#state{server_state = SS}, Actions};
         Effects ->

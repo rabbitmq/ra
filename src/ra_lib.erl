@@ -40,6 +40,7 @@
          retry/3,
          write_file/2,
          lists_chunk/2,
+         lists_detect_sort/1,
          is_dir/1,
          is_file/1,
          ensure_dir/1,
@@ -347,6 +348,33 @@ lists_take(_N, [], Acc) ->
 lists_take(N, [H | T], Acc) ->
     lists_take(N-1, T, [H | Acc]).
 
+lists_detect_sort([]) ->
+    undefined;
+lists_detect_sort([_]) ->
+    undefined;
+lists_detect_sort([A | [A | _] = Rem]) ->
+    %% direction not determined yet
+    lists_detect_sort(Rem);
+lists_detect_sort([A, B | Rem]) when A > B ->
+    do_descending(B, Rem);
+lists_detect_sort([A, B | Rem]) when A < B ->
+    do_ascending(B, Rem).
+
+do_descending(_A, []) ->
+    descending;
+do_descending(A, [B | Rem])
+  when B =< A ->
+    do_descending(B, Rem);
+do_descending(_A, _) ->
+    unsorted.
+
+do_ascending(_A, []) ->
+    ascending;
+do_ascending(A, [B | Rem])
+  when B >= A ->
+    do_ascending(B, Rem);
+do_ascending(_A, _) ->
+    unsorted.
 
 is_dir(Dir) ->
     case prim_file:read_file_info(Dir) of
@@ -458,6 +486,21 @@ validate_base64uri_test() ->
 
 zeropad_test() ->
     "0000000000000037" = zpad_hex(55),
+    ok.
+
+lists_detect_sort_test() ->
+    ?assertEqual(undefined, lists_detect_sort([])),
+    ?assertEqual(undefined, lists_detect_sort([1])),
+    ?assertEqual(undefined, lists_detect_sort([1, 1])),
+    ?assertEqual(ascending, lists_detect_sort([1, 1, 2])),
+    ?assertEqual(unsorted, lists_detect_sort([1, 2, 1])),
+    ?assertEqual(unsorted, lists_detect_sort([2, 1, 2])),
+    ?assertEqual(descending, lists_detect_sort([2, 1])),
+    ?assertEqual(descending, lists_detect_sort([2, 2, 1])),
+    ?assertEqual(ascending, lists_detect_sort([1, 1, 2])),
+    ?assertEqual(ascending, lists_detect_sort([1, 2, 3, 4, 6, 6])),
+    ?assertEqual(unsorted, lists_detect_sort([1, 2, 3, 4, 6, 5])),
+
     ok.
 
 -endif.

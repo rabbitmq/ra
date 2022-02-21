@@ -17,6 +17,7 @@
          append_sync/2,
          write_sync/2,
          take/3,
+         sparse_read/2,
          last_index_term/1,
          set_last_index/2,
          handle_event/2,
@@ -307,6 +308,48 @@ take(Start, Num, #?MODULE{cfg = Cfg,
     end;
 take(_, _, State) ->
     {[], 0, State}.
+
+
+%% read a list of indexes,
+%% will be returned in ascending order
+-spec sparse_read([ra_index()], state()) ->
+    {[log_entry()], state()}.
+sparse_read(Indexes0, #?MODULE{cfg = Cfg,
+                               reader = Reader0,
+                               cache = Cache} = State) ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
+    %% indexes need to be sorted high -> low but will be returned
+    %% low -> high
+    Sort = ra_lib:lists_detect_sort(Indexes0),
+    Indexes1 = case Sort of
+                   unsorted ->
+                       lists:sort(fun erlang:'>'/2, Indexes0);
+                   ascending ->
+                       lists:reverse(Indexes0);
+                   _ ->
+                       % descending or undefined
+                       Indexes0
+               end,
+    {Entries0, CacheNumRead, Indexes} = cache_read_sparse(Indexes1, Cache, []),
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
+    {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
+    Entries = case Sort of
+                  descending ->
+                      lists:reverse(Entries1);
+                  unsorted ->
+                      %% need to return entries in the order of the original
+                      %% Indexes0 list
+                      Lookup = lists:foldl(
+                                 fun ({I, _, _} = E, Acc) ->
+                                         maps:put(I, E, Acc)
+                                 end, #{}, Entries1),
+                      maps_with_values(Indexes0, Lookup);
+                  _ ->
+                      %% nothing to do for ascending or undefined
+                      Entries1
+              end,
+
+    {Entries, State#?MODULE{reader = Reader}}.
 
 -spec last_index_term(state()) -> ra_idxterm().
 last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
@@ -844,6 +887,19 @@ cache_take0(Next, Last, Cache, Acc) ->
             Acc
     end.
 
+cache_read_sparse(Indexes, Cache, Acc) ->
+    cache_read_sparse(Indexes, Cache, 0, Acc).
+
+cache_read_sparse([], _Cache, Num, Acc) ->
+    {Acc, Num, []}; %% no reminder
+cache_read_sparse([Next | Rem] = Indexes, Cache, Num, Acc) ->
+    case Cache of
+        #{Next := Entry} ->
+            cache_read_sparse(Rem, Cache, Num + 1, [Entry | Acc]);
+        _ ->
+            {Acc, Num, Indexes}
+    end.
+
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
@@ -993,6 +1049,18 @@ incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
 server_data_dir(Dir, UId) ->
     Me = ra_lib:to_list(UId),
     filename:join(Dir, Me).
+
+maps_with_values(Keys, Map) ->
+    lists:foldr(
+      fun (K, Acc) ->
+              case Map of
+                  #{K := Value} ->
+                      [Value | Acc];
+                  _ ->
+                      Acc
+              end
+      end, [], Keys).
+
 %%%% TESTS
 
 -ifdef(TEST).

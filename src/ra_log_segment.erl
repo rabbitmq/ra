@@ -13,6 +13,7 @@
          sync/1,
          read/3,
          read_cons/5,
+         read_sparse/4,
          term_query/2,
          close/1,
          range/1,
@@ -20,6 +21,7 @@
          max_count/1,
          filename/1,
          segref/1,
+         advise/1,
          is_same_as/2]).
 
 -export([dump/1,
@@ -34,7 +36,8 @@
 -define(DEFAULT_MAX_PENDING, 1024).
 -define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
 -define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
--define(READ_AHEAD_B, 64000).
+-define(BLOCK_SIZE, 4096). %% assumed block size
+-define(READ_AHEAD_B, ?BLOCK_SIZE * 16). %% some multiple of common block sizes
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
                               Offset :: non_neg_integer(), % 32 bit
@@ -258,10 +261,62 @@ read(State, Idx, Num) ->
 -spec read_cons(state(), ra_index(), Num :: non_neg_integer(),
                 fun((binary()) -> term()), Acc) ->
     Acc when Acc :: [{ra_index(), ra_term(), binary()}].
-read_cons(#state{cfg = #cfg{fd = _Fd, mode = read},
-                 index = Index} = State, Idx,
-          Num, Fun, Acc) ->
-    pread_cons(State, Idx, Idx + Num - 1, Index, Fun, Acc).
+read_cons(#state{cfg = #cfg{mode = read} = Cfg,
+                 cache = Cache,
+                 index = Index}, Idx, Num, Fun, Acc) ->
+    pread_cons(Cfg, Cache, Idx, Idx + Num - 1, Index, Fun, Acc).
+
+read_sparse(#state{index = Index,
+                   cfg = Cfg,
+                   cache = _Cache0}, Indexes, Fun, Acc) ->
+    Cache0 = prepare_cache(Cfg, Indexes, Index),
+    Entries = read_sparse0(Cfg, Indexes, Index, Cache0, Fun, Acc),
+    {undefined, length(Entries), Entries}.
+
+read_sparse0(_Cfg, [], _Index, _Cache, _Fun, Acc) ->
+    Acc;
+read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc) ->
+    {Term, Offset, Length, _} = map_get(NextIdx, Index),
+    case cache_read(Cache0, Offset, Length) of
+        false ->
+            case prepare_cache(Cfg, Indexes, Index) of
+                undefined ->
+                    {ok, Data, _} = pread(Cfg, undefined, Offset, Length),
+                    read_sparse0(Cfg, Rem, Index, undefined, Fun,
+                                 [{NextIdx, Term, Fun(Data)} | Acc]);
+                Cache ->
+                    read_sparse0(Cfg, Indexes, Index, Cache, Fun, Acc)
+            end;
+        Data ->
+            read_sparse0(Cfg, Rem, Index, Cache0, Fun,
+                         [{NextIdx, Term, Fun(Data)} | Acc])
+    end.
+
+cache_read({CPos, CLen, Bin}, Pos, Length)
+  when Pos >= CPos andalso
+       Pos + Length =< (CPos + CLen) ->
+    %% read fits inside cache
+    binary:part(Bin, Pos - CPos, Length);
+cache_read(_, _, _) ->
+    false.
+
+prepare_cache(#cfg{} = _Cfg, [_], _SegIndex) ->
+    undefined;
+prepare_cache(#cfg{fd = Fd} = _Cfg, [First | Rem], SegIndex) ->
+    case consec_run(First, First, Rem) of
+        {I, I} ->
+            %% no run, no cache;
+            undefined;
+        {FstI, LastI} ->
+            {_, FstOffset, FstLength, _} = map_get(FstI, SegIndex),
+            {_, LastOffset, LastLength, _} = map_get(LastI, SegIndex),
+            %% The cache needs to be at least as large as the next entry
+            %% but no larger than ?READ_AHEAD_B
+            MaxCacheLen = FstLength + LastOffset + LastLength,
+            CacheLen = min(MaxCacheLen, max(FstLength, ?READ_AHEAD_B)),
+            {ok, CacheData} = ra_file_handle:pread(Fd, FstOffset, CacheLen),
+            {FstOffset, byte_size(CacheData), CacheData}
+    end.
 
 -spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
 term_query(#state{index = Index}, Idx) ->
@@ -271,32 +326,32 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
-pread_cons(_Fd, Idx, FinalIdx, _, _Fun, Acc)
+pread_cons(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, Acc)
   when Idx > FinalIdx ->
     Acc;
-pread_cons(#state{cfg = #cfg{fd = _Fd}} = State0, Idx,
+pread_cons(Cfg, Cache0, Idx,
            FinalIdx, Index, Fun, Acc) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
-            case pread(State0, Offset, Length) of
-                {ok, Data, State} ->
+            case pread(Cfg, Cache0, Offset, Length) of
+                {ok, Data, Cache} ->
                     %% performc crc check
                     case erlang:crc32(Data) of
                         Crc ->
                             [{Idx, Term, Fun(Data)} |
-                             pread_cons(State, Idx+1, FinalIdx, Index, Fun, Acc)];
+                             pread_cons(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, Acc)];
                         _ ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
-                                  State#state.cfg#cfg.filename})
+                                  Cfg#cfg.filename})
                     end;
                 {error, partial_data} ->
                     %% we did not read the correct number of bytes suggesting
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
-                          State0#state.cfg#cfg.filename})
+                          Cfg#cfg.filename})
             end;
         _ ->
-            pread_cons(State0, Idx+1, FinalIdx, Index, Fun, Acc)
+            pread_cons(Cfg, Cache0, Idx+1, FinalIdx, Index, Fun, Acc)
     end.
 
 -spec range(state()) -> maybe({ra_index(), ra_index()}).
@@ -317,6 +372,10 @@ segref(#state{range = undefined}) ->
 segref(#state{range = {Start, End},
               cfg = #cfg{filename = Fn}}) ->
     {Start, End, ra_lib:to_string(filename:basename(Fn))}.
+
+advise(#state{cfg = #cfg{fd = Fd, mode = read}}) ->
+    file:advise(Fd, 0, 0, will_need).
+
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
@@ -475,36 +534,35 @@ read_header(Fd) ->
             Err
     end.
 
-pread(#state{cfg = #cfg{access_pattern = random,
-                        fd = Fd}} = State, Pos, Length) ->
+%% TODO: avoid updating state each time
+pread(#cfg{access_pattern = random,
+           fd = Fd}, Cache, Pos, Length) ->
     %% no cache
     {ok, Data} = ra_file_handle:pread(Fd, Pos, Length),
     case byte_size(Data)  of
         Length ->
-            {ok, Data, State};
+            {ok, Data, Cache};
         _ ->
             {error, partial_data}
     end;
-pread(#state{cfg = #cfg{fd = _Fd},
-             cache = {CPos, CLen, Bin}} = State, Pos, Length)
+pread(#cfg{}, {CPos, CLen, Bin} = Cache, Pos, Length)
   when Pos >= CPos andalso
        Pos + Length =< (CPos + CLen) ->
     %% read fits inside cache
-    {ok, binary:part(Bin, Pos - CPos, Length), State};
-pread(#state{cfg = #cfg{fd = Fd},
-             cache = undefined} = State, Pos, Length) ->
+    {ok, binary:part(Bin, Pos - CPos, Length), Cache};
+pread(#cfg{access_pattern = sequential,
+           fd = Fd} = Cfg, undefined, Pos, Length) ->
     CacheLen = max(Length, ?READ_AHEAD_B),
-    {ok, Cache} = ra_file_handle:pread(Fd, Pos, CacheLen),
-    case byte_size(Cache) >= Length  of
+    {ok, CacheData} = ra_file_handle:pread(Fd, Pos, CacheLen),
+    case byte_size(CacheData) >= Length  of
         true ->
-            pread(State#state{cache = {Pos, byte_size(Cache), Cache}},
-                  Pos, Length);
+            pread(Cfg, {Pos, byte_size(CacheData), CacheData}, Pos, Length);
         false ->
             {error, partial_data}
     end;
-pread(#state{cache = {_, _, _}} = State, Pos, Length) ->
+pread(Cfg, {_, _, _}, Pos, Length) ->
     %% invalidate cache
-    pread(State#state{cache = undefined}, Pos, Length).
+    pread(Cfg, undefined, Pos, Length).
 
 
 offset_size(2) -> 64;
@@ -514,3 +572,13 @@ index_record_size(2) ->
     ?INDEX_RECORD_SIZE_V2;
 index_record_size(1) ->
     ?INDEX_RECORD_SIZE_V1.
+
+%% returns the first and last indexes of the next consecuitive run
+%% of indexes
+consec_run(First, Last, []) ->
+    {First, Last};
+consec_run(First, Last, [Next | Rem])
+  when Next == Last + 1 ->
+    consec_run(First, Next, Rem);
+consec_run(First, Last, _) ->
+    {First, Last}.

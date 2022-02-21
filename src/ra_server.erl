@@ -48,7 +48,7 @@
          handle_node_status/6,
          terminate/2,
          log_fold/3,
-         read_at/2,
+         log_read/2,
          recover/1
         ]).
 
@@ -1813,19 +1813,15 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     end.
 
 %% reads user commands at the specified index
--spec read_at(ra_index(), ra_server_state()) ->
-    {ok, term(), ra_server_state()} |
+-spec log_read([ra_index()], ra_server_state()) ->
+    {ok, [term()], ra_server_state()} |
     {error, ra_server_state()}.
-read_at(Idx, #{log := Log0,
-               cfg := #cfg{log_id = LogId}} = RaState) ->
-    case ra_log:fetch(Idx, Log0) of
-        {{Idx, _, {'$usr', _, Data, _}}, Log} ->
-            {ok, Data, RaState#{log => Log}};
-        {Cmd, Log} ->
-            ?ERROR("~s: failed to read user command at ~b. Got ~w",
-                   [LogId, Idx, Cmd]),
-            {error, RaState#{log => Log}}
-    end.
+log_read(Indexes, #{log := Log0} = State) ->
+    {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
+    {ok,
+     [Data || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
+     State#{log => Log}}.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================

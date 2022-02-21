@@ -133,6 +133,7 @@
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
+    {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
