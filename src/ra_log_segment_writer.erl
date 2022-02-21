@@ -116,6 +116,11 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
+handle_cast({mem_tables, [Table], WalFile}, State) ->
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, 1),
+    ok = do_segment(Table, State),
+    _ = prim_file:delete(WalFile),
+    {noreply, State};
 handle_cast({mem_tables, Tables, WalFile}, State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
     Degree = erlang:system_info(schedulers),
@@ -148,9 +153,6 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
     _ = prim_file:delete(WalFile),
-    %% ensure we release any bin refs that might have been acquired during
-    %% segment write
-    true = erlang:garbage_collect(),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             #state{segment_conf = SegConf} = State0) ->
@@ -230,10 +232,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                            directory ~s disappeared whilst writing",
                            [ServerUId, Dir]),
                     ok;
-                {Segment1, Closed0} ->
-                    % fsync
-                    {ok, Segment} = ra_log_segment:sync(Segment1),
-
+                {Segment, Closed0} ->
                     % notify writerid of new segment update
                     % includes the full range of the segment
                     % filter out any undefined segrefs
