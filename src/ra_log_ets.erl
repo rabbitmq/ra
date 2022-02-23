@@ -49,7 +49,6 @@ init([#{data_dir := DataDir,
                    closed_mem_tbls := ClosedTbl} = Names}]) ->
     process_flag(trap_exit, true),
     TableFlags =  [named_table,
-                   {read_concurrency, true},
                    {write_concurrency, true},
                    public],
     % create mem table lookup table to be used to map ra cluster name
@@ -68,8 +67,11 @@ handle_cast({delete_tables, Tids}, State) ->
     %% we need to be defensive here.
     %% it is better to leak a table than to crash them all
     [begin
-         try ets:delete(Tid) of
-             true -> ok
+         try timer:tc(fun () -> ets_delete(Tid) end) of
+             {Time, true} ->
+                 ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w~n",
+                        [Time div 1000, Tid]),
+                 ok
          catch
              _:Err ->
                  ?WARN("ra_log_ets: failed to delete ets table ~w with ~w "
@@ -84,6 +86,10 @@ handle_cast(_Msg, State) ->
 
 handle_info(_Info, State) ->
     {noreply, State}.
+
+ets_delete(Tid) ->
+    _ = ets:delete(Tid),
+    true.
 
 terminate(_Reason, #state{names = Names}) ->
     ok = ra_directory:deinit(Names),

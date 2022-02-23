@@ -358,12 +358,10 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
-            % this case truncation shouldn't be too expensive as the cache
-            % only contains the unflushed window of entries typically less than
-            % 10ms worth of entries
-            truncate_cache(FromIdx, ToIdx,
-                           State#?MODULE{last_written_index_term = {ToIdx, Term}},
-                           []);
+            {State#?MODULE{last_written_index_term = {ToIdx, Term}},
+             %% delaying truncate_cache until the next event allows any entries
+             %% that became committed to be read from cache rather than ETS
+             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
@@ -379,6 +377,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
                    [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
             {State, []}
     end;
+handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
+    truncate_cache(FromIdx, ToIdx, State, []);
 handle_event({written, {FromIdx, _, _}},
              #?MODULE{cfg = #cfg{log_id = LogId},
                       last_written_index_term = {LastWrittenIdx, _}} = State0)

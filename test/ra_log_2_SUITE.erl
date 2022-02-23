@@ -1032,7 +1032,13 @@ assert_log_events(Log0, AssertPred, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            {Log, _} = ra_log:handle_event(Evt, Log0),
+            {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+            %% handle any next events
+            Log = lists:foldl(fun ({next_event, {ra_log_event, E}}, Acc) ->
+                                      element(1, ra_log:handle_event(E, Acc));
+                                  (_, Acc) ->
+                                      Acc
+                              end, Log1, Effs),
             case AssertPred(Log) of
                 true ->
                     Log;

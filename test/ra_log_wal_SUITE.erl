@@ -190,6 +190,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     Conf = Conf0#{dir => Dir},
     WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => ComputeChecksums,
+                                               garbage_collect => true,
                                                max_batch_size => BatchSize}),
     Data = crypto:strong_rand_bytes(DataSize),
     ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
