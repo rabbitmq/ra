@@ -125,7 +125,7 @@ run(#{name := Name,
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
 
     BName = atom_to_binary(Name, utf8),
-    [rpc:call(N, ?MODULE, print_metrics, [BName])
+    _ = [rpc:call(N, ?MODULE, print_metrics, [BName])
      || N <- Nodes],
     _ = ra:delete_cluster(ServerIds),
     %%
@@ -149,7 +149,7 @@ start(Name, Nodes) when is_atom(Name) ->
 
 prepare() ->
     _ = application:ensure_all_started(ra),
-    ra_system:start_default(),
+    _ = ra_system:start_default(),
     % error_logger:logfile(filename:join(ra_env:data_dir(), "log.log")),
     ok.
 
