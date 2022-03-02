@@ -1918,6 +1918,9 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             case FsmState of
                 follower ->
                     {FsmState, State, [start_election_timeout]};
+                await_condition ->
+                    {FsmState, State,
+                     [{reply, pre_vote_result(Term, Token, false)}]};
                 pre_vote ->
                     {FsmState, State,
                      [{reply, pre_vote_result(Term, Token, false)}]}
