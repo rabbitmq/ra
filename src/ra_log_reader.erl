@@ -171,7 +171,7 @@ sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes0, Entries0) ->
             {Entries1, State};
         {Entries1, OpenC, Rem1} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPEN_MEM_TBL, OpenC),
-            case catch closed_mem_tbl_sparse_read(Cfg, Rem1, Entries1) of
+            case closed_mem_tbl_sparse_read(Cfg, Rem1, Entries1) of
                 {Entries2, ClosedC, []} ->
                     ok = incr_counter(Cfg, ?C_RA_LOG_READ_CLOSED_MEM_TBL, ClosedC),
                     {Entries2, State};
@@ -180,10 +180,6 @@ sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes0, Entries0) ->
                     {Open, _, SegC, Entries} = (catch segment_sparse_read(State, Rem2, Entries2)),
                     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
                     {Entries, State#?MODULE{open_segments = Open}}
-                % {ets_miss, _Index} ->
-                %     %% this would happend if a mem table was deleted after
-                %     %% an external reader had read the range
-                %     sparse_read(N-1, From, To, Entries0, State)
             end
     end.
 
