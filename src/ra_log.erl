@@ -311,15 +311,14 @@ take(_, _, State) ->
 
 
 %% read a list of indexes,
-%% will be returned in ascending order
+%% will be returned in the same order as the input list of indexes
 -spec sparse_read([ra_index()], state()) ->
     {[log_entry()], state()}.
 sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                                reader = Reader0,
                                cache = Cache} = State) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
-    %% indexes need to be sorted high -> low but will be returned
-    %% low -> high
+    %% indexes need to be sorted high -> low for correct and efficient reading
     Sort = ra_lib:lists_detect_sort(Indexes0),
     Indexes1 = case Sort of
                    unsorted ->
@@ -333,12 +332,11 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
     {Entries0, CacheNumRead, Indexes} = cache_read_sparse(Indexes1, Cache, []),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
     {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
+    %% here we recover the original order of indexes
     Entries = case Sort of
                   descending ->
                       lists:reverse(Entries1);
                   unsorted ->
-                      %% need to return entries in the order of the original
-                      %% Indexes0 list
                       Lookup = lists:foldl(
                                  fun ({I, _, _} = E, Acc) ->
                                          maps:put(I, E, Acc)
@@ -348,7 +346,6 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                       %% nothing to do for ascending or undefined
                       Entries1
               end,
-
     {Entries, State#?MODULE{reader = Reader}}.
 
 -spec last_index_term(state()) -> ra_idxterm().
