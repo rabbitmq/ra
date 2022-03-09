@@ -179,6 +179,7 @@
                               % for periodic actions such as sending stale rpcs
                               % and persisting last_applied index
                               tick_timeout => non_neg_integer(), % ms
+                              install_snap_rpc_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
@@ -189,6 +190,7 @@
                             metrics_key => term(),
                             broadcast_time => non_neg_integer(), % ms
                             tick_timeout => non_neg_integer(), % ms
+                            install_snap_rpc_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
                             ra_event_formatter => {module(), atom(), [term()]}}.
