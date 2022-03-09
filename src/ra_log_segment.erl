@@ -302,20 +302,23 @@ cache_read(_, _, _) ->
 
 prepare_cache(#cfg{} = _Cfg, [_], _SegIndex) ->
     undefined;
-prepare_cache(#cfg{fd = Fd} = _Cfg, [First | Rem], SegIndex) ->
-    case consec_run(First, First, Rem) of
-        {I, I} ->
+prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
+    case consec_run(FirstIdx, FirstIdx, Rem) of
+        {Idx, Idx} ->
             %% no run, no cache;
             undefined;
-        {FstI, LastI} ->
-            {_, FstOffset, FstLength, _} = map_get(FstI, SegIndex),
-            {_, LastOffset, LastLength, _} = map_get(LastI, SegIndex),
+        {FirstIdx, LastIdx} ->
+            {_, FstPos, _FstLength, _} = map_get(FirstIdx, SegIndex),
+            {_, LastPos, LastLength, _} = map_get(LastIdx, SegIndex),
             %% The cache needs to be at least as large as the next entry
             %% but no larger than ?READ_AHEAD_B
-            MaxCacheLen = FstLength + LastOffset + LastLength,
-            CacheLen = min(MaxCacheLen, max(FstLength, ?READ_AHEAD_B)),
-            {ok, CacheData} = ra_file_handle:pread(Fd, FstOffset, CacheLen),
-            {FstOffset, byte_size(CacheData), CacheData}
+            MaxCacheLen = LastPos + LastLength - FstPos,
+            %% read at least the remainder of the block from
+            %% the first position
+            MinCacheLen = ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE),
+            CacheLen = max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)),
+            {ok, CacheData} = ra_file_handle:pread(Fd, FstPos, CacheLen),
+            {FstPos, byte_size(CacheData), CacheData}
     end.
 
 -spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
@@ -534,7 +537,6 @@ read_header(Fd) ->
             Err
     end.
 
-%% TODO: avoid updating state each time
 pread(#cfg{access_pattern = random,
            fd = Fd}, Cache, Pos, Length) ->
     %% no cache
@@ -573,7 +575,7 @@ index_record_size(2) ->
 index_record_size(1) ->
     ?INDEX_RECORD_SIZE_V1.
 
-%% returns the first and last indexes of the next consecuitive run
+%% returns the first and last indexes of the next consecutive run
 %% of indexes
 consec_run(First, Last, []) ->
     {First, Last};
