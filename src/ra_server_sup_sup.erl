@@ -14,6 +14,7 @@
          metrics_key,
          broadcast_time,
          tick_timeout,
+         install_snap_rpc_timeout,
          await_condition_timeout,
          max_pipeline_count,
          ra_event_formatter]).
