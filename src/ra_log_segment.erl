@@ -21,7 +21,6 @@
          max_count/1,
          filename/1,
          segref/1,
-         advise/1,
          is_same_as/2]).
 
 -export([dump/1,
@@ -374,10 +373,6 @@ segref(#state{range = undefined}) ->
 segref(#state{range = {Start, End},
               cfg = #cfg{filename = Fn}}) ->
     {Start, End, ra_lib:to_string(filename:basename(Fn))}.
-
-advise(#state{cfg = #cfg{fd = Fd, mode = read}}) ->
-    file:advise(Fd, 0, 0, will_need).
-
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
