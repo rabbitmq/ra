@@ -22,6 +22,7 @@ hex_pm_erlang_app(
 
 hex_pm_erlang_app(
     name = "gen_batch_server",
+    sha256 = "94a49a528486298b009d2a1b452132c0a0d68b3e89d17d3764cb1ec879b7557a",
     version = "0.8.7",
 )
 

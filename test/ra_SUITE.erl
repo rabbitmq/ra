@@ -301,6 +301,7 @@ pipeline_command(Config) ->
     receive
         {ra_event, _, {applied, [{Correlation, 14}]}} -> ok
     after 2000 ->
+              flush(),
               exit(consensus_timeout)
     end,
     terminate_cluster(Cluster).

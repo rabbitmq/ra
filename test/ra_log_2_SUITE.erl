@@ -46,6 +46,9 @@ all_tests() ->
      missed_closed_tables_are_deleted_at_next_opportunity,
      transient_writer_is_handled,
      read_opt,
+     sparse_read,
+     sparse_read_out_of_range,
+     sparse_read_out_of_range_2,
      written_event_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
@@ -285,6 +288,93 @@ read_opt(Config) ->
     ct:pal("read all took ~wms Reduction ~w", [Time3 / 1000, Reds3]),
     ok.
 
+sparse_read_out_of_range(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 2, 1, Log0, 50),
+    Log = deliver_all_log_events(Log1, 100),
+    ?assertMatch({[], _}, ra_log:sparse_read([2, 100], Log)),
+    ra_log:close(Log),
+    ok.
+
+sparse_read_out_of_range_2(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 10 entries
+    %% but only process events for 9
+    Log1 = deliver_all_log_events(write_n(10, 20, 2,
+                                          write_and_roll(1, 10, 2, Log0)), 50),
+    ct:pal("log1 ~p", [ra_log:overview(Log1)]),
+    SnapIdx = 10,
+    %% do snapshot in
+    {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
+                                             <<"snap@10">>, Log1),
+    {Log3, _} = receive
+                    {ra_log_event, {snapshot_written, {10, 2}} = Evt} ->
+                        ra_log:handle_event(Evt, Log2)
+                after 500 ->
+                          exit(snapshot_written_timeout)
+                end,
+    Log4 = deliver_all_log_events(Log3, 100),
+
+    ct:pal("log ~p", [ra_log:overview(Log4)]),
+    {SnapIdx, 2} = ra_log:snapshot_index_term(Log4),
+
+    ?assertMatch({[{11, _, _}], _},
+                 ra_log:sparse_read([1,2, 11, 100], Log4)),
+    ra_log:close(Log4),
+    ok.
+
+sparse_read(Config) ->
+    Num = 4096 * 2,
+    Div = 2,
+    Log0 = write_and_roll(1, Num div Div, 1, ra_log_init(Config), 50),
+    Log1 = wait_for_segments(Log0, 5000),
+    Log2 = write_no_roll(Num div Div, Num, 1, Log1, 50),
+    %% read small batch of the latest entries
+    {_, _, Log3} = ra_log:take(Num - 5, 5, Log2),
+    ct:pal("log overview ~p", [ra_log:overview(Log3)]),
+    %% warm up run
+    {_, _, Log4} = ra_log:take(1, Num, Log3),
+    ra_log:close(Log4),
+    NumDiv2 = Num div 2,
+    %% create a list of indexes with some consecutive and some gaps
+    Indexes = lists:usort(lists:seq(1, Num, 2) ++ lists:seq(1, Num, 5)),
+    LogTake = ra_log_init(Config),
+    {TimeTake, {_, _, LogTake1}} =
+        timer:tc(fun () ->
+                         _ = erlang:statistics(exact_reductions),
+                         ra_log:take(1, NumDiv2, LogTake)
+                 end),
+    {_, Reds} = erlang:statistics(exact_reductions),
+    ra_log:close(LogTake1),
+    ct:pal("read ~b Indexes with take/3 took ~wms Reduction ~w",
+           [NumDiv2, TimeTake / 1000, Reds]),
+
+    LogSparse = ra_log_init(Config),
+    {TimeSparse, {SparseEntries, _}} =
+        timer:tc(fun () ->
+                         _ = erlang:statistics(exact_reductions),
+                         ra_log:sparse_read(Indexes, LogSparse)
+                 end),
+    {_, Reds2} = erlang:statistics(exact_reductions),
+    ReadIndexes = [I || {I, _, _} <- SparseEntries],
+    ?assertEqual(Indexes, ReadIndexes),
+    ct:pal("read ~b indexes with sparse_read/2 took ~wms Reduction ~w",
+           [length(SparseEntries), TimeSparse / 1000, Reds2]),
+
+    LogO = ra_log_init(Config),
+    {[{1, _, _},
+      {2, _, _},
+      {3, _, _}], LogO1} = ra_log:sparse_read([1,2,3], LogO),
+
+    {[{6, _, _},
+      {5, _, _},
+      {3, _, _}], LogO2} = ra_log:sparse_read([6,5,3], LogO1),
+
+    {[{1000, _, _},
+      {5, _, _},
+      {99, _, _}], _LogO3} = ra_log:sparse_read([1000,5,99], LogO2),
+    ok.
 
 written_event_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{snapshot_interval => 1}),
@@ -993,6 +1083,10 @@ write_and_roll(From, To, Term, Log0, Timeout) ->
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     deliver_all_log_events(Log1, Timeout).
 
+write_no_roll(From, To, Term, Log0, Timeout) ->
+    Log1 = write_n(From, To, Term, Log0),
+    deliver_all_log_events(Log1, Timeout).
+
 write_and_roll_no_deliver(From, To, Term, Log0) ->
     Log1 = write_n(From, To, Term, Log0),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
@@ -1017,7 +1111,17 @@ deliver_all_log_events(Log0, Timeout) ->
     receive
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
-            {Log, Effs} = ra_log:handle_event(Evt, Log0),
+            {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+            Log = lists:foldl(
+                    fun({send_msg, P, E}, Acc) ->
+                            P ! E,
+                            Acc;
+                       ({next_event, {ra_log_event, E}}, Acc0) ->
+                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            Acc;
+                       (_, Acc) ->
+                            Acc
+                    end, Log1, Effs),
             [P ! E || {send_msg, P, E, _} <- Effs],
             % ct:pal("log evt effs: ~p", [Effs]),
             deliver_all_log_events(Log, Timeout)
@@ -1034,11 +1138,13 @@ assert_log_events(Log0, AssertPred, Timeout) ->
             ct:pal("log evt: ~p", [Evt]),
             {Log1, Effs} = ra_log:handle_event(Evt, Log0),
             %% handle any next events
-            Log = lists:foldl(fun ({next_event, {ra_log_event, E}}, Acc) ->
-                                      element(1, ra_log:handle_event(E, Acc));
-                                  (_, Acc) ->
-                                      Acc
-                              end, Log1, Effs),
+            Log = lists:foldl(
+                    fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                            {Acc, _Effs} = ra_log:handle_event(E, Acc0),
+                            Acc;
+                        (_, Acc) ->
+                            Acc
+                    end, Log1, Effs),
             case AssertPred(Log) of
                 true ->
                     Log;
