@@ -272,7 +272,6 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
             % are not going to receive any entries prior to the snapshot
             State0 = wal_truncate_write(State00, First),
             % write the rest normally
-            % TODO: batch api for wal
             write_entries(Rest, State0);
         _ ->
             write_entries(Entries, State00)
@@ -392,7 +391,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
                       last_index = LastIdx,
                       snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
-    MaybeCurrent = ra_snapshot:current(SnapState),
+    MaybeCurrentSnap = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
@@ -406,7 +405,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
              %% delaying truncate_cache until the next event allows any entries
              %% that became committed to be read from cache rather than ETS
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
-        {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
+        {undefined, State} when FromIdx =< element(1, MaybeCurrentSnap) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -414,7 +413,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             % ensure last_written_index_term does not go backwards
             LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
                                   max(LastWrittenTerm0, Term)},
-            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
+            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
+             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
@@ -831,9 +831,11 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 
 truncate_cache(FromIdx, ToIdx,
                #?MODULE{cache = Cache0,
+                        last_written_index_term = {LastWrittenIdx, _},
                         last_index = LastIdx} = State,
                Effects) ->
-    Cache = case ToIdx - FromIdx < LastIdx - ToIdx of
+    NeededCacheSize = LastIdx - LastWrittenIdx,
+    Cache = case NeededCacheSize > map_size(Cache0) div 2 of
                 true ->
                     %% if the range to be deleted is smaller than the
                     %% remaining range truncate the cache by removing entries
@@ -841,8 +843,16 @@ truncate_cache(FromIdx, ToIdx,
                 false ->
                     %% if there are fewer entries left than to be removed
                     %% extract the remaning entries
-                    cache_with(ToIdx + 1, LastIdx, Cache0, #{})
+                    cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
             end,
+
+    %% assert cache size, leave commented out
+    % case map_size(Cache) of
+    %     NeededCacheSize -> ok;
+    %     CacheSize ->
+    %         exit({invalid_cache_size, CacheSize, NeededCacheSize})
+    % end,
+
     {State#?MODULE{cache = Cache}, Effects}.
 
 cache_with(FromIdx, ToIdx, _, Cache)
@@ -906,7 +916,9 @@ maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     receive
         {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
-    State#?MODULE{first_index = 0, last_written_index_term = {0, 0}};
+    State#?MODULE{first_index = 0,
+                  cache = #{},
+                  last_written_index_term = {0, 0}};
 maybe_append_first_entry(State) ->
     State.
 
