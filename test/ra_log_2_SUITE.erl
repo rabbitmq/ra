@@ -47,6 +47,8 @@ all_tests() ->
      transient_writer_is_handled,
      read_opt,
      sparse_read,
+     sparse_read_out_of_range,
+     sparse_read_out_of_range_2,
      written_event_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
@@ -284,6 +286,42 @@ read_opt(Config) ->
                          end),
     {_, Reds3} = erlang:statistics(exact_reductions),
     ct:pal("read all took ~wms Reduction ~w", [Time3 / 1000, Reds3]),
+    ok.
+
+sparse_read_out_of_range(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 2, 1, Log0, 50),
+    Log = deliver_all_log_events(Log1, 100),
+    ?assertMatch({[], _}, ra_log:sparse_read([2, 100], Log)),
+    ra_log:close(Log),
+    ok.
+
+sparse_read_out_of_range_2(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 10 entries
+    %% but only process events for 9
+    Log1 = deliver_all_log_events(write_n(10, 20, 2,
+                                          write_and_roll(1, 10, 2, Log0)), 50),
+    ct:pal("log1 ~p", [ra_log:overview(Log1)]),
+    SnapIdx = 10,
+    %% do snapshot in
+    {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
+                                             <<"snap@10">>, Log1),
+    {Log3, _} = receive
+                    {ra_log_event, {snapshot_written, {10, 2}} = Evt} ->
+                        ra_log:handle_event(Evt, Log2)
+                after 500 ->
+                          exit(snapshot_written_timeout)
+                end,
+    Log4 = deliver_all_log_events(Log3, 100),
+
+    ct:pal("log ~p", [ra_log:overview(Log4)]),
+    {SnapIdx, 2} = ra_log:snapshot_index_term(Log4),
+
+    ?assertMatch({[{11, _, _}], _},
+                 ra_log:sparse_read([1,2, 11, 100], Log4)),
+    ra_log:close(Log4),
     ok.
 
 sparse_read(Config) ->
@@ -1100,11 +1138,13 @@ assert_log_events(Log0, AssertPred, Timeout) ->
             ct:pal("log evt: ~p", [Evt]),
             {Log1, Effs} = ra_log:handle_event(Evt, Log0),
             %% handle any next events
-            Log = lists:foldl(fun ({next_event, {ra_log_event, E}}, Acc) ->
-                                      element(1, ra_log:handle_event(E, Acc));
-                                  (_, Acc) ->
-                                      Acc
-                              end, Log1, Effs),
+            Log = lists:foldl(
+                    fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                            {Acc, _Effs} = ra_log:handle_event(E, Acc0),
+                            Acc;
+                        (_, Acc) ->
+                            Acc
+                    end, Log1, Effs),
             case AssertPred(Log) of
                 true ->
                     Log;

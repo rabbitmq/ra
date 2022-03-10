@@ -308,15 +308,14 @@ prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
             %% no run, no cache;
             undefined;
         {FirstIdx, LastIdx} ->
-            {_, FstPos, _FstLength, _} = map_get(FirstIdx, SegIndex),
+            {_, FstPos, FstLength, _} = map_get(FirstIdx, SegIndex),
             {_, LastPos, LastLength, _} = map_get(LastIdx, SegIndex),
-            %% The cache needs to be at least as large as the next entry
-            %% but no larger than ?READ_AHEAD_B
-            MaxCacheLen = LastPos + LastLength - FstPos,
-            %% read at least the remainder of the block from
-            %% the first position
-            MinCacheLen = ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE),
-            CacheLen = max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)),
+            % MaxCacheLen = LastPos + LastLength - FstPos,
+            % %% read at least the remainder of the block from
+            % %% the first position or the length of the first record
+            % MinCacheLen = max(FstLength, ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE)),
+            % CacheLen = max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)),
+            CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
             {ok, CacheData} = ra_file_handle:pread(Fd, FstPos, CacheLen),
             {FstPos, byte_size(CacheData), CacheData}
     end.
@@ -584,3 +583,34 @@ consec_run(First, Last, [Next | Rem])
     consec_run(First, Next, Rem);
 consec_run(First, Last, _) ->
     {First, Last}.
+
+cache_length(FstPos, FstLength, LastPos, LastLength) ->
+    %% The cache needs to be at least as large as the next entry
+    %% but no larger than ?READ_AHEAD_B
+    MaxCacheLen = LastPos + LastLength - FstPos,
+    %% read at least the remainder of the block from
+    %% the first position or the length of the first record
+    MinCacheLen = max(FstLength, ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE)),
+    max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+cache_length_test() ->
+    B = ?BLOCK_SIZE,
+    B2 = ?BLOCK_SIZE * 2,
+    %% total request is smaller than block size
+    ?assertEqual(B, cache_length(B, 10, B + 10, 10)),
+    %% larger than block size
+    ?assertEqual(B2, cache_length(B, B, B + B, B)),
+
+    %% large first entry
+    ?assertEqual(?READ_AHEAD_B * 2, cache_length(B, ?READ_AHEAD_B * 2,
+                                                 ?READ_AHEAD_B * 4, B)),
+
+    %% if the request is oversized, return the max read ahead as cache size
+    ?assertEqual(?READ_AHEAD_B, cache_length(B, B, ?READ_AHEAD_B * 2, B)),
+    ok.
+
+-endif.
+
