@@ -107,7 +107,6 @@ run(#{name := Name,
                                    print_counter(counters:get(Counter, 1), Counter)
                            end),
     %% wait for each pid
-    
     Wait = ((Secs * 10000) * 4),
     [begin
          receive
