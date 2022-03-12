@@ -359,7 +359,7 @@ logger:set_primary_config(level, debug).
 
 ## Copyright and License
 
-(c) 2017-2021, VMware Inc or its affiliates.
+(c) 2017-2022, VMware Inc or its affiliates.
 
 Dual licensed under the Apache License Version 2.0 and
 Mozilla Public License Version 2.0.

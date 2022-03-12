@@ -1,6 +1,6 @@
 %% This Source Code Form is subject to the terms of the Mozilla Public
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_server_SUITE).
 
