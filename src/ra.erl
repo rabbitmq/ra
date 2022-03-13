@@ -72,6 +72,7 @@
          new_uid/1,
          %% rebalancing
          transfer_leadership/2,
+         %% auxiliary commands
          aux_command/2,
          cast_aux_command/2,
          register_external_log_reader/1
@@ -977,6 +978,14 @@ members({local, ServerId}, Timeout) ->
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
+%% @doc Returns a list of initial (seed) cluster members.
+%%
+%% This allows Ra-based systems with dynamic cluster membership
+%% discover the original set of members and use them to seed newly
+%% joining ones.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @end
 -spec initial_members(ra_server_id() | [ra_server_id()]) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId) ->
@@ -995,10 +1004,20 @@ initial_members(ServerId, Timeout) ->
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 
+%% @doc Executes (using a call) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec aux_command(ra_server_id(), term()) -> term().
 aux_command(ServerRef, Cmd) ->
     gen_statem:call(ServerRef, {aux_command, Cmd}).
 
+%% @doc Executes (using a cast) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec cast_aux_command(ra_server_id(), term()) -> ok.
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).
