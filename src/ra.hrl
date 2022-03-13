@@ -62,6 +62,10 @@
 
 -type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
 
+-type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
+
+-type states() :: leader | follower | candidate | await_condition.
+
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the

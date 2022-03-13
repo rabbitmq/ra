@@ -31,6 +31,7 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         ping/2,
          % cluster operations
          start_cluster/2,
          start_cluster/3,
@@ -830,6 +831,10 @@ pipeline_command(ServerId, Command, no_correlation, Priority) ->
 pipeline_command(ServerId, Command, Correlation) ->
     pipeline_command(ServerId, Command, Correlation, low).
 
+
+-spec ping(ServerId :: ra_server_id(), Timeout :: timeout()) -> safe_call_ret({pong, states()}).
+ping(ServerId, Timeout) ->
+    ra_server_proc:ping(ServerId, Timeout).
 
 %% @doc Sends a command to the ra server using a gen_statem:cast without
 %% any correlation identifier.

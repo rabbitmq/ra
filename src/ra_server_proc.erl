@@ -90,10 +90,6 @@
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
--type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
-
--type states() :: leader | follower | candidate | await_condition.
-
 %% ra_event types
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_server_id()),
                                    ra_server:command_correlation()}.
