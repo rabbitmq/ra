@@ -3,7 +3,7 @@
 For `ra` to do anything useful you need to provide it with a state machine
 implementation that solves a particular problem.
 
-To implement a state machine to run in `ra` you need to implement the
+To implement a state machine that will be replicated using Raft and `ra`, implement the
 `ra_machine` behaviour. There are two mandatory callbacks that need to be
 implemented:
 
@@ -28,8 +28,8 @@ implement.
 
 ## A simple KV Store
 
-As an example we are going to write a simple key-value store that takes
-`write` and `read` operations.
+This example builds a simple key-value store that supports
+`write` and `read` (or put and get) operations.
 
 ### Writing the Store
 
