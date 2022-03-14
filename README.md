@@ -262,6 +262,28 @@ ra:members({dyn_members, node()}).
 % =>      {dyn_members,'ra2@hostname.local'}}
 ```
 
+If a node wants to leave the cluster, it can use `ra:leave_and_terminate/3`
+and specify itself as the target:
+
+Temporarily add a new ndde, say `ra4@hostname.local`, to the cluster:
+
+``` erlang
+% Add a new member
+{ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra4@hostname.local'}),
+
+% Start the server
+ok = ra:start_server(default, ClusterName, {dyn_members, 'ra4@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+
+%% on ra4@hostname.local
+ra:leave_and_terminate(default, {ClusterName, node()}, {ClusterName, node()}).
+
+ra:members({ClusterName, node()}).
+% => {ok,[{dyn_members,'ra1@hostname.local'},
+% =>      {dyn_members,'ra2@hostname.local'},
+% =>      {dyn_members,'ra3@hostname.local'}],
+% =>      {dyn_members,'ra2@hostname.local'}}
+```
+
 ### Other examples
 
 See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
