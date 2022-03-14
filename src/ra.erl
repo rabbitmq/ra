@@ -438,7 +438,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% @param ClusterName the name of the cluster.
 %% @param ServerId the ra_server_id() of the server
 %% @param Machine The {@link ra_machine:machine/0} configuration.
-%% @param ServerConfigs a list of initial server configurations
+%% @param ServerIds a list of initial (seed) server configurations
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
 %% started. A cluster can be successfully started if more than half of the

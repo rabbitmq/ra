@@ -231,7 +231,8 @@ Machine = {simple, fun erlang:'+'/2, 0},
 
 After the cluster is formed, members can be added.
 
-Add `ra1@hostname.local` to the cluster:
+Add `ra1@hostname.local` by telling `ra2@hostname.local` about it
+and starting a Ra replica (server) on `ra1@hostname.local` itself:
 
 ``` erlang
 % Add member
@@ -244,7 +245,7 @@ ok = ra:start_server(default, ClusterName, {dyn_members, 'ra1@hostname.local'}, 
 Add `ra3@hostname.local` to the cluster:
 
 ``` erlang
-% Add member
+% Add a new member
 {ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra3@hostname.local'}),
 
 % Start the server
@@ -253,8 +254,8 @@ ok = ra:start_server(default, ClusterName, {dyn_members, 'ra3@hostname.local'}, 
 
 Check the members from any node:
 
-``` shell
-(ra3@hostname.local)2> ra:members({dyn_members, node()}).
+``` erlang
+ra:members({dyn_members, node()}).
 % => {ok,[{dyn_members,'ra1@hostname.local'},
 % =>      {dyn_members,'ra2@hostname.local'},
 % =>      {dyn_members,'ra3@hostname.local'}],
