@@ -145,7 +145,8 @@
                                                     ra_server:command()),
                 election_timeout_set = false :: boolean(),
                 %% the log index last time gc was forced
-                force_gc_index = 0 :: ra_index()
+                force_gc_index = 0 :: ra_index(),
+                pending_notifys = #{} :: #{pid() => [term()]}
                }).
 
 %%%===================================================================
@@ -346,6 +347,7 @@ leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     ok = record_leader_change(id(State0), State0),
     {keep_state, State#state{leader_last_seen = undefined,
+                             pending_notifys = #{},
                              delayed_commands = queue:new(),
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
@@ -446,8 +448,10 @@ leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
-    {State, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
+    {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
                                        cast, State1),
+    %% try sending any pending applied notifications again
+    State = send_applied_notifications(State2, #{}),
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
@@ -930,14 +934,18 @@ format_status(Opt, [_PDict, StateName,
                            leader_last_seen = LastSeen,
                            pending_commands = Pending,
                            delayed_commands = Delayed,
+                           pending_notifys = PendingNots,
                            election_timeout_set = ElectionSet
                           }]) ->
+    NumPendingNots = maps:fold(fun (_, Corrs, Acc) -> Acc + length(Corrs) end,
+                               0, PendingNots),
     [{id, ra_server:id(NS)},
      {opt, Opt},
      {raft_state, StateName},
      {leader_last_seen, LastSeen},
      {num_pending_commands, length(Pending)},
      {num_delayed_commands, queue:len(Delayed)},
+     {num_pending_applied_notifications, NumPendingNots},
      {election_timeout_set, ElectionSet},
      {ra_server_state, ra_server:overview(NS)}
     ].
@@ -1134,12 +1142,9 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(_, {notify, Nots}, _, State, Actions) ->
+handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
-    ra_lib:maps_foreach(
-      fun(Who, Correlations) ->
-              ok = send_ra_event(Who, Correlations, id(State), applied, State)
-      end, Nots),
+    State = send_applied_notifications(State0, Nots),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
@@ -1605,19 +1610,21 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
 
 handle_process_down(Pid, Info, RaftState,
                     #state{monitors = Monitors0,
+                           pending_notifys = Nots,
                            server_state = ServerState0} = State0) ->
     {Comps, Monitors} = ra_monitors:handle_down(Pid, Monitors0),
     {ServerState, Effects} =
-    lists:foldl(
-      fun(Comp, {S0, E0}) ->
-              {_, S, E} = ra_server:handle_down(RaftState, Comp,
-                                                Pid, Info, S0),
-              {S, E0 ++ E}
-      end, {ServerState0, []}, Comps),
+        lists:foldl(
+          fun(Comp, {S0, E0}) ->
+                  {_, S, E} = ra_server:handle_down(RaftState, Comp,
+                                                    Pid, Info, S0),
+                  {S, E0 ++ E}
+          end, {ServerState0, []}, Comps),
 
     {State, Actions} =
         handle_effects(RaftState, Effects, cast,
                        State0#state{server_state = ServerState,
+                                    pending_notifys = maps:remove(Pid, Nots),
                                     monitors = Monitors}),
     {keep_state, State, Actions}.
 
@@ -1637,3 +1644,25 @@ update_peer(PeerId, Update,
   when is_map(Update) ->
     State0#state{server_state =
                  ra_server:update_peer(PeerId, Update, ServerState)}.
+
+send_applied_notifications(#state{pending_notifys = PendingNots} = State,
+                           Nots0) when map_size(PendingNots) > 0 ->
+    Nots = ra_lib:maps_merge_with(fun(_K, V1, V2) ->
+                                          V1 ++ V2
+                                  end, PendingNots, Nots0),
+    send_applied_notifications(State#state{pending_notifys = #{}}, Nots);
+send_applied_notifications(#state{} = State, Nots) ->
+    Id = id(State),
+    %% any notifications that could not be sent
+    %% will be kept and retried
+    RemNots = maps:filter(
+                fun(Who, Correlations) ->
+                        ok =/= send_ra_event(Who, Correlations, Id,
+                                             applied, State)
+                end, Nots),
+    case map_size(RemNots) of
+        0  ->
+            State;
+        _ ->
+            State#state{pending_notifys = RemNots}
+    end.
