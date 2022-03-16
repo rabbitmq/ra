@@ -806,7 +806,8 @@ append_entries_reply_success(_Config) ->
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
     % update match index
-    {leader, #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
+    {leader, #{cluster := #{N2 := #{next_index := 4,
+                                    match_index := 3}},
                commit_index := 3,
                last_applied := 3,
                machine_state := <<"hi3">>},
@@ -824,7 +825,7 @@ append_entries_reply_success(_Config) ->
                                       next_index = 4,
                                       last_index = 3, last_term = 5}},
     {leader, #{cluster := #{N2 := #{next_index := 4,
-                                             match_index := 3}},
+                                    match_index := 3}},
                commit_index := 1,
                last_applied := 1,
                current_term := 7,

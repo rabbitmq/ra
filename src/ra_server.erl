@@ -142,7 +142,7 @@
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
-    {notify, pid(), reference()} |
+    {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout.
@@ -2123,10 +2123,10 @@ apply_to(_ApplyTo, _, Notifys, Effects, State)
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State, FinalEffs}.
 
-make_notify_effects(Nots, Prior) ->
-    maps:fold(fun (Pid, Corrs, Acc) ->
-                      [{notify, Pid, lists:reverse(Corrs)} | Acc]
-              end, Prior, Nots).
+make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
+    [{notify, Nots} | Prior];
+make_notify_effects(_Nots, Prior) ->
+      Prior.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,

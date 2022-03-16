@@ -44,7 +44,8 @@
          is_dir/1,
          is_file/1,
          ensure_dir/1,
-         consult/1
+         consult/1,
+         maps_foreach/2
         ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -440,6 +441,15 @@ ensure_dir(F) ->
                     Err
             end
     end.
+
+%% because OTP 23 support
+maps_foreach(Fun, {K, V, I}) ->
+    Fun(K, V),
+    maps_foreach(Fun, maps:next(I));
+maps_foreach(_Fun, none) ->
+    ok;
+maps_foreach(Fun, Map) when is_map(Map) ->
+    maps_foreach(Fun, maps:next(maps:iterator(Map))).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

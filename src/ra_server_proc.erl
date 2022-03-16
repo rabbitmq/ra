@@ -1134,9 +1134,12 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(_, {notify, Who, Correlations}, _, State, Actions) ->
+handle_effect(_, {notify, Nots}, _, State, Actions) ->
     %% should only be done by leader
-    ok = send_ra_event(Who, Correlations, id(State), applied, State),
+    ra_lib:maps_foreach(
+      fun(Who, Correlations) ->
+              ok = send_ra_event(Who, Correlations, id(State), applied, State)
+      end, Nots),
     {State, Actions};
 handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
