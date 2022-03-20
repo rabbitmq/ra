@@ -12,6 +12,7 @@
 -compile(inline_list_funcs).
 
 -elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-elvis([{elvis_style, god_modules, disable}]).
 
 -export([
          name/2,
