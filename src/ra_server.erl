@@ -458,13 +458,13 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                 [LogId, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
-                      {_EntryTerm, L} ->
+                      {EntryTerm, L} ->
                           NextIndex = max(min(NI-1, LastIdx), MI),
                           ?DEBUG("~s: leader received last_index ~b"
                                  " from ~w with term ~b "
                                  "- expected term ~b. Setting"
                                  "next_index to ~b",
-                                 [LogId, LastIdx, PeerId, LastTerm, _EntryTerm,
+                                 [LogId, LastIdx, PeerId, LastTerm, EntryTerm,
                                   NextIndex]),
                           % last_index has a different term or entry does not
                           % exist
@@ -1047,7 +1047,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                                    transition_to => follower}},
              Effects}
     end;
-handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
+handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                   current_term := CurTerm} = State) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
@@ -1055,7 +1055,7 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DEBUG("~s: follower got append_entries_rpc from ~w in"
            " ~b but current term is: ~b",
-          [LogId, LeaderId, _Term, CurTerm]),
+          [LogId, LeaderId, Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term,
                                leader_id = LeaderId},
@@ -1122,12 +1122,12 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State1#{current_term => Term}, [{reply, Reply}]}
     end;
-handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
+handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
                 State = #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId}})
   when Term < CurTerm ->
     ?INFO("~s: declining vote to ~w for term ~b, current term ~b",
-          [LogId, _Cand, Term, CurTerm]),
+          [LogId, Candidate, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
@@ -1920,11 +1920,11 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
-                                         candidate_id = _Cand},
+                                         candidate_id = Candidate},
                 #{current_term := CurTerm} = State)
   when Term < CurTerm ->
     ?DEBUG("~s declining pre-vote to ~w for term ~b, current term ~b",
-           [log_id(State), _Cand, Term, CurTerm]),
+           [log_id(State), Candidate, Term, CurTerm]),
     {FsmState, State,
      [{reply, pre_vote_result(CurTerm, Token, false)}]}.
 
