@@ -2,9 +2,9 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "rules_erlang",
-    sha256 = "7fd0564918537eb72294d17f5f8dc663907b16d712773b1c006e83194746a1c0",
-    strip_prefix = "rules_erlang-2.0.0",
-    urls = ["https://github.com/rabbitmq/rules_erlang/archive/refs/tags/2.0.0.zip"],
+    sha256 = "faf9d4c8dda5dcac74110445fba74a7374f7c47ddd1b6e68cbd69997d6f8e1cf",
+    strip_prefix = "rules_erlang-2.2.0",
+    urls = ["https://github.com/rabbitmq/rules_erlang/archive/refs/tags/2.2.0.zip"],
 )
 
 load("@rules_erlang//:rules_erlang.bzl", "rules_erlang_dependencies")
@@ -22,8 +22,8 @@ hex_pm_erlang_app(
 
 hex_pm_erlang_app(
     name = "gen_batch_server",
-    sha256 = "ff6b0ed0f7be945f38b94ddd4784d128f35ff029c34dad6ca0c6cb17ab7bc9c4",
-    version = "0.8.4",
+    sha256 = "94a49a528486298b009d2a1b452132c0a0d68b3e89d17d3764cb1ec879b7557a",
+    version = "0.8.7",
 )
 
 http_archive(

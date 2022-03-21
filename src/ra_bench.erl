@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_bench).
@@ -107,7 +107,6 @@ run(#{name := Name,
                                    print_counter(counters:get(Counter, 1), Counter)
                            end),
     %% wait for each pid
-    
     Wait = ((Secs * 10000) * 4),
     [begin
          receive
@@ -125,7 +124,7 @@ run(#{name := Name,
               [TotalOps, Taken, TotalOps div (Taken div 1000)]),
 
     BName = atom_to_binary(Name, utf8),
-    [rpc:call(N, ?MODULE, print_metrics, [BName])
+    _ = [rpc:call(N, ?MODULE, print_metrics, [BName])
      || N <- Nodes],
     _ = ra:delete_cluster(ServerIds),
     %%
@@ -149,7 +148,7 @@ start(Name, Nodes) when is_atom(Name) ->
 
 prepare() ->
     _ = application:ensure_all_started(ra),
-    ra_system:start_default(),
+    _ = ra_system:start_default(),
     % error_logger:logfile(filename:join(ra_env:data_dir(), "log.log")),
     ok.
 

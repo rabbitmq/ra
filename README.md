@@ -130,6 +130,47 @@ Machine = {simple, fun erlang:'+'/2, 0},
 {ok, 12, LeaderId1} = ra:process_command(LeaderId, 7).
 ```
 
+### Querying Machine State
+
+Ra machines are only useful if their state can be queried. There are type types of queries:
+
+ * Local queries return machine state on the target node
+ * Leader queries return machine state from the leader node.
+   If a follower node is queried, the query command will be redirected to the leader.
+
+Local queries are much more efficient but can return out-of-date machine state.
+Leader queries offer best possible machine state consistency but potentially require
+sending a request to a remote node.
+
+Use `ra:leader_query/{2,3}` to perform a leader query:
+
+``` erlang
+%% find current Raft cluster leader
+{ok, _Members, LeaderId} = ra:members(quick_start),
+%% perform a leader query on the leader node
+QueryFun = fun(StateVal) -> StateVal end,
+{ok, {_TermMeta, State}, LeaderId1} = ra:leader_query(LeaderId, QueryFun).
+```
+
+Similarly, use `ra:local_query/{2,3}` to perform a local query:
+
+``` erlang
+%% this is the replica hosted on the current Erlang node.
+%% alternatively it can be constructed as {ClusterName, node()}
+{ok, Members, _LeaderId} = ra:members(quick_start),
+LocalReplicaId = lists:keyfind(node(), 2, Members),
+%% perform a local query on the local node
+QueryFun = fun(StateVal) -> StateVal end,
+{ok, {_TermMeta, State}, LeaderId1} = ra:local_query(LocalReplicaId, QueryFun).
+```
+
+A query function is a single argument function that accepts current machine state
+and returns any value (usually derived from the state).
+
+Both `ra:leader_query/2` and `ra:local_query/2` return machine term metadata, a result returned by the query
+function, and current cluster leader ID.
+
+
 ### Dynamically Changing Cluster Membership
 
 Nodes can be added to or removed from a Ra cluster dynamically. Only one
@@ -158,19 +199,21 @@ rebar3 shell --name ra3@hostname.local
 
 Start the ra application:
 
-``` shell
-(ra1@hostname.local)1> ra:start().
+``` erlang
+%% on ra1@hostname.local
+ra:start().
 % => ok
 ```
 
-``` shell
-(ra2@hostname.local)1> ra:start().
+``` erlang
+%% on ra2@hostname.local
+ra:start().
 % => ok
-
 ```
 
-``` shell
-(ra3@hostname.local)1> ra:start().
+``` erlang
+%% on ra3@hostname.local
+ra:start().
 % => ok
 ```
 
@@ -188,7 +231,8 @@ Machine = {simple, fun erlang:'+'/2, 0},
 
 After the cluster is formed, members can be added.
 
-Add `ra1@hostname.local` to the cluster:
+Add `ra1@hostname.local` by telling `ra2@hostname.local` about it
+and starting a Ra replica (server) on `ra1@hostname.local` itself:
 
 ``` erlang
 % Add member
@@ -201,7 +245,7 @@ ok = ra:start_server(default, ClusterName, {dyn_members, 'ra1@hostname.local'}, 
 Add `ra3@hostname.local` to the cluster:
 
 ``` erlang
-% Add member
+% Add a new member
 {ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra3@hostname.local'}),
 
 % Start the server
@@ -210,8 +254,30 @@ ok = ra:start_server(default, ClusterName, {dyn_members, 'ra3@hostname.local'}, 
 
 Check the members from any node:
 
-``` shell
-(ra3@hostname.local)2> ra:members({dyn_members, node()}).
+``` erlang
+ra:members({dyn_members, node()}).
+% => {ok,[{dyn_members,'ra1@hostname.local'},
+% =>      {dyn_members,'ra2@hostname.local'},
+% =>      {dyn_members,'ra3@hostname.local'}],
+% =>      {dyn_members,'ra2@hostname.local'}}
+```
+
+If a node wants to leave the cluster, it can use `ra:leave_and_terminate/3`
+and specify itself as the target:
+
+Temporarily add a new ndde, say `ra4@hostname.local`, to the cluster:
+
+``` erlang
+% Add a new member
+{ok, _, _} = ra:add_member({dyn_members, 'ra2@hostname.local'}, {dyn_members, 'ra4@hostname.local'}),
+
+% Start the server
+ok = ra:start_server(default, ClusterName, {dyn_members, 'ra4@hostname.local'}, Machine, [{dyn_members, 'ra2@hostname.local'}]).
+
+%% on ra4@hostname.local
+ra:leave_and_terminate(default, {ClusterName, node()}, {ClusterName, node()}).
+
+ra:members({ClusterName, node()}).
 % => {ok,[{dyn_members,'ra1@hostname.local'},
 % =>      {dyn_members,'ra2@hostname.local'},
 % =>      {dyn_members,'ra3@hostname.local'}],
@@ -359,7 +425,7 @@ logger:set_primary_config(level, debug).
 
 ## Copyright and License
 
-(c) 2017-2021, VMware Inc or its affiliates.
+(c) 2017-2022, VMware Inc or its affiliates.
 
 Dual licensed under the Apache License Version 2.0 and
 Mozilla Public License Version 2.0.

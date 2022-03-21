@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_log_props_SUITE).
 -compile(export_all).
@@ -25,9 +25,9 @@ all_tests() ->
      write,
      % write_missing_entry,
      % multi_write_missing_entry,
-     write_overwrite_entry
+     write_overwrite_entry,
      % write_index_starts_zero,
-     % append,
+     append
      % append_missing_entry,
      % append_overwrite_entry,
      % append_index_starts_one,

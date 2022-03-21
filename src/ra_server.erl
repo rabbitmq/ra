@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_server).
 
@@ -10,6 +10,9 @@
 -include("ra_server.hrl").
 
 -compile(inline_list_funcs).
+
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-elvis([{elvis_style, god_modules, disable}]).
 
 -export([
          name/2,
@@ -48,7 +51,7 @@
          handle_node_status/6,
          terminate/2,
          log_fold/3,
-         read_at/2,
+         log_read/2,
          recover/1
         ]).
 
@@ -179,6 +182,7 @@
                               % for periodic actions such as sending stale rpcs
                               % and persisting last_applied index
                               tick_timeout => non_neg_integer(), % ms
+                              install_snap_rpc_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
@@ -189,6 +193,7 @@
                             metrics_key => term(),
                             broadcast_time => non_neg_integer(), % ms
                             tick_timeout => non_neg_integer(), % ms
+                            install_snap_rpc_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
                             ra_event_formatter => {module(), atom(), [term()]}}.
@@ -454,13 +459,13 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                 [LogId, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
-                      {_EntryTerm, L} ->
+                      {EntryTerm, L} ->
                           NextIndex = max(min(NI-1, LastIdx), MI),
                           ?DEBUG("~s: leader received last_index ~b"
                                  " from ~w with term ~b "
                                  "- expected term ~b. Setting"
                                  "next_index to ~b",
-                                 [LogId, LastIdx, PeerId, LastTerm, _EntryTerm,
+                                 [LogId, LastIdx, PeerId, LastTerm, EntryTerm,
                                   NextIndex]),
                           % last_index has a different term or entry does not
                           % exist
@@ -1043,7 +1048,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                                    transition_to => follower}},
              Effects}
     end;
-handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
+handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                   current_term := CurTerm} = State) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
@@ -1051,7 +1056,7 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DEBUG("~s: follower got append_entries_rpc from ~w in"
            " ~b but current term is: ~b",
-          [LogId, LeaderId, _Term, CurTerm]),
+          [LogId, LeaderId, Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term,
                                leader_id = LeaderId},
@@ -1118,12 +1123,12 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State1#{current_term => Term}, [{reply, Reply}]}
     end;
-handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
+handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
                 State = #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId}})
   when Term < CurTerm ->
     ?INFO("~s: declining vote to ~w for term ~b, current term ~b",
-          [LogId, _Cand, Term, CurTerm]),
+          [LogId, Candidate, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
@@ -1818,19 +1823,15 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     end.
 
 %% reads user commands at the specified index
--spec read_at(ra_index(), ra_server_state()) ->
-    {ok, term(), ra_server_state()} |
+-spec log_read([ra_index()], ra_server_state()) ->
+    {ok, [term()], ra_server_state()} |
     {error, ra_server_state()}.
-read_at(Idx, #{log := Log0,
-               cfg := #cfg{log_id = LogId}} = RaState) ->
-    case ra_log:fetch(Idx, Log0) of
-        {{Idx, _, {'$usr', _, Data, _}}, Log} ->
-            {ok, Data, RaState#{log => Log}};
-        {Cmd, Log} ->
-            ?ERROR("~s: failed to read user command at ~b. Got ~w",
-                   [LogId, Idx, Cmd]),
-            {error, RaState#{log => Log}}
-    end.
+log_read(Indexes, #{log := Log0} = State) ->
+    {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
+    {ok,
+     [Data || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
+     State#{log => Log}}.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -1928,11 +1929,11 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
-                                         candidate_id = _Cand},
+                                         candidate_id = Candidate},
                 #{current_term := CurTerm} = State)
   when Term < CurTerm ->
     ?DEBUG("~s declining pre-vote to ~w for term ~b, current term ~b",
-           [log_id(State), _Cand, Term, CurTerm]),
+           [log_id(State), Candidate, Term, CurTerm]),
     {FsmState, State,
      [{reply, pre_vote_result(CurTerm, Token, false)}]}.
 

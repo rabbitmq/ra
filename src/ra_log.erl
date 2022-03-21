@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_log).
@@ -17,6 +17,7 @@
          append_sync/2,
          write_sync/2,
          take/3,
+         sparse_read/2,
          last_index_term/1,
          set_last_index/2,
          handle_event/2,
@@ -271,7 +272,6 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
             % are not going to receive any entries prior to the snapshot
             State0 = wal_truncate_write(State00, First),
             % write the rest normally
-            % TODO: batch api for wal
             write_entries(Rest, State0);
         _ ->
             write_entries(Entries, State00)
@@ -307,6 +307,49 @@ take(Start, Num, #?MODULE{cfg = Cfg,
     end;
 take(_, _, State) ->
     {[], 0, State}.
+
+
+%% read a list of indexes,
+%% found indexes be returned in the same order as the input list of indexes
+-spec sparse_read([ra_index()], state()) ->
+    {[log_entry()], state()}.
+sparse_read(Indexes0, #?MODULE{cfg = Cfg,
+                               reader = Reader0,
+                               last_index = LastIdx,
+                               cache = Cache} = State) ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
+    %% indexes need to be sorted high -> low for correct and efficient reading
+    Sort = ra_lib:lists_detect_sort(Indexes0),
+    Indexes1 = case Sort of
+                   unsorted ->
+                       lists:sort(fun erlang:'>'/2, Indexes0);
+                   ascending ->
+                       lists:reverse(Indexes0);
+                   _ ->
+                       % descending or undefined
+                       Indexes0
+               end,
+
+    %% drop any indexes that are larger than the last index available
+    Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
+    {Entries0, CacheNumRead, Indexes} = cache_read_sparse(Indexes2, Cache, []),
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
+    {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
+    %% here we recover the original order of indexes
+    Entries = case Sort of
+                  descending ->
+                      lists:reverse(Entries1);
+                  unsorted ->
+                      Lookup = lists:foldl(
+                                 fun ({I, _, _} = E, Acc) ->
+                                         maps:put(I, E, Acc)
+                                 end, #{}, Entries1),
+                      maps_with_values(Indexes0, Lookup);
+                  _ ->
+                      %% nothing to do for ascending or undefined
+                      Entries1
+              end,
+    {Entries, State#?MODULE{reader = Reader}}.
 
 -spec last_index_term(state()) -> ra_idxterm().
 last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
@@ -348,7 +391,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
                       last_index = LastIdx,
                       snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
-    MaybeCurrent = ra_snapshot:current(SnapState),
+    MaybeCurrentSnap = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
@@ -362,7 +405,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
              %% delaying truncate_cache until the next event allows any entries
              %% that became committed to be read from cache rather than ETS
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
-        {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
+        {undefined, State} when FromIdx =< element(1, MaybeCurrentSnap) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -370,7 +413,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             % ensure last_written_index_term does not go backwards
             LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
                                   max(LastWrittenTerm0, Term)},
-            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
+            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
+             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
@@ -787,9 +831,11 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 
 truncate_cache(FromIdx, ToIdx,
                #?MODULE{cache = Cache0,
+                        last_written_index_term = {LastWrittenIdx, _},
                         last_index = LastIdx} = State,
                Effects) ->
-    Cache = case ToIdx - FromIdx < LastIdx - ToIdx of
+    NeededCacheSize = LastIdx - LastWrittenIdx,
+    Cache = case NeededCacheSize > map_size(Cache0) div 2 of
                 true ->
                     %% if the range to be deleted is smaller than the
                     %% remaining range truncate the cache by removing entries
@@ -797,8 +843,16 @@ truncate_cache(FromIdx, ToIdx,
                 false ->
                     %% if there are fewer entries left than to be removed
                     %% extract the remaning entries
-                    cache_with(ToIdx + 1, LastIdx, Cache0, #{})
+                    cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
             end,
+
+    %% assert cache size, leave commented out
+    % case map_size(Cache) of
+    %     NeededCacheSize -> ok;
+    %     CacheSize ->
+    %         exit({invalid_cache_size, CacheSize, NeededCacheSize})
+    % end,
+
     {State#?MODULE{cache = Cache}, Effects}.
 
 cache_with(FromIdx, ToIdx, _, Cache)
@@ -844,12 +898,27 @@ cache_take0(Next, Last, Cache, Acc) ->
             Acc
     end.
 
+cache_read_sparse(Indexes, Cache, Acc) ->
+    cache_read_sparse(Indexes, Cache, 0, Acc).
+
+cache_read_sparse([], _Cache, Num, Acc) ->
+    {Acc, Num, []}; %% no reminder
+cache_read_sparse([Next | Rem] = Indexes, Cache, Num, Acc) ->
+    case Cache of
+        #{Next := Entry} ->
+            cache_read_sparse(Rem, Cache, Num + 1, [Entry | Acc]);
+        _ ->
+            {Acc, Num, Indexes}
+    end.
+
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
         {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
-    State#?MODULE{first_index = 0, last_written_index_term = {0, 0}};
+    State#?MODULE{first_index = 0,
+                  cache = #{},
+                  last_written_index_term = {0, 0}};
 maybe_append_first_entry(State) ->
     State.
 
@@ -993,6 +1062,18 @@ incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
 server_data_dir(Dir, UId) ->
     Me = ra_lib:to_list(UId),
     filename:join(Dir, Me).
+
+maps_with_values(Keys, Map) ->
+    lists:foldr(
+      fun (K, Acc) ->
+              case Map of
+                  #{K := Value} ->
+                      [Value | Acc];
+                  _ ->
+                      Acc
+              end
+      end, [], Keys).
+
 %%%% TESTS
 
 -ifdef(TEST).

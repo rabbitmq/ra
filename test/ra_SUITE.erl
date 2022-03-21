@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_SUITE).
 
@@ -302,6 +302,7 @@ pipeline_command(Config) ->
     receive
         {ra_event, _, {applied, [{Correlation, 14}]}} -> ok
     after 2000 ->
+              flush(),
               exit(consensus_timeout)
     end,
     terminate_cluster(Cluster).

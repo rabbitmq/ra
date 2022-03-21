@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @doc The primary module for interacting with ra servers and clusters.
 
@@ -31,6 +31,7 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         ping/2,
          % cluster operations
          start_cluster/2,
          start_cluster/3,
@@ -71,6 +72,7 @@
          new_uid/1,
          %% rebalancing
          transfer_leadership/2,
+         %% auxiliary commands
          aux_command/2,
          cast_aux_command/2,
          register_external_log_reader/1
@@ -436,7 +438,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% @param ClusterName the name of the cluster.
 %% @param ServerId the ra_server_id() of the server
 %% @param Machine The {@link ra_machine:machine/0} configuration.
-%% @param ServerConfigs a list of initial server configurations
+%% @param ServerIds a list of initial (seed) server configurations
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
 %% started. A cluster can be successfully started if more than half of the
@@ -831,6 +833,10 @@ pipeline_command(ServerId, Command, Correlation) ->
     pipeline_command(ServerId, Command, Correlation, low).
 
 
+-spec ping(ServerId :: ra_server_id(), Timeout :: timeout()) -> safe_call_ret({pong, states()}).
+ping(ServerId, Timeout) ->
+    ra_server_proc:ping(ServerId, Timeout).
+
 %% @doc Sends a command to the ra server using a gen_statem:cast without
 %% any correlation identifier.
 %% Effectively the same as
@@ -972,6 +978,14 @@ members({local, ServerId}, Timeout) ->
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
+%% @doc Returns a list of initial (seed) cluster members.
+%%
+%% This allows Ra-based systems with dynamic cluster membership
+%% discover the original set of members and use them to seed newly
+%% joining ones.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @end
 -spec initial_members(ra_server_id() | [ra_server_id()]) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId) ->
@@ -990,10 +1004,20 @@ initial_members(ServerId, Timeout) ->
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 
+%% @doc Executes (using a call) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec aux_command(ra_server_id(), term()) -> term().
 aux_command(ServerRef, Cmd) ->
     gen_statem:call(ServerRef, {aux_command, Cmd}).
 
+%% @doc Executes (using a cast) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec cast_aux_command(ra_server_id(), term()) -> ok.
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).

@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_server_proc).
@@ -90,10 +90,6 @@
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
--type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
-
--type states() :: leader | follower | candidate | await_condition.
-
 %% ra_event types
 -type ra_event_reject_detail() :: {not_leader, Leader :: maybe(ra_server_id()),
                                    ra_server:command_correlation()}.
@@ -134,6 +130,7 @@
                flush_commands_size = ?FLUSH_COMMANDS_SIZE :: non_neg_integer(),
                snapshot_chunk_size = ?DEFAULT_SNAPSHOT_CHUNK_SIZE :: non_neg_integer(),
                receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer(),
+               install_snap_rpc_timeout :: non_neg_integer(),
                aten_poll_interval = 1000 :: non_neg_integer(),
                counter :: undefined | counters:counters_ref()
               }).
@@ -288,6 +285,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                         end, Peers)
               end),
     TickTime = maps:get(tick_timeout, Config),
+    InstallSnapRpcTimeout = maps:get(install_snap_rpc_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
     FlushCommandsSize = application:get_env(ra, low_priority_commands_flush_size,
@@ -305,6 +303,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 ra_event_formatter = RaEventFormatterMFA,
                                 flush_commands_size = FlushCommandsSize,
                                 snapshot_chunk_size = SnapshotChunkSize,
+                                install_snap_rpc_timeout = InstallSnapRpcTimeout,
                                 receive_snapshot_timeout = ReceiveSnapshotTimeout,
                                 aten_poll_interval = AtenPollInt,
                                 counter = Counter},
@@ -1118,19 +1117,9 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
   when is_list(Idxs) ->
     %% Useful to implement a batch send of data obtained from the log.
     %% 1) Retrieve all data from the list of indexes
-    {Data, SS} = lists:foldr(
-                   fun(Idx, {Data0, Acc0}) ->
-                           case ra_server:read_at(Idx, Acc0) of
-                               {ok, D, Acc} ->
-                                   {[D | Data0], Acc};
-                               {error, _} ->
-                                   %% this is unrecoverable
-                                   exit({failed_to_read_index_for_log_effect,
-                                         Idx})
-                           end
-                   end, {[], SS0}, Idxs),
-    %% 2) Apply the fun to the list of data as a whole and deal with any effects
-    case Fun(Data) of
+    {ok, Cmds, SS} = ra_server:log_read(Idxs, SS0),
+    %% 2) Apply the fun to the list of commands as a whole and deal with any effects
+    case Fun(Cmds) of
         [] ->
             {State#state{server_state = SS}, Actions};
         Effects ->
@@ -1166,13 +1155,14 @@ handle_effect(_, {reply, Reply}, EvtType, _, _) ->
 handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
-                     conf = #conf{snapshot_chunk_size = ChunkSize} = Conf} = State0, Actions) ->
+                     conf = #conf{snapshot_chunk_size = ChunkSize,
+                     install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0, Actions) ->
     ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
     %% leader effect only
     Me = self(),
     Pid = spawn(fun () ->
                         try send_snapshots(Me, Id, Term, To,
-                                           ChunkSize, SnapState) of
+                                           ChunkSize, InstallSnapTimeout, SnapState) of
                             _ -> ok
                         catch
                             C:timeout:S ->
@@ -1423,6 +1413,7 @@ do_state_query(initial_members, #{log := Log}) ->
 config_defaults(RegName) ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
+      install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
       counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS),
@@ -1488,7 +1479,7 @@ fold_log(From, Fun, Term, State) ->
              [{reply, From, {error, Reason}}]}
     end.
 
-send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
+send_snapshots(Me, Id, Term, To, ChunkSize, InstallTimeout, SnapState) ->
     {ok, Meta, ReadState} = ra_snapshot:begin_read(SnapState),
 
     RPC = #install_snapshot_rpc{term = Term,
@@ -1496,11 +1487,11 @@ send_snapshots(Me, Id, Term, To, ChunkSize, SnapState) ->
                                 meta = Meta},
 
     Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
-                                      ChunkSize, SnapState),
+                                      ChunkSize, InstallTimeout, SnapState),
     ok = gen_statem:cast(Me, {To, Result}).
 
 read_chunks_and_send_rpc(RPC0,
-                         To, ReadState0, Num, ChunkSize, SnapState) ->
+                         To, ReadState0, Num, ChunkSize, InstallTimeout, SnapState) ->
     {ok, Data, ContState} = ra_snapshot:read_chunk(ReadState0, ChunkSize,
                                                    SnapState),
     ChunkFlag = case ContState of
@@ -1512,11 +1503,11 @@ read_chunks_and_send_rpc(RPC0,
     RPC1 = RPC0#install_snapshot_rpc{chunk_state = {Num, ChunkFlag},
                                      data = Data},
     Res1 = gen_statem:call(To, RPC1,
-                           {dirty_timeout, ?INSTALL_SNAP_RPC_TIMEOUT}),
+                           {dirty_timeout, InstallTimeout}),
     case ContState of
         {next, ReadState1} ->
             read_chunks_and_send_rpc(RPC0, To, ReadState1, Num + 1,
-                                     ChunkSize, SnapState);
+                                     ChunkSize, InstallTimeout, SnapState);
         last ->
             Res1
     end.
