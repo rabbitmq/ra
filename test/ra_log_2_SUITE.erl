@@ -39,6 +39,7 @@ all_tests() ->
      detect_lost_written_range,
      % snapshot_recovery,
      snapshot_installation,
+     snapshot_written_after_installation,
      append_after_snapshot_installation,
      written_event_after_snapshot_installation,
      update_release_cursor,
@@ -78,6 +79,7 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    ra_env:configure_logger(logger),
     PrivDir = ?config(priv_dir, Config),
     UId = <<(atom_to_binary(TestCase, utf8))/binary,
             (atom_to_binary(?config(access_pattern, Config)))/binary>>,
@@ -388,6 +390,7 @@ written_event_after_snapshot(Config) ->
                 after 500 ->
                           exit(snapshot_written_timeout)
                 end,
+
     Log4 = deliver_all_log_events(Log3, 100),
     % true = filelib:is_file(Snap1),
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
@@ -676,6 +679,50 @@ detect_lost_written_range(Config) ->
     Entries = RecoveredEntries,
     ok.
 
+
+
+snapshot_written_after_installation(Config) ->
+    Log0 = ra_log_init(Config, #{snapshot_interval => 2}),
+    %% log 1 .. 9, should create a single segment
+    Log1 = write_and_roll(1, 10, 1, Log0),
+    {Log2, _} = ra_log:update_release_cursor(5, #{}, 1,
+                                             <<"one-five">>, Log1),
+    DelayedSnapWritten = receive
+                             {ra_log_event, {snapshot_written, {5, 1}} = Evt} ->
+                                 Evt
+                         after 1000 ->
+                                   flush(),
+                                   exit(snapshot_written_timeout)
+                         end,
+
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    %% write some more to create another segment
+    Log4 = write_and_roll(16, 20, 2, Log3),
+    {Log5, Efx4} = ra_log:handle_event(DelayedSnapWritten, Log4),
+    {19, _} = ra_log:last_index_term(Log5),
+    {19, _} = ra_log:last_written(Log5),
+
+    [begin
+         case E of
+             {delete_snapshot, Dir, S} ->
+                 ra_snapshot:delete(Dir, S);
+             _ ->
+                 ok
+         end
+     end || E <- Efx4],
+
+    %% assert there is no pending snapshot
+    ?assertEqual(undefined, ra_snapshot:pending(ra_log:snapshot_state(Log5))),
+
+    _ = ra_log:close(ra_log_init(Config, #{snapshot_interval => 2})),
+
+    ok.
+
 snapshot_installation(Config) ->
     logger:set_primary_config(level, all),
     % write a few entries
@@ -687,43 +734,45 @@ snapshot_installation(Config) ->
     % Log1 = write_n(1, 10, 2, Log0),
     Log1 = assert_log_events(write_n(1, 10, 2, Log0),
                              fun (L) ->
-                                     {9, 2} == ra_log:last_written(L)
+                                     LW = ra_log:last_written(L),
+                                     ct:pal("assert log evt v ~w", [LW]),
+                                     {9, 2} == LW
                              end),
-    Log2 = write_n(10, 20, 2, Log1),
+
+    Log2 = write_n(10, 21, 2, Log1),
     %% cache all log events
-    DelayedEvt = receive
-                     {ra_log_event, E} ->
-                         ct:pal("cached log evt: ~p", [E]),
-                         E
-                 after 1000 ->
-                           exit(log_event_timeout)
-                 end,
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
     Chunk = create_snapshot_chunk(Config, Meta),
-
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-
     {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
     #{cache_size := 0} = ra_log:overview(Log3),
-    {Log4, _} = ra_log:handle_event(DelayedEvt, Log3),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log4 = deliver_all_log_events(Log3, 100),
     {15, _} = ra_log:last_index_term(Log4),
     {15, _} = ra_log:last_written(Log4),
     #{cache_size := 0} = ra_log:overview(Log4),
 
-    flush(),
-
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
     Log5 = write_n(16, 20, 2, Log4),
-    Log = assert_log_events(Log5, fun (L) ->
-                                          {19, 2} == ra_log:last_written(L)
-                                  end),
+    {[], 0, _} = ra_log:take(1, 9, Log5),
+    {[_, _], 2, _} = ra_log:take(16, 2, Log5),
+    Log6 = assert_log_events(Log5, fun (L) ->
+                                           {19, 2} == ra_log:last_written(L)
+                                   end),
+    {[], 0, _} = ra_log:take(1, 9, Log6),
+    {[_, _], 2, _} = ra_log:take(16, 2, Log6),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    {[], 0, _} = ra_log:take(1, 9, Log6),
+    {[_, _], 2, _} = ra_log:take(16, 2, Log6),
+    Log = deliver_all_log_events(Log6, 100),
     {[], 0, _} = ra_log:take(1, 9, Log),
     {[_, _], 2, _} = ra_log:take(16, 2, Log),
     ok.
@@ -1152,7 +1201,7 @@ assert_log_events(Log0, AssertPred, Timeout) ->
                     assert_log_events(Log, AssertPred, Timeout)
             end
     after Timeout ->
-              exit(assert_log_events_timeout)
+              exit({assert_log_events_timeout, Log0})
     end.
 
 wait_for_segments(Log0, Timeout) ->

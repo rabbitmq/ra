@@ -122,7 +122,7 @@ handle_log_update({ra_log_update, From, FstIdx, SegRefs},
     {state(), [segment_ref()]}.
 update_first_index(Idx, #?STATE{segment_refs = SegRefs0,
                                 open_segments = OpenSegs0} = State) ->
-    case lists:partition(fun({_, To, _}) when To > Idx -> true;
+    case lists:partition(fun({_, To, _}) when To >= Idx -> true;
                             (_) -> false
                          end, SegRefs0) of
         {_, []} ->
@@ -137,7 +137,7 @@ update_first_index(Idx, #?STATE{segment_refs = SegRefs0,
                                            end
                                    end, OpenSegs0, ObsoleteKeys),
             {State#?STATE{open_segments = OpenSegs,
-                          first_index = Idx,
+                          first_index = Idx + 1,
                           segment_refs = Active},
              Obsolete}
     end.

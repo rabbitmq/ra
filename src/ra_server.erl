@@ -1198,8 +1198,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w",
-           [LogId, Num, ChunkFlag]),
+    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+           [LogId, Num, ChunkFlag, LastIndex, LastTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
                                                SnapState0),
@@ -1226,9 +1226,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = State0#{log => Log},
             {receive_snapshot, State, [{reply, Reply}]}
     end;
-handle_receive_snapshot({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_receive_snapshot({ra_log_event, Evt},
+                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
+                                  log := Log0}) ->
+    ?DEBUG("~s: ~s ra_log_event received: ~w",
+          [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
-    % whilst the snapshot is being written
+    % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
 handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
@@ -1737,8 +1741,9 @@ handle_down(leader, machine, Pid, Info, State)
 handle_down(leader, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
   when is_pid(Pid) ->
-    ?DEBUG("~s: Snapshot sender process ~w exited with ~W",
-          [LogId, Pid, Info, 10]),
+    ?DEBUG_IF(Info /= normal,
+              "~s: Snapshot sender process ~w exited with ~W",
+              [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)

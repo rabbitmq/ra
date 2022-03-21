@@ -747,7 +747,8 @@ receive_snapshot(_, tick_timeout, State0) ->
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
-            {#state{conf = Conf} = State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {#state{conf = Conf} = State, Actions} =
+                ?HANDLE_EFFECTS(Effects, EventType, State1),
             #conf{receive_snapshot_timeout = ReceiveSnapshotTimeout} = Conf,
             {keep_state, State,
              [{state_timeout, ReceiveSnapshotTimeout,
@@ -1164,7 +1165,8 @@ handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
-                     install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0, Actions) ->
+                     install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0,
+              Actions) ->
     ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
     %% leader effect only
     Me = self(),
