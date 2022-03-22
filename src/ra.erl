@@ -809,7 +809,7 @@ process_command(ServerId, Command) ->
 -spec pipeline_command(ServerId :: ra_server_id(), Command :: term(),
                        Correlation :: ra_server:command_correlation() |
                        no_correlation,
-                       Priority :: normal | low) -> ok.
+                       Priority :: ra_server:command_priority()) -> ok.
 pipeline_command(ServerId, Command, Correlation, Priority)
   when Correlation /= no_correlation ->
     Cmd = usr(Command, {notify, Correlation, self()}),

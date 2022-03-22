@@ -98,6 +98,8 @@
 
 -type command_correlation() :: integer() | reference().
 
+-type command_priority() :: normal | low.
+
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
                               {notify,
@@ -211,6 +213,7 @@
               command_type/0,
               command_meta/0,
               command_correlation/0,
+              command_priority/0,
               command_reply_mode/0,
               ra_event_formatter_fun/0,
               effect/0,

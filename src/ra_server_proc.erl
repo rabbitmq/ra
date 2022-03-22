@@ -76,8 +76,6 @@
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
 
--type ra_command_priority() :: normal | low.
-
 -type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_server_id()} |
                                     {error, term()} |
                                     {timeout, ra_server_id()}.
@@ -166,7 +164,7 @@ command(ServerLoc, Cmd, Timeout) ->
 cast_command(ServerId, Cmd) ->
     gen_statem:cast(ServerId, {command, low, Cmd}).
 
--spec cast_command(ra_server_id(), ra_command_priority(), ra_command()) -> ok.
+-spec cast_command(ra_server_id(), ra_server:command_priority(), ra_command()) -> ok.
 cast_command(ServerId, Priority, Cmd) ->
     gen_statem:cast(ServerId, {command, Priority, Cmd}).
 
