@@ -589,11 +589,8 @@ wal_crash_recover(Config) ->
     % write someting
     timer:sleep(100),
     Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
-    ok = proc_lib:stop(ra_log_segment_writer),
+    spawn(fun () -> proc_lib:stop(ra_log_segment_writer) end),
     Log3 = write_n(75, 100, 2, Log2),
-    % Log4 = assert_log_events(Log3, fun (L) ->
-    %                                        {99, 2} == ra_log:last_written(L)
-    %                                end),
     % wait long enough for the resend window to pass
     timer:sleep(2000),
     Log = assert_log_events(write_n(100, 101, 2,  Log3),
