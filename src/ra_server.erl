@@ -1275,7 +1275,7 @@ handle_await_condition(Msg, #{condition := Cond} = State0) ->
               #pre_vote_rpc{} = PreVote ->
               process_pre_vote(await_condition, PreVote, State);
             _ ->
-              log_unhandled_msg(await_condition, Msg, State),
+              % log_unhandled_msg(await_condition, Msg, State),
               {await_condition, State, []}
             end
     end.
