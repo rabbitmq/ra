@@ -16,10 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-          # Build image for every supported Erlang major version.
-          # Source of truth for OTP versions (min & max): https://www.rabbitmq.com/which-erlang.html
           image_tag_suffix:
-            - otp-min
+            #! - otp-min
             - otp-max
     steps:
       - name: Checkout Ra
@@ -88,6 +86,7 @@ jobs:
         working-directory: rabbitmq-server
         run: |
           echo "::set-output name=RABBITMQ_SHA::$(git rev-parse HEAD)"
+          echo "::set-output name=RABBITMQ_REF::$(git rev-parse --abbrev-ref HEAD)"
 
       - name: Build generic unix package
         working-directory: rabbitmq-server
@@ -129,15 +128,29 @@ jobs:
         run: |
           xzcat ${GENERIC_UNIX_ARCHIVE} | tar xvf -
 
-      - name: Compute Image Tag
+      - name: Compute Image Tags
         id: compute-tags
         run: |
+          RABBIT_REF=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_REF }}
           RABBIT_SHA=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}
-          RABBIT_ABBREV=rabbit-${RABBIT_SHA:0:7}
+
           RA_SHA=${{ github.sha }}
           RA_ABBREV=ra-${RA_SHA:0:7}
-          OTP_VERSION=${{ steps.load-info.outputs.otp }}
-          echo "::set-output name=TAG_1::${RABBIT_ABBREV}-${RA_ABBREV}-${OTP_VERSION}"
+
+          TAG_1=rabbitmq-${RABBIT_REF}-${RA_ABBREV}-${{ steps.load-info.outputs.otp }}
+          TAG_2=rabbitmq-${RABBIT_REF}-${RA_ABBREV}-${{ matrix.image_tag_suffix }}
+          TAG_3=rabbitmq-${RABBIT_SHA:0:7}-${RA_ABBREV}-${{ steps.load-info.outputs.otp }}
+          TAG_4=rabbitmq-${RABBIT_SHA:0:7}-${RA_ABBREV}-${{ matrix.image_tag_suffix }}
+
+          echo "Will tag with ${TAG_1}"
+          echo "Will tag with ${TAG_2}"
+          echo "Will tag with ${TAG_3}"
+          echo "Will tag with ${TAG_4}"
+
+          echo "::set-output name=TAG_1::${TAG_1}"
+          echo "::set-output name=TAG_2::${TAG_2}"
+          echo "::set-output name=TAG_3::${TAG_3}"
+          echo "::set-output name=TAG_4::${TAG_4}"
 
       - name: Build and push
         uses: docker/build-push-action@v2
@@ -146,6 +159,9 @@ jobs:
           push: true
           tags: |
             pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_1 }}
+            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_2 }}
+            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_3 }}
+            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_4 }}
           build-args: |
             SKIP_PGP_VERIFY=true
             PGP_KEYSERVER=pgpkeys.eu
