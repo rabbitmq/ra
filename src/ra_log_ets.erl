@@ -69,7 +69,7 @@ handle_cast({delete_tables, Tids}, State) ->
     [begin
          try timer:tc(fun () -> ets_delete(Tid) end) of
              {Time, true} ->
-                 ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w~n",
+                 ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
                         [Time div 1000, Tid]),
                  ok
          catch

@@ -98,6 +98,8 @@
 
 -type command_correlation() :: integer() | reference().
 
+-type command_priority() :: normal | low.
+
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
                               {notify,
@@ -145,7 +147,7 @@
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
-    {notify, pid(), reference()} |
+    {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout.
@@ -211,6 +213,7 @@
               command_type/0,
               command_meta/0,
               command_correlation/0,
+              command_priority/0,
               command_reply_mode/0,
               ra_event_formatter_fun/0,
               effect/0,
@@ -1201,8 +1204,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w",
-           [LogId, Num, ChunkFlag]),
+    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+           [LogId, Num, ChunkFlag, LastIndex, LastTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
                                                SnapState0),
@@ -1229,9 +1232,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = State0#{log => Log},
             {receive_snapshot, State, [{reply, Reply}]}
     end;
-handle_receive_snapshot({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_receive_snapshot({ra_log_event, Evt},
+                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
+                                  log := Log0}) ->
+    ?DEBUG("~s: ~s ra_log_event received: ~w",
+          [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
-    % whilst the snapshot is being written
+    % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
 handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
@@ -1745,8 +1752,9 @@ handle_down(leader, machine, Pid, Info, State)
 handle_down(leader, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
   when is_pid(Pid) ->
-    ?DEBUG("~s: Snapshot sender process ~w exited with ~W",
-          [LogId, Pid, Info, 10]),
+    ?DEBUG_IF(Info /= normal,
+              "~s: Snapshot sender process ~w exited with ~W",
+              [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
@@ -2134,10 +2142,10 @@ apply_to(_ApplyTo, _, Notifys, Effects, State)
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State, FinalEffs}.
 
-make_notify_effects(Nots, Prior) ->
-    maps:fold(fun (Pid, Corrs, Acc) ->
-                      [{notify, Pid, lists:reverse(Corrs)} | Acc]
-              end, Prior, Nots).
+make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
+    [{notify, Nots} | Prior];
+make_notify_effects(_Nots, Prior) ->
+      Prior.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,

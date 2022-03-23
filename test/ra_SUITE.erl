@@ -892,6 +892,6 @@ gather_applied(Acc, Timeout) ->
         {ra_event, _Leader, {applied, Corrs}} ->
             gather_applied(Acc ++ Corrs, Timeout)
     after Timeout ->
-              Acc
+              lists:reverse(Acc)
     end.
 

@@ -171,6 +171,11 @@
 -define(WAL_RECOVERY_CHUNK_SIZE, 33554432).
 
 %% logging shim
+-define(DEBUG_IF(Bool, Fmt, Args),
+        case Bool of
+            true -> ?DISPATCH_LOG(debug, Fmt, Args);
+            false -> ok
+        end).
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
 -define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
 -define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).
