@@ -421,8 +421,6 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
                    [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
             {State, []}
     end;
-handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
-    truncate_cache(FromIdx, ToIdx, State, []);
 handle_event({written, {FromIdx, _, _}},
              #?MODULE{cfg = #cfg{log_id = LogId},
                       last_written_index_term = {LastWrittenIdx, _}} = State0)
@@ -432,6 +430,8 @@ handle_event({written, {FromIdx, _, _}},
     ?DEBUG("~s: ra_log: written gap detected at ~b expected ~b!",
            [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
+handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
+    truncate_cache(FromIdx, ToIdx, State, []);
 handle_event({segments, Tid, NewSegs},
              #?MODULE{cfg = #cfg{names = Names},
                       reader = Reader0,
@@ -440,8 +440,6 @@ handle_event({segments, Tid, NewSegs},
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
-    % compact seg ref list so that only the latest range for a segment
-    % file has an entry
     State = State0#?MODULE{reader = Reader},
     % not fast but we rarely should have more than one or two closed tables
     % at any time
@@ -475,10 +473,13 @@ handle_event({segments, Tid, NewSegs},
                         end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
-handle_event({snapshot_written, {Idx, _} = Snap},
-             #?MODULE{snapshot_state = SnapState0} = State0) ->
+handle_event({snapshot_written, {SnapIdx, _} = Snap},
+             #?MODULE{first_index = FstIdx,
+                      snapshot_state = SnapState0} = State0)
+%% only update snapshot if it is newer than the last snapshot
+  when SnapIdx >= FstIdx ->
     % delete any segments outside of first_index
-    {State, Effects0} = delete_segments(Idx, State0),
+    {State, Effects0} = delete_segments(SnapIdx, State0),
     SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
     %% delete old snapshot files
     %% This is done as an effect
@@ -489,8 +490,20 @@ handle_event({snapshot_written, {Idx, _} = Snap},
                 ra_snapshot:current(SnapState0)} | Effects0],
     %% do not set last written index here as the snapshot may
     %% be for a past index
-    {State#?MODULE{first_index = Idx + 1,
+    {State#?MODULE{first_index = SnapIdx + 1,
                    snapshot_state = SnapState}, Effects};
+handle_event({snapshot_written, {Idx, Term} = Snap},
+             #?MODULE{cfg =#cfg{log_id = LogId},
+                      snapshot_state = SnapState} = State0) ->
+    %% if the snapshot is stale we just want to delete it
+    Current = ra_snapshot:current(SnapState),
+    ?INFO("~s: old snapshot_written received for index ~b in term ~b
+          current snapshot ~w, deleting old snapshot",
+           [LogId, Idx, Term, Current]),
+    Effects = [{delete_snapshot,
+                ra_snapshot:directory(SnapState),
+                Snap}],
+    {State0, Effects};
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -539,13 +552,13 @@ set_snapshot_state(SnapState, State) ->
 
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
     {state(), effects()}.
-install_snapshot({Idx, _} = IdxTerm, SnapState,
+install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
                  #?MODULE{cfg = Cfg} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
-    {State, Effs} = delete_segments(Idx, State0),
+    {State, Effs} = delete_segments(SnapIdx, State0),
     {State#?MODULE{snapshot_state = SnapState,
-                   first_index = Idx + 1,
-                   last_index = Idx,
+                   first_index = SnapIdx + 1,
+                   last_index = SnapIdx,
                    %% TODO: update last_term too?
                    %% cache can go
                    cache = #{},
@@ -757,7 +770,7 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
       [ra_event, local]} || P <- Pids].
 
 
-%% deletes all segments where the last index is lower or equal to
+%% deletes all segments where the last index is lower than
 %% the Idx argumement
 delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
                                          segment_writer = SegWriter,
@@ -776,8 +789,8 @@ delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
                                                                          UId, Pivot)
                     end),
             Active = ra_log_reader:segment_refs(Reader),
-            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
-                   [LogId, length(Obsolete), Idx, length(Active)]),
+            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b, pivot ~w",
+                   [LogId, length(Obsolete), Idx, length(Active), Pivot]),
             State = State0#?MODULE{reader = Reader},
             {State, log_update_effects(Readers, Pid, State)}
     end.

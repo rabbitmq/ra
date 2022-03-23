@@ -712,22 +712,23 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
 
     %% process writers
-    maps_foreach(fun (Pid, #batch_writer{tbl_start = TblStart,
-                                         uid = UId,
-                                         from = From,
-                                         to = To,
-                                         term = Term,
-                                         inserts = Inserts,
-                                         tid = Tid}) ->
-                         %% need to reverse inserts in case an index overwrite
-                         %% came to be processed in the same batch.
-                         %% Unlikely, but possible
-                         true = ets:insert(Tid, lists:reverse(Inserts)),
-                         true = ets:update_element(OpnTbl, UId,
-                                                   [{2, TblStart}, {3, To}]),
-                         Pid ! {ra_log_event, {written, {From, To, Term}}},
-                         ok
-                 end, Waiting),
+    ra_lib:maps_foreach(
+      fun (Pid, #batch_writer{tbl_start = TblStart,
+                              uid = UId,
+                              from = From,
+                              to = To,
+                              term = Term,
+                              inserts = Inserts,
+                              tid = Tid}) ->
+              %% need to reverse inserts in case an index overwrite
+              %% came to be processed in the same batch.
+              %% Unlikely, but possible
+              true = ets:insert(Tid, lists:reverse(Inserts)),
+              true = ets:update_element(OpnTbl, UId,
+                                        [{2, TblStart}, {3, To}]),
+              Pid ! {ra_log_event, {written, {From, To, Term}}},
+              ok
+      end, Waiting),
     ok = post_notify_flush(State),
     State.
 
@@ -913,12 +914,3 @@ table_start(false, Idx, TblStart) ->
     min(TblStart, Idx);
 table_start(true, Idx, _TblStart) ->
     Idx.
-
-%% because OTP 23 support
-maps_foreach(Fun, {K, V, I}) ->
-    Fun(K, V),
-    maps_foreach(Fun, maps:next(I));
-maps_foreach(_Fun, none) ->
-    ok;
-maps_foreach(Fun, Map) when is_map(Map) ->
-    maps_foreach(Fun, maps:next(maps:iterator(Map))).
