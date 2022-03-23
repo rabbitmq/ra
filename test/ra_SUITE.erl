@@ -50,7 +50,8 @@ all_tests() ->
      follower_catchup,
      post_partition_liveness,
      all_metrics_are_integers,
-     transfer_leadership
+     transfer_leadership,
+     transfer_leadership_two_node
     ].
 
 groups() ->
@@ -744,6 +745,22 @@ transfer_leadership(Config) ->
     {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
     % issue a command
     {ok, _, Leader} = ra:process_command({n3, node()}, 5),
+    % transfer leadership
+    [NextInLine | _] = Members -- [Leader],
+    ct:pal("Transferring leadership from ~p to ~p", [Leader, NextInLine]),
+    ok = ra:transfer_leadership(Leader, NextInLine),
+    {ok, _, NewLeader} = ra:process_command(NextInLine, 5),
+    ?assertEqual(NewLeader, NextInLine),
+    ?assertEqual(already_leader, ra:transfer_leadership(NewLeader, NewLeader)),
+    ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
+    terminate_cluster(Members).
+
+transfer_leadership_two_node(Config) ->
+    Name = ?config(test_name, Config),
+    Members = [{n1, node()}, {n2, node()}],
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
+    % issue a command
+    {ok, _, Leader} = ra:process_command({n2, node()}, 5),
     % transfer leadership
     [NextInLine | _] = Members -- [Leader],
     ct:pal("Transferring leadership from ~p to ~p", [Leader, NextInLine]),

@@ -25,6 +25,7 @@ all() ->
      follower_request_vote,
      follower_pre_vote,
      pre_vote_receives_pre_vote,
+     await_condition_receives_pre_vote,
      request_vote_rpc_with_lower_term,
      leader_does_not_abdicate_to_unknown_peer,
      higher_term_detected,
@@ -1008,6 +1009,22 @@ pre_vote_receives_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
         ra_server:handle_pre_vote(Msg, State),
+    ok.
+
+await_condition_receives_pre_vote(_Config) ->
+    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    Term = 5,
+    Token = make_ref(),
+    Msg = #pre_vote_rpc{candidate_id = ?N2, term = Term, last_log_index = 3,
+                        machine_version = 0,
+                        token = Token, last_log_term = 5},
+    % success - pre vote still returns other pre vote requests
+    % else we could have a dead-lock with a two process cluster with
+    % both peers in pre-vote state
+    {await_condition, #{current_term := Term},
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}}]} =
+        ra_server:handle_await_condition(Msg, State),
     ok.
 
 request_vote_rpc_with_lower_term(_Config) ->

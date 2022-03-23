@@ -1259,6 +1259,8 @@ handle_receive_snapshot(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, Msg}]};
+handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
+    process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout,
@@ -1922,7 +1924,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             case FsmState of
                 follower ->
                     {FsmState, State, [start_election_timeout]};
-                pre_vote ->
+                _ ->
                     {FsmState, State,
                      [{reply, pre_vote_result(Term, Token, false)}]}
             end
