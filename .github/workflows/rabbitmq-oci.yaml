@@ -3,6 +3,10 @@ name: RabbitMQ OCI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      rabbitmq_ref:
+        description: The branch, tag or commit of rabbitmq-server to use
+        default: master
 env:
   GENERIC_UNIX_ARCHIVE: ${{ github.workspace }}/rabbitmq-server/bazel-bin/package-generic-unix.tar.xz
 jobs:
@@ -32,6 +36,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: rabbitmq/rabbitmq-server
+          ref: ${{ github.event.inputs.rabbitmq_ref }}
           path: rabbitmq-server
 
       - name: Load Erlang/Elixir Version Info
