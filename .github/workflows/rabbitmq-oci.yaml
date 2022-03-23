@@ -28,7 +28,7 @@ jobs:
       - name: Inject the git sha as the ra version
         working-directory: ra
         run: |
-          sed -i"_orig" "/vsn,/ s/2\\.[0-9]\\.[0-9]/${{ github.sha }}/" src/ra.app.src
+          sed -i"_orig" "/vsn,/ s/2\\.[0-9]\\.[0-9]/${{ github.event.pull_request.head.sha }}/" src/ra.app.src
 
       - name: Checkout RabbitMQ
         uses: actions/checkout@v3
@@ -113,7 +113,7 @@ jobs:
         uses: actions/cache@v2
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-${{ github.event.pull_request.head.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-
 
@@ -134,7 +134,7 @@ jobs:
           RABBIT_REF=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_REF }}
           RABBIT_SHA=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}
 
-          RA_SHA=${{ github.sha }}
+          RA_SHA=${{ github.event.pull_request.head.sha }}
           RA_ABBREV=ra-${RA_SHA:0:7}
 
           TAG_1=rabbitmq-${RABBIT_REF}-${RA_ABBREV}-${{ steps.load-info.outputs.otp }}
