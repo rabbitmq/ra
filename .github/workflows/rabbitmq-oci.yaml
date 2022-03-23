@@ -132,7 +132,12 @@ jobs:
       - name: Compute Image Tag
         id: compute-tags
         run: |
-          echo "::set-output name=TAG_1::rabbitmq-${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}-ra-${{ github.sha }}-${{ steps.load-info.outputs.otp }}"
+          RABBIT_SHA=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}
+          RABBIT_ABBREV=rabbit-${RABBIT_SHA:0:7}
+          RA_SHA=${{ github.sha }}
+          RA_ABBREV=ra-${RA_SHA:0:7}
+          OTP_VERSION=${{ steps.load-info.outputs.otp }}
+          echo "::set-output name=TAG_1::${RABBIT_ABBREV}-${RA_ABBREV}-${OTP_VERSION}"
 
       - name: Build and push
         uses: docker/build-push-action@v2
