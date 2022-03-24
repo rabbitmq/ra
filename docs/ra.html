@@ -620,7 +620,7 @@ A correlation id can be included
 to implement reliable async interactions with the ra system. The calling  
 process can retain a map of commands that have not yet been applied to the  
 state machine successfully and resend them if a notification is not received  
-withing some time window.  
+within some time window.  
 When the submitted command(s) is applied to the state machine, the ra server will send  
 the calling process a ra_event of the following structure:</p>
  
@@ -837,7 +837,7 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
                        {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
 <p> </p>
 </div><p>Transfers leadership from the leader to a follower.
-  Returns <code>already_leader</code> if the transfer targer is already the leader.</p>
+  Returns <code>already_leader</code> if the transfer target is already the leader.</p>
 
 <h3 class="function"><a name="aux_command-2">aux_command/2</a></h3>
 <div class="spec">

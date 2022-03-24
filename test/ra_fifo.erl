@@ -98,7 +98,7 @@
     purge.
 
 -type command() :: protocol() | ra_machine:builtin_command().
-%% all the command types suppored by ra fifo
+%% all the command types supported by ra fifo
 
 -type client_msg() :: delivery().
 %% the messages `ra_fifo' can send to customers.
@@ -222,7 +222,7 @@ apply(#{index := RaftIdx}, {settle, MsgIds, CustomerId},
     case Custs0 of
         #{CustomerId := Cust0} ->
             % need to increment metrics before completing as any snapshot
-            % states taken need to includ them
+            % states taken need to include them
             complete_and_checkout(RaftIdx, MsgIds, CustomerId,
                                   Cust0, [], State);
         _ ->
@@ -427,7 +427,7 @@ get_checked_out(Cid, From, To, #state{customers = Customers}) ->
     end.
 
 init_aux(Name) when is_atom(Name) ->
-    %% TODO: catch specific exeption throw if table already exists
+    %% TODO: catch specific exception throw if table already exists
     ok = ra_machine_ets:create_table(ra_fifo_usage,
                                      [named_table, set, public,
                                       {write_concurrency, true}]),
@@ -1362,7 +1362,7 @@ enq_check_settle_snapshot_recover_test() ->
 
 
 run_snapshot_test(Name, Commands) ->
-    %% create every incremental permuation of the commands lists
+    %% create every incremental permutation of the commands lists
     %% and run the snapshot tests against that
     [begin
          % ?debugFmt("~w running commands ~w", [?FUNCTION_NAME, C]),

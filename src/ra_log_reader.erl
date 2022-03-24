@@ -211,7 +211,7 @@ retry_read(N, From, To, Entries0,
                             {Entries, C, State#?MODULE{open_segments = Open}}
                     end;
                 {ets_miss, _Index} ->
-                    %% this would happend if a mem table was deleted after
+                    %% this would happen if a mem table was deleted after
                     %% an external reader had read the range
                     retry_read(N-1, From, To, Entries0, State)
             end

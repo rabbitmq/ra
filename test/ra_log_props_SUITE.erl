@@ -155,7 +155,7 @@ out_of_range_gen(Entries) ->
 
 write(Config) ->
     %% There is no way to create a log file from a list of entries without the write
-    %% API. We have to prove first that writting a consecutive log file succeeds,
+    %% API. We have to prove first that writing a consecutive log file succeeds,
     %% so we can use it as a base for our tests
     TestCase = ?config(test_case, Config),
     run_proper(fun write_prop/1, [TestCase], 100).
@@ -295,7 +295,7 @@ write_index_starts_zero_prop(TestCase) ->
 append(Config) ->
     %% There is no way to create a log file from a list of entries without the
     %% write
-    %% API. We have to prove first that writting a consecutive log file succeeds,
+    %% API. We have to prove first that writing a consecutive log file succeeds,
     %% so we can use it as a base for our tests
     TestCase = ?config(test_case, Config),
     run_proper(fun append_prop/1, [TestCase], 100).

@@ -233,7 +233,7 @@ close(#?MODULE{cfg = #cfg{uid = UId},
     _ = ra_log_reader:close(Reader),
     %% delete ra_log_metrics record
     catch ets:delete(ra_log_metrics, UId),
-    %% inserted in ra_snapshot but it doesn't havea terminate callback so
+    %% inserted in ra_snapshot but it doesn't have a terminate callback so
     %% deleting ets table here
     catch ets:delete(ra_log_snapshot_state, UId),
     ok.
@@ -771,7 +771,7 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
 
 
 %% deletes all segments where the last index is lower than
-%% the Idx argumement
+%% the Idx argument
 delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
                                          segment_writer = SegWriter,
                                          uid = UId},
@@ -855,7 +855,7 @@ truncate_cache(FromIdx, ToIdx,
                     cache_without(FromIdx, ToIdx, Cache0);
                 false ->
                     %% if there are fewer entries left than to be removed
-                    %% extract the remaning entries
+                    %% extract the remaining entries
                     cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
             end,
 
@@ -1043,7 +1043,7 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
     pick_range(Tail, {min(Fst, CurFst), CurLst}).
 
 
-%% TODO: implent synchronous writes using gen_batch_server:call/3
+%% TODO: implement synchronous writes using gen_batch_server:call/3
 await_written_idx(Idx, Term, Log0) ->
     receive
         {ra_log_event, {written, {_, Idx, Term}} = Evt} ->

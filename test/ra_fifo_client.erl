@@ -145,7 +145,7 @@ enqueue(Msg, State) ->
 
 %% @doc Dequeue a message from the queue.
 %%
-%% This is a syncronous call. I.e. the call will block until the command
+%% This is a synchronous call. I.e. the call will block until the command
 %% has been accepted by the ra process or it times out.
 %%
 %% @param CustomerTag a unique tag to identify this particular customer.
@@ -286,7 +286,7 @@ discard(CustomerTag, [_|_] = MsgIds,
 %% @doc Register with the ra_fifo queue to "checkout" messages as they
 %% become available.
 %%
-%% This is a syncronous call. I.e. the call will block until the command
+%% This is a synchronous call. I.e. the call will block until the command
 %% has been accepted by the ra process or it times out.
 %%
 %% @param CustomerTag a unique tag to identify this particular customer.
@@ -306,7 +306,7 @@ checkout(CustomerTag, NumUnsettled, State0) ->
 
 %% @doc Cancels a checkout with the ra_fifo queue  for the customer tag
 %%
-%% This is a syncronous call. I.e. the call will block until the command
+%% This is a synchronous call. I.e. the call will block until the command
 %% has been accepted by the ra process or it times out.
 %%
 %% @param CustomerTag a unique tag to identify this particular customer.
@@ -338,10 +338,10 @@ purge(Node) ->
 cluster_name(#state{cluster_name = ClusterName}) ->
     ClusterName.
 
-%% @doc Handles incoming `ra_events'. Events carry both internal "bookeeping"
+%% @doc Handles incoming `ra_events'. Events carry both internal "bookkeeping"
 %% events emitted by the `ra' leader as well as `ra_fifo' emitted events such
 %% as message deliveries. All ra events need to be handled by {@module}
-%% to ensure bookeeping, resends and flow control is correctly handled.
+%% to ensure bookkeeping, resends and flow control is correctly handled.
 %%
 %% If the `ra_event' contains a `ra_fifo' generated message it will be returned
 %% for further processing.

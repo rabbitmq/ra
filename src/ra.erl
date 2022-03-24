@@ -405,7 +405,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
     case Started of
         [] ->
             ?ERR("ra: failed to form a new cluster ~w.~n "
-                  "No servers were succesfully started.",
+                  "No servers were successfully started.",
                   [ClusterName]),
             {error, cluster_not_formed};
         _ ->
@@ -769,7 +769,7 @@ process_command(ServerId, Command) ->
 %% to implement reliable async interactions with the ra system. The calling
 %% process can retain a map of commands that have not yet been applied to the
 %% state machine successfully and resend them if a notification is not received
-%% withing some time window.
+%% within some time window.
 %% When the submitted command(s) is applied to the state machine, the ra server will send
 %% the calling process a ra_event of the following structure:
 %%
@@ -997,7 +997,7 @@ initial_members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, initial_members, Timeout).
 
 %% @doc Transfers leadership from the leader to a follower.
-%% Returns `already_leader' if the transfer targer is already the leader.
+%% Returns `already_leader' if the transfer target is already the leader.
 %% @end
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
     ok | already_leader | {error, term()} | {timeout, ra_server_id()}.

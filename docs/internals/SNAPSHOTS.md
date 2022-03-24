@@ -5,7 +5,7 @@ behaviour. The default implementation uses `term_to_binary/2` to write the
 snapshot to disk.
 
 Snapshot transfer between the leader and followers use distributed
-erlang and therefor it implements a "chunked transfer" approach where the
+erlang and therefore it implements a "chunked transfer" approach where the
 snapshot is divided up into fixed size blocks that are transferred one by one
 so as to not block the distribution port when snapshot become very large.
 
@@ -24,7 +24,7 @@ checkpoints or similar in disk-based state machines.
 - `write(Location :: file:filename(), meta(), Ref :: term()) -> ok | {error, term()}.`:
 
 This is called in a separate process and should write the snapshot into the
-directory specificied by the Location argument.
+directory specified by the Location argument.
 
 - `begin_read(ChunkSizeBytes :: non_neg_integer(), Location :: file:filename()) ->
     {ok, Crc :: non_neg_integer(), Meta :: meta(), ReadState :: term()}

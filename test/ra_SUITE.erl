@@ -253,7 +253,7 @@ start_servers(Config) ->
     ok = ra:start_server(default, Name, N3, add_machine(),
                          [N1, N2]),
     timer:sleep(100),
-    % issue command - this is likely to preceed teh rpc timeout so the node
+    % issue command - this is likely to precede the rpc timeout so the node
     % then should stash the command until a leader is known
     {ok, _, Leader} = ra:process_command(N3, 5,
                                          ?PROCESS_COMMAND_TIMEOUT),

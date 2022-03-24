@@ -200,7 +200,7 @@ delete_two_server_cluster(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     receive
         Anything ->
-            ct:pal("got wierd message ~p", [Anything]),
+            ct:pal("got weird message ~p", [Anything]),
             exit({unexpected, Anything})
     after 250 ->
               ok
