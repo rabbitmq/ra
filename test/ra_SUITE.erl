@@ -113,7 +113,16 @@ pipeline_commands(Config) ->
     % index is 2 as leaders commit a no-op entry on becoming leaders
     ok = ra:pipeline_command(N1, 5, C1, normal),
     ok = ra:pipeline_command(N1, 5, C2, normal),
+    %% here we are asserting on the order of received
+    %% correlations
     [{C1, 5}, {C2, 10}] = gather_applied([], 125),
+
+    %% correlations are transient so ok to reuse refs
+    ok = ra:pipeline_command(N1, 5, C1, low),
+    ok = ra:pipeline_command(N1, 5, C2, low),
+    %% here we are asserting on the order of received
+    %% correlations
+    [{C1, 15}, {C2, 20}] = gather_applied([], 125),
     terminate_cluster([N1]).
 
 stop_server_idemp(Config) ->
@@ -892,6 +901,6 @@ gather_applied(Acc, Timeout) ->
         {ra_event, _Leader, {applied, Corrs}} ->
             gather_applied(Acc ++ Corrs, Timeout)
     after Timeout ->
-              lists:reverse(Acc)
+              Acc
     end.
 
