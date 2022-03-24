@@ -354,7 +354,7 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~s: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
-    %% disable segment read cache by setting random accesss pattern
+    %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value

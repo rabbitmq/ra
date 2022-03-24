@@ -416,7 +416,7 @@ updated_segment_can_be_read(Config) ->
     Log0 = ra_log_init(Config,
                        #{counter => ra_counters:fetch(?FUNCTION_NAME),
                          snapshot_interval => 1}),
-    %% append a few entrie
+    %% append a few entries
     Log2 = append_and_roll(1, 5, 1, Log0),
     % Log2 = deliver_all_log_events(Log1, 200),
     %% read some, this will open the segment with the an index of entries
@@ -586,7 +586,7 @@ wal_crash_recover(Config) ->
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
     ok = proc_lib:stop(ra_log_segment_writer),
-    % write someting
+    % write something
     timer:sleep(100),
     Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
     spawn(fun () -> proc_lib:stop(ra_log_segment_writer) end),

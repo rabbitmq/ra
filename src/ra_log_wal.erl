@@ -198,7 +198,7 @@ force_roll_over(Wal) ->
 %%
 %% Once the current .wal file is full a new one is closed. All the entries in
 %% ra_log_open_mem_tables are moved to ra_log_closed_mem_tables so that writers
-%% can still locate the tables whilst they are being flushed ot disk. The
+%% can still locate the tables whilst they are being flushed to disk. The
 %% ra_log_segment_writer is notified of all the mem tables written to during
 %% the lifetime of the .wal file and will begin writing these to on-disk segment
 %% files. Once it has finished the current set of mem_tables it will delete the
@@ -541,7 +541,7 @@ roll_over(OpnMemTbls, #state{wal = Wal0, file_num = Num0,
     NextFile = filename:join(Dir, Fn),
     ?DEBUG("wal: opening new file ~ts open mem tables: ~w", [Fn, OpnMemTbls]),
     %% if this is the first wal since restart randomise the first
-    %% max wal size to reduce the likelyhood that each erlang node will
+    %% max wal size to reduce the likelihood that each erlang node will
     %% flush mem tables at the same time
     NextMaxBytes = case Wal0 of
                        undefined ->

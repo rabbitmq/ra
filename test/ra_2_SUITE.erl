@@ -323,7 +323,7 @@ server_restart_after_application_restart(Config) ->
 
 
 % NB: this is not guaranteed not to re-issue side-effects but only tests
-% that the likelyhood is small
+% that the likelihood is small
 restarted_server_does_not_reissue_side_effects(Config) ->
     ServerId = ?config(server_id, Config),
     Name = element(1, ServerId),

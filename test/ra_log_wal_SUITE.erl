@@ -323,7 +323,7 @@ overwrite(Config) ->
 
 truncate_write(Config) ->
     % a truncate write should update the range to not include previous indexes
-    % a trucated write does not need to follow the sequence
+    % a truncated write does not need to follow the sequence
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),

@@ -135,7 +135,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
                      %% this is what we expect
                      ok;
                  _ ->
-                     ?ERROR("segment_writer: ~b failures encounted during segment"
+                     ?ERROR("segment_writer: ~b failures encountered during segment"
                             " flush. Errors: ~P", [length(Failures), Failures, 32]),
                      exit(segment_writer_segment_write_failure)
              end
@@ -147,7 +147,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     ?DEBUG("segment_writer: deleting wal file: ~s",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
-    %% TODO: this shoudl be a debug option config?
+    %% TODO: this should be a debug option config?
     % Base = filename:basename(WalFile),
     % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
     % filelib:ensure_dir(BkFile),

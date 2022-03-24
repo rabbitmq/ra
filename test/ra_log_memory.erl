@@ -53,7 +53,7 @@
 
 -spec init(_) -> ra_log_memory_state().
 init(_Args) ->
-    % initialized with a deafault 0 index 0 term dummy value
+    % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     #state{}.
 

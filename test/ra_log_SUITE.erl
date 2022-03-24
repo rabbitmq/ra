@@ -214,7 +214,7 @@ take(Config) ->
                                Entry = {I, Term, "entry" ++ integer_to_list(I)},
                                ra_log:append_sync(Entry, L0)
                        end, Log0, lists:seq(Idx, LastIdx)),
-    % wont work for memory
+    % won't work for memory
     {[?IDX(1)], 1, Log2} = ra_log:take(1, 1, Log1),
     {[?IDX(1), ?IDX(2)], 2, Log3} = ra_log:take(1, 2, Log2),
     % partly out of range

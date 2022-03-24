@@ -193,7 +193,7 @@ full_file(Config) ->
 write_close_open_write(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    % create unique data so that the CRC check is trigged in case we
+    % create unique data so that the CRC check is triggered in case we
     % write to the wrong offset
     Data = fun (Num) ->
                    I = integer_to_binary(Num),
@@ -229,7 +229,7 @@ write_then_read(Config) ->
     {ok, Seg} = ra_log_segment:sync(Seg2),
     ok = ra_log_segment:close(Seg),
 
-    % read two consequtive entries from index 1
+    % read two consecutive entries from index 1
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
     [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 2),
     %% validate a larger range still returns results

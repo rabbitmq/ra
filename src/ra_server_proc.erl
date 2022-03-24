@@ -903,7 +903,7 @@ terminate(Reason, StateName,
             catch ets:delete(ra_state, UId),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
-            %% wont do this automatically, even for transient children
+            %% won't do this automatically, even for transient children
             %% for simple_one_for_one terminate also removes
             _ = spawn(fun () ->
                               Ref = erlang:monitor(process, Self),
@@ -1450,7 +1450,7 @@ reject_command(Pid, Corr, #state{leader_monitor = _Mon} = State) ->
             %% don't log these as they may never be resolved
             ok;
         Id ->
-            %% this can happend during an explicit leader change
+            %% this can happen during an explicit leader change
             %% best not rejecting them to oneself!
             ok;
         _ ->

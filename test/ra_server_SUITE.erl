@@ -525,7 +525,7 @@ follower_aer_5(_Config) ->
     {follower, State0, _} = ra_server:handle_follower(
                               {ra_log_event, {written, {4, 4, 1}}}, State00),
     % now an AER from another leader in a higher term is received
-    % This is what the leader sends immedately before committing it;s noop
+    % This is what the leader sends immediately before committing it;s noop
     AER2 = #append_entries_rpc{term = 2, leader_id = N5, prev_log_index = 3,
                                prev_log_term = 1, leader_commit = 3,
                                entries = []},
@@ -626,7 +626,7 @@ follower_handles_append_entries_rpc(_Config) ->
       {record_leader_msg, _}]}
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{prev_log_index = 4},
                                     State),
-    % there is an entry but not with a macthing term
+    % there is an entry but not with a matching term
     {await_condition, _, [{cast, N1, {N1, #append_entries_reply{term = 5, success = false}}},
                           {record_leader_msg, _}]}
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{prev_log_term = 4},
@@ -1184,7 +1184,7 @@ follower_machine_version(_Config) ->
     MacVer = 1,
     %
     State00 = base_state(3, ?FUNCTION_NAME),
-    %% follower with lower machine version is adviced of higher machine version
+    %% follower with lower machine version is advised of higher machine version
     Aer = #append_entries_rpc{entries = [{4, 5, {noop, meta(), MacVer}},
                                          {5, 5, usr(new_state)}],
                               term = 5, leader_id = ?N1,
@@ -1630,7 +1630,7 @@ follower_receives_stale_snapshot(_Config) ->
                                                    maps:keys(Config)),
                                   chunk_state = {1, last},
                                   data = []},
-    %% this should be a rare occurence, rather than implement a special
+    %% this should be a rare occurrence, rather than implement a special
     %% protocol at this point the server just replies
     {follower, _, _} =
         ra_server:handle_follower(ISRpc, FState),
@@ -1735,7 +1735,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                                         next_index => N2NextIndex}), % stale peer - previous leader
                   N3 => new_peer_with(#{match_index => 3,
                                         next_index => 4,
-                                        commit_index_sent => 3})}, % uptodate peer
+                                        commit_index_sent => 3})}, % up-to-date peer
                 cluster_change_permitted => true,
                 cluster_index_term => {0,0},
                 commit_index => 3,

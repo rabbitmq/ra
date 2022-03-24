@@ -349,7 +349,7 @@ in a separate repository.
                     <code>default</code>: used by default. <code>write(2)</code> system calls are delayed until a buffer is due to be flushed. Then it writes all the data in a single call then <code>fsync</code>s. Fastest option but incurs some additional memory use.
                 </li>
                 <li>
-                    <code>o_sync</code>: Like default but will try to open the file with O_SYNC and thus wont need the additional <code>fsync(2)</code> system call. If it fails to open the file with this flag this mode falls back to default.
+                    <code>o_sync</code>: Like default but will try to open the file with O_SYNC and thus won't need the additional <code>fsync(2)</code> system call. If it fails to open the file with this flag this mode falls back to default.
                 </li>
             </ul>
         </td>
