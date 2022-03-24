@@ -1656,7 +1656,10 @@ send_applied_notifications(#state{} = State, Nots) ->
     %% any notifications that could not be sent
     %% will be kept and retried
     RemNots = maps:filter(
-                fun(Who, Correlations) ->
+                fun(Who, Correlations0) ->
+                        %% correlations are build up in reverse order so we need
+                        %% to reverse before sending
+                        Correlations = lists:reverse(Correlations0),
                         ok =/= send_ra_event(Who, Correlations, Id,
                                              applied, State)
                 end, Nots),
