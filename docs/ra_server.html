@@ -34,6 +34,10 @@
 <p><pre>command_meta() = #{from =&gt; <a href="#type-from">from()</a>, ts := integer()}</pre></p>
 
 
+<h3 class="typedecl"><a name="type-command_priority">command_priority()</a></h3>
+<p><pre>command_priority() = normal | low</pre></p>
+
+
 <h3 class="typedecl"><a name="type-command_reply_mode">command_reply_mode()</a></h3>
 <p><pre>command_reply_mode() = 
     after_log_append | await_consensus |
@@ -69,7 +73,7 @@
       Term :: <a href="#type-ra_term">ra_term()</a>}} |
     {next_event, <a href="#type-ra_msg">ra_msg()</a>} |
     {next_event, cast, <a href="#type-ra_msg">ra_msg()</a>} |
-    {notify, pid(), reference()} |
+    {notify, #{pid() =&gt; [term()]}} |
     {record_leader_msg, <a href="#type-ra_server_id">ra_server_id()</a>} |
     start_election_timeout</pre></p>
 
@@ -235,7 +239,7 @@
 <tr><td valign="top"><a href="#handle_node_status-6">handle_node_status/6</a></td><td></td></tr>
 <tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#log_fold-3">log_fold/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read_at-2">read_at/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#log_read-2">log_read/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -507,11 +511,11 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="read_at-2">read_at/2</a></h3>
+<h3 class="function"><a name="log_read-2">log_read/2</a></h3>
 <div class="spec">
-<p><pre>read_at(Idx :: <a href="#type-ra_index">ra_index()</a>, RaState :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
-           {ok, term(), <a href="#type-ra_server_state">ra_server_state()</a>} |
-           {error, <a href="#type-ra_server_state">ra_server_state()</a>}</pre></p>
+<p><pre>log_read(Indexes :: [<a href="#type-ra_index">ra_index()</a>], State :: <a href="#type-ra_server_state">ra_server_state()</a>) -&gt;
+            {ok, [term()], <a href="#type-ra_server_state">ra_server_state()</a>} |
+            {error, <a href="#type-ra_server_state">ra_server_state()</a>}</pre></p>
 <p> </p>
 </div>
 <hr>

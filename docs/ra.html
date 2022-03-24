@@ -90,6 +90,7 @@
 <tr><td valign="top"><a href="#pipeline_command-4">pipeline_command/4</a></td><td>Submits a command to the ra server using a gen_statem:cast, passing  
 an optional process-scoped term as correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#pipeline_command-3">pipeline_command/3</a></td><td>Same as <code>pipeline_command/4</code> but uses a hardcoded priority of <code>low</code>.</td></tr>
+<tr><td valign="top"><a href="#ping-2">ping/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#pipeline_command-2">pipeline_command/2</a></td><td>Sends a command to the ra server using a gen_statem:cast without
   any correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#local_query-2">local_query/2</a></td><td>Query the machine state on any available server.</td></tr>
@@ -100,11 +101,11 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td>Same as <code>consistent_query/2</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Returns a list of cluster members.</td></tr>
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td>Returns a list of cluster members.</td></tr>
-<tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td>Returns a list of initial (seed) cluster members.</td></tr>
 <tr><td valign="top"><a href="#initial_members-2">initial_members/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a follower.</td></tr>
-<tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
+<tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td>Executes (using a cast) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#register_external_log_reader-1">register_external_log_reader/1</a></td><td>Registers an external log reader.</td></tr>
 </table>
 
@@ -330,6 +331,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <p><tt>ClusterName</tt>: the name of the cluster.<br>
 <tt>ServerId</tt>: the ra_server_id() of the server<br>
 <tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<tt>ServerIds</tt>: a list of initial (seed) server configurations<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -600,7 +602,7 @@ of the success reply tuple.</p>
                  Correlation ::
                      <a href="ra_server.html#type-command_correlation">ra_server:command_correlation()</a> |
                      no_correlation,
-                 Priority :: normal | low) -&gt;
+                 Priority :: <a href="ra_server.html#type-command_priority">ra_server:command_priority()</a>) -&gt;
                     ok</pre></p>
 <p><tt>ServerId</tt>: the ra server id to send the command to<br>
 <tt>Command</tt>: an arbitrary term that the state machine can handle<br>
@@ -662,6 +664,13 @@ success or otherwise.</p>
 </div><p>Same as <code>pipeline_command/4</code> but uses a hardcoded priority of <code>low</code>.</p>
 <p><b>See also:</b> <a href="#pipeline_command-4">pipeline_command/4</a>.</p>
 
+<h3 class="function"><a name="ping-2">ping/2</a></h3>
+<div class="spec">
+<p><pre>ping(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Timeout :: timeout()) -&gt;
+        <a href="#type-safe_call_ret">safe_call_ret</a>({pong, <a href="#type-states">states()</a>})</pre></p>
+<p> </p>
+</div>
+
 <h3 class="function"><a name="pipeline_command-2">pipeline_command/2</a></h3>
 <div class="spec">
 <p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Command :: term()) -&gt;
@@ -672,7 +681,7 @@ success or otherwise.</p>
 </div><p>Sends a command to the ra server using a gen_statem:cast without
   any correlation identifier.
   Effectively the same as
-  <code>ra:pipeline_command(ServerId, Command, low, no_correlation)</code>
+  <code>ra:pipeline_command(ServerId, Command, no_correlation, low)</code>
   This is the least reliable way to interact with a ra system ("fire and forget")
   and should only be used for commands that are of little importance
   and/or where waiting for a response is prohibitively slow.</p>
@@ -816,8 +825,14 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
 <p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
                                                      error)</pre></p>
-<p> </p>
-</div>
+<p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
+</p>
+</div><p><p>Returns a list of initial (seed) cluster members.</p>
+ 
+  This allows Ra-based systems with dynamic cluster membership
+  discover the original set of members and use them to seed newly
+  joining ones.
+ </p>
 
 <h3 class="function"><a name="initial_members-2">initial_members/2</a></h3>
 <div class="spec">
@@ -843,13 +858,15 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
 <div class="spec">
 <p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; term()</pre></p>
 <p> </p>
-</div>
+</div><p>Executes (using a call) an auxiliary command that the state machine can handle.
+ </p>
 
 <h3 class="function"><a name="cast_aux_command-2">cast_aux_command/2</a></h3>
 <div class="spec">
 <p><pre>cast_aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; ok</pre></p>
 <p> </p>
-</div>
+</div><p>Executes (using a cast) an auxiliary command that the state machine can handle.
+ </p>
 
 <h3 class="function"><a name="register_external_log_reader-1">register_external_log_reader/1</a></h3>
 <div class="spec">

@@ -26,9 +26,11 @@
       wal_compute_checksums =&gt; boolean(),
       wal_max_batch_size =&gt; non_neg_integer(),
       wal_max_entries =&gt; non_neg_integer(),
-      wal_write_strategy =&gt; default | o_sync,
-      wal_sync_method =&gt; datasync | sync,
+      wal_write_strategy =&gt; default | o_sync | sync_after_notify,
+      wal_sync_method =&gt; datasync | sync | none,
       wal_hibernate_after =&gt; non_neg_integer(),
+      wal_garbage_collect =&gt; boolean(),
+      wal_pre_allocate =&gt; boolean(),
       snapshot_chunk_size =&gt; non_neg_integer(),
       receive_snapshot_timeout =&gt; non_neg_integer()}</pre></p>
 

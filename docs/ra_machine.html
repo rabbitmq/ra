@@ -99,12 +99,18 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
      Msg :: term(),
      Options :: <a href="#type-send_msg_opts">send_msg_opts()</a>} |
     {mod_call, module(), Function :: atom(), [term()]} |
+    {append, term()} |
+    {append, term(), <a href="ra_server.html#type-command_reply_mode">ra_server:command_reply_mode()</a>} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
     {log, [<a href="#type-ra_index">ra_index()</a>], fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>)} |
+    {log,
+     [<a href="#type-ra_index">ra_index()</a>],
+     fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>),
+     {local, node()}} |
     {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>

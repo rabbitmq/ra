@@ -39,6 +39,7 @@
 <tr><td valign="top"><a href="#num_open_segments-1">num_open_segments/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read-3">read/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read-4">read/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#sparse_read-3">sparse_read/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch_term-2">fetch_term/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete_closed_mem_table_object-2">delete_closed_mem_table_object/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#closed_mem_tables-1">closed_mem_tables/1</a></td><td></td></tr>
@@ -132,6 +133,15 @@
      State :: <a href="#type-state">state()</a>,
      Entries :: [<a href="#type-log_entry">log_entry()</a>]) -&gt;
         {[<a href="#type-log_entry">log_entry()</a>], NumRead :: non_neg_integer(), <a href="#type-state">state()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="sparse_read-3">sparse_read/3</a></h3>
+<div class="spec">
+<p><pre>sparse_read(State :: <a href="#type-state">state()</a>,
+            Indexes0 :: [<a href="#type-ra_index">ra_index()</a>],
+            Entries0 :: [<a href="#type-log_entry">log_entry()</a>]) -&gt;
+               {[<a href="#type-log_entry">log_entry()</a>], <a href="#type-state">state()</a>}</pre></p>
 <p> </p>
 </div>
 
