@@ -1,0 +1,53 @@
+module(
+    name = "ra",
+    version = "2.0.5",
+)
+
+bazel_dep(name = "rules_erlang", version = "2.5.0")
+
+local_path_override(
+    module_name = "rules_erlang",
+    path = "../rules_erlang",
+)
+
+erlang_package = use_extension(
+    "@rules_erlang//bzlmod:extensions.bzl",
+    "erlang_package",
+)
+
+erlang_package.hex(
+    name = "aten",
+    version = "0.5.7",
+    sha256 = "8b623c8be27b59a911d16ab0af41777b504c147bc0d60a29015fab58321c04b0",
+)
+
+erlang_package.hex(
+    name = "gen_batch_server",
+    version = "0.8.7",
+    sha256 = "94a49a528486298b009d2a1b452132c0a0d68b3e89d17d3764cb1ec879b7557a",
+)
+
+erlang_package.git(
+    name = "inet_tcp_proxy_dist",
+    repository = "rabbitmq/inet_tcp_proxy",
+    branch = "master",
+)
+
+erlang_package.git(
+    repository = "eproxus/meck",
+    branch = "master",
+)
+
+erlang_package.git(
+    repository = "manopapad/proper",
+    branch = "master",
+)
+
+use_repo(
+    erlang_package,
+    "aten",
+    "gen_batch_server",
+    "inet_tcp_proxy_dist",
+    "meck",
+    "proper",
+)

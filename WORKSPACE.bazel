@@ -2,9 +2,9 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "rules_erlang",
-    sha256 = "faf9d4c8dda5dcac74110445fba74a7374f7c47ddd1b6e68cbd69997d6f8e1cf",
-    strip_prefix = "rules_erlang-2.2.0",
-    urls = ["https://github.com/rabbitmq/rules_erlang/archive/refs/tags/2.2.0.zip"],
+    # sha256 = "56569bf2d161ee5007e17bc77919df4d83696cd7ad8ff9be5202751cad3332fd",
+    strip_prefix = "rules_erlang-2.5.0",
+    urls = ["https://github.com/rabbitmq/rules_erlang/archive/refs/tags/2.5.0.zip"],
 )
 
 load("@rules_erlang//:rules_erlang.bzl", "rules_erlang_dependencies")
@@ -27,7 +27,7 @@ hex_pm_erlang_app(
 )
 
 http_archive(
-    name = "inet_tcp_proxy",
+    name = "inet_tcp_proxy_dist",
     build_file_content = """load("@rules_erlang//:erlang_app.bzl", "erlang_app")
 erlang_app(
     app_name = "inet_tcp_proxy_dist",

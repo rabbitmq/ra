@@ -1,5 +1,5 @@
 load("@rules_erlang//:erlc.bzl", "erlc")
-load("@rules_erlang//:ct.bzl", "ct_suite")
+load("@rules_erlang//:ct_sharded.bzl", "ct_suite")
 
 TEST_ERLC_OPTS = [
     "-DTEST",
@@ -35,7 +35,7 @@ def ra_suites():
             runtime_deps = [
                 "@gen_batch_server//:erlang_app",
                 "@aten//:erlang_app",
-                "@inet_tcp_proxy//:erlang_app",
+                "@inet_tcp_proxy_dist//:erlang_app",
                 "@meck//:erlang_app",
             ],
             deps = [
