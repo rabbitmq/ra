@@ -51,7 +51,8 @@ all_tests() ->
      post_partition_liveness,
      all_metrics_are_integers,
      transfer_leadership,
-     transfer_leadership_two_node
+     transfer_leadership_two_node,
+     initial_leader
     ].
 
 groups() ->
@@ -500,9 +501,10 @@ snapshot_installation(Config) ->
     Servers = [N1, N2, N3],
     Mac = {module, ra_queue, #{}},
     % start two servers
-    {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
+    {ok, [Member, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
     ok = ra:stop_server(?SYS, Down),
-    {ok, _, Leader} = ra:members(Leader0),
+    timer:sleep(1500),
+    {ok, _, Leader} = ra:members(Member),
     %% process enough commands to trigger two snapshots, ra will snapshot
     %% every ~4000 log entries or so by default
     [begin
@@ -560,9 +562,10 @@ snapshot_installation_with_call_crash(Config) ->
     meck:new(gen_statem, [unstick, passthrough]),
 
     % start two servers
-    {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
+    {ok, [Member, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
     ok = ra:stop_server(?SYS, Down),
-    {ok, _, Leader} = ra:members(Leader0),
+    timer:sleep(1500),
+    {ok, _, Leader} = ra:members(Member),
     %% process enough commands to trigger two snapshots, ra will snapshot
     %% every ~4000 log entries or so by default
     [begin
@@ -780,6 +783,18 @@ transfer_leadership_two_node(Config) ->
     ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
     terminate_cluster(Members).
 
+initial_leader(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    Servers = shuffle([N1, N2, N3]),
+    Mac = {module, ra_queue, #{}},
+    %% The first server in the list of Servers should trigger leader election.
+    {ok, [Member, _, _], []}  = ra:start_cluster(default, Name, Mac, Servers),
+    {ok, _, Leader} = ra:members(Member),
+    ?assertEqual(hd(Servers), Leader).
+
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),
     proplists:get_value(raft_state, lists:last(Items)).
@@ -789,7 +804,7 @@ wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout)
     case get_gen_statem_status(Ref) of
         ExpectedStatus ->
             ok;
-        OtherStatus when Timeout >= 0 ->
+        _OtherStatus when Timeout >= 0 ->
             timer:sleep(500),
             wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout - 500);
         OtherStatus ->
@@ -904,3 +919,6 @@ gather_applied(Acc, Timeout) ->
               Acc
     end.
 
+shuffle(L) when is_list(L) ->
+    lists:map(fun({_, E}) -> E end,
+              lists:keysort(1, [{rand:uniform(), E0} || E0 <- L])).

@@ -328,6 +328,7 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %% @param ClusterName the name of the cluster.
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @param ServerIds The list of ra server ids.
+%% The first server in the list attempts to become the leader.
 %% @param Timeout The time to wait for each server to start
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
@@ -362,7 +363,8 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 
 %% @doc Starts a new distributed ra cluster.
 %%
-%% @param ServerConfigs a list of initial server configurations
+%% @param ServerConfigs a list of initial server configurations.
+%% The first server in the list attempts to become the leader.
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
 %% started. A cluster can be successfully started if more than half of the
@@ -382,14 +384,15 @@ start_cluster(System, ServerConfigs)
     start_cluster(System, ServerConfigs, ?START_TIMEOUT).
 
 %% @doc Same as `start_cluster/1' but accepts a custom timeout.
-%% @param ServerConfigs a list of initial server configurations
+%% @param ServerConfigs a list of initial server configurations.
+%% The first server in the list attempts to become the leader.
 %% @param Timeout the timeout to use
 %% @end
 -spec start_cluster(atom(),
                     [ra_server:ra_server_config()], non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
-start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
+start_cluster(System, [#{cluster_name := ClusterName, id := InitialLeaderId} | _] = ServerConfigs,
               Timeout) when is_atom(System) ->
     {Started, NotStarted} =
         ra_lib:partition_parallel(
@@ -413,7 +416,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             NotStartedIds = [I || #{id := I} <- NotStarted],
             %% try triggering elections until one succeeds
             _ = lists:any(fun (N) -> ok == trigger_election(N) end,
-                          sort_by_local(StartedIds, [])),
+                          sort_by(InitialLeaderId, StartedIds, [])),
             %% TODO: handle case where no election was successfully triggered
             case members(hd(StartedIds),
                          length(ServerConfigs) * Timeout) of
@@ -1037,9 +1040,9 @@ register_external_log_reader({_, Node} = ServerId)
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
 
-sort_by_local([], Acc) ->
+sort_by(_, [], Acc) ->
     Acc;
-sort_by_local([{_, N} = X | Rem], Acc) when N =:= node() ->
+sort_by(X, [X | Rem], Acc) ->
     [X | Acc] ++ Rem;
-sort_by_local([X | Rem], Acc) ->
-    sort_by_local(Rem, [X | Acc]).
+sort_by(Id, [X | Rem], Acc) ->
+    sort_by(Id, Rem, [X | Acc]).
