@@ -1322,7 +1322,11 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
                     cluster, leader_id, voted_for], State),
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
-    MacOverview = ra_machine:overview(MacMod, MacState),
+    MacOverview = try ra_machine:overview(MacMod, MacState) of
+                      MO -> MO
+                  catch _:_ = Err ->
+                            {machine_overview_crashed, Err}
+                  end,
     O#{log => LogOverview,
        aux => Aux,
        machine => MacOverview}.
