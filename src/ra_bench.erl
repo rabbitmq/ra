@@ -120,8 +120,8 @@ run(#{name := Name,
     End = erlang:system_time(millisecond),
     Taken = End - Start,
     exit(CounterPrinter, kill),
-    io:format("benchmark completed: ~b ops in ~bms rate ~b ops/sec~n",
-              [TotalOps, Taken, TotalOps div (Taken div 1000)]),
+    io:format("benchmark completed: ~b ops in ~bms rate ~.2f ops/sec~n",
+              [TotalOps, Taken, TotalOps / (Taken / 1000)]),
 
     BName = atom_to_binary(Name, utf8),
     _ = [rpc:call(N, ?MODULE, print_metrics, [BName])
