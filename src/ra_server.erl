@@ -40,6 +40,7 @@
          leader_id/1,
          current_term/1,
          machine_version/1,
+         machine/1,
          machine_query/2,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -1418,6 +1419,10 @@ current_term(State) ->
 -spec machine_version(ra_server_state()) -> non_neg_integer().
 machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
     MacVer.
+
+-spec machine(ra_server_state()) -> ra_machine:machine().
+machine(#{cfg := #cfg{machine = Machine}}) ->
+    Machine.
 
 -spec machine_query(fun((term()) -> term()), ra_server_state()) ->
     {ra_idxterm(), term()}.

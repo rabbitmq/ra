@@ -1167,10 +1167,12 @@ handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
               Actions) ->
     ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
     %% leader effect only
-    Me = self(),
+    Self = self(),
+    Machine = ra_server:machine(SS0),
     Pid = spawn(fun () ->
-                        try send_snapshots(Me, Id, Term, To,
-                                           ChunkSize, InstallSnapTimeout, SnapState) of
+                        try send_snapshots(Self, Id, Term, To,
+                                           ChunkSize, InstallSnapTimeout,
+                                           SnapState, Machine) of
                             _ -> ok
                         catch
                             C:timeout:S ->
@@ -1487,16 +1489,25 @@ fold_log(From, Fun, Term, State) ->
              [{reply, From, {error, Reason}}]}
     end.
 
-send_snapshots(Me, Id, Term, To, ChunkSize, InstallTimeout, SnapState) ->
-    {ok, Meta, ReadState} = ra_snapshot:begin_read(SnapState),
+send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
+               InstallTimeout, SnapState, Machine) ->
+    {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
+        ra_snapshot:begin_read(SnapState),
 
-    RPC = #install_snapshot_rpc{term = Term,
-                                leader_id = Id,
-                                meta = Meta},
+    %% only send the snapshot if the target server can accept it
+    TheirMacVer = rpc:call(ToNode, ra_machine, version, [Machine]),
 
-    Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
-                                      ChunkSize, InstallTimeout, SnapState),
-    ok = gen_statem:cast(Me, {To, Result}).
+    case SnapMacVer > TheirMacVer of
+        true ->
+            ok;
+        false ->
+            RPC = #install_snapshot_rpc{term = Term,
+                                        leader_id = Id,
+                                        meta = Meta},
+            Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
+                                              ChunkSize, InstallTimeout, SnapState),
+            ok = gen_statem:cast(Me, {To, Result})
+    end.
 
 read_chunks_and_send_rpc(RPC0,
                          To, ReadState0, Num, ChunkSize, InstallTimeout, SnapState) ->
