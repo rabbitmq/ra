@@ -38,6 +38,7 @@ all() ->
      leader_noop_operation_enables_cluster_change,
      leader_noop_increments_machine_version,
      follower_machine_version,
+     follower_install_snapshot_machine_version,
      leader_server_join,
      leader_server_leave,
      leader_is_removed,
@@ -1206,11 +1207,38 @@ follower_machine_version(_Config) ->
                  commit_index := 5,
                  log := _Log} = _State1, _Effects} =
     ra_server:handle_follower({ra_log_event, {written, {4, 5, 5}}}, State0),
+    ok.
 
-    %% TODO: validate append entries reply effect
+follower_install_snapshot_machine_version(_Config) ->
+    MacVer = 1,
+    %
+    State00 = base_state(3, ?FUNCTION_NAME),
+    %% follower with lower machine version is advised of higher machine version
+    %% by install snapshot rpc
+    SnapMeta = #{index => 4,
+                 term => 5,
+                 cluster => [?N1, ?N2, ?N3],
+                 machine_version => MacVer},
+    SnapData = [<<"hi4_v2">>],
 
-    %% TODO: simulate that follower is updated from this state
-    %% ra_server_init
+    ISR = #install_snapshot_rpc{term = 5, leader_id = ?N1,
+                                meta = SnapMeta,
+                                chunk_state = {1, last},
+                                data = SnapData},
+    {receive_snapshot, #{cfg := #cfg{machine_version = 0,
+                                     effective_machine_version = 0},
+                         last_applied := 3,
+                         commit_index := _} = State0,
+     _Effects0} = ra_server:handle_follower(ISR, State00),
+
+    meck:expect(ra_log, recover_snapshot, fun (_) -> {SnapMeta, SnapData} end),
+    {follower, #{cfg := #cfg{machine_version = 0,
+                             machine_versions = [{4, 1}, {0,0}],
+                             effective_machine_version = 1},
+                 last_applied := 3,
+                 machine_state := <<"hi3">>, %% old machine state
+                 commit_index := 4},
+     _} = ra_server:handle_receive_snapshot(ISR, State0),
     ok.
 
 leader_server_join(_Config) ->
