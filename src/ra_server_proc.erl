@@ -1499,6 +1499,7 @@ send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
 
     case SnapMacVer > TheirMacVer of
         true ->
+            timer:sleep(InstallTimeout),
             ok;
         false ->
             RPC = #install_snapshot_rpc{term = Term,
