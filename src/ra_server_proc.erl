@@ -447,7 +447,7 @@ leader(_, tick_timeout, State0) ->
     ServerState = State1#state.server_state,
     Effects = ra_server:tick(ServerState),
     {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
-                                       cast, State1),
+                                        cast, State1),
     %% try sending any pending applied notifications again
     State = send_applied_notifications(State2, #{}),
     {keep_state, handle_tick_metrics(State),

@@ -1775,9 +1775,13 @@ handle_down(leader, machine, Pid, Info, State)
     handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
                             {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info,
+handle_down(RaftState, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
-  when is_pid(Pid) ->
+  when (RaftState == leader orelse
+        RaftState == await_condition)
+       andalso is_pid(Pid)  ->
+    %% if a rebalance is being done we also need to handle snapshot_sender
+    %% downs here
     ?DEBUG_IF(Info /= normal,
               "~s: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),
