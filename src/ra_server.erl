@@ -40,6 +40,7 @@
          leader_id/1,
          current_term/1,
          machine_version/1,
+         machine/1,
          machine_query/2,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -1157,13 +1158,18 @@ handle_follower(#install_snapshot_rpc{term = Term,
 %% need to check if it's the first or last rpc
 %% TODO: must abort pending if for some reason we need to do so
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      meta = #{index := SnapIdx} = Meta,
+                                      meta = #{index := SnapIdx,
+                                               machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
                                       chunk_state = {1, _ChunkFlag}} = Rpc,
-                #{cfg := #cfg{log_id = LogId}, log := Log0,
+                #{cfg := #cfg{log_id = LogId,
+                              machine_version = MacVer}, log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
-  when Term >= CurTerm andalso SnapIdx > LastApplied ->
+  when Term >= CurTerm andalso
+       SnapIdx > LastApplied andalso
+       %% only install snapshot if the machine version is understood
+       MacVer >= SnapMacVer ->
     %% only begin snapshot procedure if Idx is higher than the last_applied
     %% index.
     ?DEBUG("~s: begin_accept snapshot at index ~b in term ~b",
@@ -1196,32 +1202,51 @@ handle_follower(Msg, State) ->
     {follower, State, []}.
 
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
-                                              meta = #{index := LastIndex,
-                                                       term := LastTerm},
+                                              meta = #{index := SnapIndex,
+                                                       machine_version := SnapMacVer,
+                                                       term := SnapTerm},
                                               chunk_state = {Num, ChunkFlag},
                                               data = Data},
-                        #{cfg := #cfg{id = Id, log_id = LogId},
+                        #{cfg := #cfg{id = Id,
+                                      log_id = LogId,
+                                      effective_machine_version = CurEffMacVer,
+                                      machine_versions = MachineVersions,
+                                      machine = Machine} = Cfg0,
                           log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     ?DEBUG("~s: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
-           [LogId, Num, ChunkFlag, LastIndex, LastTerm]),
+           [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
                                                SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
-                                     last_term = LastTerm,
-                                     last_index = LastIndex},
+                                     last_term = SnapTerm,
+                                     last_index = SnapIndex},
     case ChunkFlag of
         last ->
             %% this is the last chunk so we can "install" it
-            {Log, Effs} = ra_log:install_snapshot({LastIndex, LastTerm},
+            {Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
                                                   SnapState, Log0),
+            %% if the machine version of the snapshot is higher
+            %% we also need to update the current effective machine configuration
+            Cfg = case SnapMacVer > CurEffMacVer of
+                      true ->
+                          EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
+                          Cfg0#cfg{effective_machine_version = SnapMacVer,
+                                   machine_versions = [{SnapIndex, SnapMacVer}
+                                                       | MachineVersions],
+                                   effective_machine_module = EffMacMod};
+                      false ->
+                          Cfg0
+                  end,
+
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-            State = State0#{log => Log,
+            State = State0#{cfg => Cfg,
+                            log => Log,
                             current_term => Term,
-                            commit_index => LastIndex,
-                            last_applied => LastIndex,
+                            commit_index => SnapIndex,
+                            last_applied => SnapIndex,
                             cluster => make_cluster(Id, ClusterIds),
                             machine_state => MacState},
             %% it was the last snapshot chunk so we can revert back to
@@ -1418,6 +1443,10 @@ current_term(State) ->
 -spec machine_version(ra_server_state()) -> non_neg_integer().
 machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
     MacVer.
+
+-spec machine(ra_server_state()) -> ra_machine:machine().
+machine(#{cfg := #cfg{machine = Machine}}) ->
+    Machine.
 
 -spec machine_query(fun((term()) -> term()), ra_server_state()) ->
     {ra_idxterm(), term()}.
@@ -1746,9 +1775,13 @@ handle_down(leader, machine, Pid, Info, State)
     handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
                             {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info,
+handle_down(RaftState, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
-  when is_pid(Pid) ->
+  when (RaftState == leader orelse
+        RaftState == await_condition)
+       andalso is_pid(Pid)  ->
+    %% if a rebalance is being done we also need to handle snapshot_sender
+    %% downs here
     ?DEBUG_IF(Info /= normal,
               "~s: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),

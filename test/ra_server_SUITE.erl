@@ -38,6 +38,7 @@ all() ->
      leader_noop_operation_enables_cluster_change,
      leader_noop_increments_machine_version,
      follower_machine_version,
+     follower_install_snapshot_machine_version,
      leader_server_join,
      leader_server_leave,
      leader_is_removed,
@@ -46,6 +47,7 @@ all() ->
      leader_appends_cluster_change_then_steps_before_applying_it,
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
+     follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
      receive_snapshot_timeout,
      snapshotted_follower_received_append_entries,
@@ -1206,11 +1208,52 @@ follower_machine_version(_Config) ->
                  commit_index := 5,
                  log := _Log} = _State1, _Effects} =
     ra_server:handle_follower({ra_log_event, {written, {4, 5, 5}}}, State0),
+    ok.
 
-    %% TODO: validate append entries reply effect
+follower_install_snapshot_machine_version(_Config) ->
+    %% follower receives a snapshot with a higher machine version that it's current
+    %% effective machine version, in this case the follower will never receive
+    %% the noop command for the machine version bump and thus it needs to be
+    %% updated here
+    MacMod1 = follower_install_snapshot_machine_version_1,
+    MacVer = 1,
+    mock_machine(MacMod1),
 
-    %% TODO: simulate that follower is updated from this state
-    %% ra_server_init
+    #{cfg := Cfg} = State000 = base_state(3, ?FUNCTION_NAME),
+    %% patch up machine version so that the follower "understands" machine version 1
+    State00 = State000#{cfg => Cfg#cfg{machine_version = 1}},
+    meck:expect(?FUNCTION_NAME, which_module,
+                fun (0) ->
+                        ?FUNCTION_NAME;
+                    (1) ->
+                        MacMod1
+                end),
+    %% follower with lower machine version is advised of higher machine version
+    %% by install snapshot rpc
+    SnapMeta = #{index => 4,
+                 term => 5,
+                 cluster => [?N1, ?N2, ?N3],
+                 machine_version => MacVer},
+    SnapData = <<"hi4_v2">>,
+
+    ISR = #install_snapshot_rpc{term = 5, leader_id = ?N1,
+                                meta = SnapMeta,
+                                chunk_state = {1, last},
+                                data = SnapData},
+    {receive_snapshot, #{cfg := #cfg{effective_machine_version = 0},
+                         last_applied := 3,
+                         commit_index := _} = State0,
+     _Effects0} = ra_server:handle_follower(ISR, State00),
+
+    meck:expect(ra_log, recover_snapshot, fun (_) -> {SnapMeta, SnapData} end),
+    {follower, #{cfg := #cfg{machine_version = _,%% this gets populated on init only
+                             machine_versions = [{4, 1}, {0,0}],
+                             effective_machine_module = MacMod1,
+                             effective_machine_version = 1},
+                 last_applied := 4,
+                 machine_state := SnapData, %% old machine state
+                 commit_index := 4},
+     _} = ra_server:handle_receive_snapshot(ISR, State0),
     ok.
 
 leader_server_join(_Config) ->
@@ -1614,6 +1657,27 @@ follower_installs_snapshot(_Config) ->
                  leader_id := N1},
      [{reply, #install_snapshot_result{}}]} =
         ra_server:handle_receive_snapshot(ISRpc, FState1),
+
+    ok.
+
+follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
+    %% currently followers cannot correctly handle snapshots with a higher
+    %% machine version so have to ignore them
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, FState = #{cluster := Config}, _}}
+    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    LastTerm = 1, % snapshot term
+    Term = 2, % leader term
+    Idx = 3,
+    ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
+                                  meta = #{index => Idx,
+                                           term => LastTerm,
+                                           cluster => maps:keys(Config),
+                                           machine_version => 1},
+                                  chunk_state = {1, last},
+                                  data = []},
+    {follower, FState, _} =
+        ra_server:handle_follower(ISRpc, FState),
 
     ok.
 
