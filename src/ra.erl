@@ -518,13 +518,34 @@ delete_cluster(ServerIds) ->
 -spec delete_cluster(ServerIds :: [ra_server_id()], timeout()) ->
     {ok, Leader :: ra_server_id()} | {error, term()}.
 delete_cluster(ServerIds, Timeout) ->
+    %% We monitor the Ra server processes to know when they exit. That's
+    %% because they can only terminate once the command below is applied.
+    %% However, we want this function to return when the Ra server processes
+    %% and their related supervision trees are really stopped.
+    MRefs = [erlang:monitor(process, ServerId) || ServerId <- ServerIds],
     DeleteCmd = {'$ra_cluster', delete, await_consensus},
     case ra_server_proc:command(ServerIds, DeleteCmd, Timeout) of
         {ok, _, Leader} ->
+            %% Now we wait for the Ra server processes to exit.
+            lists:foreach(
+              fun(MRef) ->
+                      receive
+                          {'DOWN', MRef, _, _, _} -> ok
+                      after Timeout ->
+                                ok
+                      end
+              end,
+              MRefs),
             {ok, Leader};
         {timeout, _} ->
+            lists:foreach(
+              fun(MRef) -> erlang:demonitor(MRef, [flush]) end,
+              MRefs),
             {error, timeout};
         Err ->
+            lists:foreach(
+              fun(MRef) -> erlang:demonitor(MRef, [flush]) end,
+              MRefs),
             Err
     end.
 
