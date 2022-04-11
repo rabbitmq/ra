@@ -176,14 +176,20 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
             case ra_log_segment:segref(Seg) of
                 SegRef ->
+                    _ = ra_log_segment:close(Seg),
                     %% it has not changed - we can delete that too
+                    _ = prim_file:delete(Pivot),
                     %% as we are deleting the last segment - create an empty
                     %% successor
-                    _ = ra_log_segment:close(
-                          open_successor_segment(Seg, SegConf)),
-                    _ = ra_log_segment:close(Seg),
-                    _ = prim_file:delete(Pivot),
-                    {noreply, State0};
+                    case open_successor_segment(Seg, SegConf) of
+                        undefined ->
+                            %% directory must have been deleted after the pivot
+                            %% segment was opened
+                            {noreply, State0};
+                        Succ ->
+                            _ = ra_log_segment:close(Succ),
+                            {noreply, State0}
+                    end;
                 _ ->
                     %% the segment has changed - leave it in place
                     _ = ra_log_segment:close(Seg),
