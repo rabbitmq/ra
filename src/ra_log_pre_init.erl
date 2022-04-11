@@ -38,6 +38,8 @@ init([System]) ->
     %% populated before WAL recovery begins to avoid writing unnecessary
     %% indexes to segment files.
     Regd = ra_directory:list_registered(System),
+    ?INFO("ra system '~s' running pre init for ~b registered servers",
+          [System, length(Regd)]),
     _ = [catch(pre_init(System, Name)) || {Name, _U} <- Regd],
     {ok, #state{} , hibernate}.
 

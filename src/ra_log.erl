@@ -129,6 +129,7 @@
 pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}
           } = Conf) ->
+    timer:sleep(1),
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     SnapshotsDir = filename:join(Dir, "snapshots"),

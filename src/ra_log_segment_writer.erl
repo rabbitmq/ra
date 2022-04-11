@@ -32,6 +32,7 @@
 -include("ra.hrl").
 
 -define(AWAIT_TIMEOUT, 30000).
+-define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
 
 -define(COUNTER_FIELDS,
         [mem_tables,
@@ -63,17 +64,18 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
 truncate_segments(SegWriter, Who, SegRef) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     % truncate all closed segment files
     gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
 -spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
 my_segments(SegWriter, Who) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     gen_server:call(SegWriter, {my_segments, Who}, infinity).
 
 -spec overview(atom() | pid()) -> #{}.
 overview(SegWriter) ->
     gen_server:call(SegWriter, overview).
-
 
 await(SegWriter)  ->
     IsAlive = fun IsAlive(undefined) -> false;
@@ -384,3 +386,20 @@ open_file(Dir, SegConf) ->
                   "error: ~W. Exiting", [File, Err, 10]),
             exit(Err)
     end.
+
+maybe_wait_for_segment_writer(_SegWriter, TimeRemaining)
+  when TimeRemaining < 0 ->
+    error(segment_writer_not_available);
+maybe_wait_for_segment_writer(SegWriter, TimeRemaining)
+  when is_atom(SegWriter) ->
+    case whereis(SegWriter) of
+        undefined ->
+            %% segment writer isn't available yet, sleep a bit
+            timer:sleep(10),
+            maybe_wait_for_segment_writer(SegWriter, TimeRemaining - 10);
+        _ ->
+            ok
+    end;
+maybe_wait_for_segment_writer(_SegWriter, _TimeRemaining) ->
+    ok.
+
