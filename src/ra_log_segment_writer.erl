@@ -32,6 +32,7 @@
 -include("ra.hrl").
 
 -define(AWAIT_TIMEOUT, 30000).
+-define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
 
 -define(COUNTER_FIELDS,
         [mem_tables,
@@ -63,17 +64,18 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
 truncate_segments(SegWriter, Who, SegRef) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     % truncate all closed segment files
     gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
 -spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
 my_segments(SegWriter, Who) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     gen_server:call(SegWriter, {my_segments, Who}, infinity).
 
 -spec overview(atom() | pid()) -> #{}.
 overview(SegWriter) ->
     gen_server:call(SegWriter, overview).
-
 
 await(SegWriter)  ->
     IsAlive = fun IsAlive(undefined) -> false;
@@ -174,14 +176,20 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
             case ra_log_segment:segref(Seg) of
                 SegRef ->
+                    _ = ra_log_segment:close(Seg),
                     %% it has not changed - we can delete that too
+                    _ = prim_file:delete(Pivot),
                     %% as we are deleting the last segment - create an empty
                     %% successor
-                    _ = ra_log_segment:close(
-                          open_successor_segment(Seg, SegConf)),
-                    _ = ra_log_segment:close(Seg),
-                    _ = prim_file:delete(Pivot),
-                    {noreply, State0};
+                    case open_successor_segment(Seg, SegConf) of
+                        undefined ->
+                            %% directory must have been deleted after the pivot
+                            %% segment was opened
+                            {noreply, State0};
+                        Succ ->
+                            _ = ra_log_segment:close(Succ),
+                            {noreply, State0}
+                    end;
                 _ ->
                     %% the segment has changed - leave it in place
                     _ = ra_log_segment:close(Seg),
@@ -384,3 +392,20 @@ open_file(Dir, SegConf) ->
                   "error: ~W. Exiting", [File, Err, 10]),
             exit(Err)
     end.
+
+maybe_wait_for_segment_writer(_SegWriter, TimeRemaining)
+  when TimeRemaining < 0 ->
+    error(segment_writer_not_available);
+maybe_wait_for_segment_writer(SegWriter, TimeRemaining)
+  when is_atom(SegWriter) ->
+    case whereis(SegWriter) of
+        undefined ->
+            %% segment writer isn't available yet, sleep a bit
+            timer:sleep(10),
+            maybe_wait_for_segment_writer(SegWriter, TimeRemaining - 10);
+        _ ->
+            ok
+    end;
+maybe_wait_for_segment_writer(_SegWriter, _TimeRemaining) ->
+    ok.
+
