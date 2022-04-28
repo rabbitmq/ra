@@ -67,9 +67,8 @@ handle_batch(Commands, #?MODULE{ref = Ref,
                     #{Id := Data} ->
                         Inserts0#{Id => update_key(Key, Value, Data)};
                     _ ->
-                        case dets:lookup(Ref, Id) of
-                            [{Id, T, V, A}] ->
-                                Data = {Id, T, V, A},
+                        case ets:lookup(TblName, Id) of
+                            [{Id, _, _, _} = Data] ->
                                 Inserts0#{Id => update_key(Key, Value, Data)};
                             [] ->
                                 Data = {Id, undefined, undefined, undefined},
@@ -107,6 +106,7 @@ handle_batch(Commands, #?MODULE{ref = Ref,
 
 terminate(_, #?MODULE{ref = Ref,
                       table_name = TblName}) ->
+    ?DEBUG("ra: meta data store is terminating", []),
     ok = dets:sync(TblName),
     _ = dets:close(Ref),
     ok.
