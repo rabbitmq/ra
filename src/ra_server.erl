@@ -2250,7 +2250,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
             %% enable cluster change if the noop command is for the current term
             Cfg = Cfg0#cfg{effective_machine_version = NextMacVer,
                            %% record this machine version "term"
-                           machine_versions = [{Idx, MacVer} | MacVersions],
+                           machine_versions = [{Idx, NextMacVer} | MacVersions],
                            effective_machine_module = Module},
             State = State0#{cfg => Cfg,
                             cluster_change_permitted => ClusterChangePerm},
