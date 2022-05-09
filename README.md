@@ -132,7 +132,7 @@ Machine = {simple, fun erlang:'+'/2, 0},
 
 ### Querying Machine State
 
-Ra machines are only useful if their state can be queried. There are type types of queries:
+Ra machines are only useful if their state can be queried. There are two types of queries:
 
  * Local queries return machine state on the target node
  * Leader queries return machine state from the leader node.
