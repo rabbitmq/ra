@@ -88,11 +88,13 @@ jobs:
           echo "::set-output name=RABBITMQ_SHA::$(git rev-parse HEAD)"
           echo "::set-output name=RABBITMQ_REF::$(git rev-parse --abbrev-ref HEAD)"
 
-      - name: Build generic unix package
+      - name: Build generic unix package with this ra
         working-directory: rabbitmq-server
         run: |
-          sed -i"_orig" '/APP_VERSION/ s/3.10.0/${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}/' rabbitmq.bzl
+          sed -i"_orig" 's/    "ra",//' MODULE.bazel
+          sed -i"_orig" -E '/APP_VERSION/ s/3\.[0-9]+\.[0-9]+/${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}/' rabbitmq.bzl
           bazelisk build :package-generic-unix \
+            --experimental_enable_bzlmod \
             --override_repository ra=${{ github.workspace }}/ra
 
       - name: Resolve generic unix package path
