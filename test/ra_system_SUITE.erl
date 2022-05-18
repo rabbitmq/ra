@@ -30,7 +30,8 @@ all_tests() ->
     [
      start_cluster,
      start_clusters_in_systems,
-     restart_system
+     restart_system,
+     ra_overview
     ].
 
 groups() ->
@@ -142,6 +143,18 @@ restart_system(Config) ->
     [ok = start_system_on(Sys, N, DataDir) || N <- Nodes],
     {ok, Started2, []} = ra:start_cluster(Sys, ClusterName, Machine, ServerIds),
     [] = Started2 -- ServerIds,
+    ok.
+
+ra_overview(Config) ->
+    DataDir = ?config(data_dir, Config),
+    SysCfg = #{name => system_name,
+               data_dir => DataDir,
+               names => ra_system:derive_names(system_name)},
+    application:ensure_all_started(ra),
+    ra_system:start(SysCfg),
+    Overview = ra:overview(system_name),
+    ?assert(is_map(Overview)),
+    ?assert(maps:is_key(servers, Overview)),
     ok.
 
 
