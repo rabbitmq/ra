@@ -454,7 +454,7 @@ append_data(#state{conf = Cfg,
                    writers = Writers} = State,
             {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
     Batch = incr_batch(Cfg, Batch0, UId, Pid,
-                       {Idx, Term}, Data, Entry, Truncate),
+                       {Idx, Term, Entry}, Data, Truncate),
     State#state{file_size = FileSize + DataSize,
                 batch = Batch,
                 writers = Writers#{UId => {in_seq, Idx}} }.
@@ -463,7 +463,7 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
            #batch{writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
-           UId, Pid, {Idx, Term}, Data, Entry, Truncate) ->
+           UId, Pid, {Idx, Term, _} = Record, Data, Truncate) ->
     Waiting = case Waiting0 of
                   #{Pid := #batch_writer{tbl_start = TblStart0,
                                          tid = _Tid,
@@ -472,7 +472,7 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                       TblStart = table_start(Truncate, Idx, TblStart0),
                       Inserts = case Inserts0 of
                                     [] ->
-                                        [{Idx, Term, Entry}];
+                                        [Record];
                                     [{PrevIdx, _, _} | RemIdxs] when Idx =< PrevIdx ->
                                         %% we are overwriting, this should rarely,
                                         %% if ever happen within the timeframe of a batch
@@ -482,9 +482,9 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                                             lists:dropwhile(fun ({I, _, _}) ->
                                                                     Idx =< I
                                                             end, RemIdxs),
-                                        [{Idx, Term, Entry} | Filtered];
+                                        [Record | Filtered];
                                     _ ->
-                                        [{Idx, Term, Entry} | Inserts0]
+                                        [Record | Inserts0]
                                 end,
                       Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
                                                       tbl_start = TblStart,
@@ -511,7 +511,7 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                                              tid = Tid,
                                              uid = UId,
                                              term = Term,
-                                             inserts = [{Idx, Term, Entry}]},
+                                             inserts = [Record]},
                       Waiting0#{Pid => Writer}
               end,
 
