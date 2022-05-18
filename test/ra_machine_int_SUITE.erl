@@ -483,7 +483,7 @@ aux_command(Config) ->
     Mod = ?config(modname, Config),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> [] end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, apply,
                 fun (_, {monitor_me, Pid}, State) ->
                         {[Pid | State], ok, [{monitor, process, Pid}]};
@@ -537,7 +537,7 @@ aux_eval(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
@@ -588,7 +588,7 @@ aux_tick(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, tick, AuxState, Log, _MacState) ->
@@ -638,7 +638,7 @@ aux_monitor_effect(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
@@ -692,7 +692,7 @@ aux_and_machine_monitor_same_process(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok, {monitor, process, P}}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
@@ -756,7 +756,7 @@ aux_and_machine_monitor_same_node(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok, {monitor, node, P}}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
@@ -814,7 +814,7 @@ aux_and_machine_monitor_leader_change(Config) ->
                         ct:pal("handling ~p", [Cmd]),
                         {State, ok, {monitor, process, P}}
                 end),
-    meck:expect(Mod, aux_init, fun (_) -> undefined end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
                 fun
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
