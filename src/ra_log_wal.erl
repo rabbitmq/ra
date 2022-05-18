@@ -470,7 +470,22 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                                          from = From,
                                          inserts = Inserts0} = W} ->
                       TblStart = table_start(Truncate, Idx, TblStart0),
-                      Inserts = [{Idx, Term, Entry} | Inserts0],
+                      Inserts = case Inserts0 of
+                                    [] ->
+                                        [{Idx, Term, Entry}];
+                                    [{PrevIdx, _, _} | RemIdxs] when Idx =< PrevIdx ->
+                                        %% we are overwriting, this should rarely,
+                                        %% if ever happen within the timeframe of a batch
+                                        %% Drop all inserts that are higher or equal
+                                        %% to the current Idx
+                                        Filtered =
+                                            lists:dropwhile(fun ({I, _, _}) ->
+                                                                    Idx =< I
+                                                            end, RemIdxs),
+                                        [{Idx, Term, Entry} | Filtered];
+                                    _ ->
+                                        [{Idx, Term, Entry} | Inserts0]
+                                end,
                       Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
                                                       tbl_start = TblStart,
                                                       to = Idx,
@@ -720,10 +735,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                               term = Term,
                               inserts = Inserts,
                               tid = Tid}) ->
-              %% need to reverse inserts in case an index overwrite
-              %% came to be processed in the same batch.
-              %% Unlikely, but possible
-              true = ets:insert(Tid, lists:reverse(Inserts)),
+              true = ets:insert(Tid, Inserts),
               true = ets:update_element(OpnTbl, UId,
                                         [{2, TblStart}, {3, To}]),
               Pid ! {ra_log_event, {written, {From, To, Term}}},
