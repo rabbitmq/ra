@@ -401,7 +401,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             write_data(Id, Idx, Term, Data0, Trunc, State);
         false ->
             EntryData = to_binary(Data0),
-            EntryDataLen = byte_size(EntryData),
+            EntryDataLen = iolist_size(EntryData),
             {HeaderData, HeaderLen, Cache} = serialize_header(UId, Trunc, Cache0),
             % fixed overhead =
             % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
@@ -409,14 +409,14 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
             State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache,
                                                  entry_count = Count + 1}},
             Entry = [<<Idx:64/unsigned,
-                       Term:64/unsigned>>,
+                       Term:64/unsigned>> |
                      EntryData],
             Checksum = case ComputeChecksum of
                            true -> erlang:adler32(Entry);
                            false -> 0
                        end,
             Record = [HeaderData,
-                      <<Checksum:32/integer, EntryDataLen:32/unsigned>>,
+                      <<Checksum:32/integer, EntryDataLen:32/unsigned>> |
                       Entry],
             append_data(State0, Id, Idx, Term, Data0,
                         DataSize, Record, Trunc)
@@ -888,7 +888,7 @@ merge_conf_defaults(Conf) ->
                  sync_method => datasync}, Conf).
 
 to_binary(Term) ->
-    term_to_binary(Term).
+    term_to_iovec(Term).
 
 should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
                        file_size = FileSize,

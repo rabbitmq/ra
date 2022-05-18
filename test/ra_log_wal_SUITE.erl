@@ -176,7 +176,7 @@ write_many(Config) ->
                                                         Batch, Data, Config),
                    io_lib:format("Scenario ~s took ~bms using ~b "
                                  "reductions for ~b writes @ ~b bytes, "
-                                 "batch size ~b",
+                                 "batch size ~b~n",
                                  [Name, Time, Reductions, Num, Data, Batch])
                end || {Name, Num, Check, Batch, Data} <- Tests],
     ct:pal("~s", [Results]),
