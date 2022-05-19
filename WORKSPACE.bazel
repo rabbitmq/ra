@@ -16,8 +16,7 @@ load("@rules_erlang//:hex_pm.bzl", "hex_pm_erlang_app")
 
 hex_pm_erlang_app(
     name = "aten",
-    sha256 = "8b623c8be27b59a911d16ab0af41777b504c147bc0d60a29015fab58321c04b0",
-    version = "0.5.7",
+    version = "0.5.8",
 )
 
 hex_pm_erlang_app(
