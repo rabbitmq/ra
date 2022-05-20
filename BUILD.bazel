@@ -10,11 +10,6 @@ EXTRA_APPS = [
     "crypto",
 ]
 
-FIRST_SRCS = [
-    "src/ra_machine.erl",
-    "src/ra_snapshot.erl",
-]
-
 DEPS = [
     "@gen_batch_server//:erlang_app",
 ]
@@ -26,7 +21,6 @@ RUNTIME_DEPS = [
 erlang_app(
     app_name = NAME,
     extra_apps = EXTRA_APPS,
-    first_srcs = FIRST_SRCS,
     runtime_deps = RUNTIME_DEPS,
     deps = DEPS,
 )
@@ -34,7 +28,6 @@ erlang_app(
 test_erlang_app(
     app_name = NAME,
     extra_apps = EXTRA_APPS,
-    first_srcs = FIRST_SRCS,
     runtime_deps = RUNTIME_DEPS,
     deps = DEPS,
 )
@@ -55,6 +48,7 @@ plt(
         "ssh",
         "ssl",
     ],
+    deps = DEPS,
 )
 
 dialyze(

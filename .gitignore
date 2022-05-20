@@ -29,5 +29,5 @@ config
 
 doc/*
 
-/.bazelrc
+/user.bazelrc
 /bazel-*
