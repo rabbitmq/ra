@@ -825,9 +825,9 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                 Entries) ->
     WriterId = {UId, self()},
     {WalCommands, Num, Cache} =
-        lists:foldl(fun ({Idx, Term, Data}, {WC, N, C0}) ->
+        lists:foldl(fun ({Idx, Term, Data} = Entry, {WC, N, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], N+1, C0#{Idx => {Idx, Term, Data}}}
+                            {[WalC | WC], N+1, C0#{Idx => Entry}}
                     end, {[], 0, Cache0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,

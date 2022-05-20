@@ -22,8 +22,6 @@
          read_meta/1
          ]).
 
--include("ra.hrl").
-
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
 

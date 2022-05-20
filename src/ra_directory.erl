@@ -27,9 +27,7 @@
 
 -include("ra.hrl").
 
--define(REVERSE_TBL, ra_directory_reverse).
-
-% registry for a ra servers's locally unique name
+% registry for ra servers' locally unique name
 
 -spec init(atom()) -> ok | {error, system_not_started}.
 init(System) when is_atom(System) ->

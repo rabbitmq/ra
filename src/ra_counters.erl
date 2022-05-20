@@ -15,17 +15,7 @@
          delete/1
          ]).
 
-%% holds static or rarely changing fields
--record(cfg, {}).
-
--record(?MODULE, {cfg :: #cfg{}}).
-
--opaque state() :: #?MODULE{}.
 -type name() :: term().
-
--export_type([
-              state/0
-              ]).
 
 -spec init() -> ok.
 init() ->
@@ -81,7 +71,3 @@ overview(Name) ->
 register_counter(Name, Ref, Size) ->
     true = ets:insert(?MODULE, {Name, Ref, Size}),
     ok.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.

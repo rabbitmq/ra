@@ -19,8 +19,6 @@
 
 -record(state, {}).
 
--include("ra.hrl").
-
 %%% here to own metrics ETS tables
 
 %%%===================================================================

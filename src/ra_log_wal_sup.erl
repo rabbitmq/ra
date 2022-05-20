@@ -15,8 +15,6 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--include("ra.hrl").
-
 -spec start_link(ra_log_wal:wal_conf()) ->
     {ok, pid()} | ignore | {error, term()}.
 start_link(Conf) ->

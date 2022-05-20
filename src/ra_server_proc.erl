@@ -55,11 +55,9 @@
 
 -export([send_rpc/3]).
 
--define(SERVER, ?MODULE).
 -define(DEFAULT_BROADCAST_TIME, 100).
 -define(DEFAULT_ELECTION_MULT, 5).
 -define(TICK_INTERVAL_MS, 1000).
--define(DEFAULT_STOP_FOLLOWER_ELECTION, false).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
@@ -143,7 +141,6 @@
                                                     ra_server:command()),
                 election_timeout_set = false :: boolean(),
                 %% the log index last time gc was forced
-                force_gc_index = 0 :: ra_index(),
                 pending_notifys = #{} :: #{pid() => [term()]}
                }).
 

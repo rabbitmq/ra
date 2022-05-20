@@ -202,7 +202,6 @@ throw_error(Format, Args) ->
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz"
         "0123456789_-=").
--define(UID_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890").
 -define(UID_LENGTH, 12).
 
 -spec make_uid() -> binary().

@@ -13,8 +13,6 @@
 -compile(inline).
 -compile({no_auto_import, [apply/3]}).
 
--include("ra.hrl").
-
 -include_lib("eunit/include/eunit.hrl").
 
 -define(PIPE_SIZE, 500).
