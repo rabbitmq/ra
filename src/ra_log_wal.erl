@@ -205,7 +205,9 @@ force_roll_over(Wal) ->
 %% corresponding .wal file.
 
 -spec start_link(Config :: wal_conf()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+    {ok, pid()} |
+    {error, {already_started, pid()}} |
+    {error, wal_checksum_validation_failure}.
 start_link(#{name := Name} = Config)
   when is_atom(Name) ->
     WalMaxBatchSize = maps:get(max_batch_size, Config,
@@ -840,6 +842,8 @@ recover_records(Conf, Fd,
             Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
             recover_records(Conf, Fd, Rest, Cache0, RecoveryChunkSize);
         error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
             %% if this is the last entry in the wal we can just drop the
             %% record;
             is_last_record(Fd, Rest)
@@ -860,6 +864,8 @@ recover_records(Conf, Fd,
                                     binary_to_term(EntryData), Trunc =:= 1),
             recover_records(Conf, Fd, Rest, Cache, RecoveryChunkSize);
         error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
             %% if this is the last entry in the wal we can just drop the
             %% record;
             is_last_record(Fd, Rest)
@@ -889,6 +895,8 @@ is_last_record(Fd, Rest) ->
                     is_last_record(Fd, <<Rest/binary, Next/binary>>)
             end;
         false ->
+            ?ERROR("WAL: record failed CRC check during recovery. "
+                   "Unable to recover WAL data safely", []),
             throw({stop, wal_checksum_validation_failure})
 
     end.

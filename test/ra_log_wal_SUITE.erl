@@ -43,6 +43,7 @@ all_tests() ->
      recover_after_roll_over,
      recover_truncated_write,
      recover_with_last_entry_corruption,
+     recover_with_last_entry_corruption_pre_allocate,
      checksum_failure_in_middle_of_file_should_fail,
      recover_with_partial_last_entry,
      sys_get_status
@@ -775,14 +776,41 @@ recover_with_last_entry_corruption(Config) ->
 
     %% overwrite last few bytes of the file with 0s
     {ok, Fd} = file:open(WalFile, [raw, binary, read, write]),
-    % _ = file:position(Fd, 103331),
-    {ok, Pos} = file:position(Fd, {eof, -10}),
-    ct:pal("Pos ~b", [Pos]),
-    % file:truncate(Fd),
+    {ok, _Pos} = file:position(Fd, {eof, -10}),
     ok = file:write(Fd, <<0,0,0,0,0,0,0,0,0,0>>),
     file:close(Fd),
 
-    % {error,wal_checksum_validation_failure}
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    ?assert(erlang:is_process_alive(Pid)),
+    ok = proc_lib:stop(ra_log_wal),
+    meck:unload(),
+    ok.
+
+recover_with_last_entry_corruption_pre_allocate(Config) ->
+    ok = logger:set_primary_config(level, all),
+    #{dir := Dir} = Conf0 = ?config(wal_conf, Config),
+    WriterId = ?config(writer_id, Config),
+    Conf = Conf0#{segment_writer => spawn(fun () -> ok end),
+                  pre_allocate => true},
+    Data = crypto:strong_rand_bytes(1000),
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    {ok, _Wal} = ra_log_wal:start_link(Conf),
+    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, {1, 100, 1}),
+    empty_mailbox(),
+    ok = proc_lib:stop(ra_log_wal),
+
+    [WalFile] = filelib:wildcard(filename:join(Dir, "*.wal")),
+
+    %% overwrite last few bytes of the file with 0s
+    {ok, Fd} = file:open(WalFile, [raw, binary, read, write]),
+    %% TODO: if the internal WAL format changes this will be wrong
+    _ = file:position(Fd, 103331),
+    ok = file:write(Fd, <<0,0,0,0,0,0,0,0,0,0>>),
+    file:close(Fd),
+
     {ok, Pid} = ra_log_wal:start_link(Conf),
     ?assert(erlang:is_process_alive(Pid)),
     ok = proc_lib:stop(ra_log_wal),
