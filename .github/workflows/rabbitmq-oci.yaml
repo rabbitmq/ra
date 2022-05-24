@@ -119,7 +119,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-
 
+      - name: Check for Push Credentials
+        id: authorized
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "::set-output name=PUSH::true"
+          else
+            echo "::set-output name=PUSH::false"
+          fi
+
       - name: Login to DockerHub
+        if: steps.authorized.outputs.PUSH == 'true'
         uses: docker/login-action@v1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -158,7 +168,7 @@ jobs:
         uses: docker/build-push-action@v2
         with:
           context: rabbitmq-server/packaging/docker-image
-          push: true
+          push: ${{ steps.authorized.outputs.PUSH }}
           tags: |
             pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_1 }}
             pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_2 }}
