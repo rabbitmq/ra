@@ -31,7 +31,8 @@ all_tests() ->
      start_cluster,
      start_clusters_in_systems,
      restart_system,
-     ra_overview
+     ra_overview,
+     ra_overview_not_started
     ].
 
 groups() ->
@@ -156,6 +157,9 @@ ra_overview(Config) ->
     ?assert(is_map(Overview)),
     ?assert(maps:is_key(servers, Overview)),
     ok.
+
+ra_overview_not_started(_Config) ->
+    ?assertEqual(ra:overview(unstarted_system), system_not_started).
 
 
 %% Utility

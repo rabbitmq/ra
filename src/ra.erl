@@ -711,20 +711,24 @@ overview() ->
 %% @end
 -spec overview(atom()) -> map() | system_not_started.
 overview(System) ->
-
-    #{names := #{segment_writer := SegWriter,
-                 open_mem_tbls := OpenTbls,
-                 closed_mem_tbls := ClosedTbls,
-                 wal := Wal}} = ra_system:fetch(System),
-    #{node => node(),
-      servers => ra_directory:overview(System),
-      %% TODO:filter counter keys by system
-      counters => ra_counters:overview(),
-      wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
-               open_mem_tables => ets:info(OpenTbls, size),
-               closed_mem_tables => ets:info(ClosedTbls, size)},
-      segment_writer => ra_log_segment_writer:overview(SegWriter)
-     }.
+    case ra_system:fetch(System) of
+        undefined ->
+            system_not_started;
+        Config ->
+            #{names := #{segment_writer := SegWriter,
+                         open_mem_tbls := OpenTbls,
+                         closed_mem_tbls := ClosedTbls,
+                         wal := Wal}} = Config,
+            #{node => node(),
+              servers => ra_directory:overview(System),
+              %% TODO:filter counter keys by system
+              counters => ra_counters:overview(),
+              wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
+                       open_mem_tables => ets:info(OpenTbls, size),
+                       closed_mem_tables => ets:info(ClosedTbls, size)},
+              segment_writer => ra_log_segment_writer:overview(SegWriter)
+             }
+    end.
 
 %% @doc Submits a command to a ra server. Returns after the command has
 %% been applied to the Raft state machine. If the state machine returned a
