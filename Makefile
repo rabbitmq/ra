@@ -10,7 +10,8 @@ ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
 dep_gen_batch_server = hex 0.8.8
 dep_aten = hex 0.5.8
-DEPS = aten gen_batch_server
+dep_seshat = hex 0.3.2
+DEPS = aten gen_batch_server seshat
 
 TEST_DEPS = proper meck eunit_formatters looking_glass inet_tcp_proxy
 

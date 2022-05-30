@@ -16,6 +16,7 @@ DEPS = [
 
 RUNTIME_DEPS = [
     "@aten//:erlang_app",
+    "@seshat//:erlang_app",
 ]
 
 erlang_app(

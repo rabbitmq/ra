@@ -16,58 +16,34 @@
          ]).
 
 -type name() :: term().
+-type seshat_field_spec() ::
+    {Name :: atom(), Position :: pos_integer(),
+     Type :: counter | gauge, Description :: string()}.
 
 -spec init() -> ok.
 init() ->
-    _ = ets:new(?MODULE, [set, named_table, public]),
+    _ = application:ensure_all_started(seshat),
+    _ = seshat:new_group(ra),
     ok.
 
--spec new(name(),  [atom()]) -> counters:counters_ref().
+-spec new(name(),  [seshat_field_spec()]) ->
+    counters:counters_ref().
 new(Name, Fields)
   when is_list(Fields) ->
-    Size = length(Fields),
-    CRef = counters:new(Size, []),
-    ok = register_counter(Name, CRef, Fields),
-    CRef.
+    seshat:new(ra, Name, Fields).
 
 -spec fetch(name()) -> undefined | counters:counters_ref().
 fetch(Name) ->
-    case ets:lookup(?MODULE, Name) of
-        [{Name, Ref, _}] ->
-            Ref;
-        _ ->
-            undefined
-    end.
+    seshat:fetch(ra, Name).
 
 -spec delete(term()) -> ok.
 delete(Name) ->
-    true = ets:delete(?MODULE, Name),
-    ok.
+    seshat:delete(ra, Name).
 
 -spec overview() -> #{name() => #{atom() => non_neg_integer()}}.
 overview() ->
-    ets:foldl(
-      fun({Name, Ref, Fields}, Acc) ->
-              Size = length(Fields),
-              Values = [counters:get(Ref, I) || I <- lists:seq(1, Size)],
-              Counters = maps:from_list(lists:zip(Fields, Values)),
-              Acc#{Name => Counters}
-      end, #{}, ?MODULE).
+    seshat:overview(ra).
 
 -spec overview(name()) -> #{atom() => non_neg_integer()}.
 overview(Name) ->
-    case ets:lookup(?MODULE, Name) of
-        [{Name, Ref, Fields}] ->
-              Size = length(Fields),
-              Values = [counters:get(Ref, I) || I <- lists:seq(1, Size)],
-              maps:from_list(lists:zip(Fields, Values));
-        _ ->
-            undefined
-    end.
-
-
-%% internal
-
-register_counter(Name, Ref, Size) ->
-    true = ets:insert(?MODULE, {Name, Ref, Size}),
-    ok.
+    seshat:overview(ra, Name).

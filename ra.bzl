@@ -35,6 +35,7 @@ def ra_suites():
             runtime_deps = [
                 "@gen_batch_server//:erlang_app",
                 "@aten//:erlang_app",
+                "@seshat//:erlang_app",
                 "@inet_tcp_proxy//:erlang_app",
                 "@meck//:erlang_app",
             ],
