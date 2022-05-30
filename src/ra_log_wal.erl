@@ -205,7 +205,9 @@ force_roll_over(Wal) ->
 %% corresponding .wal file.
 
 -spec start_link(Config :: wal_conf()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+    {ok, pid()} |
+    {error, {already_started, pid()}} |
+    {error, wal_checksum_validation_failure}.
 start_link(#{name := Name} = Config)
   when is_atom(Name) ->
     WalMaxBatchSize = maps:get(max_batch_size, Config,
@@ -818,8 +820,8 @@ recover_wal_chunks(Conf, Fd, RecoveryChunkSize) ->
     recover_records(Conf, Fd, Chunk, #{}, RecoveryChunkSize).
 % All zeros indicates end of a pre-allocated wal file
 recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
-                       IdDataLen:16/unsigned, _:IdDataLen/binary,
-                       0:32/integer, 0:32/unsigned, _/binary>>,
+                          IdDataLen:16/unsigned, _:IdDataLen/binary,
+                          0:32/integer, 0:32/unsigned, _/binary>>,
                 _Cache, _ChunkSize) ->
     ok;
 % First record or different UID to last record
@@ -832,9 +834,20 @@ recover_records(Conf, Fd,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>>,
                 Cache, RecoveryChunkSize) ->
-    true = validate_and_update(Conf, UId, Checksum, Idx, Term, EntryData, Trunc),
-    Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
-    recover_records(Conf, Fd, Rest, Cache0, RecoveryChunkSize);
+
+    case validate_checksum(Checksum, Idx, Term, EntryData) of
+        ok ->
+            true = update_mem_table(Conf, UId, Idx, Term,
+                                    binary_to_term(EntryData), Trunc =:= 1),
+            Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
+            recover_records(Conf, Fd, Rest, Cache0, RecoveryChunkSize);
+        error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
+            %% if this is the last entry in the wal we can just drop the
+            %% record;
+            is_last_record(Fd, Rest)
+    end;
 % Same UID as last record
 recover_records(Conf, Fd,
                 <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
@@ -845,8 +858,18 @@ recover_records(Conf, Fd,
                   Rest/binary>>,
                 Cache, RecoveryChunkSize) ->
     #{IdRef := {UId, _}} = Cache,
-    true = validate_and_update(Conf, UId, Checksum, Idx, Term, EntryData, Trunc),
-    recover_records(Conf, Fd, Rest, Cache, RecoveryChunkSize);
+    case validate_checksum(Checksum, Idx, Term, EntryData) of
+        ok ->
+            true = update_mem_table(Conf, UId, Idx, Term,
+                                    binary_to_term(EntryData), Trunc =:= 1),
+            recover_records(Conf, Fd, Rest, Cache, RecoveryChunkSize);
+        error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
+            %% if this is the last entry in the wal we can just drop the
+            %% record;
+            is_last_record(Fd, Rest)
+    end;
 % Not enough remainder to parse another record, need to read
 recover_records(Conf, Fd, Chunk, Cache, RecoveryChunkSize) ->
     NextChunk = read_from_wal_file(Fd, RecoveryChunkSize),
@@ -860,6 +883,24 @@ recover_records(Conf, Fd, Chunk, Cache, RecoveryChunkSize) ->
             recover_records(Conf, Fd, Chunk0, Cache, RecoveryChunkSize)
     end.
 
+is_last_record(_Fd, <<0:104, _/binary>>) ->
+    ok;
+is_last_record(Fd, Rest) ->
+    case byte_size(Rest) < 13 of
+        true ->
+            case read_from_wal_file(Fd, 256) of
+                <<>> ->
+                    ok;
+                Next ->
+                    is_last_record(Fd, <<Rest/binary, Next/binary>>)
+            end;
+        false ->
+            ?ERROR("WAL: record failed CRC check during recovery. "
+                   "Unable to recover WAL data safely", []),
+            throw({stop, wal_checksum_validation_failure})
+
+    end.
+
 read_from_wal_file(Fd, Len) ->
     case file:read(Fd, Len) of
         {ok, <<Data/binary>>} ->
@@ -869,11 +910,6 @@ read_from_wal_file(Fd, Len) ->
         {error, Reason} ->
             exit({could_not_read_wal_chunk, Reason})
     end.
-
-validate_and_update(Conf, UId, Checksum, Idx, Term, EntryData, Trunc) ->
-    validate_checksum(Checksum, Idx, Term, EntryData),
-    true = update_mem_table(Conf, UId, Idx, Term,
-                            binary_to_term(EntryData), Trunc =:= 1).
 
 validate_checksum(0, _, _, _) ->
     % checksum not used
@@ -885,7 +921,7 @@ validate_checksum(Checksum, Idx, Term, Data) ->
         Checksum ->
             ok;
         _ ->
-            exit(wal_checksum_validation_failure)
+            error
     end.
 
 merge_conf_defaults(Conf) ->
