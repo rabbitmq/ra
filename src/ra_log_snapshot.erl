@@ -47,9 +47,8 @@ write(Dir, Meta, MacState) ->
     %% no compression on meta data to make sure reading it is as fast
     %% as possible
     MetaBin = term_to_binary(Meta),
-    %% the data can however be compressed
-    Bin = term_to_binary(MacState, [{compressed, 9}]),
-    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin, Bin],
+    IOVec = term_to_iovec(MacState),
+    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
     ra_lib:write_file(File, [<<?MAGIC,
