@@ -687,7 +687,7 @@ follower(info, {node_event, Node, down}, State0) ->
             {State, Actions} = maybe_set_election_timeout(long, State0, []),
             {keep_state, State, Actions};
         _ ->
-            {keep_state, State0}
+            {keep_state, State0, []}
     end;
 follower(info, {node_event, Node, up}, State) ->
     case leader_id(State) of
@@ -698,7 +698,7 @@ follower(info, {node_event, Node, up}, State) ->
              State#state{election_timeout_set = false},
              [{state_timeout, infinity, election_timeout}]};
         _ ->
-            {keep_state, State}
+            {keep_state, State, []}
     end;
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
