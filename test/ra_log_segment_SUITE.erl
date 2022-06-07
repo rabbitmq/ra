@@ -98,7 +98,7 @@ large_segment(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn),
     Seg = lists:foldl(
       fun (Idx, S0) ->
-              Data = make_data(1100 * 1100),
+              Data = term_to_iovec(crypto:strong_rand_bytes(1100 * 1100)),
               {ok, S} = ra_log_segment:append(S0, Idx, 1, Data),
               S
       end, Seg0, lists:seq(1, 4096)),
