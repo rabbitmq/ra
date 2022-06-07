@@ -81,8 +81,7 @@ complete_accept(Chunk, {PartialCrc, Fd}) ->
     complete_accept(Rest, {PartialCrc, Crc, Fd});
 complete_accept(Chunk, {PartialCrc0, Crc, Fd}) ->
     ok = file:write(Fd, Chunk),
-    {ok, 5} = file:position(Fd, 5),
-    ok = file:write(Fd, <<Crc:32/integer>>),
+    ok = file:pwrite(Fd, 5, <<Crc:32/integer>>),
     Crc = erlang:crc32(PartialCrc0, Chunk),
     ok = file:sync(Fd),
     ok = file:close(Fd),
@@ -113,8 +112,7 @@ read_chunk({Crc, ReadState}, Size, Dir) when is_integer(Crc) ->
             Err
     end;
 read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
-    {ok, _} = file:position(Fd, Pos),
-    case file:read(Fd, Size) of
+    case file:pread(Fd, Pos, Size) of
         {ok, Data} ->
             case Pos + Size >= Eof of
                 true ->

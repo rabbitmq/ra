@@ -306,7 +306,7 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
     {Seg, Closed};
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
-    Data = term_to_binary(Data0),
+    Data = term_to_iovec(Data0),
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
             ok = counters:add(State#state.counter, ?C_ENTRIES, 1),
