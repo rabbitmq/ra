@@ -7,7 +7,7 @@ platform(
     constraint_values = [
         "@rules_erlang//platforms:erlang_external",
     ],
-    parents = ["@rbe//config:platform"],
+    parents = ["@local_config_platform//:host"],
 )
 
 platform(
