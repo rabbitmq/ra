@@ -1,4 +1,4 @@
-load("@rules_erlang//:erlc.bzl", "erlc")
+load("@rules_erlang//:erlang_bytecode.bzl", "erlang_bytecode")
 load("@rules_erlang//:ct.bzl", "ct_suite")
 
 TEST_ERLC_OPTS = [
@@ -16,7 +16,7 @@ def ra_suites():
         "src/ra_server.hrl",
     ]
 
-    erlc(
+    erlang_bytecode(
         name = "test_helpers",
         srcs = helpers,
         hdrs = hdrs,

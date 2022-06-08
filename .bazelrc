@@ -1,0 +1,49 @@
+build --experimental_enable_bzlmod
+
+build --incompatible_strict_action_env
+build --local_test_jobs=1
+
+build:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
+build:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
+build:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+build:buildbuddy --remote_timeout=1200
+build:buildbuddy --grpc_keepalive_time=360s
+build:buildbuddy --grpc_keepalive_timeout=360s
+build:buildbuddy --remote_download_minimal
+build:buildbuddy --build_metadata=REPO_URL=https://github.com/rabbitmq/ra.git
+
+build:rbe --config=buildbuddy
+
+build:rbe --remote_executor=grpcs://remote.buildbuddy.io
+
+build:rbe --spawn_strategy=remote
+build:rbe --test_strategy=""
+build:rbe --jobs=50
+
+build:rbe --crosstool_top=@rbe//cc:toolchain
+build:rbe --extra_toolchains=@rbe//config:cc-toolchain
+
+build:rbe --host_platform=@rbe//config:platform
+
+build:rbe --host_cpu=k8
+build:rbe --cpu=k8
+
+build:rbe-23 --config=rbe
+build:rbe-23 --platforms=//bzl/platforms:erlang_23_platform
+build:rbe-23 --extra_execution_platforms=//bzl/platforms:erlang_23_platform
+
+build:rbe-24 --config=rbe
+build:rbe-24 --platforms=//bzl/platforms:erlang_24_platform
+build:rbe-24 --extra_execution_platforms=//bzl/platforms:erlang_24_platform
+
+build:rbe-25 --config=rbe
+build:rbe-25 --platforms=//bzl/platforms:erlang_25_platform
+build:rbe-25 --extra_execution_platforms=//bzl/platforms:erlang_25_platform
+
+build:local --platforms=//bzl/platforms:erlang_external_platform
+build:local --extra_execution_platforms=//bzl/platforms:erlang_external_platform
+
+# Try importing a user specific .bazelrc
+# You can create your own by copying and editing the template-user.bazelrc template:
+# cp template-user.bazelrc user.bazelrc
+try-import %workspace%/user.bazelrc

@@ -43,14 +43,9 @@ jobs:
         run: |
           FILE=packaging/docker-image/otp-versions/${{ matrix.image_tag_suffix }}.yaml
           echo "::set-output name=otp::$(yq eval '.otp' $FILE)"
+          echo "::set-output name=otp_major::$(yq eval '.otp_major' $FILE)"
           echo "::set-output name=otp_sha256::$(yq eval '.otp_sha256' $FILE)"
           echo "::set-output name=elixir::$(yq eval '.elixir' $FILE)"
-
-      - name: Set up Erlang & Elixir
-        uses: erlef/setup-beam@v1.11
-        with:
-          otp-version: ${{ steps.load-info.outputs.otp }}
-          elixir-version: ${{ steps.load-info.outputs.elixir }}
 
       - name: MOUNT BAZEL CACHE
         uses: actions/cache@v1
@@ -61,8 +56,6 @@ jobs:
       - name: CONFIGURE BAZEL
         working-directory: rabbitmq-server
         run: |
-          ERLANG_HOME="$(dirname $(dirname $(which erl)))"
-          ELIXIR_HOME="$(dirname $(dirname $(which iex)))"
           if [ -n "${{ secrets.BUILDBUDDY_API_KEY }}" ]; then
           cat << EOF >> user.bazelrc
             build:buildbuddy --remote_header=x-buildbuddy-api-key=${{ secrets.BUILDBUDDY_API_KEY }}
@@ -71,15 +64,28 @@ jobs:
           cat << EOF >> user.bazelrc
             build:buildbuddy --build_metadata=ROLE=CI
             build:buildbuddy --build_metadata=VISIBILITY=PRIVATE
-            build:buildbuddy --remote_instance_name=buildbuddy-io/buildbuddy/ci-oci-ra
             build:buildbuddy --repository_cache=/home/runner/repo-cache/
             build:buildbuddy --color=yes
             build:buildbuddy --disk_cache=
 
-            build --@rules_erlang//:erlang_version=${{ steps.load-info.outputs.otp }}
-            build --@rules_erlang//:erlang_home=${ERLANG_HOME}
-            build --//:elixir_home=${ELIXIR_HOME}
+            build:buildbuddy --remote_download_toplevel
           EOF
+
+      - name: Check for otp & elixir version exact match
+        working-directory: rabbitmq-server
+        run: |
+          bazelisk build :otp_version --config=rbe-${{ steps.load-info.outputs.otp_major }}
+          if [ ! "$(cat bazel-bin/otp_version.txt)" == "${{ steps.load-info.outputs.otp }}" ]; then
+            echo "The version of erlang specified via bazel is $(cat bazel-bin/otp_version.txt),
+            echo "but ${{ steps.load-info.outputs.otp }} is expected."
+            exit 1
+          fi
+          bazelisk build :elixir_version --config=rbe-${{ steps.load-info.outputs.otp_major }}
+          if [ ! "$(cat bazel-bin/elixir_version.txt)" == "${{ steps.load-info.outputs.elixir }}" ]; then
+            echo "The version of elixir specified via bazel is $(cat bazel-bin/elixir_version.txt),
+            echo "but ${{ steps.load-info.outputs.elixir }} is expected."
+            exit 1
+          fi
 
       - name: Load RabbitMQ Version Info
         id: load-rabbitmq-info
@@ -94,7 +100,6 @@ jobs:
           sed -i"_orig" 's/    "ra",//' MODULE.bazel
           sed -i"_orig" -E '/APP_VERSION/ s/3\.[0-9]+\.[0-9]+/${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}/' rabbitmq.bzl
           bazelisk build :package-generic-unix \
-            --experimental_enable_bzlmod \
             --override_repository ra=${{ github.workspace }}/ra
 
       - name: Resolve generic unix package path
