@@ -41,38 +41,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp:
-        - "23.3"
-        - "24.3"
+        otp_major:
+        - "24"
+        - "25"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
-    - name: CONFIGURE ERLANG
-      uses: erlef/setup-beam@v1
-      with:
-        otp-version: ${{ matrix.otp }}
-    - name: CONFIGURE BAZEL
-      run: |
-        ERLANG_HOME="$(dirname $(dirname $(which erl)))"
-        cat << EOF >> .bazelrc
-          build --@rules_erlang//:erlang_version=${{ matrix.erlang_version }}
-          build --@rules_erlang//:erlang_home=${ERLANG_HOME}
-
-          build --incompatible_strict_action_env
-
-          build --test_strategy=exclusive
-        EOF
     - name: TEST
       run: |
-        bazelisk test //...
-    - name: RESOVLE TEST LOGS PATH
-      if: failure()
-      run: |
-        echo "::set-output name=LOGS_PATH::$(readlink -f bazel-testlogs)"
-      id: resolve-test-logs-path
-    - name: CAPTURE TEST LOGS ON FAILURE
-      uses: actions/upload-artifact@v2-preview
-      if: failure()
-      with:
-        name: bazel-testlogs-${{matrix.otp}}
-        path: ${{ steps.resolve-test-logs-path.outputs.LOGS_PATH }}/*
+        bazelisk test //... --config=rbe-${{ matrix.otp_major }}
