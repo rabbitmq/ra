@@ -100,7 +100,7 @@ jobs:
           sed -i"_orig" 's/    "ra",//' MODULE.bazel
           sed -i"_orig" -E '/APP_VERSION/ s/3\.[0-9]+\.[0-9]+/${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}/' rabbitmq.bzl
           bazelisk build :package-generic-unix \
-            --config=rbe-${{ steps.load-info.outputs.otp_major }} \\
+            --config=rbe-${{ steps.load-info.outputs.otp_major }} \
             --override_repository ra=${{ github.workspace }}/ra
 
       - name: Resolve generic unix package path
