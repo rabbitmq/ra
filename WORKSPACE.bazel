@@ -74,6 +74,11 @@ hex_pm_erlang_app(
     version = "0.8.8",
 )
 
+hex_pm_erlang_app(
+    name = "seshat",
+    version = "0.3.2",
+)
+
 http_archive(
     name = "inet_tcp_proxy",
     build_file_content = """load("@rules_erlang//:erlang_app.bzl", "erlang_app")

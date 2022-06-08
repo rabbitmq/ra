@@ -34,15 +34,19 @@
 -define(AWAIT_TIMEOUT, 30000).
 -define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
 
--define(COUNTER_FIELDS,
-        [mem_tables,
-         segments,
-         entries
-         ]).
-
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
 -define(C_ENTRIES, 3).
+
+-define(COUNTER_FIELDS,
+        [{mem_tables, ?C_MEM_TABLES, counter,
+          "Number of in-memory tables handled"},
+         {segments, ?C_SEGMENTS, counter,
+          "Number of segments written"},
+         {entries, ?C_ENTRIES, counter,
+          "Number of entries written"}
+        ]).
+
 
 %%% ra_log_segment_writer
 %%% receives a set of closed mem_segments from the wal

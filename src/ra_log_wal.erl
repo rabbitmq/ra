@@ -30,15 +30,15 @@
 -define(MAGIC, "RAWA").
 -define(HEADER_SIZE, 5).
 
--define(COUNTER_FIELDS,
-        [wal_files,
-         batches,
-         writes
-         ]).
-
 -define(C_WAL_FILES, 1).
 -define(C_BATCHES, 2).
 -define(C_WRITES, 3).
+-define(COUNTER_FIELDS,
+        [{wal_files, ?C_WAL_FILES, counter, "Number of write-ahead log files created"},
+         {batches, ?C_BATCHES, counter, "Number of batches written"},
+         {writes, ?C_WRITES, counter, "Number of entries written"}
+         ]).
+
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
 % current pid().
 % The pid is used for the immediate writer notification

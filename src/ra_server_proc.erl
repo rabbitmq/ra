@@ -257,15 +257,15 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 
 init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     process_flag(trap_exit, true),
-    Key = ra_lib:ra_server_id_to_local_name(Id),
     Config = #{counter := Counter,
-               system_config := SysConf} = maps:merge(config_defaults(Key),
+               system_config := SysConf} = maps:merge(config_defaults(Id),
                                                       Config0),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
     % ensure ra_directory has the new pid
     #{names := Names} = SysConf,
+    Key = ra_lib:ra_server_id_to_local_name(Id),
     ok = ra_directory:register_name(Names, UId, self(),
                                     maps:get(parent, Config, undefined), Key,
                                     ClusterName),
@@ -890,6 +890,7 @@ terminate(Reason, StateName,
                  log_meta := MetaName} = Names} =
         ra_server:system_config(ServerState),
     UId = uid(State),
+    Id = id(State),
     _ = ra_server:terminate(ServerState, Reason),
     Parent = ra_directory:where_is_parent(Names, UId),
     case Reason of
@@ -898,6 +899,7 @@ terminate(Reason, StateName,
             catch ra_directory:unregister_name(Names, UId),
             catch ra_log_meta:delete_sync(MetaName, UId),
             catch ets:delete(ra_state, UId),
+            catch ra_counters:delete(Id),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% won't do this automatically, even for transient children
@@ -919,7 +921,6 @@ terminate(Reason, StateName,
     end,
     _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
-    ok = ra_counters:delete({Key, self()}),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -1417,13 +1418,13 @@ do_state_query(initial_members, #{log := Log}) ->
             error
     end.
 
-config_defaults(RegName) ->
+config_defaults(ServerId) ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
       install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => ra_counters:new({RegName, self()}, ?RA_COUNTER_FIELDS),
+      counter => ra_counters:new(ServerId, ?RA_COUNTER_FIELDS),
       system_config => ra_system:default_config()
      }.
 
