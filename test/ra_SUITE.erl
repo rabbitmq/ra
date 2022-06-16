@@ -626,8 +626,8 @@ send_command_to_follower_during_election() ->
     [{timetrap, {seconds, 20}}].
 
 send_command_to_follower_during_election(Config) ->
-    %ok = logger:set_primary_config(level, debug),
-    %ok = logger:update_handler_config(default, #{filter_default => log}),
+    ok = logger:set_primary_config(level, debug),
+    ok = logger:update_handler_config(default, #{filter_default => log}),
 
     Name = ?config(test_name, Config),
     Members = [{n1, node()}, {n2, node()}, {n3, node()}],
