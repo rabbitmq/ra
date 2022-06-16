@@ -38,6 +38,7 @@
          log_id/1,
          system_config/1,
          leader_id/1,
+         clear_leader_id/1,
          current_term/1,
          machine_version/1,
          machine/1,
@@ -1435,6 +1436,10 @@ system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
 -spec leader_id(ra_server_state()) -> maybe(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
+
+-spec clear_leader_id(ra_server_state()) -> ra_server_state().
+clear_leader_id(State) ->
+    State#{leader_id => undefined}.
 
 -spec current_term(ra_server_state()) -> maybe(ra_term()).
 current_term(State) ->

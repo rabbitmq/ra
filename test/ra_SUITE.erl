@@ -47,6 +47,8 @@ all_tests() ->
      start_and_join_then_leave_and_terminate,
      leader_steps_down_after_replicating_new_cluster,
      stop_leader_and_wait_for_elections,
+     {testcase, send_command_to_follower_during_election,
+      [{repeat_until_fail, 50}]},
      follower_catchup,
      post_partition_liveness,
      all_metrics_are_integers,
@@ -619,6 +621,57 @@ stop_leader_and_wait_for_elections(Config) ->
     {ok, _, NewLeader} = ra:process_command(Serv, 5),
     true = (NewLeader =/= Leader),
     terminate_cluster(Rem).
+
+send_command_to_follower_during_election() ->
+    [{timetrap, {seconds, 20}}].
+
+send_command_to_follower_during_election(Config) ->
+    ok = logger:set_primary_config(level, debug),
+    ok = logger:update_handler_config(default, #{filter_default => log}),
+
+    Name = ?config(test_name, Config),
+    Members = [{n1, node()}, {n2, node()}, {n3, node()}],
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
+    % issue one command to query leader
+    {ok, _, Leader} = ra:process_command({n3, node()}, 5),
+    Followers = Members -- [Leader],
+    ct:pal("Leader = ~p~nFollowers = ~p", [Leader, Followers]),
+    [Follower, _] = Followers,
+
+    % shut down the leader
+    % first we ensure that the follower we will use later at least has
+    % learnt about the first leader
+    ra:members(Follower),
+
+    gen_statem:stop(Leader, normal, 2000),
+    % issue command to confirm a new leader is elected
+    NewLeader = wait_for_leader(Leader, Follower, 5, 5000),
+    ?assertNotEqual(Leader, NewLeader),
+    terminate_cluster(Followers).
+
+wait_for_leader(OldLeader, Follower, Command, Timeout) ->
+    case ra:process_command(Follower, Command, Timeout) of
+        {ok, _, NewLeader} ->
+            NewLeader;
+        {timeout, Follower} ->
+            wait_for_leader(OldLeader, Follower, Command, Timeout);
+        {timeout, OldLeader} ->
+            ct:pal(
+              "ERROR: Follower ~0p redirected command to exited "
+              "leader on ~0p",
+              [Follower, OldLeader]),
+            exit({bad_redirect_from_follower_to_exited_leader,
+                  #{follower => Follower,
+                    exited_leader => OldLeader}});
+        {error, noproc} ->
+            ct:pal(
+              "ERROR: Follower ~0p (probably) redirected command "
+              "to exited leader on ~0p",
+              [Follower, OldLeader]),
+            exit({bad_redirect_from_follower_to_exited_leader,
+                  #{follower => Follower,
+                    exited_leader => OldLeader}})
+    end.
 
 queue_example(Config) ->
     Self = self(),
