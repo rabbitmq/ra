@@ -639,6 +639,10 @@ send_command_to_follower_during_election(Config) ->
     [Follower, _] = Followers,
 
     % shut down the leader
+    % first we ensure that the follower we will use later at least has
+    % learnt about the first leader
+    ra:members(Follower),
+
     gen_statem:stop(Leader, normal, 2000),
     % issue command to confirm a new leader is elected
     NewLeader = wait_for_leader(Leader, Follower, 5, 5000),
