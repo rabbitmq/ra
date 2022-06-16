@@ -667,6 +667,20 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
          #state{leader_monitor = MRef} = State0) ->
     ?INFO("~s: Leader monitor down with ~W, setting election timeout",
           [log_id(State0), Info, 8]),
+    %% If the DOWN reason is something else than `noconnection', we know that
+    %% the leader process is really gone. We want to clear the leader ID we
+    %% know at this point, while a new election is running.
+    %%
+    %% This is to make sure that `follower_leader_change()' won't create a
+    %% useless monitor and more importantly, it won't redirect pending
+    %% commands to that old leader. This would cause the commands callers to
+    %% get a `noproc' error or a timeout.
+    State1 = case Info of
+                 noconnection ->
+                     State0;
+                 _ ->
+                     clear_leader_id(State0)
+             end,
     TimeoutLen = case Info of
                      noconnection ->
                          short;
@@ -675,7 +689,7 @@ follower(info, {'DOWN', MRef, process, _Pid, Info},
                          %% set the shortest timeout
                          really_short
                  end,
-    {State, Actions} = maybe_set_election_timeout(TimeoutLen, State0, []),
+    {State, Actions} = maybe_set_election_timeout(TimeoutLen, State1, []),
     {keep_state, State#state{leader_monitor = undefined}, Actions};
 follower(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
@@ -1309,6 +1323,10 @@ uid(#state{server_state = ServerState}) ->
 
 leader_id(#state{server_state = ServerState}) ->
     ra_server:leader_id(ServerState).
+
+clear_leader_id(#state{server_state = ServerState} = State) ->
+    ServerState1 = ra_server:clear_leader_id(ServerState),
+    State#state{server_state = ServerState1}.
 
 current_term(#state{server_state = ServerState}) ->
     ra_server:current_term(ServerState).
