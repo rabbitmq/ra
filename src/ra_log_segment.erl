@@ -52,7 +52,8 @@
               fd :: maybe(file:io_device()),
               index_size :: pos_integer(),
               access_pattern :: sequential | random,
-              mode = append :: read | append}).
+              mode = append :: read | append,
+              compute_checksums = true :: boolean()}).
 
 -record(state,
         {cfg :: #cfg{},
@@ -71,6 +72,7 @@
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
                                     max_pending => non_neg_integer(),
+                                    compute_checksums => boolean(),
                                     mode => append | read,
                                     access_pattern => sequential | random}.
 -opaque state() :: #state{}.
@@ -123,6 +125,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
             AccessPattern = maps:get(access_pattern, Options, random),
             Mode = maps:get(mode, Options, append),
+            ComputeChecksums = maps:get(compute_checksums, Options, true),
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
                                    max_pending = MaxPending,
@@ -130,6 +133,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
                                    mode = Mode,
                                    index_size = IndexSize,
                                    access_pattern = AccessPattern,
+                                   compute_checksums = ComputeChecksums,
                                    fd = Fd},
                     data_start = ?HEADER_SIZE + IndexSize,
                     data_offset = DataOffset,
@@ -149,6 +153,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
 process_file(false, Mode, Filename, Fd, Options) ->
     MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
     MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
+    ComputeChecksums = maps:get(compute_checksums, Options, true),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
     {ok, #state{cfg = #cfg{version = ?VERSION,
@@ -158,6 +163,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
                            mode = Mode,
                            index_size = IndexSize,
                            fd = Fd,
+                           compute_checksums = ComputeChecksums,
                            access_pattern = random},
                 index_write_offset = ?HEADER_SIZE,
                 index_offset = ?HEADER_SIZE,
@@ -178,7 +184,7 @@ append(#state{cfg = #cfg{max_pending = PendingCount},
             Err
     end;
 append(#state{cfg = #cfg{version = Version,
-                         mode = append},
+                         mode = append} = Cfg,
               index_offset = IndexOffset,
               data_start = DataStart,
               data_offset = DataOffset,
@@ -192,7 +198,7 @@ append(#state{cfg = #cfg{version = Version,
         true ->
             Length = erlang:iolist_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
-            Checksum = erlang:crc32(Data),
+            Checksum = compute_checksum(Cfg, Data),
             OSize = offset_size(Version),
             IndexData = <<Index:64/unsigned, Term:64/unsigned,
                           DataOffset:OSize/unsigned, Length:32/unsigned,
@@ -337,11 +343,11 @@ pread_cons(Cfg, Cache0, Idx,
             case pread(Cfg, Cache0, Offset, Length) of
                 {ok, Data, Cache} ->
                     %% performc crc check
-                    case erlang:crc32(Data) of
-                        Crc ->
+                    case validate_checksum(Crc, Data) of
+                        true ->
                             [{Idx, Term, Fun(Data)} |
                              pread_cons(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, Acc)];
-                        _ ->
+                        false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
                                   Cfg#cfg.filename})
@@ -586,6 +592,16 @@ cache_length(FstPos, FstLength, LastPos, LastLength) ->
     %% the first position or the length of the first record
     MinCacheLen = max(FstLength, ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE)),
     max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)).
+
+compute_checksum(#cfg{compute_checksums = false}, _) ->
+    0;
+compute_checksum(#cfg{}, Data) ->
+    erlang:crc32(Data).
+
+validate_checksum(0, _) ->
+    true;
+validate_checksum(Crc, Data) ->
+    Crc == erlang:crc32(Data).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

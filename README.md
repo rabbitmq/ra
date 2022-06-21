@@ -410,6 +410,11 @@ in a separate repository.
         </td>
         <td>Positive integer</td>
     </tr>
+    <tr>
+        <td>segment_compute_checksums</td>
+        <td>Indicate whether the segment writer should compute and validate checksums. Default: `true`</td>
+        <td>Boolean</td>
+    </tr>
 </table>
 
 ## Logging

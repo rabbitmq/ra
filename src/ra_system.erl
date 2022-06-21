@@ -28,7 +28,6 @@
                     names := names(),
                     data_dir := file:filename(),
                     wal_data_dir => file:filename(),
-                    segment_max_entries => non_neg_integer(),
                     wal_max_size_bytes => non_neg_integer(),
                     wal_compute_checksums => boolean(),
                     wal_max_batch_size => non_neg_integer(),
@@ -38,6 +37,8 @@
                     wal_hibernate_after => non_neg_integer(),
                     wal_garbage_collect => boolean(),
                     wal_pre_allocate => boolean(),
+                    segment_max_entries => non_neg_integer(),
+                    segment_compute_checksums => boolean(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer()
                    }.
@@ -60,6 +61,7 @@ start_default() ->
 -spec default_config() -> ra_system:config().
 default_config() ->
     SegmentMaxEntries = application:get_env(ra, segment_max_entries, 4096),
+    SegmentComputeChecksums = application:get_env(ra, segment_compute_checksums, true),
     WalMaxSizeBytes = application:get_env(ra, wal_max_size_bytes,
                                           ?WAL_DEFAULT_MAX_SIZE_BYTES),
     WalComputeChecksums = application:get_env(ra, wal_compute_checksums, true),
@@ -84,6 +86,7 @@ default_config() ->
       wal_pre_allocate => WalPreAllocate,
       wal_sync_method => WalSyncMethod,
       segment_max_entries => SegmentMaxEntries,
+      segment_compute_checksums => SegmentComputeChecksums,
       names =>
       #{wal => ra_log_wal,
         wal_sup => ra_log_wal_sup,

@@ -23,6 +23,7 @@ all_tests() ->
     [
      open_close_persists_max_count,
      write_then_read,
+     write_then_read_no_checksums,
      read_cons,
      write_close_open_write,
      full_file,
@@ -223,7 +224,7 @@ write_then_read(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
     Data = make_data(1024),
-    {ok, Seg0} = ra_log_segment:open(Fn),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{compute_checksums => true}),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, Data),
     {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, Data),
     {ok, Seg} = ra_log_segment:sync(Seg2),
@@ -240,6 +241,27 @@ write_then_read(Config) ->
     ok = ra_log_segment:close(SegR),
     ok.
 
+write_then_read_no_checksums(Config) ->
+    % tests items are bing persisted and index can be recovered
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data = make_data(1024),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{compute_checksums => false}),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, Data),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, Data),
+    {ok, Seg} = ra_log_segment:sync(Seg2),
+    ok = ra_log_segment:close(Seg),
+
+    % read two consecutive entries from index 1
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
+    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 2),
+    %% validate a larger range still returns results
+    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 5),
+    %% out of range returns nothing
+    [{2, 2, Data}] = ra_log_segment:read(SegR, 2, 2),
+    {1, 2} = ra_log_segment:range(SegR),
+    ok = ra_log_segment:close(SegR),
+    ok.
 read_cons(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
