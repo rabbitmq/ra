@@ -91,8 +91,8 @@
                pre_allocate = false :: boolean()
               }).
 
--record(wal, {fd :: maybe(file:io_device()),
-              filename :: maybe(file:filename()),
+-record(wal, {fd :: 'maybe'(file:io_device()),
+              filename :: 'maybe'(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
               entry_count = 0 :: non_neg_integer()
@@ -114,7 +114,7 @@
                 % and the last index seen
                 writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
-                batch :: maybe(#batch{})
+                batch :: 'maybe'(#batch{})
                }).
 
 -type state() :: #state{}.

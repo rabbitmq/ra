@@ -49,7 +49,7 @@
               max_count = ?DEFAULT_INDEX_MAX_COUNT :: non_neg_integer(),
               max_pending = ?DEFAULT_MAX_PENDING :: non_neg_integer(),
               filename :: file:filename_all(),
-              fd :: maybe(file:io_device()),
+              fd :: 'maybe'(file:io_device()),
               index_size :: pos_integer(),
               access_pattern :: sequential | random,
               mode = append :: read | append,
@@ -62,8 +62,8 @@
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
-         index = undefined :: maybe(ra_segment_index()),
-         range :: maybe({ra_index(), ra_index()}),
+         index = undefined :: 'maybe'(ra_segment_index()),
+         range :: 'maybe'({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
          pending_count = 0 :: non_neg_integer(),
@@ -325,7 +325,7 @@ prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
             {FstPos, byte_size(CacheData), CacheData}
     end.
 
--spec term_query(state(), Idx :: ra_index()) -> maybe(ra_term()).
+-spec term_query(state(), Idx :: ra_index()) -> 'maybe'(ra_term()).
 term_query(#state{index = Index}, Idx) ->
     case Index of
         #{Idx := {Term, _, _, _}} ->
@@ -361,7 +361,7 @@ pread_cons(Cfg, Cache0, Idx,
             pread_cons(Cfg, Cache0, Idx+1, FinalIdx, Index, Fun, Acc)
     end.
 
--spec range(state()) -> maybe({ra_index(), ra_index()}).
+-spec range(state()) -> 'maybe'({ra_index(), ra_index()}).
 range(#state{range = Range}) ->
     Range.
 
@@ -373,7 +373,7 @@ max_count(#state{cfg = #cfg{max_count = Max}}) ->
 filename(#state{cfg = #cfg{filename = Fn}}) ->
     Fn.
 
--spec segref(state()) -> maybe(ra_log:segment_ref()).
+-spec segref(state()) -> 'maybe'(ra_log:segment_ref()).
 segref(#state{range = undefined}) ->
     undefined;
 segref(#state{range = {Start, End},

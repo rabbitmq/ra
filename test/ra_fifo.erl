@@ -89,7 +89,7 @@
                          cancel.
 
 -type protocol() ::
-    {enqueue, Sender :: maybe(pid()), MsgSeq :: maybe(msg_seqno()),
+    {enqueue, Sender :: 'maybe'(pid()), MsgSeq :: 'maybe'(msg_seqno()),
      Msg :: raw_msg()} |
     {checkout, Spec :: checkout_spec(), Customer :: customer_id()} |
     {settle, MsgIds :: [msg_id()], Customer :: customer_id()} |
@@ -160,10 +160,10 @@
          % customers that require further service are queued here
          % needs to be part of snapshot
          service_queue = queue:new() :: queue:queue(customer_id()),
-         dead_letter_handler :: maybe(applied_mfa()),
-         cancel_customer_handler :: maybe(applied_mfa()),
-         become_leader_handler :: maybe(applied_mfa()),
-         metrics_handler :: maybe(applied_mfa()),
+         dead_letter_handler :: 'maybe'(applied_mfa()),
+         cancel_customer_handler :: 'maybe'(applied_mfa()),
+         become_leader_handler :: 'maybe'(applied_mfa()),
+         metrics_handler :: 'maybe'(applied_mfa()),
          prefix_msg_count = 0 :: non_neg_integer()
         }).
 
