@@ -274,7 +274,7 @@
          {rpcs_sent, ?C_RA_SRV_RPCS_SENT, counter,
           "Total number of rpcs, incl append_entries_rpcs"},
          {msgs_sent, ?C_RA_SRV_MSGS_SENT, counter,
-          "All messages sent (exept messages sent to wal)"},
+          "All messages sent (except messages sent to wal)"},
          {dropped_sends, ?C_RA_SRV_DROPPED_SENDS, counter,
           "Total number of message sends that return noconnect or nosuspend are dropped"},
          {send_msg_effects_sent, ?C_RA_SRV_SEND_MSG_EFFS_SENT, counter,

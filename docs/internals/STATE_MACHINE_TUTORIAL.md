@@ -63,10 +63,10 @@ we support.
 
 ```erlang
 apply(_Meta, {write, Key, Value}, State) ->
-    {maps:put(Key, Value, State), ok, Effects};
+    {maps:put(Key, Value, State), ok, _Effects = []};
 apply(_Meta, {read, Key}, State) ->
     Reply = maps:get(Key, State, undefined),
-    {State, Reply, Effects}.
+    {State, Reply, _Effects = []}.
 ```
 
 For the `{write, Key, Value}` command we simply put the key and value into the
@@ -76,7 +76,7 @@ return value.
 For `{read, Key}` we additionally return the value of the key or `undefined` if
 it does not exist so that a waiting caller can obtain the value.
 
-An that is it! The state machine is finished.
+And that is it! The state machine is finished.
 
 
 ### Running the state machine inside `ra`
@@ -134,7 +134,7 @@ Now you can write your first value into the cluster.
 `ra:process_command/2` blocks until the command has achieved consensus
 and has been applied to the state machine on the leader server. It is the simplest
 way to interact with `ra` but also the one with the highest latency.
-To read values consistently we have no choice than to use it.
+To read values consistently we have no choice other than to use it.
 The return tuple has either the raft index and term the entry was added to the
 raft log _or_ the return value optionally returned by the state machine. The
 `{read, Key}` command returns the current value of the key.
@@ -184,9 +184,9 @@ the state machine.
 
 ### Send a message
 
-The `{send_msg, pid(), Msg :: term()}` effects asynchronously sends a message
+The `{send_msg, pid(), Msg :: term()}` effect asynchronously sends a message
 to the specified
-`pid`. Not that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
+`pid`. Note that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
 options which are the least reliable message sending options. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
 To ensure message reliability normal [Autmatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)

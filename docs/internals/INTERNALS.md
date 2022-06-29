@@ -95,7 +95,7 @@ Followers process the same set of commands but simply throw away any effects ret
 the state machine.
 
 To ensure we not re-issue effects on recovery each `ra` server persists its `last_applied` index.
-When the server restarts it replays it's log until this point and throws away any resulting effects as they
+When the server restarts it replays its log until this point and throws away any resulting effects as they
 should already have been issued.
 
 As the `last_applied` index is only persisted periodically there is a small
@@ -173,8 +173,8 @@ Potential use cases could be when a command contains large binary data and you
 don't want to keep this in memory but load it on demand when needed for a side-effect.
 
 This is an advanced feature and will only work as long as the command is still
-in the log. If a `release_cursor` has been emitted with an index higher than this
-the command may not longer be in the log and the function will not be called.
+in the log. If a `release_cursor` has been emitted with an index higher than this,
+the command may no longer be in the log and the function will not be called.
 
 There is currently no facility for reading partial data from a snapshot.
 
@@ -340,8 +340,7 @@ current incarnation which obviously is unacceptable. Hence providing a
 unique local identity is critical for correct operation.
 
 The IDs are used to identify a Ra server's data on disk and must be
-filename-safe and conform to the [base64url
-standard](https://tools.ietf.org/html/rfc4648#section-5)
+filename-safe and conform to the [base64url standard].
 
 Ra cluster members also use IDs that are unique to that member.
 The IDs assume Base64 URI-encoded binaries that can be safely used
@@ -355,20 +354,22 @@ segment and snapshot writer processes who use the `ra_directory` module to
 lookup the current `pid()` for a given ID.
 
 
-A UID can be user-provided. Values that conform to the [base64url
-standard](https://tools.ietf.org/html/rfc4648#section-5) must be used.
+A UID can be user-provided. Values must conform to the [base64url
+standard].
 
 
 Here's an example of a compliant user-provided UID:
 
 
-```
+```erlang
 Config = #{cluster_name => <<"ra-cluster-1">>,
            server_id => {ra_cluster_1, ra1@snowman},
            uid => <<"ra_cluster_1_1519808362841">>
            ...},
 
 ```
+
+[base64url standard]: https://tools.ietf.org/html/rfc4648#section-5
 
 
 ## Group Membership
@@ -377,13 +378,13 @@ Ra implements the single server cluster membership change strategy
 covered in [Consensus: Bridging Theory and Practice][https://raft.github.io/raft.pdf].
 In practice that means that join and leave requests are processed sequentially one by one.
 
-The function that manage cluster members, `ra:add_member/2` and `ra:remove_member/2`, respectively,
+The functions that manage cluster members, `ra:add_member/2` and `ra:remove_member/2`, respectively,
 will return as soon as the membership change state transition has been written to the log and the leader
 has switched to the new configuration.
 
 ## Client Leader Tracking
 
-To interact with a Ra cluster client processes need to first discover and subsequently
+To interact with a Ra cluster, client processes need to first discover and subsequently
 track the leader of the cluster.
 
 Synchronous commands such as `ra:process_command/2`, `ra:members/1` always redirect
@@ -409,7 +410,7 @@ Therefore it has deviated from the original Raft protocol in certain areas.
 
 Log replication in Ra is mostly asynchronous, so there is no actual use of RPC (as in the Raft paper) calls.
 New entries are pipelined and followers reply after receiving a written event which incurs
-a natural batching effects on the replies.
+a natural batching effect on the replies.
 
 Followers include 3 non-standard fields in their Raft `AppendEntries` RPC replies:
 
@@ -553,10 +554,10 @@ Ra servers look up confirmed entries with their index and apply them to their st
 
 ### The Segment Writer
 
-To avoid perpetually appending to and ever growing file the WAL periodically
+To avoid perpetually appending to an ever growing file the WAL periodically
 "rolls over" to a new file. The old file and the mem tables written during
 the lifetime of that file are passed to the segment writer process that is
-responsible for flushing the mem tables to per-Ra-server specific on disk
+responsible for flushing the mem tables to per-Ra-server-specific on-disk
 storage. The data is stored in variably sized segments with a fixed number of
 log entries.
 
@@ -574,7 +575,7 @@ that potentially have been truncated.
 
 Ra distinguishes between open and closed WAL's ETS tables. A Ra server
 can have only 1 (or none) open ETS table at a time. This open ETS table
-contains the entry that are in the current WAL file.
+contains the entries that are in the current WAL file.
 
 During WAL rollover, open ETS tables become closed because they won't be appended
 to anymore. Closed ETS tables only exist while the segment writer is flushing

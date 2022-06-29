@@ -365,7 +365,7 @@ leaderboard(Config) ->
     ok.
 
 bench(Config) ->
-    %% exercies the large message handling code
+    %% exercises the large message handling code
     PrivDir = ?config(data_dir, Config),
     Nodes = [start_follower(N, PrivDir) || N <- [s1,s2,s3]],
     ok = ra_bench:run(#{name => ?FUNCTION_NAME,
