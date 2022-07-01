@@ -45,7 +45,7 @@
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
                 entries = #{0 => {0, undefined}} :: #{ra_term() => {ra_index(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
-                snapshot :: maybe(snapshot())}).
+                snapshot :: 'maybe'(snapshot())}).
 
 -type ra_log_memory_state() :: #state{} | ra_log:state().
 
@@ -120,7 +120,7 @@ sparse_take(Idx, Log, Num, Max, Res) ->
     end.
 
 
--spec last_index_term(ra_log_memory_state()) -> maybe(ra_idxterm()).
+-spec last_index_term(ra_log_memory_state()) -> 'maybe'(ra_idxterm()).
 last_index_term(#state{last_index = LastIdx,
                        entries = Log,
                        snapshot = Snapshot}) ->
@@ -177,7 +177,7 @@ next_index(#state{last_index = LastIdx}) ->
     LastIdx + 1.
 
 -spec fetch(ra_index(), ra_log_memory_state()) ->
-    {maybe(log_entry()), ra_log_memory_state()}.
+    {'maybe'(log_entry()), ra_log_memory_state()}.
 fetch(Idx, #state{entries = Log} = State) ->
     case Log of
         #{Idx := {T, D}} ->
@@ -186,7 +186,7 @@ fetch(Idx, #state{entries = Log} = State) ->
     end.
 
 -spec fetch_term(ra_index(), ra_log_memory_state()) ->
-    {maybe(ra_term()), ra_log_memory_state()}.
+    {'maybe'(ra_term()), ra_log_memory_state()}.
 fetch_term(Idx, #state{entries = Log} = State) ->
     case Log of
         #{Idx := {T, _}} ->
@@ -222,7 +222,7 @@ recover_snapshot(#state{snapshot = {Meta, Data}}) ->
 
 
 -spec read_meta(Key :: ra_log:ra_meta_key(), State :: ra_log_memory_state()) ->
-    maybe(term()).
+    'maybe'(term()).
 read_meta(Key, #state{meta = Meta}) ->
     maps:get(Key, Meta, undefined).
 

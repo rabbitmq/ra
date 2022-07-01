@@ -35,8 +35,8 @@ Ra supports the following Erlang/OTP versions:
  * `24.x`
  * `23.x`
 
-Modern Erlang releases provide [distribution traffic fragmentation](http://blog.erlang.org/OTP-22-Highlights/) which
-algorithms such as Raft significantly benefit from.
+Modern Erlang releases provide [distribution traffic fragmentation](https://www.erlang.org/blog/otp-22-highlights/#fragmented-distribution-messages)
+which algorithms such as Raft significantly benefit from.
 
 
 ## Design Goals
@@ -110,10 +110,10 @@ ErlangNodes = ['ra1@hostname.local', 'ra2@hostname.local', 'ra3@hostname.local']
 ServerIds = [{quick_start, N} || N <- ErlangNodes],
 
 ClusterName = quick_start,
-%% State machine that implements the logic
+%% State machine that implements the logic and an initial state
 Machine = {simple, fun erlang:'+'/2, 0},
 
-%% Start a Ra cluster  with an addition state machine that has an initial state of 0.
+%% Start a Ra cluster with an addition state machine that has an initial state of 0.
 %% It's sufficient to invoke this function only on one Erlang node. For example, this
 %% can be a "designated seed" node or the node that was first to start and did not discover
 %% any peers after a few retries.
@@ -287,7 +287,7 @@ ra:members({ClusterName, node()}).
 ### Other examples
 
 See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
-for how to write more sophisiticated state machines by implementing
+for how to write more sophisticated state machines by implementing
 the `ra_machine` behaviour.
 
 A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store) is available

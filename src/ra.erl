@@ -153,7 +153,7 @@ start_in(DataDir) ->
 -spec restart_server(ra_server_id()) ->
     ok | {error, term()}.
 restart_server(ServerId) ->
-    %% TODO: this is a bad overlaod
+    %% TODO: this is a bad overload
     restart_server(default, ServerId).
 
 %% @doc Restarts a previously successfully started ra server
@@ -476,7 +476,7 @@ start_server(Conf) ->
     start_server(default, Conf).
 
 %% @doc Starts a ra server
-%% @param The system name
+%% @param System the system name
 %% @param Conf a ra_server_config() configuration map.
 %% @returns `{ok | error, Error}'
 %% @end
@@ -596,7 +596,7 @@ remove_member(ServerRef, ServerId, Timeout) ->
                            {'$ra_leave', ServerId, after_log_append},
                            Timeout).
 
-%% @doc Makes the server to enter a pre-vote state and attempt to become the leader.
+%% @doc Makes the server enter a pre-vote state and attempt to become the leader.
 %% It is necessary to call this function when starting a new cluster as a
 %% brand new Ra server (node) will not automatically enter the pre-vote state.
 %% This does not apply to recovering (previously started) servers: they will

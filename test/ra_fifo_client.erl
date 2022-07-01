@@ -30,9 +30,9 @@
 
 -record(state, {cluster_name :: ra_cluster_name(),
                 servers = [] :: [ra_server_id()],
-                leader :: maybe(ra_server_id()),
+                leader :: 'maybe'(ra_server_id()),
                 next_seq = 0 :: seq(),
-                last_applied :: maybe(seq()),
+                last_applied :: 'maybe'(seq()),
                 next_enqueue_seq = 1 :: seq(),
                 %% indicates that we've exceeded the soft limit
                 slow = false :: boolean(),
@@ -40,7 +40,7 @@
                                            {[seq()], [seq()], [seq()]}},
                 soft_limit = ?SOFT_LIMIT :: non_neg_integer(),
                 pending = #{} :: #{seq() =>
-                                   {maybe(term()), ra_fifo:command()}},
+                                   {'maybe'(term()), ra_fifo:command()}},
                 customer_deliveries = #{} :: #{ra_fifo:customer_tag() =>
                                                seq()},
                 priority = normal :: normal | low,
