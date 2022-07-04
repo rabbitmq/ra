@@ -361,8 +361,18 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
                end || Id <- ServerIds],
     start_cluster(System, Configs, Timeout).
 
+%% @doc Same as `start_cluster/2' but uses the default Ra system.
+%% @param ServerConfigs a list of initial server configurations
+%% DEPRECATED: use start_cluster/2
+%% @end
+-spec start_cluster([ra_server:ra_server_config()]) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
+start_cluster(ServerConfigs) ->
+  start_cluster(default, ServerConfigs).
+
 %% @doc Starts a new distributed ra cluster.
-%%
+%% @param System the system name
 %% @param ServerConfigs a list of initial server configurations
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
@@ -375,12 +385,6 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
 %% @end
--spec start_cluster([ra_server:ra_server_config()]) ->
-    {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
-start_cluster(ServerConfigs)
-  start_cluster(default, ServerConfigs).
-
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
@@ -388,7 +392,8 @@ start_cluster(System, ServerConfigs)
   when is_atom(System) ->
     start_cluster(System, ServerConfigs, ?START_TIMEOUT).
 
-%% @doc Same as `start_cluster/1' but accepts a custom timeout.
+%% @doc Same as `start_cluster/2' but accepts a custom timeout.
+%% @param System the system name
 %% @param ServerConfigs a list of initial server configurations
 %% @param Timeout the timeout to use
 %% @end
