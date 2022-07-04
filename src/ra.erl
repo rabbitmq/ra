@@ -33,6 +33,7 @@
          consistent_query/3,
          ping/2,
          % cluster operations
+         start_cluster/1,
          start_cluster/2,
          start_cluster/3,
          start_cluster/4,
@@ -374,6 +375,12 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
 %% @end
+-spec start_cluster([ra_server:ra_server_config()]) ->
+    {ok, [ra_server_id()], [ra_server_id()]} |
+    {error, cluster_not_formed}.
+start_cluster(ServerConfigs)
+  start_cluster(default, ServerConfigs).
+
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
