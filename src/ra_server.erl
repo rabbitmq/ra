@@ -128,7 +128,8 @@
                   ra_log:event() |
                   {consistent_query, term(), ra:query_fun()} |
                   #heartbeat_rpc{} |
-                  {ra_server_id, #heartbeat_reply{}}.
+                  {ra_server_id, #heartbeat_reply{}} |
+                  pipeline_rpcs.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -382,21 +383,9 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = put_peer(PeerId, Peer, State0),
             {State2, Effects0} = evaluate_quorum(State1, []),
 
-            {State3, Effects1} = process_pending_consistent_queries(State2,
-                                                                    Effects0),
-
-            {State, More, RpcEffects0} = make_pipelined_rpc_effects(State3, []),
-            % rpcs need to be issued _AFTER_ machine effects or there is
-            % a chance that effects will never be issued if the leader crashes
-            % after sending rpcs but before actioning the machine effects
-            RpcEffects = case More of
-                             true ->
-                                 [{next_event, info, pipeline_rpcs} |
-                                  RpcEffects0];
-                             false ->
-                                 RpcEffects0
-                         end,
-            Effects = Effects1 ++ RpcEffects,
+            {State, Effects1} = process_pending_consistent_queries(State2,
+                                                                   Effects0),
+            Effects = [{next_event, info, pipeline_rpcs} | Effects1],
             case State of
                 #{cluster := #{Id := _}} ->
                     % leader is in the cluster
@@ -532,9 +521,8 @@ handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
 handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
-    {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
-    {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
-    {leader, State, Effects};
+    {State, Effects} = process_pending_consistent_queries(State1, Effects1),
+    {leader, State, [{next_event, info, pipeline_rpcs} | Effects]};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
     {leader, State#{log => Log1}, Effects};
@@ -2145,9 +2133,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
     To = min(From + ?MAX_FETCH_ENTRIES, ApplyTo),
     case fetch_entries(From, To, State0) of
         {[], State} ->
-            %% reverse list before consing the notifications to ensure
-            %% notifications are processed first
-            FinalEffs = make_notify_effects(Notifys0, lists:reverse(Effects0)),
+            FinalEffs = lists:reverse(make_notify_effects(Notifys0, Effects0)),
             {State, FinalEffs};
         %% assert first item read is from
         {[{From, _, _} | _] = Entries, State1} ->
@@ -2169,15 +2155,21 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
     end;
 apply_to(_ApplyTo, _, Notifys, Effects, State)
   when is_list(Effects) ->
-    %% reverse list before consing the notifications to ensure
-    %% notifications are processed first
-    FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
+    FinalEffs = lists:reverse(make_notify_effects(Notifys, Effects)),
     {State, FinalEffs}.
 
 make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
     [{notify, Nots} | Prior];
 make_notify_effects(_Nots, Prior) ->
       Prior.
+
+append_app_effects([], Effs) ->
+    Effs;
+append_app_effects([AppEff], Effs) ->
+    [AppEff | Effs];
+append_app_effects(AppEffs, Effs) ->
+    [AppEffs | Effs].
+
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
@@ -2190,21 +2182,22 @@ apply_with(_Cmd,
 apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
            {Module, _LastAppliedIdx,
             State = #{cfg := #cfg{effective_machine_version = MacVer}},
-            MacSt, Effects, Notifys0, LastTs}) ->
+            MacSt, Effects0, Notifys0, LastTs}) ->
     %% augment the meta data structure
     Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
     Ts = maps:get(ts, CmdMeta, LastTs),
     case ra_machine:apply(Module, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
-            {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
-                                             Effects, Notifys0),
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+                                           append_app_effects(AppEffs, Effects0),
+                                           Notifys0),
             {Module, Idx, State, NextMacSt,
-             [AppEffs | ReplyEffs], Notifys, Ts};
+             Effects, Notifys, Ts};
         {NextMacSt, Reply} ->
-            {ReplyEffs, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
-                                             Effects, Notifys0),
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+                                           Effects0, Notifys0),
             {Module, Idx, State, NextMacSt,
-             ReplyEffs, Notifys, Ts}
+             Effects, Notifys, Ts}
     end;
 apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
            {Mod, _, State0, MacSt, Effects0, Notifys0, LastTs}) ->

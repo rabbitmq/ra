@@ -35,6 +35,7 @@ all() ->
      candidate_election,
      is_new,
      command,
+     command_notify,
      leader_noop_operation_enables_cluster_change,
      leader_noop_increments_machine_version,
      follower_machine_version,
@@ -801,7 +802,7 @@ append_entries_reply_success(_Config) ->
                 N2 => new_peer_with(#{next_index => 1, match_index => 0,
                                       commit_index_sent => 3}),
                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
+    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
                              last_applied => 1,
                              cluster => Cluster,
                              machine_state => <<"hi1">>},
@@ -813,16 +814,23 @@ append_entries_reply_success(_Config) ->
                                     match_index := 3}},
                commit_index := 3,
                last_applied := 3,
+               machine_state := <<"hi3">>} = State,
+     [{next_event, info, pipeline_rpcs},
+      {aux, eval}]} = ra_server:handle_leader(Msg, State0),
+
+    {leader, #{cluster := #{N2 := #{next_index := 4,
+                                    match_index := 3}},
+               commit_index := 3,
+               last_applied := 3,
                machine_state := <<"hi3">>},
-     [{aux, eval},
-      {send_rpc, N3,
+     [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
                            prev_log_term = 1,
                            leader_commit = 3,
                            entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }]} = ra_server:handle_leader(Msg, State),
+      }]} = ra_server:handle_leader(pipeline_rpcs, State),
 
     Msg1 = {N2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
@@ -833,7 +841,7 @@ append_entries_reply_success(_Config) ->
                last_applied := 1,
                current_term := 7,
                machine_state := <<"hi1">>}, _} =
-        ra_server:handle_leader(Msg1, State#{current_term := 7}),
+        ra_server:handle_leader(Msg1, State0#{current_term := 7}),
     ok.
 
 append_entries_reply_no_success(_Config) ->
@@ -1485,6 +1493,41 @@ command(_Config) ->
                  {send_rpc, N3, AE}, {send_rpc, N2, AE} |
                  _]} =
         ra_server:handle_leader({command, Cmd}, State),
+    ok.
+
+command_notify(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    State0 = base_state(3, ?FUNCTION_NAME),
+
+    meck:expect(?FUNCTION_NAME,
+                apply, fun (_, Cmd, _) -> {Cmd, ok, [{aux, banana}]} end),
+    Meta = meta(),
+    Cmd = {'$usr', Meta, <<"hi4">>, {notify, 99, self()}},
+    AE = #append_entries_rpc{entries = [{4, 5, Cmd}],
+                             leader_id = N1,
+                             term = 5,
+                             prev_log_index = 3,
+                             prev_log_term = 5,
+                             leader_commit = 3
+                            },
+    {leader, State1, [{send_rpc, N3, AE}, {send_rpc, N2, AE} | _]} =
+        ra_server:handle_leader({command, Cmd}, State0),
+
+    {leader, State, _} =
+        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+    AER = #append_entries_reply{success = true,
+                                term = 5,
+                                next_index = 5,
+                                last_index = 4,
+                                last_term = 5},
+    %% asserting that the notify effect is positioned _after_ any apply effects
+    %% e.g. {aux, banana}. this ensures that writers aren't notified or reply to
+    %% before the side effects for their command have been executed.
+    {leader, _State, [_,
+                      {aux,eval},
+                      {aux, banana},
+                      {notify, _}]} =
+        ra_server:handle_leader({N2, AER}, State),
     ok.
 
 candidate_election(_Config) ->
@@ -2240,7 +2283,8 @@ leader_consistent_query_delay(_Config) ->
                queries_waiting_heartbeats := WaitingQueries,
                query_index := QueryIndex2},
     %% There can be more effects.
-     [{send_rpc, N2, HeartBeatRpc2},
+     [{next_event, info, pipeline_rpcs},
+      {send_rpc, N2, HeartBeatRpc2},
       {send_rpc, N3, HeartBeatRpc2},
       {send_rpc, N2, HeartBeatRpc1},
       {send_rpc, N3, HeartBeatRpc1}
