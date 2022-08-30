@@ -17,7 +17,8 @@
          install_snap_rpc_timeout,
          await_condition_timeout,
          max_pipeline_count,
-         ra_event_formatter]).
+         ra_event_formatter,
+         nodes]).
 
 %% API functions
 -export([start_server/2,
