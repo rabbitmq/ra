@@ -11,8 +11,7 @@
          open/2,
          append/4,
          sync/1,
-         read/3,
-         read_cons/5,
+         fold/6,
          read_sparse/4,
          term_query/2,
          close/1,
@@ -62,7 +61,7 @@
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
-         index = undefined :: 'maybe'(ra_segment_index()),
+         index = undefined :: maybe(ra_segment_index()),
          range :: 'maybe'({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
@@ -257,30 +256,30 @@ flush(#state{cfg = #cfg{fd = Fd},
             Err
     end.
 
--spec read(state(), Idx :: ra_index(), Num :: non_neg_integer()) ->
-    [{ra_index(), ra_term(), binary()}].
-read(State, Idx, Num) ->
-    read_cons(State, Idx, Num, fun ra_lib:id/1, []).
+-spec fold(state(),
+           FromIdx :: ra_index(),
+           ToIdx :: ra_index(),
+           fun((binary()) -> term()),
+           fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc) ->
+    Acc when Acc :: term().
+fold(#state{cfg = #cfg{mode = read} = Cfg,
+            cache = Cache,
+            index = Index},
+     FromIdx, ToIdx, Fun, AccFun, Acc) ->
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc).
 
-
--spec read_cons(state(), ra_index(), Num :: non_neg_integer(),
-                fun((binary()) -> term()), Acc) ->
-    Acc when Acc :: [{ra_index(), ra_term(), binary()}].
-read_cons(#state{cfg = #cfg{mode = read} = Cfg,
-                 cache = Cache,
-                 index = Index}, Idx, Num, Fun, Acc) ->
-    pread_cons(Cfg, Cache, Idx, Idx + Num - 1, Index, Fun, Acc).
-
+-spec read_sparse(state(), [ra_index()],
+                  fun((binary()) -> term()), term()) ->
+    {non_neg_integer(), term()}.
 read_sparse(#state{index = Index,
-                   cfg = Cfg,
-                   cache = _Cache0}, Indexes, Fun, Acc) ->
+                   cfg = Cfg}, Indexes, Fun, Acc) ->
     Cache0 = prepare_cache(Cfg, Indexes, Index),
-    Entries = read_sparse0(Cfg, Indexes, Index, Cache0, Fun, Acc),
-    {undefined, length(Entries), Entries}.
+    read_sparse0(Cfg, Indexes, Index, Cache0, Fun, Acc, 0).
 
-read_sparse0(_Cfg, [], _Index, _Cache, _Fun, Acc) ->
-    Acc;
-read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc) ->
+read_sparse0(_Cfg, [], _Index, _Cache, _Fun, Acc, Num) ->
+    {Num, Acc};
+read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc, Num)
+ when is_map_key(NextIdx, Index) ->
     {Term, Offset, Length, _} = map_get(NextIdx, Index),
     case cache_read(Cache0, Offset, Length) of
         false ->
@@ -288,14 +287,16 @@ read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc) ->
                 undefined ->
                     {ok, Data, _} = pread(Cfg, undefined, Offset, Length),
                     read_sparse0(Cfg, Rem, Index, undefined, Fun,
-                                 [{NextIdx, Term, Fun(Data)} | Acc]);
+                                 [{NextIdx, Term, Fun(Data)} | Acc], Num+1);
                 Cache ->
-                    read_sparse0(Cfg, Indexes, Index, Cache, Fun, Acc)
+                    read_sparse0(Cfg, Indexes, Index, Cache, Fun, Acc, Num+1)
             end;
         Data ->
             read_sparse0(Cfg, Rem, Index, Cache0, Fun,
-                         [{NextIdx, Term, Fun(Data)} | Acc])
-    end.
+                         [{NextIdx, Term, Fun(Data)} | Acc], Num+1)
+    end;
+read_sparse0(_Cfg, [NextIdx | _], _Index, _Cache, _Fun, _Acc, _Num) ->
+    exit({missing_key, NextIdx}).
 
 cache_read({CPos, CLen, Bin}, Pos, Length)
   when Pos >= CPos andalso
@@ -313,17 +314,19 @@ prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
             %% no run, no cache;
             undefined;
         {FirstIdx, LastIdx} ->
-            {_, FstPos, FstLength, _} = map_get(FirstIdx, SegIndex),
-            {_, LastPos, LastLength, _} = map_get(LastIdx, SegIndex),
-            % MaxCacheLen = LastPos + LastLength - FstPos,
+            {_, FstPos, FstLength, _} = map_get_(FirstIdx, SegIndex),
+            {_, LastPos, LastLength, _} = map_get_(LastIdx, SegIndex),
             % %% read at least the remainder of the block from
             % %% the first position or the length of the first record
-            % MinCacheLen = max(FstLength, ?BLOCK_SIZE - (FstPos rem ?BLOCK_SIZE)),
-            % CacheLen = max(MinCacheLen, min(MaxCacheLen, ?READ_AHEAD_B)),
             CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
             {ok, CacheData} = ra_file_handle:pread(Fd, FstPos, CacheLen),
             {FstPos, byte_size(CacheData), CacheData}
     end.
+
+map_get_(Key, Map) when is_map_key(Key, Map) ->
+    map_get(Key, Map);
+map_get_(Key, _Map) ->
+    exit({missing_key, Key}).
 
 -spec term_query(state(), Idx :: ra_index()) -> 'maybe'(ra_term()).
 term_query(#state{index = Index}, Idx) ->
@@ -333,11 +336,10 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
-pread_cons(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, Acc)
+fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc)
   when Idx > FinalIdx ->
     Acc;
-pread_cons(Cfg, Cache0, Idx,
-           FinalIdx, Index, Fun, Acc) ->
+fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
             case pread(Cfg, Cache0, Offset, Length) of
@@ -345,8 +347,8 @@ pread_cons(Cfg, Cache0, Idx,
                     %% performc crc check
                     case validate_checksum(Crc, Data) of
                         true ->
-                            [{Idx, Term, Fun(Data)} |
-                             pread_cons(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, Acc)];
+                            Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
+                            fold0(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, AccFun, Acc);
                         false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
@@ -358,10 +360,11 @@ pread_cons(Cfg, Cache0, Idx,
                           Cfg#cfg.filename})
             end;
         _ ->
-            pread_cons(Cfg, Cache0, Idx+1, FinalIdx, Index, Fun, Acc)
+            exit({ra_log_segment_unexpected_eof, Idx,
+                  Cfg#cfg.filename})
     end.
 
--spec range(state()) -> 'maybe'({ra_index(), ra_index()}).
+-spec range(state()) -> maybe({ra_index(), ra_index()}).
 range(#state{range = Range}) ->
     Range.
 
@@ -446,9 +449,10 @@ dump_index(File) ->
 dump(File) ->
     {ok, S0} = open(File, #{mode => read}),
     {Idx, Last} = range(S0),
-    L = read_cons(S0, Idx, Last - Idx + 1, fun erlang:binary_to_term/1, []),
+    L = fold(S0, Idx, Last - Idx + 1, fun erlang:binary_to_term/1,
+             fun (E, A) -> [E | A] end, []),
     close(S0),
-    L.
+    lists:reverse(L).
 
 
 dump_index_data(<<Idx:64/unsigned, Term:64/unsigned,

@@ -25,9 +25,10 @@ start_erlang_node(Node, Config) ->
                                           code:where_is_file(DistModS ++ ".beam"))),
                         DistArg = re:replace(DistModS, "_dist$", "",
                                              [{return, list}]),
-                        "-pa \"" ++ DistModPath ++ "\" -proto_dist " ++ DistArg
+                        "-pa \"" ++ DistModPath ++ "\" -proto_dist " ++ DistArg ++
+                        " -kernel prevent_overlapping_partitions false"
                 end,
-    {ok, _} = ct_slave:start(Node, [{erl_flags, StartArgs}]),
+    _ = ct_slave:start(Node, [{erl_flags, StartArgs}]),
     wait_for_distribution(Node, 50),
     add_lib_dir(Node),
     Node.

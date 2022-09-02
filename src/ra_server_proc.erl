@@ -1494,15 +1494,11 @@ send(To, Msg, Conf) ->
             Res
     end.
 
-
 fold_log(From, Fun, Term, State) ->
     case ra_server:log_fold(State#state.server_state, Fun, Term) of
         {ok, Result, ServerState} ->
             {keep_state, State#state{server_state = ServerState},
-             [{reply, From, {ok, Result}}]};
-        {error, Reason, ServerState} ->
-            {keep_state, State#state{server_state = ServerState},
-             [{reply, From, {error, Reason}}]}
+             [{reply, From, {ok, Result}}]}
     end.
 
 send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,

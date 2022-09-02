@@ -11,6 +11,7 @@
          append/2,
          write/2,
          take/3,
+         fold/5,
          last_index_term/1,
          set_last_index/2,
          handle_event/2,
@@ -105,6 +106,12 @@ write(_Entries, _State) ->
 take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
     Entries = sparse_take(Start, Log, Num, LastIdx, []),
     {Entries, length(Entries), State}.
+
+fold(From, To, Fun, Acc0, #state{last_index = LastIdx,
+                                 entries = Log} = State) ->
+    Entries = sparse_take(From, Log, To - From + 1, LastIdx, []),
+    Acc = lists:foldl(Fun, Acc0, Entries),
+    {Acc, State}.
 
 % this allows for missing entries in the log
 sparse_take(Idx, _Log, Num, Max, Res)

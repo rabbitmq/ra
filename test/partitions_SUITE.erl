@@ -25,7 +25,15 @@ groups() ->
             ],
     [{tests, [], Tests}].
 
-init_per_group(_, Config) -> Config.
+init_per_suite(Config) ->
+    application:set_env(kernel, prevent_overlapping_partitions, false),
+    Config.
+
+end_per_suite(Config) ->
+    Config.
+
+init_per_group(_, Config) ->
+    Config.
 
 end_per_group(_, _Config) -> ok.
 

@@ -281,7 +281,7 @@ init(#{id := Id,
 
     LatestMacVer = ra_machine:version(Machine),
 
-    {FirstIndex, Cluster0, MacVer, MacState,
+    {_FirstIndex, Cluster0, MacVer, MacState,
      {SnapshotIdx, _} = SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
@@ -294,11 +294,12 @@ init(#{id := Id,
                machine_version := MacVersion}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
-                {Idx, Clu, MacVersion, MacSt, {Idx, Term}}
+                %% TODO: should this be Idx + 1?
+                {Idx + 1, Clu, MacVersion, MacSt, {Idx, Term}}
         end,
     MacMod = ra_machine:which_module(Machine, MacVer),
 
-    CommitIndex = max(LastApplied, FirstIndex),
+    CommitIndex = max(LastApplied, SnapshotIdx),
     Cfg = #cfg{id = Id,
                uid = UId,
                log_id = LogId,
@@ -325,7 +326,7 @@ init(#{id := Id,
       commit_index => CommitIndex,
       %% set this to the first index so that we can apply all entries
       %% up to the commit index during recovery
-      last_applied => FirstIndex,
+      last_applied => SnapshotIdx,
       persisted_last_applied => LastApplied,
       log => Log0,
       machine_state => MacState,
@@ -1683,12 +1684,15 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                         #{log := Log0, current_term := Term,
                           cfg := #cfg{id = Id},
                           commit_index := CommitIndex} = State) ->
-    Next = PrevIdx + 1,
-    {Entries, NumRead, Log} = ra_log:take(Next, Num, Log0),
-    NextIndex = Next + NumRead,
-    {NextIndex,
+    {LastIndex, _} = ra_log:last_index_term(Log0),
+    From = PrevIdx + 1,
+    To = min(LastIndex, PrevIdx + Num),
+    {Entries, Log} = ra_log:fold(From, To,
+                                 fun (E, A) -> [E | A] end,
+                                 [], Log0),
+    {To + 1,
      {send_rpc, PeerId,
-      #append_entries_rpc{entries = Entries,
+      #append_entries_rpc{entries = lists:reverse(Entries),
                           term = Term,
                           leader_id = Id,
                           prev_log_index = PrevIdx,
@@ -1846,11 +1850,11 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
               undefined ->
                   1
           end,
-    case fold_log_from(Idx, Fun, {State, Log}) of
+    try fold_log_from(Idx, Fun, {State, Log}) of
         {ok, {State1, Log1}} ->
-            {ok, State1, RaState#{log => Log1}};
-        {error, Reason, Log1} ->
-            {error, Reason, RaState#{log => Log1}}
+            {ok, State1, RaState#{log => Log1}}
+    catch _:Err ->
+            {error, Err, RaState}
     end.
 
 %% reads user commands at the specified index
@@ -2091,10 +2095,6 @@ fetch_term(Idx, #{log := Log0} = State) ->
             {Term, State#{log => Log}}
     end.
 
-fetch_entries(From, To, #{log := Log0} = State) ->
-    {Entries, _, Log} = ra_log:take(From, To - From + 1, Log0),
-    {Entries, State#{log => Log}}.
-
 make_cluster(Self, Nodes) ->
     case lists:foldl(fun(N, Acc) ->
                              Acc#{N => new_peer()}
@@ -2127,32 +2127,29 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
            cfg := #cfg{machine_version = MacVer,
                        effective_machine_module = MacMod,
                        effective_machine_version = EffMacVer},
-           machine_state := MacState0} = State0)
+           machine_state := MacState0,
+           log := Log0} = State0)
   when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
     From = LastApplied + 1,
-    To = min(From + ?MAX_FETCH_ENTRIES, ApplyTo),
-    case fetch_entries(From, To, State0) of
-        {[], State} ->
-            FinalEffs = lists:reverse(make_notify_effects(Notifys0, Effects0)),
-            {State, FinalEffs};
-        %% assert first item read is from
-        {[{From, _, _} | _] = Entries, State1} ->
-            {_, AppliedTo, State, MacState, Effects, Notifys, LastTs} =
-                lists:foldl(ApplyFun, {MacMod, LastApplied, State1, MacState0,
-                                       Effects0, Notifys0, undefined},
-                            Entries),
-            CommitLatency = case LastTs of
-                                undefined ->
-                                    0;
-                                _ when is_integer(LastTs) ->
-                                    erlang:system_time(millisecond) - LastTs
-                            end,
-            %% due to machine versioning all entries may not have been applied
-            apply_to(ApplyTo, ApplyFun, Notifys, Effects,
-                     State#{last_applied => AppliedTo,
-                            commit_latency => CommitLatency,
-                            machine_state => MacState})
-    end;
+    {LastIdx, _} = ra_log:last_index_term(Log0),
+    To = min(LastIdx, ApplyTo),
+    FoldState = {MacMod, LastApplied, State0, MacState0,
+                 Effects0, Notifys0, undefined},
+    {{_, AppliedTo, State, MacState, Effects, Notifys, LastTs},
+     Log} = ra_log:fold(From, To, ApplyFun, FoldState, Log0),
+    CommitLatency = case LastTs of
+                        undefined ->
+                            0;
+                        _ when is_integer(LastTs) ->
+                            erlang:system_time(millisecond) - LastTs
+                    end,
+    %% due to machine versioning all entries may not have been applied
+    %%
+    FinalEffs = lists:reverse(make_notify_effects(Notifys, Effects)),
+    {State#{last_applied => AppliedTo,
+            log => Log,
+            commit_latency => CommitLatency,
+            machine_state => MacState}, FinalEffs};
 apply_to(_ApplyTo, _, Notifys, Effects, State)
   when is_list(Effects) ->
     FinalEffs = lists:reverse(make_notify_effects(Notifys, Effects)),
@@ -2481,17 +2478,10 @@ log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~s: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
-    case ra_log:take(From, ?FOLD_LOG_BATCH_SIZE, Log0) of
-        {[], _, Log} ->
-            {ok, {St, Log}};
-        {Entries, _, Log}  ->
-            try
-                St1 = lists:foldl(Folder, St, Entries),
-                fold_log_from(From + ?FOLD_LOG_BATCH_SIZE, Folder, {St1, Log})
-            catch
-                _:Reason ->
-                    {error, Reason, Log}
-            end
+    {To, _} =  ra_log:last_index_term(Log0),
+    case ra_log:fold(From, To, Folder, St, Log0) of
+        {St1, Log} ->
+            {ok, {St1, Log}}
     end.
 
 drop_existing({Log0, []}) ->
