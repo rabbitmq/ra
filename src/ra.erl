@@ -446,7 +446,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             end
     end.
 
-%% @doc Starts a new distributed ra cluster.
+%% @doc Starts server in a new distributed ra cluster.
 %% @param ClusterName the name of the cluster.
 %% @param ServerId the ra_server_id() of the server
 %% @param Machine The {@link ra_machine:machine/0} configuration.
