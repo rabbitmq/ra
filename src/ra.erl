@@ -168,13 +168,7 @@ restart_server(ServerId) ->
     ok | {error, term()}.
 restart_server(System, ServerId)
   when is_atom(System) ->
-    % don't match on return value in case it is already running
-    case catch ra_server_sup_sup:restart_server(System, ServerId, #{}) of
-        {ok, _} -> ok;
-        {ok, _, _} -> ok;
-        {error, _} = Err -> Err;
-        {'EXIT', Err} -> {error, Err}
-    end.
+    restart_server(System, ServerId, #{}).
 
 %% @doc Restarts a previously successfully started ra server
 %% @param System the system identifier
