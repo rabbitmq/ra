@@ -363,10 +363,8 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
-
     FilterNodes = maps:get(filter_nodes, State0),
     Cluster0 = maps:get(cluster, State0),
-
     Cluster1 = case FilterNodes of undefined ->
                        Cluster0;
                    _ ->
@@ -376,7 +374,6 @@ recover(#{cfg := #cfg{log_id = LogId,
                                            Res
                                    end, Cluster0)
               end,
-
     State#{cluster => Cluster1,
            log => Log,
            %% reset commit latency as recovery may calculate a very old value
