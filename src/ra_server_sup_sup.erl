@@ -18,7 +18,7 @@
          await_condition_timeout,
          max_pipeline_count,
          ra_event_formatter,
-         nodes]).
+         filter_nodes]).
 
 %% API functions
 -export([start_server/2,

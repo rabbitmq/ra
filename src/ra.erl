@@ -50,6 +50,8 @@
          restart_server/1,
          restart_server/2,
          restart_server/3,
+         force_restart_server/3,
+         force_restart_server/4,
          % deprecated
          stop_server/1,
          stop_server/2,
@@ -191,6 +193,24 @@ restart_server(System, ServerId, AddConfig)
         {error, _} = Err -> Err;
         {'EXIT', Err} -> {error, Err}
     end.
+
+%% @doc
+%%
+
+-spec force_restart_server(atom(), ra_server_id(), [node()]) ->
+          ok | {error, term()}.
+force_restart_server(System, ServerId, FilterNodes)
+  when is_list(FilterNodes) ->
+    force_restart_server(System, ServerId, FilterNodes, #{}).
+
+%% @doc
+%%
+
+-spec force_restart_server(atom(), ra_server_id(), [node()], ra_server:mutable_config()) ->
+    ok | {error, term()}.
+force_restart_server(System, ServerId, FilterNodes, AddConfig)
+  when is_list(FilterNodes) ->
+    restart_server(System, ServerId, AddConfig#{filter_nodes => FilterNodes}).
 
 %% @doc Stops a ra server in the default system
 %% @param ServerId the ra_server_id() of the server

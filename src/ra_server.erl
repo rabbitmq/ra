@@ -85,7 +85,7 @@
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => 'maybe'(non_neg_integer()),
-      nodes => 'maybe'([node()])
+      filter_nodes => 'maybe'([node()])
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -204,7 +204,7 @@
                             max_pipeline_count => non_neg_integer(),
                             ra_event_formatter => {module(), atom(), [term()]},
                             %% distribution setup
-                            nodes := 'maybe'([node()])}.
+                            filter_nodes => 'maybe'([node()])}.
 
 -type config() :: ra_server_config().
 
@@ -239,7 +239,6 @@ init(#{id := Id,
        machine := MachineConf} = Config) ->
     SystemConfig = maps:get(system_config, Config,
                             ra_system:default_config()),
-    Nodes = maps:get(nodes, Config, undefined),
     LogId = maps:get(friendly_name, Config,
                      lists:flatten(io_lib:format("~w", [Id]))),
     MaxPipelineCount = maps:get(max_pipeline_count, Config,
@@ -338,7 +337,7 @@ init(#{id := Id,
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => [],
-      nodes => Nodes}.
+      filter_nodes => maps:get(filter_nodes, Config, undefined)}.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer,
@@ -365,17 +364,20 @@ recover(#{cfg := #cfg{log_id = LogId,
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
 
-    Nodes = maps:get(nodes, State0),
+    FilterNodes = maps:get(filter_nodes, State0),
     Cluster0 = maps:get(cluster, State0),
 
-    Cluster = case Nodes of undefined -> Cluster0;
-                            _ -> maps:filter(fun ({Name, Node}, _) -> Res = lists:member(Node, Nodes),
-                                             Res orelse ?INFO("filter cluster member name: ~s, node: ~s", [Name, Node]),
-                                             Res
-                                             end, Cluster0)
+    Cluster1 = case FilterNodes of undefined ->
+                       Cluster0;
+                   _ ->
+                       maps:filter(fun ({Name, Node}, _) ->
+                                           Res = lists:member(Node, FilterNodes),
+                                           Res orelse ?INFO("filtered node: ~s, node: ~s", [Name, Node]),
+                                           Res
+                                   end, Cluster0)
               end,
 
-    State#{cluster => Cluster,
+    State#{cluster => Cluster1,
            log => Log,
            %% reset commit latency as recovery may calculate a very old value
            commit_latency => 0}.
