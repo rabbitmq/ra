@@ -194,7 +194,8 @@ restart_server(System, ServerId, AddConfig)
         {'EXIT', Err} -> {error, Err}
     end.
 
-%% @doc
+%% @doc Restarts a previously successfully started ra server with inclusion filter apllied to the members list.
+%% This method is designed mostly for a data recovery purposes and when applied to the minority group
 %%
 
 -spec force_restart_server(atom(), ra_server_id(), [node()]) ->

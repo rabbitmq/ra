@@ -364,7 +364,7 @@ recover(#{cfg := #cfg{log_id = LogId,
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
     FilterNodes = maps:get(filter_nodes, State0),
-    Cluster0 = maps:get(cluster, State0),
+    Cluster0 = maps:get(cluster, State),
     Cluster1 = case FilterNodes of undefined ->
                        Cluster0;
                    _ ->
