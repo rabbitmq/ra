@@ -274,15 +274,11 @@ start_servers(Config) ->
 
 force_restart(Config) ->
     Name = ?config(test_name, Config),
-
     Nodes = [ nth_server_name(Config, 1),
               nth_server_name(Config, 2), nth_server_name(Config, 3)
             ],
-
     {ok, Res, Failed} = ra:start_cluster(default, Name, _Machine = add_machine(), Nodes),
-
     terminate_cluster(Nodes),
-
     [ begin ok = ra:force_restart_server(default, N, [node()]),
             ok
       end || N <- Nodes
