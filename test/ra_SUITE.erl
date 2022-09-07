@@ -27,6 +27,7 @@ all_tests() ->
      stop_server_idemp,
      minority,
      start_servers,
+     force_restart,
      server_recovery,
      process_command,
      pipeline_command,
@@ -271,6 +272,21 @@ start_servers(Config) ->
     {ok, _, _} = ra:process_command(N3, 5, ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
+force_restart(Config) ->
+    Name = ?config(test_name, Config),
+
+    Nodes = [ nth_server_name(Config, 1),
+              nth_server_name(Config, 2), nth_server_name(Config, 3)
+            ],
+
+    {ok, Res, Failed} = ra:start_cluster(default, Name, _Machine = add_machine(), Nodes),
+
+    terminate_cluster(Nodes),
+
+    [ begin ok = ra:force_restart_server(default, N, [node()]),
+            ok
+      end || N <- Nodes
+    ].
 
 server_recovery(Config) ->
     N1 = nth_server_name(Config, 1),
