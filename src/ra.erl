@@ -194,9 +194,15 @@ restart_server(System, ServerId, AddConfig)
         {'EXIT', Err} -> {error, Err}
     end.
 
-%% @doc Restarts a previously successfully started ra server with inclusion filter apllied to the members list.
-%% This method is designed mostly for a data recovery purposes and when applied to the minority group
-%%
+%% @doc Restarts a previously successfully started ra server in a new cluster configuration
+%% through inclusion filter of nodes.
+%% This function call is designed mostly for a data recovery purposes.
+%% Allows to forcely restart a server in a new restricted membership configuration.
+%% @param System the system identifier
+%% @param ServerId the ra_server_id() of the server
+%% @param FilterNodes to test against membership configuration
+%% @returns the same ra:restart_server/2
+%% @end
 
 -spec force_restart_server(atom(), ra_server_id(), [node()]) ->
           ok | {error, term()}.
@@ -204,8 +210,15 @@ force_restart_server(System, ServerId, FilterNodes)
   when is_list(FilterNodes) ->
     force_restart_server(System, ServerId, FilterNodes, #{}).
 
-%% @doc
-%%
+%% @doc Same as `force_restart_server/3' but accepts additional config parameters
+%% @see ra:restart_server/3.
+%% @param System the system identifier
+%% @param ServerId the ra_server_id() of the server
+%% @param FilterNodes to test against membership configuration
+%% @param AddConfig additional config parameters to be merged into the
+%% original config.
+%% @returns the same ra:restart_server/2
+%% @end
 
 -spec force_restart_server(atom(), ra_server_id(), [node()], ra_server:mutable_config()) ->
     ok | {error, term()}.
