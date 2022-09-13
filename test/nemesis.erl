@@ -84,7 +84,6 @@ handle_info(next_step, State0) ->
             {noreply, State}
     end.
 
-
 terminate(_Reason, _State) ->
     ok.
 
@@ -101,6 +100,7 @@ partition(Partitions) ->
 handle_step(#state{steps = [{wait, Time} | Rem]} = State) ->
     erlang:send_after(Time, self(), next_step),
     State#state{steps = Rem};
+
 handle_step(#state{steps = [{part, Partition0, Time} | Rem],
                    nodes = Nodes} = State) ->
     %% first we need to always heal
@@ -110,9 +110,16 @@ handle_step(#state{steps = [{part, Partition0, Time} | Rem],
     ok = partition(Partitions),
     % always heal after part
     State#state{steps = [heal | Rem]};
+
 handle_step(#state{steps = [heal | Rem]} = State) ->
     heal(State#state.nodes),
     handle_step(State#state{steps = Rem});
+
+handle_step(#state{steps = [{app_stop, Servers} | Rem]} = State) ->
+    ct:pal("doing app stop of ~w", [Servers]),
+    [begin rpc:call(N, application, stop, [ra]) end || {_, N} <- Servers],
+    handle_step(State#state{steps = Rem});
+
 handle_step(#state{steps = [{app_restart, Servers} | Rem]} = State) ->
     ct:pal("doing app restart of ~w", [Servers]),
     [begin
@@ -121,10 +128,19 @@ handle_step(#state{steps = [{app_restart, Servers} | Rem]} = State) ->
          rpc:call(N, ra, restart_server, [?SYS, Id])
      end || {_, N} = Id <- Servers],
     handle_step(State#state{steps = Rem});
+
+handle_step(#state{steps = [{app_start, Servers} | Rem]} = State) ->
+  ct:pal("doing app start of ~w", [Servers]),
+  [begin rpc:call(N, ra, start, []) end || {_, N} <- Servers],
+  handle_step(State#state{steps = Rem});
+
+handle_step(#state{steps = [{force_restart_server, Servers, FilterNodes} | Rem]} = State) ->
+  ct:pal("doing app restart of ~w", [Servers]),
+  [begin rpc:call(N, ra, force_restart_server, [?SYS, Id, FilterNodes]) end || {_, N} = Id <- Servers],
+  handle_step(State#state{steps = Rem});
+
 handle_step(#state{steps = []}) ->
     done.
-
-
 
 partition({Partition1, Partition2}, PartitionFun) ->
     lists:foreach(

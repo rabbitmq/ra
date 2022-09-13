@@ -20,7 +20,8 @@ all() -> [
 
 groups() ->
     Tests = [
-             enq_drain_basic
+             enq_drain_basic,
+             enq_drain_recovery
              % prop_enq_drain
             ],
     [{tests, [], Tests}].
@@ -104,6 +105,19 @@ enq_drain_basic(Config) ->
                 {wait, 5000}],
     true = do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario).
 
+enq_drain_recovery(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    Nodes = ?config(nodes, Config),
+    DC0 = select_some(Nodes, 1.5),
+    DC1 = Nodes -- DC0,
+    Servers0 = ?config(servers, Config),
+    Servers1 = [S || S <- Servers0, lists:member(S, Servers0)],
+    ct:pal("DC0: ~p DC1: ~p",[DC0, DC1]),
+    Scenario = [{wait, 5000},
+                {app_stop, DC0},
+                {force_restart_server, DC1, DC1}],
+    true = do_enq_drain_scenario(ClusterName, Nodes, Servers1, Scenario).
+
 do_enq_drain_scenario(ClusterName, Nodes, Servers, Scenario) ->
     ct:pal("Running ~p", [Scenario]),
     NemConf = #{nodes => Nodes,
@@ -169,7 +183,10 @@ validate_machine_state(Servers, Num) ->
     end.
 
 select_some(Servers) ->
-    N = trunc(length(Servers) / 2),
+  select_some(Servers, 2).
+
+select_some(Servers, Count) ->
+    N = trunc(length(Servers) / Count),
     element(1,
             lists:foldl(fun (_, {Selected, Rem0}) ->
                                 {S, Rem} = random_element(Rem0),
@@ -186,11 +203,16 @@ scenario_time([heal | Rest], Acc) ->
     scenario_time(Rest, Acc);
 scenario_time([{app_restart, _} | Rest], Acc) ->
     scenario_time(Rest, Acc + 100);
+scenario_time([{app_stop, _} | Rest], Acc) ->
+  scenario_time(Rest, Acc + 100);
+scenario_time([{app_start, _} | Rest], Acc) ->
+  scenario_time(Rest, Acc + 100);
 scenario_time([{_, T} | Rest], Acc) ->
     scenario_time(Rest, Acc + T);
+scenario_time([{force_restart_server, _, _} | Rest], Acc) ->
+    scenario_time(Rest, Acc + 100);
 scenario_time([{_, _, T} | Rest], Acc) ->
     scenario_time(Rest, Acc + T).
-
 
 drain(ClusterName, Nodes) ->
     ct:pal("draining ~w", [ClusterName]),
