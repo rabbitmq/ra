@@ -2233,7 +2233,8 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
                     State1 = State0#{cluster => NewCluster,
                                      cluster_change_permitted => true,
                                      cluster_index_term => {Idx, Term}},
-                    State2 = State1#{ cluster => validate_cluster(State1) };
+                    State2 = State1#{cluster => validate_cluster(State1)},
+                    State2;
                 _  ->
                     ?DEBUG("~s: committing ra cluster change to ~w",
                            [log_id(State0), maps:keys(NewCluster)]),
