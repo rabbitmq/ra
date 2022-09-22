@@ -27,7 +27,7 @@ start_link() ->
 start_system(#{name := Name,
                names := _Names,
                data_dir := Dir} = Config) when is_atom(Name) ->
-    ?INFO("starting Ra system: ~s in directory: ~s", [Name, Dir]),
+    ?INFO("starting Ra system: ~ts in directory: ~ts", [Name, Dir]),
     %% TODO: validate configuration
     ok = ra_system:store(Config),
     RaSystemsSup = #{id => Name,
