@@ -215,18 +215,17 @@ take(Config) ->
                                ra_log:append_sync(Entry, L0)
                        end, Log0, lists:seq(Idx, LastIdx)),
     % won't work for memory
-    {[?IDX(1)], 1, Log2} = ra_log:take(1, 1, Log1),
-    {[?IDX(1), ?IDX(2)], 2, Log3} = ra_log:take(1, 2, Log2),
+    {[?IDX(1)], Log2} = ra_log_take(1, 1, Log1),
+    {[?IDX(1), ?IDX(2)], Log3} = ra_log_take(1, 2, Log2),
     % partly out of range
-    {[?IDX(9), ?IDX(10)], 2, Log4} = ra_log:take(9, 3, Log3),
+    {[?IDX(9), ?IDX(10)], Log4} = ra_log_take(9, 11, Log3),
     % completely out of range
-    {[], 0, Log5} = ra_log:take(11, 3, Log4),
+    {[], Log5} = ra_log_take(11, 14, Log4),
     % take all
-    {Taken, C0, _} = ra_log:take(1, 10, Log5),
-    ?assertEqual(length(Taken), C0),
+    {Taken, _} = ra_log_take(1, 10, Log5),
     ?assertEqual(10, length(Taken)),
     %% take 0
-    {[], 0, _} = ra_log:take(5, 0, Log5),
+    {[], _} = ra_log_take(5, 4, Log5),
     ok.
 
 take_cache(Config) ->
@@ -236,7 +235,7 @@ take_cache(Config) ->
     Log1 = ra_log:append_sync({Idx, Term, <<"one">>}, Log0),
     Idx2 = Idx +1,
     Log = ra_log:append({Idx2, Term, <<"two">>}, Log1),
-    {[?IDX(Idx), ?IDX(Idx2)], 2, _Log2} = ra_log:take(1, 2, Log),
+    {[?IDX(Idx), ?IDX(Idx2)], _Log2} = ra_log_take(1, 2, Log),
     ok.
 
 last(Config) ->
@@ -272,3 +271,7 @@ append_in(Term, Data, Log0) ->
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, Data},
     ra_log:append_sync(Entry, Log0).
+
+ra_log_take(From, To, Log0) ->
+    {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),
+    {lists:reverse(Acc), Log}.

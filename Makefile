@@ -13,7 +13,7 @@ dep_aten = hex 0.5.8
 dep_seshat = hex 0.3.2
 DEPS = aten gen_batch_server seshat
 
-TEST_DEPS = proper meck eunit_formatters looking_glass inet_tcp_proxy
+TEST_DEPS = proper meck eunit_formatters inet_tcp_proxy
 
 BUILD_DEPS = elvis_mk
 
@@ -24,7 +24,7 @@ dep_inet_tcp_proxy = git https://github.com/rabbitmq/inet_tcp_proxy.git
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck looking_glass gen_batch_server inet_tcp_proxy
+PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck gen_batch_server inet_tcp_proxy
 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}

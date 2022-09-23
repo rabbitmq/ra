@@ -87,8 +87,8 @@ corrupted_segment(Config) ->
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
     %% for now we are just going to exit when reaching this point
     %% in the future we can find a strategy for handling this case
-    ?assertExit({ra_log_segment_unexpected_eof, _, _, _},
-                ra_log_segment:read(SegR, 1, 2)),
+    ?assertExit({missing_key, 2},
+                read_sparse(SegR, [1, 2])),
     ok.
 
 
@@ -107,7 +107,7 @@ large_segment(Config) ->
     %% validate all entries can be read
     {ok, Seg1} = ra_log_segment:open(Fn, #{mode => read}),
     [begin
-         [{Idx, 1, _B}] = ra_log_segment:read(Seg1, Idx, 1)
+         [{Idx, 1, _B}] = read_sparse(Seg1, [Idx])
      end
      || Idx <- lists:seq(1, 4096)],
     ct:pal("Index ~p", [lists:last(ra_log_segment:dump_index(Fn))]),
@@ -141,7 +141,7 @@ versions_v1(Config) ->
     ok = file:sync(Fd),
     ok = file:close(Fd),
     {ok, R0} = ra_log_segment:open(Fn, #{mode => read}),
-    [{Idx, Term, Data}] = ra_log_segment:read(R0, Idx, 1),
+    [{Idx, Term, Data}] = read_sparse(R0, [Idx]),
     ok = ra_log_segment:close(R0),
 
     %% append as v1
@@ -150,8 +150,7 @@ versions_v1(Config) ->
     ok = ra_log_segment:close(W),
     %% read again
     {ok, R1} = ra_log_segment:open(Fn, #{mode => read}),
-    [{Idx, Term, Data},
-     {2, Term, Data}] = ra_log_segment:read(R1, Idx, 2),
+    [{Idx, Term, Data}] = read_sparse(R1, [Idx]),
     ok = ra_log_segment:close(R1),
     ok.
 
@@ -214,7 +213,7 @@ write_close_open_write(Config) ->
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
     {1, 3} = ra_log_segment:range(SegR),
     [{1, 2, <<"data1">>}, {2, 2, <<"data2">>}, {3, 2, <<"data3">>}] =
-        ra_log_segment:read(SegR, 1, 3),
+        read_sparse(SegR, [1, 2, 3]),
     ok = ra_log_segment:close(SegA),
     ok = ra_log_segment:close(SegR),
     ok.
@@ -232,11 +231,8 @@ write_then_read(Config) ->
 
     % read two consecutive entries from index 1
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 2),
-    %% validate a larger range still returns results
-    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 5),
-    %% out of range returns nothing
-    [{2, 2, Data}] = ra_log_segment:read(SegR, 2, 2),
+    [{1, 2, Data}, {2, 2, Data}] = read_sparse(SegR, [1, 2]),
+    [{2, 2, Data}] = read_sparse(SegR, [2]),
     {1, 2} = ra_log_segment:range(SegR),
     ok = ra_log_segment:close(SegR),
     ok.
@@ -254,14 +250,12 @@ write_then_read_no_checksums(Config) ->
 
     % read two consecutive entries from index 1
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 2),
-    %% validate a larger range still returns results
-    [{1, 2, Data}, {2, 2, Data}] = ra_log_segment:read(SegR, 1, 5),
-    %% out of range returns nothing
-    [{2, 2, Data}] = ra_log_segment:read(SegR, 2, 2),
+    [{1, 2, Data}, {2, 2, Data}] = read_sparse(SegR, [1, 2]),
+    [{2, 2, Data}] = read_sparse(SegR, [2]),
     {1, 2} = ra_log_segment:range(SegR),
     ok = ra_log_segment:close(SegR),
     ok.
+
 read_cons(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
@@ -275,10 +269,13 @@ read_cons(Config) ->
 
     %% end of setup
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    [{3, 2, Data}] = Read = ra_log_segment:read(SegR, 3, 1),
+    [{1, 2, Data}] = Read = read_sparse(SegR, [1]),
     %% validate a larger range still returns results
-    [{1, 2, Data}, {2, 2, Data}, {3, 2, Data}] = ra_log_segment:read_cons(SegR, 1, 2,
-                                                                          fun ra_lib:id/1, Read),
+    [{1, 2, Data}, {2, 2, Data}, {3, 2, Data}] =
+        lists:reverse(
+          ra_log_segment:fold(SegR, 2, 3, fun ra_lib:id/1,
+                            fun (E, A) -> [E | A] end,
+                            Read)),
     ok = ra_log_segment:close(SegR),
 
     ok.
@@ -294,7 +291,7 @@ try_read_missing(Config) ->
     ok = ra_log_segment:close(Seg),
 
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    [] = ra_log_segment:read(SegR, 2, 2),
+    [_] = read_sparse(SegR, [1]),
     ok.
 
 overwrite(Config) ->
@@ -309,8 +306,8 @@ overwrite(Config) ->
     {ok, Seg} = ra_log_segment:sync(Seg2),
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
     {2, 2} = ra_log_segment:range(Seg),
-    [] = ra_log_segment:read(SegR, 5, 1),
-    [{2, 2, Data}] = ra_log_segment:read(SegR, 2, 1),
+    ?assertExit({missing_key, 5}, read_sparse(SegR, [5])),
+    [{2, 2, Data}] = read_sparse(SegR, [2]),
     ok = ra_log_segment:close(Seg),
     ok.
 
@@ -402,3 +399,7 @@ stop_profile(Config) ->
     Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
     lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
     ok.
+
+read_sparse(R, Idxs) ->
+    {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
+    lists:reverse(Entries).

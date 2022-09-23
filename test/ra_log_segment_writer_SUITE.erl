@@ -97,7 +97,7 @@ accept_mem_tables(Config) ->
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
-                       || {I, T, B} <- ra_log_segment:read(Seg, 1, 3)]
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
@@ -300,7 +300,8 @@ skip_entries_lower_than_snapshot_index(Config) ->
             % assert only entries with a higher index than the snapshot
             % have been written
             ok = gen_server:stop(TblWriterPid),
-            [{4, _, _}, {5, _, _}] = ra_log_segment:read(Seg, 1, 5)
+            ?assertExit({missing_key, 1}, read_sparse(Seg, [1,2, 3])),
+            [{4, _, _}, {5, _, _}] = read_sparse(Seg, [4, 5])
     after 3000 ->
               ok = gen_server:stop(TblWriterPid),
               throw(ra_log_event_timeout)
@@ -355,7 +356,7 @@ accept_mem_tables_append(Config) ->
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             AllEntries = [{I, T, binary_to_term(B)}
-                          || {I, T, B} <- ra_log_segment:read(Seg, 1, 5)]
+                          || {I, T, B} <- read_sparse(Seg, lists:seq(1, 5))]
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
@@ -382,9 +383,9 @@ accept_mem_tables_overwrite(Config) ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             C2 = term_to_binary(c2),
-            [{1, 43, _}, {2, 43, _}] = ra_log_segment:read(Seg, 1, 2),
-            [{3, 43, C2}] = ra_log_segment:read(Seg, 3, 1),
-            [] = ra_log_segment:read(Seg, 4, 2)
+            [{1, 43, _}, {2, 43, _}] = read_sparse(Seg, [1, 2]),
+            [{3, 43, C2}] = read_sparse(Seg, [3]),
+            ?assertExit({missing_key, 4}, read_sparse(Seg, [4]))
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
@@ -441,7 +442,7 @@ accept_mem_tables_for_down_server(Config) ->
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
-                       || {I, T, B} <- ra_log_segment:read(Seg, 1, 3)]
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
     after 3000 ->
               throw(ra_log_event_timeout)
     end,
@@ -496,7 +497,7 @@ accept_mem_tables_with_corrupt_segment(Config) ->
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
-                       || {I, T, B} <- ra_log_segment:read(Seg, 1, 3)]
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
     after 3000 ->
               flush(),
               throw(ra_log_event_timeout)
@@ -597,3 +598,7 @@ segments_for(UId, DataDir) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     SegFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.segment"))),
     SegFiles.
+
+read_sparse(R, Idxs) ->
+    {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
+    lists:reverse(Entries).
