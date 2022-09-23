@@ -239,7 +239,7 @@ init(#{dir := Dir} = Conf0) ->
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~s init, open tbls: ~w, closed tbls: ~w",
+    ?NOTICE("WAL: ~ts init, open tbls: ~w, closed tbls: ~w",
             [WalName, OpenTblsName, ClosedTblsName]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
@@ -326,14 +326,14 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     RecoverConf = Conf#conf{open_mem_tbls_name = RecoverTid},
     All = [begin
                FBase = filename:basename(F),
-               ?DEBUG("wal: recovering ~s", [FBase]),
+               ?DEBUG("wal: recovering ~ts", [FBase]),
                Fd = open_at_first_record(F),
                {Time, ok} = timer:tc(
                               fun () ->
                                       recover_wal_chunks(RecoverConf, Fd,
                                                          RecoveryChunkSize)
                               end),
-               ?DEBUG("wal: recovered ~s time taken ~bms",
+               ?DEBUG("wal: recovered ~ts time taken ~bms",
                       [FBase, Time div 1000]),
                close_existing(Fd),
                recovering_to_closed(RecoverTid, F)
