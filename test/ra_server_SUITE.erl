@@ -2147,9 +2147,9 @@ leader_heartbeat_reply_node_size_5(_Config) ->
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},
     WaitingQuery = queue:in({QueryIndex, QueryRef1}, queue:new()),
-    State0 = set_peer_query_index(BaseState#{query_index => QueryIndex + 1,
+    State0 = set_peer_query_index(BaseState#{query_index => QueryIndex,
                                              queries_waiting_heartbeats => WaitingQuery},
-                                  Id, QueryIndex + 1),
+                                  Id, QueryIndex),
 
     {leader, State, []}
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State0),

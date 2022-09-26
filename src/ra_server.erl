@@ -744,9 +744,11 @@ handle_leader({transfer_leadership, ServerId},
 handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {leader, State#{log => Log}, Effs};
+handle_leader(force_member_change, State0) ->
+    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
-    {leader, State, []}.
+    {leader, State, [{reply, unknown_command}]}.
 
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
@@ -853,6 +855,8 @@ handle_candidate(election_timeout, State) ->
 handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {candidate, State#{log => Log}, Effs};
+handle_candidate(force_member_change, State0) ->
+    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
@@ -931,6 +935,8 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {pre_vote, State#{log => Log}, Effs};
+handle_pre_vote(force_member_change, State0) ->
+    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
     {pre_vote, State, []}.
@@ -1064,7 +1070,7 @@ handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term,
     Reply = heartbeat_reply(State2),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{leader_id = LeaderId},
-                #{cfg := #cfg{id = Id}} = State)->
+                #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, {written, _} = Evt},
@@ -1187,6 +1193,14 @@ handle_follower(try_become_leader, State) ->
 handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {follower, State#{log => Log}, Effs};
+handle_follower(force_member_change,
+                #{cfg := #cfg{id = Id,
+                              log_id = LogId}} = State0) ->
+    Cluster = #{Id => new_peer()},
+    ?WARN("~s: Forcing cluster change. New cluster ~w",
+          [LogId, Cluster]),
+    {ok, _, _, State} = append_cluster_change(Cluster, undefined, no_reply, State0),
+    call_for_election(pre_vote, State, [{reply, ok}]);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
@@ -1871,8 +1885,12 @@ log_read(Indexes, #{log := Log0} = State) ->
 %%% Internal functions
 %%%===================================================================
 
+call_for_election(TargetState, State) ->
+    call_for_election(TargetState, State, []).
+
 call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
-                               current_term := CurrentTerm} = State0) ->
+                               current_term := CurrentTerm} = State0,
+                 Effects) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_ELECTIONS, 1),
     NewTerm = CurrentTerm + 1,
     ?DEBUG("~s: election called for in term ~b", [LogId, NewTerm]),
@@ -1888,11 +1906,13 @@ call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     State = update_term_and_voted_for(NewTerm, Id, State0),
     {candidate, State#{leader_id => undefined, votes => 0},
-     [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
+     [{next_event, cast, VoteForSelf},
+      {send_vote_requests, Reqs} | Effects]};
 call_for_election(pre_vote, #{cfg := #cfg{id = Id,
                                           log_id = LogId,
                                           machine_version = MacVer} = Cfg,
-                              current_term := Term} = State0) ->
+                              current_term := Term} = State0,
+                 Effects) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_PRE_VOTE_ELECTIONS, 1),
     ?DEBUG("~s: pre_vote election called for in term ~b", [LogId, Term]),
     Token = make_ref(),
@@ -1911,7 +1931,8 @@ call_for_election(pre_vote, #{cfg := #cfg{id = Id,
     State = update_term_and_voted_for(Term, Id, State0),
     {pre_vote, State#{leader_id => undefined, votes => 0,
                       pre_vote_token => Token},
-     [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]}.
+     [{next_event, cast, VoteForSelf},
+      {send_vote_requests, Reqs} | Effects]}.
 
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                          version = Version,
