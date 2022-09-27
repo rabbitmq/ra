@@ -748,7 +748,7 @@ handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
-    {leader, State, [{reply, unknown_command}]}.
+    {leader, State, []}.
 
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
