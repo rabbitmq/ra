@@ -94,8 +94,8 @@ handle_batch(Commands, #?MODULE{ref = Ref,
                    [{reply, From, ok} | Replies], true}
           end, {#{}, [], false}, Commands),
     Objects = maps:values(Inserts),
-    ok = dets:insert(TblName, Objects),
     true = ets:insert(TblName, Objects),
+    ok = dets:insert(TblName, Objects),
     case ShouldSync of
         true ->
             ok = dets:sync(TblName);
