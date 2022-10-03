@@ -711,6 +711,7 @@ flush_pending(#state{wal = #wal{fd = Fd},
         default ->
             ok = ra_file_handle:write(Fd, Pend),
             ok = ra_file_handle:SyncMeth(Fd),
+            _ = file:advise(Fd, 0, 0, dont_need),
             ok;
         _ ->
             ok = ra_file_handle:write(Fd, Pend)
