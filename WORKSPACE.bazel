@@ -1,23 +1,17 @@
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "bazel_skylib",
-    sha256 = "af87959afe497dc8dfd4c6cb66e1279cb98ccc84284619ebfec27d9c09a903de",
-    urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.2.0/bazel-skylib-1.2.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.2.0/bazel-skylib-1.2.0.tar.gz",
-    ],
+load(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_archive",
 )
-
-load("@bazel_skylib//:workspace.bzl", "bazel_skylib_workspace")
-
-bazel_skylib_workspace()
+load(
+    "@bazel_tools//tools/build_defs/repo:git.bzl",
+    "git_repository",
+)
 
 http_archive(
     name = "io_buildbuddy_buildbuddy_toolchain",
-    sha256 = "a2a5cccec251211e2221b1587af2ce43c36d32a42f5d881737db3b546a536510",
-    strip_prefix = "buildbuddy-toolchain-829c8a574f706de5c96c54ca310f139f4acda7dd",
-    urls = ["https://github.com/buildbuddy-io/buildbuddy-toolchain/archive/829c8a574f706de5c96c54ca310f139f4acda7dd.tar.gz"],
+    sha256 = "48546946879b1fd2dcba327ba15776c822f2ce9a9ef1077be9bf3ecadcc1564a",
+    strip_prefix = "buildbuddy-toolchain-b2f5e7e3b126c6d7cf243227147478c0959bfc95",
+    urls = ["https://github.com/buildbuddy-io/buildbuddy-toolchain/archive/b2f5e7e3b126c6d7cf243227147478c0959bfc95.zip"],
 )
 
 load("@io_buildbuddy_buildbuddy_toolchain//:deps.bzl", "buildbuddy_deps")
@@ -31,74 +25,8 @@ buildbuddy(
     llvm = True,
 )
 
-load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-
 git_repository(
     name = "rbe",
-    commit = "f68402af3e31018e8bbff1d24a5ccc43ca4ad4c6",  # linux-rbe branch
+    branch = "linux-rbe",
     remote = "https://github.com/rabbitmq/rbe-erlang-platform.git",
-)
-
-git_repository(
-    name = "rules_erlang",
-    remote = "https://github.com/rabbitmq/rules_erlang.git",
-    tag = "3.1.0",
-)
-
-load(
-    "@rules_erlang//:rules_erlang.bzl",
-    "rules_erlang_dependencies",
-)
-
-rules_erlang_dependencies()
-
-register_toolchains(
-    "//bzl/toolchains:erlang_toolchain_external",
-    "//bzl/toolchains:erlang_toolchain_23",
-    "//bzl/toolchains:erlang_toolchain_24",
-    "//bzl/toolchains:erlang_toolchain_25",
-)
-
-load("@rules_erlang//:github.bzl", "github_erlang_app")
-load("@rules_erlang//:hex_pm.bzl", "hex_pm_erlang_app")
-
-hex_pm_erlang_app(
-    name = "aten",
-    sha256 = "64d40a8cf0ddfea4e13af00b7327f0925147f83612d0627d9506cbffe90c13ef",
-    version = "0.5.8",
-)
-
-hex_pm_erlang_app(
-    name = "gen_batch_server",
-    sha256 = "c3e6a1a2a0fb62aee631a98cfa0fd8903e9562422cbf72043953e2fb1d203017",
-    version = "0.8.8",
-)
-
-hex_pm_erlang_app(
-    name = "seshat",
-    version = "0.3.2",
-)
-
-http_archive(
-    name = "inet_tcp_proxy",
-    build_file_content = """load("@rules_erlang//:erlang_app.bzl", "erlang_app")
-erlang_app(
-    app_name = "inet_tcp_proxy_dist",
-    app_version = "0.1.0",
-    app_description = "Erlang distribution proxy to simulate network failures",
-    app_module = "inet_tcp_proxy_dist_app",
-)
-""",
-    strip_prefix = "inet_tcp_proxy-master",
-    urls = ["https://github.com/rabbitmq/inet_tcp_proxy/archive/master.zip"],
-)
-
-github_erlang_app(
-    name = "meck",
-    org = "eproxus",
-)
-
-github_erlang_app(
-    name = "proper",
-    org = "manopapad",
 )

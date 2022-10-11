@@ -3,33 +3,25 @@ package(
 )
 
 platform(
-    name = "erlang_external_platform",
+    name = "erlang_internal_platform",
     constraint_values = [
-        "@rules_erlang//platforms:erlang_external",
-    ],
-    parents = ["@local_config_platform//:host"],
-)
-
-platform(
-    name = "erlang_23_platform",
-    constraint_values = [
-        "@rules_erlang//platforms:erlang_23",
+        "@erlang_config//:erlang_internal",
     ],
     parents = ["@rbe//config:platform"],
 )
 
 platform(
-    name = "erlang_24_platform",
+    name = "erlang_linux_24_platform",
     constraint_values = [
-        "@rules_erlang//platforms:erlang_24",
+        "@erlang_config//:erlang_24",
     ],
     parents = ["@rbe//config:platform"],
 )
 
 platform(
-    name = "erlang_25_platform",
+    name = "erlang_linux_25_platform",
     constraint_values = [
-        "@rules_erlang//platforms:erlang_25",
+        "@erlang_config//:erlang_25",
     ],
     parents = ["@rbe//config:platform"],
 )
