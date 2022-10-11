@@ -1,7 +1,15 @@
 build --experimental_enable_bzlmod
+build --registry=https://raw.githubusercontent.com/rabbitmq/bazel-central-registry/dev/
 
 build --incompatible_strict_action_env
 build --local_test_jobs=1
+
+build --flag_alias=erlang_home=@rules_erlang//:erlang_home
+build --flag_alias=erlang_version=@rules_erlang//:erlang_version
+
+build --extra_toolchains="@erlang_config//external:toolchain"
+build --extra_toolchains="@erlang_config//24:toolchain"
+build --extra_toolchains="@erlang_config//25:toolchain"
 
 build:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
 build:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
@@ -11,6 +19,8 @@ build:buildbuddy --grpc_keepalive_time=360s
 build:buildbuddy --grpc_keepalive_timeout=360s
 build:buildbuddy --remote_download_minimal
 build:buildbuddy --build_metadata=REPO_URL=https://github.com/rabbitmq/ra.git
+build:buildbuddy --experimental_remote_cache_compression
+build:buildbuddy --experimental_remote_cache_async
 
 build:rbe --config=buildbuddy
 
@@ -23,25 +33,19 @@ build:rbe --jobs=50
 build:rbe --crosstool_top=@rbe//cc:toolchain
 build:rbe --extra_toolchains=@rbe//config:cc-toolchain
 
-build:rbe --host_platform=@rbe//config:platform
+build:rbe --host_platform=//bzl/platforms:erlang_internal_platform
 
 build:rbe --host_cpu=k8
 build:rbe --cpu=k8
 
-build:rbe-23 --config=rbe
-build:rbe-23 --platforms=//bzl/platforms:erlang_23_platform
-build:rbe-23 --extra_execution_platforms=//bzl/platforms:erlang_23_platform
-
 build:rbe-24 --config=rbe
-build:rbe-24 --platforms=//bzl/platforms:erlang_24_platform
-build:rbe-24 --extra_execution_platforms=//bzl/platforms:erlang_24_platform
+build:rbe-24 --platforms=//bzl/platforms:erlang_linux_24_platform
 
 build:rbe-25 --config=rbe
-build:rbe-25 --platforms=//bzl/platforms:erlang_25_platform
-build:rbe-25 --extra_execution_platforms=//bzl/platforms:erlang_25_platform
+build:rbe-25 --platforms=//bzl/platforms:erlang_linux_25_platform
 
-build:local --platforms=//bzl/platforms:erlang_external_platform
-build:local --extra_execution_platforms=//bzl/platforms:erlang_external_platform
+# no-op config so that --config=local does not error
+build:local --color=auto
 
 # Try importing a user specific .bazelrc
 # You can create your own by copying and editing the template-user.bazelrc template:

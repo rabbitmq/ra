@@ -36,7 +36,7 @@ def ra_suites():
                 "@gen_batch_server//:erlang_app",
                 "@aten//:erlang_app",
                 "@seshat//:erlang_app",
-                "@inet_tcp_proxy//:erlang_app",
+                "@inet_tcp_proxy_dist//:erlang_app",
                 "@meck//:erlang_app",
             ],
             deps = [

@@ -5,13 +5,35 @@ module(
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.1.0",
+    version = "3.6.2",
 )
 
-archive_override(
-    module_name = "rules_erlang",
-    urls = ["https://github.com/rabbitmq/rules_erlang/archive/refs/tags/3.1.0.zip"],
-    strip_prefix = "rules_erlang-3.1.0",
+erlang_config = use_extension(
+    "@rules_erlang//bzlmod:extensions.bzl",
+    "erlang_config",
+    dev_dependency = True,
+)
+
+erlang_config.internal_erlang_from_github_release(
+    name = "24",
+    sha256 = "8444ff9abe23aea268adbb95463561fc222c965052d35d7c950b17be01c3ad82",
+    version = "24.3.4.6",
+)
+
+erlang_config.internal_erlang_from_github_release(
+    name = "25",
+    sha256 = "42840c32e13a27bdb2c376d69aa22466513d441bfe5eb882de23baf8218308d3",
+    version = "25.1.1",
+)
+
+use_repo(
+    erlang_config,
+    "erlang_config",
+)
+
+register_toolchains(
+    "@erlang_config//24:toolchain",
+    "@erlang_config//25:toolchain",
 )
 
 erlang_package = use_extension(
@@ -47,6 +69,11 @@ erlang_package.git_package(
     branch = "master",
 )
 
+erlang_package.hex_package(
+    name = "seshat",
+    version = "0.3.2",
+)
+
 use_repo(
     erlang_package,
     "aten",
@@ -54,4 +81,5 @@ use_repo(
     "inet_tcp_proxy_dist",
     "meck",
     "proper",
+    "seshat",
 )
