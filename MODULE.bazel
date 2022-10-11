@@ -4,6 +4,11 @@ module(
 )
 
 bazel_dep(
+    name = "platforms",
+    version = "0.0.5",
+)
+
+bazel_dep(
     name = "rules_erlang",
     version = "3.8.2",
 )
@@ -31,50 +36,35 @@ use_repo(
     "erlang_config",
 )
 
-erlang_package = use_extension(
-    "@rules_erlang//bzlmod:extensions.bzl",
-    "erlang_package",
-)
-
-erlang_package.hex_package(
+bazel_dep(
     name = "aten",
     version = "0.5.8",
-    sha256 = "64d40a8cf0ddfea4e13af00b7327f0925147f83612d0627d9506cbffe90c13ef",
 )
 
-erlang_package.hex_package(
+bazel_dep(
     name = "gen_batch_server",
-    sha256 = "94a49a528486298b009d2a1b452132c0a0d68b3e89d17d3764cb1ec879b7557a",
     version = "0.8.7",
 )
 
-erlang_package.git_package(
-    name = "inet_tcp_proxy_dist",
-    repository = "rabbitmq/inet_tcp_proxy",
-    branch = "master",
-)
-
-erlang_package.git_package(
-    repository = "eproxus/meck",
-    branch = "master",
-)
-
-erlang_package.git_package(
-    repository = "manopapad/proper",
-    branch = "master",
-)
-
-erlang_package.hex_package(
+bazel_dep(
     name = "seshat",
     version = "0.3.2",
 )
 
-use_repo(
-    erlang_package,
-    "aten",
-    "gen_batch_server",
-    "inet_tcp_proxy_dist",
-    "meck",
-    "proper",
-    "seshat",
+bazel_dep(
+    name = "inet_tcp_proxy_dist",
+    version = "2022.10.11",
+    dev_dependency = True,
+)
+
+bazel_dep(
+    name = "meck",
+    version = "0.9.2",
+    dev_dependency = True,
+)
+
+bazel_dep(
+    name = "proper",
+    version = "1.4.0",
+    dev_dependency = True,
 )
