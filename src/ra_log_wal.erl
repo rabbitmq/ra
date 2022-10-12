@@ -33,10 +33,12 @@
 -define(C_WAL_FILES, 1).
 -define(C_BATCHES, 2).
 -define(C_WRITES, 3).
+-define(C_BYTES_WRITTEN, 4).
 -define(COUNTER_FIELDS,
         [{wal_files, ?C_WAL_FILES, counter, "Number of write-ahead log files created"},
          {batches, ?C_BATCHES, counter, "Number of batches written"},
-         {writes, ?C_WRITES, counter, "Number of entries written"}
+         {writes, ?C_WRITES, counter, "Number of entries written"},
+         {bytes_written, ?C_BYTES_WRITTEN, counter, "Number of bytes written"}
          ]).
 
 % a writer_id consists of a unqique local name (see ra_directory) and a writer's
@@ -292,17 +294,22 @@ terminate(_Reason, State) ->
     ok.
 
 format_status(#state{conf = #conf{write_strategy = Strat,
+                                  sync_method = SyncMeth,
                                   compute_checksums = Cs,
+                                  names = #{wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      file_size = FSize,
                      wal = #wal{filename = Fn}}) ->
     #{write_strategy => Strat,
+      sync_method => SyncMeth,
       compute_checksums => Cs,
       writers => maps:size(Writers),
       filename => filename:basename(Fn),
       current_size => FSize,
-      max_size_bytes => MaxSize}.
+      max_size_bytes => MaxSize,
+      counters => ra_counters:overview(WalName)
+     }.
 
 %% Internal
 
@@ -376,7 +383,7 @@ extract_file_num([F | _]) ->
 cleanup(#state{wal = #wal{fd = undefined}}) ->
     ok;
 cleanup(#state{wal = #wal{fd = Fd}}) ->
-    _ = ra_file_handle:sync(Fd),
+    _ = file:sync(Fd),
     ok.
 
 serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
@@ -457,13 +464,14 @@ handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
 handle_msg(rollover, State) ->
     roll_over(State).
 
-append_data(#state{conf = Cfg,
+append_data(#state{conf = #conf{counter = C} = Cfg,
                    file_size = FileSize,
                    batch = Batch0,
                    writers = Writers} = State,
             {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
     Batch = incr_batch(Cfg, Batch0, UId, Pid,
                        {Idx, Term, Entry}, Data, Truncate),
+    counters:add(C, ?C_BYTES_WRITTEN, DataSize),
     State#state{file_size = FileSize + DataSize,
                 batch = Batch,
                 writers = Writers#{UId => {in_seq, Idx}} }.
@@ -611,7 +619,7 @@ prepare_file(File, Modes) ->
     %% rename is atomic-ish so we will never accidentally write an empty wal file
     %% using prim_file here as file:rename/2 uses the file server
     ok = prim_file:rename(Tmp, File),
-    case ra_file_handle:open(File, Modes) of
+    case file:open(File, Modes) of
         {ok, Fd2} ->
             {ok, ?HEADER_SIZE} = file:position(Fd2, ?HEADER_SIZE),
             {ok, Fd2};
@@ -650,8 +658,7 @@ maybe_pre_allocate(Conf, _Fd, _Max) ->
 close_file(undefined) ->
     ok;
 close_file(Fd) ->
-    % ok = ra_file_handle:sync(Fd),
-    ra_file_handle:close(Fd).
+    file:close(Fd).
 
 close_open_mem_tables(MemTables,
                       #conf{segment_writer = TblWriter,
@@ -710,27 +717,31 @@ start_batch(#state{conf = #conf{counter = CRef}} = State) ->
 
 
 post_notify_flush(#state{wal = #wal{fd = Fd},
-                         conf =  #conf{write_strategy = sync_after_notify,
-                                       sync_method = SyncMeth}}) ->
-    ok = ra_file_handle:SyncMeth(Fd);
+                         conf = #conf{write_strategy = sync_after_notify,
+                                      sync_method = SyncMeth}}) ->
+    sync(Fd, SyncMeth);
 post_notify_flush(_State) ->
     ok.
 
-
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend},
-                     conf =  #conf{write_strategy = WriteStrategy,
-                                   sync_method = SyncMeth}} = State0) ->
+                     conf = #conf{write_strategy = WriteStrategy,
+                                  sync_method = SyncMeth}} = State0) ->
 
     case WriteStrategy of
         default ->
-            ok = ra_file_handle:write(Fd, Pend),
-            ok = ra_file_handle:SyncMeth(Fd),
-            ok;
+            ok = file:write(Fd, Pend),
+            sync(Fd, SyncMeth);
         _ ->
-            ok = ra_file_handle:write(Fd, Pend)
+            ok = file:write(Fd, Pend)
     end,
     State0#state{batch = undefined}.
+
+sync(_Fd, none) ->
+    ok;
+sync(Fd, Meth) ->
+    ok = file:Meth(Fd),
+    ok.
 
 complete_batch(#state{batch = undefined} = State) ->
     State;

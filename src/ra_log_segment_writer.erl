@@ -37,6 +37,7 @@
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
 -define(C_ENTRIES, 3).
+-define(C_BYTES_WRITTEN, 4).
 
 -define(COUNTER_FIELDS,
         [{mem_tables, ?C_MEM_TABLES, counter,
@@ -44,7 +45,9 @@
          {segments, ?C_SEGMENTS, counter,
           "Number of segments written"},
          {entries, ?C_ENTRIES, counter,
-          "Number of entries written"}
+          "Number of entries written"},
+         {bytes_written, ?C_BYTES_WRITTEN, counter,
+          "Number of bytes written"}
         ]).
 
 
@@ -306,9 +309,15 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     [{_, Term, Data0}] = ets:lookup(Tid, Idx),
     Data = term_to_iovec(Data0),
-    case ra_log_segment:append(Seg0, Idx, Term, Data) of
+    DataSize = iolist_size(Data),
+    case ra_log_segment:append(Seg0, Idx, Term, {DataSize, Data}) of
         {ok, Seg} ->
             ok = counters:add(State#state.counter, ?C_ENTRIES, 1),
+            %% this isn't completely accurate as firstly the segment may not
+            %% have written it to disk and it doesn't include data written to
+            %% the segment index but is probably good enough to get comparative
+            %% data rates for different Ra components
+            ok = counters:add(State#state.counter, ?C_BYTES_WRITTEN, DataSize),
             append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
         {error, full} ->
             % close and open a new segment

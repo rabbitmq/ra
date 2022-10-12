@@ -21,6 +21,7 @@
          delete/2,
 
          init/3,
+         init/4,
          init_ets/0,
          current/1,
          pending/1,
@@ -50,6 +51,7 @@
 
 -record(?MODULE,
         {uid :: ra_uid(),
+         counter :: undefined | counters:counters_ref(),
          module :: module(),
          %% the snapshot directory
          %% typically <data_dir>/snapshots
@@ -78,7 +80,9 @@
 -callback write(Location :: file:filename(),
                 Meta :: meta(),
                 Ref :: term()) ->
-    ok | {error, file_err() | term()}.
+    ok |
+    {ok, Bytes :: non_neg_integer()} |
+    {error, file_err() | term()}.
 
 
 %% Read the snapshot metadata and initialise a read state used in read_chunk/1
@@ -129,8 +133,15 @@
 
 -spec init(ra_uid(), module(), file:filename()) ->
     state().
-init(UId, Module, SnapshotsDir) ->
+init(UId, Mod, File) ->
+    init(UId, Mod, File, undefined).
+
+-spec init(ra_uid(), module(), file:filename(),
+           undefined | counters:counters_ref()) ->
+    state().
+init(UId, Module, SnapshotsDir, Counter) ->
     State = #?MODULE{uid = UId,
+                     counter = Counter,
                      module = Module,
                      directory = SnapshotsDir},
     true = ra_lib:is_dir(SnapshotsDir),
@@ -205,6 +216,7 @@ last_index_for(UId) ->
     {state(), [effect()]}.
 begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                #?MODULE{module = Mod,
+                        counter = Counter,
                         directory = Dir} = State) ->
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
@@ -216,7 +228,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
     Self = self(),
     Pid = spawn(fun () ->
                         ok = ra_lib:make_dir(SnapDir),
-                        ok = Mod:write(SnapDir, Meta, Ref),
+                        case Mod:write(SnapDir, Meta, Ref) of
+                            ok -> ok;
+                            {ok, BytesWritten} ->
+                                counters_add(Counter,
+                                             ?C_RA_LOG_SNAPSHOT_BYTES_WRITTEN,
+                                             BytesWritten),
+                                ok
+                        end,
                         Self ! {ra_log_event,
                                 {snapshot_written, {Idx, Term}}},
                         ok
@@ -373,3 +392,8 @@ make_snapshot_dir(Dir, Index, Term) ->
     I = ra_lib:zpad_hex(Index),
     T = ra_lib:zpad_hex(Term),
     filename:join(Dir, T ++ "_" ++ I).
+
+counters_add(undefined, _, _) ->
+    ok;
+counters_add(Counter, Ix, Incr) ->
+    counters:add(Counter, Ix, Incr).

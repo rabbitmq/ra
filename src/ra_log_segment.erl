@@ -105,7 +105,7 @@ open(Filename, Options) ->
                 read ->
                     [read, raw, binary]
             end,
-    case ra_file_handle:open(Filename, Modes) of
+    case file:open(Filename, Modes) of
         {ok, Fd} ->
             process_file(FileExists, Mode, Filename, Fd, Options);
         Err -> Err
@@ -169,7 +169,8 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 data_write_offset = ?HEADER_SIZE + IndexSize
                }}.
 
--spec append(state(), ra_index(), ra_term(), iodata()) ->
+-spec append(state(), ra_index(), ra_term(),
+             iodata() | {non_neg_integer(), iodata()}) ->
     {ok, state()} | {error, full | inet:posix()}.
 append(#state{cfg = #cfg{max_pending = PendingCount},
               pending_count = PendingCount} = State0,
@@ -189,11 +190,10 @@ append(#state{cfg = #cfg{version = Version,
               pending_count = PendCnt,
               pending_index = IdxPend0,
               pending_data = DataPend0} = State,
-       Index, Term, Data) ->
+       Index, Term, {Length, Data}) ->
     % check if file is full
     case IndexOffset < DataStart of
         true ->
-            Length = erlang:iolist_size(Data),
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = compute_checksum(Cfg, Data),
             OSize = offset_size(Version),
@@ -211,12 +211,17 @@ append(#state{cfg = #cfg{version = Version,
             };
         false ->
             {error, full}
-     end.
+     end;
+append(State, Index, Term, Data)
+  when is_list(Data) orelse
+       is_binary(Data) ->
+    %% convert into {Size, Data} tuple
+    append(State, Index, Term, {iolist_size(Data), Data}).
 
 -spec sync(state()) -> {ok, state()} | {error, term()}.
 sync(#state{cfg = #cfg{fd = Fd},
             pending_index = []} = State) ->
-    case ra_file_handle:sync(Fd) of
+    case file:sync(Fd) of
         ok ->
             {ok, State};
         {error, _} = Err ->
@@ -238,9 +243,9 @@ flush(#state{cfg = #cfg{fd = Fd},
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
-    case ra_file_handle:pwrite(Fd, DataWriteOffs, PendData) of
+    case file:pwrite(Fd, DataWriteOffs, PendData) of
         ok ->
-            case ra_file_handle:pwrite(Fd, IdxWriteOffs, PendIndex) of
+            case file:pwrite(Fd, IdxWriteOffs, PendIndex) of
                 ok ->
                     {ok, State#state{pending_data = [],
                                      pending_index = [],
@@ -317,7 +322,7 @@ prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
             % %% read at least the remainder of the block from
             % %% the first position or the length of the first record
             CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
-            {ok, CacheData} = ra_file_handle:pread(Fd, FstPos, CacheLen),
+            {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
             {FstPos, byte_size(CacheData), CacheData}
     end.
 
@@ -390,10 +395,10 @@ close(#state{cfg = #cfg{fd = Fd, mode = append}} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
-    _ = ra_file_handle:close(Fd),
+    _ = file:close(Fd),
     ok;
 close(#state{cfg = #cfg{fd = Fd}}) ->
-    _ = ra_file_handle:close(Fd),
+    _ = file:close(Fd),
     ok.
 
 %%% Internal
@@ -413,7 +418,7 @@ update_range({First, _Last}, Idx) ->
 recover_index(Fd, Version, MaxCount) ->
     IndexSize = MaxCount * index_record_size(Version),
     DataOffset = ?HEADER_SIZE + IndexSize,
-    case ra_file_handle:pread(Fd, ?HEADER_SIZE, IndexSize) of
+    case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
         {ok, Data} ->
             parse_index_data(Version, Data, DataOffset);
         eof ->
@@ -518,12 +523,12 @@ parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
 
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
-    {ok, 0} = ra_file_handle:position(Fd, 0),
-    ok = ra_file_handle:write(Fd, Header),
-    ok = ra_file_handle:sync(Fd).
+    {ok, 0} = file:position(Fd, 0),
+    ok = file:write(Fd, Header),
+    ok = file:sync(Fd).
 
 read_header(Fd) ->
-    case ra_file_handle:pread(Fd, 0, ?HEADER_SIZE) of
+    case file:pread(Fd, 0, ?HEADER_SIZE) of
         {ok, Buffer} ->
             case Buffer of
                 <<?MAGIC, Version:16/unsigned, MaxCount:16/unsigned>>
@@ -541,7 +546,7 @@ read_header(Fd) ->
 pread(#cfg{access_pattern = random,
            fd = Fd}, Cache, Pos, Length) ->
     %% no cache
-    {ok, Data} = ra_file_handle:pread(Fd, Pos, Length),
+    {ok, Data} = file:pread(Fd, Pos, Length),
     case byte_size(Data)  of
         Length ->
             {ok, Data, Cache};
@@ -556,7 +561,7 @@ pread(#cfg{}, {CPos, CLen, Bin} = Cache, Pos, Length)
 pread(#cfg{access_pattern = sequential,
            fd = Fd} = Cfg, undefined, Pos, Length) ->
     CacheLen = max(Length, ?READ_AHEAD_B),
-    {ok, CacheData} = ra_file_handle:pread(Fd, Pos, CacheLen),
+    {ok, CacheData} = file:pread(Fd, Pos, CacheLen),
     case byte_size(CacheData) >= Length  of
         true ->
             pread(Cfg, {Pos, byte_size(CacheData), CacheData}, Pos, Length);
