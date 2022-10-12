@@ -1520,13 +1520,12 @@ command_notify(_Config) ->
                                 next_index = 5,
                                 last_index = 4,
                                 last_term = 5},
-    %% asserting that the notify effect is positioned _after_ any apply effects
-    %% e.g. {aux, banana}. this ensures that writers aren't notified or reply to
-    %% before the side effects for their command have been executed.
+
     {leader, _State, [_,
+                      {notify, _},
                       {aux,eval},
-                      {aux, banana},
-                      {notify, _}]} =
+                      {aux, banana}
+                     ]} =
         ra_server:handle_leader({N2, AER}, State),
     ok.
 

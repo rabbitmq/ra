@@ -175,7 +175,7 @@ fold(FromIdx, ToIdx, Fun, Acc,
               segment_fold(S, From, To, Fun, Ac)
       end, {State, Acc}, Plan);
 fold(_FromIdx, _ToIdx, _Fun, Acc,
-    #?STATE{} = State) ->
+     #?STATE{} = State) ->
     {State, Acc}.
 
 -spec sparse_read(state(), [ra_index()], [log_entry()]) ->

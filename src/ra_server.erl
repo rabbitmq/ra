@@ -519,7 +519,8 @@ handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
     {State, _, Effects} = make_pipelined_rpc_effects(Num, State0, Effects0),
 
     {leader, State, Effects};
-handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
+handle_leader({ra_log_event, {written, _} = Evt},
+              #{log := Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
     {State, Effects} = process_pending_consistent_queries(State1, Effects1),
@@ -2145,14 +2146,14 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                     end,
     %% due to machine versioning all entries may not have been applied
     %%
-    FinalEffs = lists:reverse(make_notify_effects(Notifys, Effects)),
+    FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State#{last_applied => AppliedTo,
             log => Log,
             commit_latency => CommitLatency,
             machine_state => MacState}, FinalEffs};
 apply_to(_ApplyTo, _, Notifys, Effects, State)
   when is_list(Effects) ->
-    FinalEffs = lists:reverse(make_notify_effects(Notifys, Effects)),
+    FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State, FinalEffs}.
 
 make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
