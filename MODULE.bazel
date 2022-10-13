@@ -5,7 +5,7 @@ module(
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.6.2",
+    version = "3.8.1",
 )
 
 erlang_config = use_extension(
@@ -29,11 +29,6 @@ erlang_config.internal_erlang_from_github_release(
 use_repo(
     erlang_config,
     "erlang_config",
-)
-
-register_toolchains(
-    "@erlang_config//24:toolchain",
-    "@erlang_config//25:toolchain",
 )
 
 erlang_package = use_extension(
