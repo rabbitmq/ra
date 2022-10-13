@@ -7,9 +7,10 @@ build --local_test_jobs=1
 build --flag_alias=erlang_home=@rules_erlang//:erlang_home
 build --flag_alias=erlang_version=@rules_erlang//:erlang_version
 
-build --extra_toolchains="@erlang_config//external:toolchain"
 build --extra_toolchains="@erlang_config//24:toolchain"
+build --extra_toolchains="@erlang_config//24:toolchain2"
 build --extra_toolchains="@erlang_config//25:toolchain"
+build --extra_toolchains="@erlang_config//25:toolchain2"
 
 build:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
 build:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
