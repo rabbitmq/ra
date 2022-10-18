@@ -842,7 +842,7 @@ wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout)
     case get_gen_statem_status(Ref) of
         ExpectedStatus ->
             ok;
-        OtherStatus when Timeout >= 0 ->
+        _OtherStatus when Timeout >= 0 ->
             timer:sleep(500),
             wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout - 500);
         OtherStatus ->
