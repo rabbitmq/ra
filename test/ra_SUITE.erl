@@ -300,7 +300,7 @@ process_command(Config) ->
     [A, _B, _C] = Cluster =
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
-        {ok, 14, _Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+    {ok, 14, _Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster(Cluster).
 
 pipeline_command(Config) ->
