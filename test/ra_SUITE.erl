@@ -15,6 +15,10 @@
 -define(PROCESS_COMMAND_TIMEOUT, 6000).
 -define(SYS, default).
 
+%% The dialyzer catches that the given reply mode is not included in the
+%% `ra_server:command_reply_mode()' type:
+-dialyzer({nowarn_function, [process_command_with_unknown_reply_mode/1]}).
+
 all() ->
     [
      {group, tests}
@@ -29,6 +33,7 @@ all_tests() ->
      start_servers,
      server_recovery,
      process_command,
+     process_command_with_unknown_reply_mode,
      pipeline_command,
      pipeline_command_reject,
      pipeline_command_2_forwards_to_leader,
@@ -301,6 +306,18 @@ process_command(Config) ->
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
     {ok, 14, _Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+    terminate_cluster(Cluster).
+
+process_command_with_unknown_reply_mode(Config) ->
+    [A, _B, _C] = Cluster =
+        start_local_cluster(3, ?config(test_name, Config),
+                            {simple, fun erlang:'+'/2, 9}),
+    Command = 5,
+    ReplyMode = bad_reply_mode,
+    RaCommand = {'$usr', Command, ReplyMode},
+    ?assertEqual({error, {invalid_reply_mode, ReplyMode}},
+                 ra_server_proc:command(A, RaCommand,
+                                        ?PROCESS_COMMAND_TIMEOUT)),
     terminate_cluster(Cluster).
 
 pipeline_command(Config) ->

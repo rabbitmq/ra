@@ -354,32 +354,54 @@ leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
        #state{server_state = ServerState0} = State0) ->
-    %% normal priority commands are written immediately
-    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
-    {leader, ServerState, Effects} =
-        ra_server:handle_leader({command, Cmd}, ServerState0),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    case validate_reply_mode(ReplyMode) of
+        ok ->
+            %% normal priority commands are written immediately
+            Cmd = make_command(CmdType, EventType, Data, ReplyMode),
+            {leader, ServerState, Effects} =
+                ra_server:handle_leader({command, Cmd}, ServerState0),
+            {State, Actions} =
+                ?HANDLE_EFFECTS(Effects, EventType,
+                                State0#state{server_state = ServerState}),
+            {keep_state, State, Actions};
+        Error ->
+            case EventType of
+                {call, From} ->
+                    {keep_state, State0, [{reply, From, Error}]};
+                _ ->
+                    {keep_state, State0, []}
+            end
+    end;
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{delayed_commands = Delayed} = State0) ->
-    %% cache the low priority command until the flush_commands message arrives
+    case validate_reply_mode(ReplyMode) of
+        ok ->
+            %% cache the low priority command until the flush_commands message
+            %% arrives
 
-    Cmd = make_command(CmdType, EventType, Data, ReplyMode),
-    %% if there are no prior delayed commands
-    %% (and thus no action queued to do so)
-    %% queue a state timeout to flush them
-    %% We use a cast to ourselves instead of a zero timeout as we want to
-    %% get onto the back of the erlang mailbox not just the current gen_statem
-    %% event buffer.
-    case queue:is_empty(Delayed) of
-        true ->
-            ok = gen_statem:cast(self(), flush_commands);
-        false ->
-            ok
-    end,
-    {keep_state, State0#state{delayed_commands = queue:in(Cmd, Delayed)}, []};
+            Cmd = make_command(CmdType, EventType, Data, ReplyMode),
+            %% if there are no prior delayed commands
+            %% (and thus no action queued to do so)
+            %% queue a state timeout to flush them
+            %% We use a cast to ourselves instead of a zero timeout as we want
+            %% to get onto the back of the erlang mailbox not just the current
+            %% gen_statem event buffer.
+            case queue:is_empty(Delayed) of
+                true ->
+                    ok = gen_statem:cast(self(), flush_commands);
+                false ->
+                    ok
+            end,
+            State = State0#state{delayed_commands = queue:in(Cmd, Delayed)},
+            {keep_state, State, []};
+        Error ->
+            case EventType of
+                {call, From} ->
+                    {keep_state, State0, [{reply, From, Error}]};
+                _ ->
+                    {keep_state, State0, []}
+            end
+    end;
 leader(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
                                                      Cmd, State0#state.server_state),
@@ -1542,6 +1564,19 @@ read_chunks_and_send_rpc(RPC0,
         last ->
             Res1
     end.
+
+validate_reply_mode(after_log_append) ->
+    ok;
+validate_reply_mode(await_consensus) ->
+    ok;
+validate_reply_mode({notify, Correlation, Pid})
+  when (is_integer(Correlation) orelse is_reference(Correlation)) andalso
+       is_pid(Pid) ->
+    ok;
+validate_reply_mode(noreply) ->
+    ok;
+validate_reply_mode(ReplyMode) ->
+    {error, {invalid_reply_mode, ReplyMode}}.
 
 make_command(Type, {call, From}, Data, Mode) ->
     Ts = erlang:system_time(millisecond),
