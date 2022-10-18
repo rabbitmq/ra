@@ -31,3 +31,5 @@ doc/*
 
 /user.bazelrc
 /bazel-*
+
+/.vscode/
