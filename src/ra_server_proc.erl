@@ -1185,6 +1185,29 @@ handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
     _ = gen_cast(To, Msg, State),
     {State, Actions};
+handle_effect(RaftState, {reply, {Pid, _Tag} = From, Reply, Replier}, _,
+              State, Actions) ->
+    case Replier of
+        leader ->
+            ok = gen_statem:reply(From, Reply);
+        local ->
+            case can_execute_locally(RaftState, node(Pid), State) of
+                true ->
+                    ok = gen_statem:reply(From, Reply);
+                false ->
+                    ok
+            end;
+        {member, Member} ->
+            case can_execute_on_member(RaftState, Member, State) of
+                true ->
+                    ok = gen_statem:reply(From, Reply);
+                false ->
+                    ok
+            end;
+        _ ->
+            ok
+    end,
+    {State, Actions};
 handle_effect(_, {reply, From, Reply}, _, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
@@ -1571,14 +1594,39 @@ validate_reply_mode(after_log_append) ->
     ok;
 validate_reply_mode(await_consensus) ->
     ok;
+validate_reply_mode({await_consensus, Options}) when is_map(Options) ->
+    validate_reply_mode_options(Options);
 validate_reply_mode({notify, Correlation, Pid})
-  when (is_integer(Correlation) orelse is_reference(Correlation)) andalso
+  when (is_integer(Correlation) orelse
+        is_reference(Correlation)) andalso
        is_pid(Pid) ->
     ok;
+validate_reply_mode({notify, Correlation, Pid, Options})
+  when (is_integer(Correlation) orelse
+        is_reference(Correlation)) andalso
+       is_pid(Pid) andalso
+       is_map(Options) ->
+    validate_reply_mode_options(Options);
 validate_reply_mode(noreply) ->
     ok;
 validate_reply_mode(ReplyMode) ->
     {error, {invalid_reply_mode, ReplyMode}}.
+
+validate_reply_mode_options(Options) when is_map(Options) ->
+    maps:fold(fun (Key, Value, ok) ->
+                      case {Key, Value} of
+                          {reply_from, local} ->
+                              ok;
+                          {reply_from, {member, _}} ->
+                              ok;
+                          {reply_from, leader} ->
+                              ok;
+                          {_, _} ->
+                              {error, {unknown_option, Key, Value}}
+                      end;
+                  (_Key, _Value, Error) ->
+                      Error
+              end, ok, Options).
 
 make_command(Type, {call, From}, Data, Mode) ->
     Ts = erlang:system_time(millisecond),
@@ -1650,6 +1698,15 @@ can_execute_locally(RaftState, TargetNode, State) ->
         _ ->
             false
     end.
+
+can_execute_on_member(_RaftState, Member,
+                      #state{server_state = #{cfg := #cfg{id = Member}}}) ->
+    true;
+can_execute_on_member(leader, Member, State) ->
+    Members = do_state_query(members, State#state.server_state),
+    not lists:member(Member, Members);
+can_execute_on_member(_RaftState, _Member, _State) ->
+    false.
 
 handle_node_status_change(Node, Status, InfoList, RaftState,
                           #state{monitors = Monitors0,
