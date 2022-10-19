@@ -253,6 +253,7 @@
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, ?C_RA_LOG_RESERVED + 17).
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 -define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
+-define(C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, ?C_RA_LOG_RESERVED + 20).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -294,7 +295,9 @@
          {term_and_voted_for_updates, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, counter,
           "Total number of updates of term and voted for"},
          {local_queries, ?C_RA_SRV_LOCAL_QUERIES, counter,
-          "Total number of local queries"}
+          "Total number of local queries"},
+         {invalid_reply_mode_commands, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, counter,
+          "Total number of commands received with an invalid reply-mode"}
          ]).
 
 -define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).
