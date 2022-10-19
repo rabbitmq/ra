@@ -353,7 +353,7 @@ leader(EventType, {local_call, Msg}, State) ->
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
-       #state{server_state = ServerState0} = State0) ->
+       #state{conf = Conf, server_state = ServerState0} = State0) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% normal priority commands are written immediately
@@ -365,6 +365,7 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                                 State0#state{server_state = ServerState}),
             {keep_state, State, Actions};
         Error ->
+            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
@@ -373,7 +374,7 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
             end
     end;
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
-       #state{delayed_commands = Delayed} = State0) ->
+       #state{conf = Conf, delayed_commands = Delayed} = State0) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% cache the low priority command until the flush_commands message
@@ -395,6 +396,7 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             State = State0#state{delayed_commands = queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
+            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
