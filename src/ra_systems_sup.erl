@@ -37,7 +37,11 @@ start_system(#{name := Name,
 
 
 init([]) ->
-    SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
+    %% This is not something we want to expose. It helps test suites
+    %% that crash Ra systems on purpose and may end up crashing
+    %% the systems faster than we normally allow.
+    {Intensity, Period} = application:get_env(ra, ra_systems_sup_intensity, {1, 5}),
+    SupFlags = #{strategy => one_for_one, intensity => Intensity, period => Period},
     {ok, {SupFlags, []}}.
 
 
