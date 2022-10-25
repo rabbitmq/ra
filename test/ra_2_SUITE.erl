@@ -7,6 +7,7 @@
 -module(ra_2_SUITE).
 -behaviour(ra_machine).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -24,6 +25,7 @@ all() ->
 
 all_tests() ->
     [
+     server_config,
      start_stopped_server,
      server_is_force_deleted,
      force_deleted_server_mem_tables_are_cleaned_up,
@@ -58,6 +60,8 @@ init_per_suite(Config) ->
     SysCfg = #{name => ?SYS,
                names => ra_system:derive_names(?SYS),
                segment_max_entries => 128,
+               default_max_pipeline_count => 1024,
+               message_queue_data => off_heap,
                data_dir => SysDir},
     ct:pal("SYS CFG ~p", [SysCfg]),
     {ok, _} = ra_system:start(SysCfg),
@@ -99,6 +103,22 @@ enqueue(Server, Msg) ->
 dequeue(Server) ->
     {ok, Res, _} = ra:process_command(Server, deq),
     Res.
+
+server_config(Config) ->
+    %% check system config set in test init has taken effect
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    ok = ra:start_server(?SYS, Conf),
+    ok = ra:trigger_election(ServerId),
+    {ok, O, _} = ra:member_overview(ServerId),
+    ?assertMatch(#{max_pipeline_count := 1024}, O),
+    MsgQD = erlang:process_info(whereis(element(1, ServerId)), message_queue_data),
+    ?assertEqual({message_queue_data, off_heap}, MsgQD),
+    ok = ra:stop_server(?SYS, ServerId),
+    ok.
 
 start_stopped_server(Config) ->
     %% ra:start_server should fail if the server already exists
