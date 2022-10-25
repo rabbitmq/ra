@@ -76,7 +76,9 @@
          %% auxiliary commands
          aux_command/2,
          cast_aux_command/2,
-         register_external_log_reader/1
+         register_external_log_reader/1,
+         member_overview/1,
+         member_overview/2
         ]).
 
 %% xref should pick these up
@@ -1084,6 +1086,24 @@ register_external_log_reader({_, Node} = ServerId)
  when Node =:= node() ->
     {ok, Reader} = gen_statem:call(ServerId, {register_external_log_reader, self()}),
     Reader.
+
+%% @doc Returns a overview map of the internal server state
+%%
+%% The keys and values will typically remain stable but may
+%% change overtime and no guarantees are provided.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @end
+-spec member_overview(ra_server_id()) ->
+    ra_server_proc:ra_leader_call_ret(map()).
+member_overview(ServerId) ->
+    member_overview(ServerId, ?DEFAULT_TIMEOUT).
+
+-spec member_overview(ra_server_id(),
+                      timeout()) ->
+    ra_server_proc:ra_leader_call_ret(map()).
+member_overview(ServerId, Timeout) ->
+    ra_server_proc:local_state_query(ServerId, overview, Timeout).
 
 %% internal
 

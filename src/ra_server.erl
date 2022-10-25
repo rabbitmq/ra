@@ -242,8 +242,11 @@ init(#{id := Id,
                             ra_system:default_config()),
     LogId = maps:get(friendly_name, Config,
                      lists:flatten(io_lib:format("~w", [Id]))),
+    DefaultMaxPipelineCount = maps:get(default_max_pipeline_count,
+                                       SystemConfig,
+                                       ?DEFAULT_MAX_PIPELINE_COUNT),
     MaxPipelineCount = maps:get(max_pipeline_count, Config,
-                                ?DEFAULT_MAX_PIPELINE_COUNT),
+                                DefaultMaxPipelineCount),
     MetricKey = case Config of
                     #{metrics_key := K} ->
                         K;
