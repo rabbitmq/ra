@@ -247,6 +247,11 @@ init(#{id := Id,
                                        ?DEFAULT_MAX_PIPELINE_COUNT),
     MaxPipelineCount = maps:get(max_pipeline_count, Config,
                                 DefaultMaxPipelineCount),
+    DefaultMaxAERBatchSize = maps:get(default_max_append_entries_rpc_batch_size,
+                                       SystemConfig,
+                                       ?AER_CHUNK_SIZE),
+    MaxAERBatchSize = maps:get(max_append_entries_rpc_batch_size, Config,
+                               DefaultMaxAERBatchSize),
     MetricKey = case Config of
                     #{metrics_key := K} ->
                         K;
@@ -317,6 +322,7 @@ init(#{id := Id,
                effective_machine_version = MacVer,
                effective_machine_module = MacMod,
                max_pipeline_count = MaxPipelineCount,
+               max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig},
 
@@ -523,7 +529,7 @@ handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
                     end, {State00, []}, Cmds),
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-    {State, _, Effects} = make_pipelined_rpc_effects(Num, State0, Effects0),
+    {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
 
     {leader, State, Effects};
 handle_leader({ra_log_event, {written, _} = Evt},
@@ -1601,11 +1607,10 @@ filter_follower_effects(Effects) ->
                         Acc
                 end, [], Effects).
 
-make_pipelined_rpc_effects(State, Effects) ->
-    make_pipelined_rpc_effects(?AER_CHUNK_SIZE, State, Effects).
 
-make_pipelined_rpc_effects(MaxBatchSize,
-                           #{cfg := #cfg{id = Id,
+make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
+                                         max_append_entries_rpc_batch_size =
+                                         MaxBatchSize,
                                          max_pipeline_count = MaxPipelineCount},
                              commit_index := CommitIndex,
                              log := Log,
@@ -1622,23 +1627,28 @@ make_pipelined_rpc_effects(MaxBatchSize,
               %% if a peers is currently receiving a snapshot
               %% we should not pipeline
               Acc;
-          (PeerId, #{next_index := NI,
+          (PeerId, #{next_index := NextIdx,
                      commit_index_sent := CI,
-                     match_index := MI} = Peer0,
+                     match_index := MatchIdx} = Peer0,
            {S0, More0, Effs} = Acc)
-            when NI < NextLogIdx orelse CI < CommitIndex ->
+            when NextIdx < NextLogIdx orelse CI < CommitIndex ->
               % there are unsent items or a new commit index
               % check if the match index isn't too far behind the
               % next index
-              case NI - MI < MaxPipelineCount of
+              NumInFlight = NextIdx - MatchIdx - 1,
+              case NumInFlight < MaxPipelineCount of
                   true ->
-                      {NextIdx, Eff, S} =
-                          make_rpc_effect(PeerId, Peer0, MaxBatchSize, S0),
-                      Peer = Peer0#{next_index => NextIdx,
+                      %% ensure we don't pass a batch size that would allow
+                      %% the peer to go over the max pipeline count
+                      BatchSize = min(MaxBatchSize, MaxPipelineCount - NumInFlight),
+                      {NewNextIdx, Eff, S} =
+                          make_rpc_effect(PeerId, Peer0, BatchSize, S0),
+                      Peer = Peer0#{next_index => NewNextIdx,
                                     commit_index_sent => CommitIndex},
+                      NewNumInFlight = NewNextIdx - MatchIdx - 1,
                       %% is there more potentially pipelining
-                      More = More0 orelse (NextIdx < NextLogIdx andalso
-                                           NextIdx - MI < MaxPipelineCount),
+                      More = More0 orelse (NewNextIdx < NextLogIdx andalso
+                                           NewNumInFlight < MaxPipelineCount),
                       {put_peer(PeerId, Peer, S), More, [Eff | Effs]};
                   false ->
                       Acc
@@ -1661,7 +1671,10 @@ make_all_rpcs(State0) ->
 make_rpcs_for(Peers, State) ->
     maps:fold(fun(PeerId, Peer, {S0, Effs}) ->
                       {_, Eff, S} =
-                          make_rpc_effect(PeerId, Peer, ?AER_CHUNK_SIZE, S0),
+                          %% set a very small batch size here as these are only
+                          %% used to establish leadership / periodic heartbeats etc
+                          %% normal replication would use make_pipeline_rpc
+                          make_rpc_effect(PeerId, Peer, 1, S0),
                       {S, [Eff | Effs]}
               end, {State, []}, Peers).
 
