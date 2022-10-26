@@ -5,9 +5,7 @@
 %% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -define(AER_CHUNK_SIZE, 128).
--define(FOLD_LOG_BATCH_SIZE, 25).
 -define(DEFAULT_MAX_PIPELINE_COUNT, 4096).
--define(MAX_FETCH_ENTRIES, 4096).
 
 -record(cfg,
         {id :: ra_server_id(),
@@ -20,6 +18,7 @@
          effective_machine_version :: ra_machine:version(),
          effective_machine_module :: module(),
          max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer(),
+         max_append_entries_rpc_batch_size = ?AER_CHUNK_SIZE :: non_neg_integer(),
          counter :: undefined | counters:counters_ref(),
          system_config :: ra_system:config()
         }).
