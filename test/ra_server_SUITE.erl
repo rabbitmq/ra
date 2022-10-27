@@ -166,6 +166,7 @@ setup_log() ->
     meck:expect(ra_log, last_index_term, fun ra_log_memory:last_index_term/1),
     meck:expect(ra_log, set_last_index, fun ra_log_memory:set_last_index/2),
     meck:expect(ra_log, fetch_term, fun ra_log_memory:fetch_term/2),
+    meck:expect(ra_log, needs_cache_flush, fun (_) -> false end),
     meck:expect(ra_log, exists,
                 fun ({Idx, Term}, L) ->
                         case ra_log_memory:fetch_term(Idx, L) of

@@ -1000,16 +1000,19 @@ handle_follower(#append_entries_rpc{term = Term,
                     {NextState, State,
                      [cast_reply(Id, LeaderId, Reply) | Effects]};
                 _ ->
-                    State = lists:foldl(fun pre_append_log_follower/2,
-                                        State0, Entries),
+                    State1 = lists:foldl(fun pre_append_log_follower/2,
+                                         State0, Entries),
                     case ra_log:write(Entries, Log1) of
-                        {ok, Log} ->
-                            evaluate_commit_index_follower(State#{log => Log},
-                                                           Effects0);
+                        {ok, Log2} ->
+                            {NextState, State, Effects} =
+                                evaluate_commit_index_follower(State1#{log => Log2},
+                                                               Effects0),
+                                {NextState, State,
+                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             {await_condition,
-                             State#{log => Log1,
-                                    condition => fun wal_down_condition/2},
+                             State1#{log => Log1,
+                                     condition => fun wal_down_condition/2},
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -1547,14 +1550,14 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  leader_id := LeaderId,
                                  last_applied := LastApplied0,
                                  current_term := Term,
-                                 log := Log} = State0, Effects0)
+                                 log := Log0} = State0, Effects0)
   when LeaderId =/= undefined ->
     %% take the minimum of the last index seen and the commit index
     %% This may mean we apply entries that have not yet been fsynced locally.
     %% This is ok as the append_entries_rpc with the updated commit index would
     %% ensure no uncommitted entries from a previous term have been truncated
     %% from the log
-    {Idx, _} = ra_log:last_index_term(Log),
+    {Idx, _} = ra_log:last_index_term(Log0),
     ApplyTo = min(Idx, CommitIndex),
 
     % need to catch a termination throw
@@ -1626,48 +1629,63 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                          max_pipeline_count = MaxPipelineCount},
                              commit_index := CommitIndex,
                              log := Log,
-                             cluster := Cluster} = State,
-                           Effects) ->
+                             cluster := Cluster} = State0,
+                           Effects0) ->
     NextLogIdx = ra_log:next_index(Log),
-    maps:fold(
-      fun (I, _, Acc) when I =:= Id ->
-              %% oneself
-              Acc;
-          (_, #{status := suspended}, Acc) ->
-              Acc;
-          (_, #{status := {sending_snapshot, _}}, Acc) ->
-              %% if a peers is currently receiving a snapshot
-              %% we should not pipeline
-              Acc;
-          (PeerId, #{next_index := NextIdx,
-                     commit_index_sent := CI,
-                     match_index := MatchIdx} = Peer0,
-           {S0, More0, Effs} = Acc)
-            when NextIdx < NextLogIdx orelse CI < CommitIndex ->
-              % there are unsent items or a new commit index
-              % check if the match index isn't too far behind the
-              % next index
-              NumInFlight = NextIdx - MatchIdx - 1,
-              case NumInFlight < MaxPipelineCount of
-                  true ->
-                      %% ensure we don't pass a batch size that would allow
-                      %% the peer to go over the max pipeline count
-                      BatchSize = min(MaxBatchSize, MaxPipelineCount - NumInFlight),
-                      {NewNextIdx, Eff, S} =
-                          make_rpc_effect(PeerId, Peer0, BatchSize, S0),
-                      Peer = Peer0#{next_index => NewNextIdx,
-                                    commit_index_sent => CommitIndex},
-                      NewNumInFlight = NewNextIdx - MatchIdx - 1,
-                      %% is there more potentially pipelining
-                      More = More0 orelse (NewNextIdx < NextLogIdx andalso
-                                           NewNumInFlight < MaxPipelineCount),
-                      {put_peer(PeerId, Peer, S), More, [Eff | Effs]};
-                  false ->
-                      Acc
-              end;
-          (_, _, Acc) ->
-              Acc
-      end, {State, false, Effects}, Cluster).
+    %% TODO: refactor this please, why does make_rpc_effect need to take the
+    %% full state
+    {State, More, Effects} =
+        maps:fold(
+          fun (I, _, Acc) when I =:= Id ->
+                  %% oneself
+                  Acc;
+              (_, #{status := suspended}, Acc) ->
+                  Acc;
+              (_, #{status := {sending_snapshot, _}}, Acc) ->
+                  %% if a peer is currently receiving a snapshot
+                  %% do not send any append entries rpcs
+                  Acc;
+              (PeerId, #{next_index := NextIdx,
+                         commit_index_sent := CI,
+                         match_index := MatchIdx} = Peer0,
+               {S0, More0, Effs} = Acc)
+                when NextIdx < NextLogIdx orelse CI < CommitIndex ->
+                  % there are unsent items or a new commit index
+                  % check if the match index isn't too far behind the
+                  % next index
+                  NumInFlight = NextIdx - MatchIdx - 1,
+                  case NumInFlight < MaxPipelineCount of
+                      true ->
+                          %% ensure we don't pass a batch size that would allow
+                          %% the peer to go over the max pipeline count
+                          BatchSize = min(MaxBatchSize,
+                                          MaxPipelineCount - NumInFlight),
+                          {NewNextIdx, Eff, S} =
+                              make_rpc_effect(PeerId, Peer0, BatchSize, S0),
+                          Peer = Peer0#{next_index => NewNextIdx,
+                                        commit_index_sent => CommitIndex},
+                          NewNumInFlight = NewNextIdx - MatchIdx - 1,
+                          %% is there more potentially pipelining
+                          More = More0 orelse (NewNextIdx < NextLogIdx andalso
+                                               NewNumInFlight < MaxPipelineCount),
+                          {put_peer(PeerId, Peer, S), More, [Eff | Effs]};
+                      false ->
+                          Acc
+                  end;
+              (_, _, Acc) ->
+                  Acc
+          end, {State0, false, Effects0}, Cluster),
+
+    {State, More, add_flush_event(State, Effects)}.
+
+add_flush_event(#{log := Log}, Effects) ->
+    case ra_log:needs_cache_flush(Log) of
+        true ->
+            [{next_event, {ra_log_event, flush_cache}} | Effects];
+        false ->
+            Effects
+    end.
+
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),

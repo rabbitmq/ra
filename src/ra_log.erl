@@ -31,6 +31,7 @@
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
+         needs_cache_flush/1,
 
          can_write/1,
          exists/2,
@@ -98,7 +99,7 @@
          snapshot_state :: ra_snapshot:state(),
          % if this is set a snapshot write is in progress for the
          % index specified
-         cache = #{} :: #{ra_index() => {ra_index(), ra_term(), log_entry()}},
+         cache = ra_log_cache:init() :: ra_log_cache:state(),
          last_resend_time :: 'maybe'(integer()),
          reader :: ra_log_reader:state(),
          readers = [] :: [pid()]
@@ -297,7 +298,9 @@ fold(From0, To00, Fun, Acc0,
     From = max(From0, FirstIdx),
     To0 = min(To00, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
-    CacheEntries = get_cache_items(From, To0, Cache, []),
+    CacheEntries = ra_log_cache:get_items(From, To0, Cache),
+    %% TODO: if using ETS cache we want to do fold as well and here just
+    %% work out what the lowest in range index is in the cache
     To = case CacheEntries of
              [] ->
                  To0;
@@ -311,19 +314,6 @@ fold(From0, To00, Fun, Acc0,
     {Acc, State#?MODULE{reader = Reader}};
 fold(_From, _To, _Fun, Acc, State) ->
     {Acc, State}.
-
-
-
-get_cache_items(From, To, _Cache, Acc)
-  when From > To ->
-    Acc;
-get_cache_items(From, To, Cache, Acc) ->
-    case Cache of
-        #{To := Entry} ->
-            get_cache_items(From, To - 1, Cache, [Entry | Acc]);
-        _ ->
-            Acc
-    end.
 
 %% read a list of indexes,
 %% found indexes be returned in the same order as the input list of indexes
@@ -348,7 +338,7 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
 
     %% drop any indexes that are larger than the last index available
     Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
-    {Entries0, CacheNumRead, Indexes} = cache_read_sparse(Indexes2, Cache, []),
+    {Entries0, CacheNumRead, Indexes} = ra_log_cache:get_items(Indexes2, Cache),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
     {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
     %% here we recover the original order of indexes
@@ -378,7 +368,9 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 %% forces the last index and last written index back to a prior index
 -spec set_last_index(ra_index(), state()) ->
     {ok, state()} | {not_found, state()}.
-set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
+set_last_index(Idx, #?MODULE{last_index = LastIdx,
+                             cache = Cache0,
+                             last_written_index_term = {LWIdx0, _}} = State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
             {not_found, State};
@@ -387,8 +379,10 @@ set_last_index(Idx, #?MODULE{last_written_index_term = {LWIdx0, _}} = State0) ->
             {LWTerm, State2} = fetch_term(LWIdx, State1),
             %% this should always be found but still assert just in case
             true = LWTerm =/= undefined,
+            Cache = ra_log_cache:trim(Idx, LastIdx, Cache0),
             {ok, State2#?MODULE{last_index = Idx,
                                 last_term = Term,
+                                cache = Cache,
                                 last_written_index_term = {LWIdx, LWTerm}}}
     end.
 
@@ -448,6 +442,8 @@ handle_event({written, {FromIdx, _, _}},
     {resend_from(Expected, State0), []};
 handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
     truncate_cache(FromIdx, ToIdx, State, []);
+handle_event(flush_cache, State) ->
+    {flush_cache(State), []};
 handle_event({segments, Tid, NewSegs},
              #?MODULE{cfg = #cfg{names = Names},
                       reader = Reader0,
@@ -550,8 +546,8 @@ fetch_term(Idx, #?MODULE{last_index = LastIdx,
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
 fetch_term(Idx, #?MODULE{cache = Cache, reader = Reader0} = State0) ->
-    case Cache of
-        #{Idx := {Idx, Term, _}} ->
+    case ra_log_cache:fetch(Idx, Cache, undefined) of
+        {Idx, Term, _} ->
             {Term, State0};
         _ ->
             {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
@@ -569,15 +565,16 @@ set_snapshot_state(SnapState, State) ->
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
     {state(), effects()}.
 install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
-                 #?MODULE{cfg = Cfg} = State0) ->
+                 #?MODULE{cfg = Cfg,
+                         cache = Cache} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
     {State, Effs} = delete_segments(SnapIdx, State0),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
                    last_index = SnapIdx,
                    %% TODO: update last_term too?
-                   %% cache can go
-                   cache = #{},
+                   %% cache can be reset
+                   cache = ra_log_cache:reset(Cache),
                    last_written_index_term = IdxTerm},
      Effs}.
 
@@ -608,6 +605,14 @@ update_release_cursor(Idx, Cluster, MacVersion, MacState,
             % if a snapshot is in progress don't even evaluate
             {State, []}
     end.
+
+-spec flush_cache(state()) -> state().
+flush_cache(#?MODULE{cache = Cache} = State) ->
+    State#?MODULE{cache = ra_log_cache:flush(Cache)}.
+
+-spec needs_cache_flush(state()) -> boolean().
+needs_cache_flush(#?MODULE{cache = Cache}) ->
+    ra_log_cache:needs_flush(Cache).
 
 update_release_cursor0(Idx, Cluster, MacVersion, MacState,
                        #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
@@ -708,7 +713,7 @@ overview(#?MODULE{last_index = LastIndex,
                             undefined -> undefined;
                             {I, _} -> I
                         end,
-      cache_size => maps:size(Cache)
+      cache_size => ra_log_cache:size(Cache)
      }.
 
 -spec write_config(ra_server:config(), state()) -> ok.
@@ -826,7 +831,7 @@ wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
     State#?MODULE{last_index = Idx, last_term = Term,
-                  cache = Cache#{Idx => {Idx, Term, Data}}}.
+                  cache = ra_log_cache:add(Idx, {Idx, Term, Data}, Cache)}.
 
 wal_write(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
@@ -836,7 +841,7 @@ wal_write(#?MODULE{cfg = #cfg{uid = UId,
         ok ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             State#?MODULE{last_index = Idx, last_term = Term,
-                          cache = Cache#{Idx => {Idx, Term, Data}}};
+                          cache = ra_log_cache:add(Idx, {Idx, Term, Data}, Cache)};
         {error, wal_down} ->
             exit(wal_down)
     end.
@@ -849,7 +854,8 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num, Cache} =
         lists:foldl(fun ({Idx, Term, Data} = Entry, {WC, N, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], N+1, C0#{Idx => Entry}}
+                            C = ra_log_cache:add(Idx, Entry, C0),
+                            {[WalC | WC], N+1, C}
                     end, {[], 0, Cache0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
@@ -864,21 +870,22 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     end.
 
 truncate_cache(FromIdx, ToIdx,
-               #?MODULE{cache = Cache0,
-                        last_written_index_term = {LastWrittenIdx, _},
-                        last_index = LastIdx} = State,
+               #?MODULE{cache = Cache
+                        % last_written_index_term = {LastWrittenIdx, _},
+                        % last_index = LastIdx
+                       } = State,
                Effects) ->
-    NeededCacheSize = LastIdx - LastWrittenIdx,
-    Cache = case NeededCacheSize > map_size(Cache0) div 2 of
-                true ->
-                    %% if the range to be deleted is smaller than the
-                    %% remaining range truncate the cache by removing entries
-                    cache_without(FromIdx, ToIdx, Cache0);
-                false ->
-                    %% if there are fewer entries left than to be removed
-                    %% extract the remaining entries
-                    cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
-            end,
+    % NeededCacheSize = LastIdx - LastWrittenIdx,
+    % Cache = case NeededCacheSize > map_size(Cache0) div 2 of
+    %             true ->
+    %                 %% if the range to be deleted is smaller than the
+    %                 %% remaining range truncate the cache by removing entries
+    %                 cache_without(FromIdx, ToIdx, Cache0);
+    %             false ->
+    %                 %% if there are fewer entries left than to be removed
+    %                 %% extract the remaining entries
+    %                 cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
+    %         end,
 
     %% assert cache size, leave commented out
     % case map_size(Cache) of
@@ -887,32 +894,7 @@ truncate_cache(FromIdx, ToIdx,
     %         exit({invalid_cache_size, CacheSize, NeededCacheSize})
     % end,
 
-    {State#?MODULE{cache = Cache}, Effects}.
-
-cache_with(FromIdx, ToIdx, _, Cache)
-  when FromIdx > ToIdx ->
-    Cache;
-cache_with(From, To, Source, Cache) ->
-    cache_with(From + 1, To, Source, Cache#{From => maps:get(From, Source)}).
-
-cache_without(Idx, Idx, Cache) ->
-    maps:remove(Idx, Cache);
-cache_without(FromIdx, ToIdx, Cache) ->
-    cache_without(FromIdx + 1, ToIdx, maps:remove(FromIdx, Cache)).
-
-
-cache_read_sparse(Indexes, Cache, Acc) ->
-    cache_read_sparse(Indexes, Cache, 0, Acc).
-
-cache_read_sparse([], _Cache, Num, Acc) ->
-    {Acc, Num, []}; %% no reminder
-cache_read_sparse([Next | Rem] = Indexes, Cache, Num, Acc) ->
-    case Cache of
-        #{Next := Entry} ->
-            cache_read_sparse(Rem, Cache, Num + 1, [Entry | Acc]);
-        _ ->
-            {Acc, Num, Indexes}
-    end.
+    {State#?MODULE{cache = ra_log_cache:trim(FromIdx, ToIdx, Cache)}, Effects}.
 
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
@@ -920,7 +902,7 @@ maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
         {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
     State#?MODULE{first_index = 0,
-                  cache = #{},
+                  cache = ra_log_cache:reset(State#?MODULE.cache),
                   last_written_index_term = {0, 0}};
 maybe_append_first_entry(State) ->
     State.
@@ -943,7 +925,7 @@ resend_from0(Idx, #?MODULE{cfg = Cfg,
            [State#?MODULE.cfg#cfg.log_id, Idx, LastIdx]),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, LastIdx - Idx + 1),
     lists:foldl(fun (I, Acc) ->
-                        wal_write(Acc, maps:get(I, Cache))
+                        wal_write(Acc, ra_log_cache:fetch(I, Cache))
                 end,
                 State#?MODULE{last_resend_time = erlang:system_time(seconds)},
                 lists:seq(Idx, LastIdx));
