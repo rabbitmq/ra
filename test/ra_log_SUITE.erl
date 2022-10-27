@@ -1,5 +1,6 @@
 -module(ra_log_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -109,13 +110,13 @@ append_then_fetch_no_wait(Config) ->
     % leaders to send append entries for entries not yet
     % flushed
     {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
-    {Term, Log} = ra_log:fetch_term(Idx, Log2),
+    {Term, Log3} = ra_log:fetch_term(Idx, Log2),
     % if we get async written notification check that handling that
     % results in the last written being updated
     receive
         {ra_log_event, {written, _} = Evt} ->
-            {Log1, _} = ra_log:handle_event(Evt, Log),
-            {Idx, Term} = ra_log:last_written(Log1)
+            {Log, _} = ra_log:handle_event(Evt, Log3),
+            {Idx, Term} = ra_log:last_written(Log)
     after 0 ->
               ok
     end,

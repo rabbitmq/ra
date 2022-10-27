@@ -460,13 +460,16 @@ last_index_reset(Config) ->
 
 last_index_reset_before_written(Config) ->
     Log0 = ra_log_init(Config),
+    #{cache_size := 0} = ra_log:overview(Log0),
     Log1 = write_n(1, 5, 1, Log0),
+    #{cache_size := 4} = ra_log:overview(Log1),
     {0, 0} = ra_log:last_written(Log1),
     5 = ra_log:next_index(Log1),
     {4, 1} = ra_log:last_index_term(Log1),
     % reverts last index to a previous index
     % needs to be done if a new leader sends an empty AER
     {ok, Log2} = ra_log:set_last_index(3, Log1),
+    #{cache_size := 3} = ra_log:overview(Log2),
     {0, 0} = ra_log:last_written(Log2),
     4 = ra_log:next_index(Log2),
     {3, 1} = ra_log:last_index_term(Log2),
@@ -1248,24 +1251,6 @@ empty_mailbox(T) ->
     after T ->
               ok
     end.
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p", [Case]),
-    lg:stop(),
-    % this segfaults
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
 
 new_peer() ->
     #{next_index => 1,

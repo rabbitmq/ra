@@ -62,10 +62,6 @@
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
--define(DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT, 30000).
--define(DEFAULT_SNAPSHOT_CHUNK_SIZE, 1000000). % 1MB
-
--define(FLUSH_COMMANDS_SIZE, 25).
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -138,8 +134,7 @@
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
                 leader_last_seen :: integer() | undefined,
-                delayed_commands = queue:new() :: queue:queue(
-                                                    ra_server:command()),
+                low_priority_commands :: ra_ets_queue:state(),
                 election_timeout_set = false :: boolean(),
                 %% the log index last time gc was forced
                 pending_notifys = #{} :: #{pid() => [term()]}
@@ -274,8 +269,10 @@ do_init(#{id := Id,
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Id),
                                                       Config0),
-    MsgQData = maps:get(message_queue_data, SysConf, on_heap),
+    MsgQData = maps:get(message_queue_data, SysConf, off_heap),
+    MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf, ?MIN_BIN_VHEAP_SIZE),
     process_flag(message_queue_data, MsgQData),
+    process_flag(min_bin_vheap_size, MinBinVheapSize),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
@@ -300,12 +297,12 @@ do_init(#{id := Id,
     InstallSnapRpcTimeout = maps:get(install_snap_rpc_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
-    FlushCommandsSize = application:get_env(ra, low_priority_commands_flush_size,
-                                            ?FLUSH_COMMANDS_SIZE),
-    SnapshotChunkSize = application:get_env(ra, snapshot_chunk_size,
-                                            ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
-    ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
-                                                 ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
+    FlushCommandsSize = maps:get(low_priority_commands_flush_size, SysConf,
+                                 ?FLUSH_COMMANDS_SIZE),
+    SnapshotChunkSize = maps:get(snapshot_chunk_size, SysConf,
+                                 ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+    ReceiveSnapshotTimeout = maps:get(receive_snapshot_timeout, SysConf,
+                                      ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     AtenPollInt = application:get_env(aten, poll_interval, 1000),
     State = #state{conf = #conf{log_id = LogId,
                                 cluster_name = ClusterName,
@@ -319,6 +316,7 @@ do_init(#{id := Id,
                                 receive_snapshot_timeout = ReceiveSnapshotTimeout,
                                 aten_poll_interval = AtenPollInt,
                                 counter = Counter},
+                   low_priority_commands = ra_ets_queue:new(),
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     State.
@@ -365,9 +363,10 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
 leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     ok = record_leader_change(id(State0), State0),
+    %% TODO: reset refs?
     {keep_state, State#state{leader_last_seen = undefined,
                              pending_notifys = #{},
-                             delayed_commands = queue:new(),
+                             low_priority_commands = ra_ets_queue:reset(State0#state.low_priority_commands),
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
@@ -377,7 +376,8 @@ leader(EventType, {local_call, Msg}, State) ->
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf, server_state = ServerState0} = State0) ->
+       #state{conf = Conf,
+              server_state = ServerState0} = State0) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% normal priority commands are written immediately
@@ -398,12 +398,12 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
             end
     end;
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf, delayed_commands = Delayed} = State0) ->
+       #state{conf = Conf,
+              low_priority_commands = Delayed} = State0) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% cache the low priority command until the flush_commands message
             %% arrives
-
             Cmd = make_command(CmdType, EventType, Data, ReplyMode),
             %% if there are no prior delayed commands
             %% (and thus no action queued to do so)
@@ -411,13 +411,13 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             %% We use a cast to ourselves instead of a zero timeout as we want
             %% to get onto the back of the erlang mailbox not just the current
             %% gen_statem event buffer.
-            case queue:is_empty(Delayed) of
-                true ->
+            case ra_ets_queue:len(Delayed) of
+                0 ->
                     ok = gen_statem:cast(self(), flush_commands);
-                false ->
+                _ ->
                     ok
             end,
-            State = State0#state{delayed_commands = queue:in(Cmd, Delayed)},
+            State = State0#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
@@ -438,23 +438,23 @@ leader(EventType, {aux_command, Cmd}, State0) ->
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               server_state = ServerState0,
-              delayed_commands = Delayed0} = State0) ->
+              low_priority_commands = Delayed0} = State0) ->
 
-    {DelQ, Delayed} = queue_take(Size, Delayed0),
+    {Commands, Delayed} = ra_ets_queue:take(Size, Delayed0),
     %% write a batch of delayed commands
     {leader, ServerState, Effects} =
-        ra_server:handle_leader({commands, Delayed}, ServerState0),
+        ra_server:handle_leader({commands, Commands}, ServerState0),
 
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    case queue:is_empty(DelQ) of
-        true ->
+    case ra_ets_queue:len(Delayed) of
+        0 ->
             ok;
-        false ->
+        _ ->
             ok = gen_statem:cast(self(), flush_commands)
     end,
-    {keep_state, State#state{delayed_commands = DelQ}, Actions};
+    {keep_state, State#state{low_priority_commands = Delayed}, Actions};
 leader({call, From}, {local_query, QueryFun},
        #state{conf = Conf,
               server_state = ServerState} = State) ->
@@ -498,14 +498,15 @@ leader(_, tick_timeout, State0) ->
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
-       #state{server_state = ServerState0} = State0) ->
+       #state{server_state = ServerState0,
+              conf = #conf{}} = State0) ->
     % the machine timer timed out, add a timeout message
     Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
     {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
                                                              ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
                                        State0#state{server_state =
-                                                    ServerState}),
+                                                        ServerState}),
     {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -638,7 +639,8 @@ pre_vote(EventType, Msg, State0) ->
             next_state(candidate, State, Actions)
     end.
 
-follower(enter, OldState, #state{server_state = ServerState} = State0) ->
+follower(enter, OldState, #state{low_priority_commands = Delayed,
+                                 server_state = ServerState} = State0) ->
     %% New cluster starts should be coordinated and elections triggered
     %% explicitly hence if this is a new one we wait here.
     %% Else we set an election timer
@@ -659,7 +661,7 @@ follower(enter, OldState, #state{server_state = ServerState} = State0) ->
                                                           Actions0)
                        end,
     Monitors = ra_monitors:remove_all(machine, State#state.monitors),
-    {keep_state, State#state{delayed_commands = queue:new(),
+    {keep_state, State#state{low_priority_commands = ra_ets_queue:reset(Delayed),
                              monitors = Monitors}, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
@@ -990,7 +992,7 @@ format_status(Opt, [_PDict, StateName,
                     #state{server_state = NS,
                            leader_last_seen = LastSeen,
                            pending_commands = Pending,
-                           delayed_commands = Delayed,
+                           low_priority_commands = Delayed,
                            pending_notifys = PendingNots,
                            election_timeout_set = ElectionSet
                           }]) ->
@@ -1001,7 +1003,7 @@ format_status(Opt, [_PDict, StateName,
      {raft_state, StateName},
      {leader_last_seen, LastSeen},
      {num_pending_commands, length(Pending)},
-     {num_delayed_commands, queue:len(Delayed)},
+     {num_low_priority_commands, ra_ets_queue:len(Delayed)},
      {num_pending_applied_notifications, NumPendingNots},
      {election_timeout_set, ElectionSet},
      {ra_server_state, ra_server:overview(NS)}
@@ -1031,19 +1033,6 @@ handle_enter(RaftState, OldRaftState,
     end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
-
-queue_take(N, Q) ->
-    queue_take(N, Q, []).
-
-queue_take(0, Q, Acc) ->
-    {Q, lists:reverse(Acc)};
-queue_take(N, Q0, Acc) ->
-    case queue:out(Q0) of
-        {{value, I}, Q} ->
-            queue_take(N-1, Q, [I | Acc]);
-        {empty, _} ->
-            {Q0, lists:reverse(Acc)}
-    end.
 
 handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     case catch ra_server:handle_leader(Msg, ServerState0) of
@@ -1654,13 +1643,6 @@ validate_reply_mode_options(Options) when is_map(Options) ->
                       Error
               end, ok, Options).
 
-make_command(Type, {call, From}, Data, Mode) ->
-    Ts = erlang:system_time(millisecond),
-    {Type, #{from => From, ts => Ts}, Data, Mode};
-make_command(Type, _, Data, Mode) ->
-    Ts = erlang:system_time(millisecond),
-    {Type, #{ts => Ts}, Data, Mode}.
-
 maybe_set_election_timeout(_TimeoutLen,
                            #state{election_timeout_set = true} = State,
                            Actions) ->
@@ -1812,3 +1794,10 @@ send_applied_notifications(#state{} = State, Nots) ->
         _ ->
             State#state{pending_notifys = RemNots}
     end.
+
+make_command(Type, {call, From}, Data, Mode) ->
+    Ts = erlang:system_time(millisecond),
+    {Type, #{from => From, ts => Ts}, Data, Mode};
+make_command(Type, _, Data, Mode) ->
+    Ts = erlang:system_time(millisecond),
+    {Type, #{ts => Ts}, Data, Mode}.
