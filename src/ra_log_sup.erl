@@ -68,6 +68,8 @@ make_wal_conf(#{data_dir := DataDir,
     HibAfter = maps:get(wal_hibernate_after, Cfg, undefined),
     Gc = maps:get(wal_garbage_collect, Cfg, false),
     PreAlloc = maps:get(wal_pre_allocate, Cfg, false),
+    MinBinVheapSize = maps:get(wal_min_bin_vheap_size, Cfg,
+                               ?WAL_MIN_BIN_VHEAP_SIZE),
     #{name => WalName,
       names => Names,
       dir => WalDir,
@@ -80,5 +82,6 @@ make_wal_conf(#{data_dir := DataDir,
       max_batch_size => MaxBatchSize,
       hibernate_after => HibAfter,
       garbage_collect => Gc,
-      pre_allocate => PreAlloc
+      pre_allocate => PreAlloc,
+      min_bin_vheap_size => MinBinVheapSize
      }.

@@ -131,7 +131,8 @@
                       recovery_chunk_size  => non_neg_integer(),
                       hibernate_after => non_neg_integer(),
                       max_batch_size => non_neg_integer(),
-                      garbage_collect => boolean()
+                      garbage_collect => boolean(),
+                      min_bin_vheap_size => non_neg_integer()
                      }.
 
 -export_type([wal_conf/0,
@@ -235,6 +236,7 @@ init(#{dir := Dir} = Conf0) ->
       write_strategy := WriteStrategy,
       sync_method := SyncMethod,
       garbage_collect := Gc,
+      min_bin_vheap_size := MinBinVheapSize,
       names := #{wal := WalName,
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
@@ -246,6 +248,7 @@ init(#{dir := Dir} = Conf0) ->
     % at times receive large number of messages from a large number of
     % writers
     process_flag(message_queue_data, off_heap),
+    process_flag(min_bin_vheap_size, MinBinVheapSize),
     CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
@@ -933,7 +936,8 @@ merge_conf_defaults(Conf) ->
                  pre_allocate => false,
                  write_strategy => default,
                  garbage_collect => false,
-                 sync_method => datasync}, Conf).
+                 sync_method => datasync,
+                 min_bin_vheap_size => ?WAL_MIN_BIN_VHEAP_SIZE}, Conf).
 
 to_binary(Term) ->
     term_to_iovec(Term).
