@@ -44,7 +44,8 @@
                     receive_snapshot_timeout => non_neg_integer(),
                     default_max_pipeline_count => non_neg_integer(),
                     default_max_append_entries_rpc_batch_size => non_neg_integer(),
-                    message_queue_data => on_heap | off_heap
+                    message_queue_data => on_heap | off_heap,
+                    wal_min_bin_vheap_size => non_neg_integer()
                    }.
 
 -export_type([
