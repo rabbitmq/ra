@@ -701,7 +701,13 @@ post_notify_flush(#state{wal = #wal{fd = Fd},
                          conf =  #conf{write_strategy = sync_after_notify,
                                        sync_method = SyncMeth}}) ->
     ok = ra_file_handle:SyncMeth(Fd);
-post_notify_flush(_State) ->
+post_notify_flush(#state{conf =#conf{sync_method = none}}) ->
+    %% don't do this if configured not to fsync
+    ok;
+post_notify_flush(#state{wal = #wal{fd = Fd}}) ->
+    %% we don't need this data to reside in page cache as it is only read
+    %% on recovery
+    _ = file:advise(Fd, 0, 0, dont_need),
     ok.
 
 
