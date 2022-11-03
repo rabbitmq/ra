@@ -33,6 +33,8 @@ all_tests() ->
      start_servers,
      server_recovery,
      process_command,
+     process_command_reply_from_local,
+     process_command_reply_from_member,
      process_command_with_unknown_reply_mode,
      pipeline_command,
      pipeline_command_reject,
@@ -306,6 +308,73 @@ process_command(Config) ->
         start_local_cluster(3, ?config(test_name, Config),
                             {simple, fun erlang:'+'/2, 9}),
     {ok, 14, _Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+    terminate_cluster(Cluster).
+
+process_command_reply_from_local(Config) ->
+    PrivDir = filename:join(?config(priv_dir, Config),
+                            ?config(test_name, Config)),
+    Options = #{reply_from => local,
+                timeout => ?PROCESS_COMMAND_TIMEOUT},
+
+    Cluster = start_remote_cluster(3, PrivDir, local_command_cluster,
+                                   add_machine()),
+    {ok, _, Leader} = ra:members(hd(Cluster)),
+    {_, FollowerNode} = Follower =
+        hd([Member || Member <- Cluster, Member =/= Leader]),
+
+    %% The leader will reply if no node in the cluster is local to the caller.
+    {ok, 5, _} = ra:process_command(Leader, 5, Options),
+
+    %% The reply will come from the follower.
+    {ok, 10, _} = rpc:call(FollowerNode,
+                           ra, process_command, [Leader, 5, Options]),
+
+    ct:pal("stopping member: ~p", [Follower]),
+    ra:stop_server(?SYS, Follower),
+
+    %% The server is stopped so the command is not handled.
+    ?assertEqual({error, noproc},
+                 ra:process_command(Follower, 5, Options)),
+    {ok, {_, 10}, _} = ra:leader_query(Leader, fun(State) -> State end),
+
+    %% The local member can't reply to the command request since it is stopped.
+    ?assertMatch({timeout, _},
+                 rpc:call(FollowerNode,
+                          ra, process_command, [Leader, 5, Options])),
+
+    terminate_cluster(Cluster).
+
+process_command_reply_from_member(Config) ->
+    [A, _B, _C] = Cluster =
+        start_local_cluster(3, ?config(test_name, Config),
+                            {simple, fun erlang:'+'/2, 9}),
+
+    {ok, _, Leader} = ra:members(A),
+    Follower = hd([Member || Member <- Cluster, Member =/= Leader]),
+    Options = #{reply_from => {member, Follower},
+                timeout => ?PROCESS_COMMAND_TIMEOUT},
+
+    {ok, 14, _Leader} = ra:process_command(A, 5, Options),
+
+    ct:pal("stopping member: ~p", [Follower]),
+    ra:stop_server(?SYS, Follower),
+
+    %% The process is no longer alive so the command is not handled.
+    ?assertEqual({error, noproc}, ra:process_command(Follower, 5, Options)),
+    {ok, {_, 14}, _} = ra:leader_query(Leader, fun(State) -> State end),
+
+    %% The command is successfully handled on the leader but the member is
+    %% not available to reply to the caller.
+    ?assertMatch({timeout, _}, ra:process_command(Leader, 5, Options)),
+    {ok, {_, 19}, _} = ra:leader_query(Leader, fun(State) -> State end),
+
+    %% If the given member is not part of the cluster then the reply is
+    %% performed by the leader.
+    {ok, 24, _} =
+        ra:process_command(Leader, 5,
+                           #{reply_from => {member, does_not_exist},
+                             timeout => ?PROCESS_COMMAND_TIMEOUT}),
+
     terminate_cluster(Cluster).
 
 process_command_with_unknown_reply_mode(Config) ->
@@ -974,3 +1043,36 @@ gather_applied(Acc, Timeout) ->
               Acc
     end.
 
+start_remote_cluster(Num, PrivDir, ClusterName, Machine) ->
+    Nodes = [begin
+                 Name = "node" ++ erlang:integer_to_list(N),
+                 Node = start_peer(Name, PrivDir),
+                 {ClusterName, Node}
+             end || N <- lists:seq(1, Num)],
+    {ok, _, Failed} = ra:start_cluster(default, ClusterName, Machine, Nodes),
+    ?assertEqual([], Failed),
+    Nodes.
+
+start_peer(Name, PrivDir) ->
+    Dir0 = filename:join(PrivDir, Name),
+    Dir = "'\"" ++ Dir0 ++ "\"'",
+    Host = get_current_host(),
+    Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir],
+                     " "),
+    ct:pal("starting peer node ~s on host ~s for node ~s with ~s",
+           [Name, Host, node(), Pa]),
+    {ok, S} = slave:start_link(Host, Name, Pa),
+    _ = rpc:call(S, ra, start, []),
+    ok = ct_rpc:call(S, logger, set_primary_config,
+                     [level, all]),
+    S.
+
+get_current_host() ->
+    NodeStr = atom_to_list(node()),
+    Host = re:replace(NodeStr, "^[^@]+@", "", [{return, list}]),
+    list_to_atom(Host).
+
+search_paths() ->
+    Ld = code:lib_dir(),
+    lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
+                 code:get_path()).

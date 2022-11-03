@@ -754,18 +754,54 @@ overview(System) ->
 %% If there is no majority of Ra servers online, this function will return
 %% a timeout.
 %%
+%% When `TimeoutOrOptions' is a map, it supports the following option keys:
+%% <ul>
+%% <li>`timeout': the time to wait before returning `{timeout, ServerId}'</li>
+%% <li>`reply_from': the node which should reply to the command call. The
+%% default value is `leader'. If the option is `local' or a `member' and a
+%% local node or the given member is not available, the command may be
+%% processed successfully but the caller may not receive a response, timing out
+%% instead. The following values are supported for `reply_from':
+%% <ul>
+%% <li>`leader': the cluster leader replies.</li>
+%% <li>`local': a member on the some node as the caller replies.</li>
+%% <li>`{member, ServerId}': the member for the given {@link ra_server_id()}
+%% replies.</li>
+%% </ul></li>
+%% </ul>
+%%
 %% @param ServerId the server id to send the command to
 %% @param Command an arbitrary term that the state machine can handle
-%% @param Timeout the time to wait before returning {timeout, ServerId}
+%% @param TimeoutOrOptions the time to wait before returning
+%%        `{timeout, ServerId}', or a map of options.
 %% @end
--spec process_command(ServerId :: ra_server_id() | [ra_server_id()],
-                      Command :: term(),
-                      Timeout :: timeout()) ->
-    {ok, Reply :: term(), Leader :: ra_server_id()} |
+-spec process_command(ServerId, Command, TimeoutOrOptions) ->
+    {ok, Reply, Leader} |
     {error, term()} |
-    {timeout, ra_server_id()}.
-process_command(ServerId, Cmd, Timeout) ->
-    ra_server_proc:command(ServerId, usr(Cmd, await_consensus), Timeout).
+    {timeout, ra_server_id()}
+    when
+      ServerId :: ra_server_id() | [ra_server_id()],
+      Command :: term(),
+      TimeoutOrOptions :: timeout() | Options,
+      Options :: #{timeout => timeout(),
+                   reply_from => leader | local | {member, ra_server_id()}},
+      Reply :: term(),
+      Leader :: ra_server_id().
+process_command(ServerId, Command, Timeout)
+  when Timeout =:= infinity orelse is_integer(Timeout) ->
+    process_command(ServerId, Command, #{timeout => Timeout});
+process_command(ServerId, Command, Options) when is_map(Options) ->
+    Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
+    ReplyFrom = case Options of
+                    #{reply_from := local} ->
+                        local;
+                    #{reply_from := {member, Member}} ->
+                        {member, Member};
+                    _ ->
+                        leader
+                end,
+    ReplyMode = {await_consensus, #{reply_from => ReplyFrom}},
+    ra_server_proc:command(ServerId, usr(Command, ReplyMode), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
 %% @param ServerId the server id to send the command to
@@ -1051,6 +1087,10 @@ register_external_log_reader({_, Node} = ServerId)
 
 %% internal
 
+-spec usr(UserCommand, ReplyMode) -> Command when
+      UserCommand :: term(),
+      ReplyMode :: ra_server:command_reply_mode(),
+      Command :: {ra_server:command_type(), UserCommand, ReplyMode}.
 usr(Data, Mode) ->
     {'$usr', Data, Mode}.
 

@@ -102,8 +102,12 @@
 
 -type command_priority() :: normal | low.
 
+-type command_reply_options() :: #{reply_from => ra_reply_from()}.
+
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
+                              {await_consensus,
+                               command_reply_options()} |
                               {notify,
                                command_correlation(), pid()} |
                               noreply.
@@ -1572,6 +1576,12 @@ filter_follower_effects(Effects) ->
                         [C | Acc];
                     ({log, _, _, _Opts} = C, Acc) ->
                         [C | Acc];
+                    ({reply, _, _, leader}, Acc) ->
+                        Acc;
+                    ({reply, _, _, _} = C, Acc) ->
+                        %% If the reply-from is not `leader', the follower
+                        %% might be the replier.
+                        [C | Acc];
                     ({monitor, _ProcOrNode, Comp, _} = C, Acc)
                       when Comp =/= machine ->
                         %% only machine monitors should not be emitted
@@ -2307,6 +2317,18 @@ add_reply(_, '$ra_no_reply', _, Effects, Notifys) ->
     {Effects, Notifys};
 add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
     {[{reply, From, {wrap_reply, Reply}} | Effects], Notifys};
+add_reply(#{from := From}, Reply,
+          {await_consensus, Options}, Effects, Notifys) ->
+    Replier = case Options of
+                  #{reply_from := local} ->
+                      local;
+                  #{reply_from := {member, Member}} ->
+                      {member, Member};
+                  _ ->
+                      leader
+              end,
+    ReplyEffect = {reply, From, {wrap_reply, Reply}, Replier},
+    {[ReplyEffect | Effects], Notifys};
 add_reply(_, Reply, {notify, Corr, Pid},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
