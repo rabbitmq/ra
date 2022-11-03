@@ -6,6 +6,7 @@
 %%
 -module(ra_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -372,7 +373,7 @@ process_command_reply_from_member(Config) ->
     %% performed by the leader.
     {ok, 24, _} =
         ra:process_command(Leader, 5,
-                           #{reply_from => {member, does_not_exist},
+                           #{reply_from => {member, {does_not_exist, node()}},
                              timeout => ?PROCESS_COMMAND_TIMEOUT}),
 
     terminate_cluster(Cluster).
