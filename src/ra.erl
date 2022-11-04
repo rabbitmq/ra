@@ -421,20 +421,22 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                   [ClusterName]),
             {error, cluster_not_formed};
         _ ->
-            StartedIds = [I || #{id := I} <- Started],
+            StartedIds = sort_by_local([I || #{id := I} <- Started], []),
             NotStartedIds = [I || #{id := I} <- NotStarted],
             %% try triggering elections until one succeeds
-            _ = lists:any(fun (N) -> ok == trigger_election(N) end,
-                          sort_by_local(StartedIds, [])),
             %% TODO: handle case where no election was successfully triggered
-            case members(hd(StartedIds),
+            {value, TriggeredId} = lists:search(fun (N) ->
+                                                        ok == trigger_election(N)
+                                                end, StartedIds),
+            %% the triggered id is likely to become the leader so try that first
+            case members(TriggeredId,
                          length(ServerConfigs) * Timeout) of
                 {ok, _, Leader} ->
                     ?INFO("ra: started cluster ~s with ~b servers~n"
-                          "~b servers failed to start: ~w~n"
-                          "Leader: ~w", [ClusterName, length(ServerConfigs),
-                                         length(NotStarted), NotStartedIds,
-                                         Leader]),
+                          "~b servers failed to start: ~w~nLeader: ~w",
+                          [ClusterName, length(ServerConfigs),
+                           length(NotStarted), NotStartedIds,
+                           Leader]),
                     % we have a functioning cluster
                     {ok, StartedIds, NotStartedIds};
                 Err ->
