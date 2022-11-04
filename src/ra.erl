@@ -792,15 +792,13 @@ process_command(ServerId, Command, Timeout)
     process_command(ServerId, Command, #{timeout => Timeout});
 process_command(ServerId, Command, Options) when is_map(Options) ->
     Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
-    ReplyFrom = case Options of
-                    #{reply_from := local} ->
-                        local;
-                    #{reply_from := {member, Member}} ->
-                        {member, Member};
+    ReplyMode = case Options of
+                    #{reply_from := ReplyFrom} ->
+                        {await_consensus, #{reply_from => ReplyFrom}};
                     _ ->
-                        leader
+                        %% use plain reply mode for backwards compatibility
+                        await_consensus
                 end,
-    ReplyMode = {await_consensus, #{reply_from => ReplyFrom}},
     ra_server_proc:command(ServerId, usr(Command, ReplyMode), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
