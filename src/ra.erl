@@ -421,20 +421,22 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                   [ClusterName]),
             {error, cluster_not_formed};
         _ ->
-            StartedIds = [I || #{id := I} <- Started],
+            StartedIds = sort_by_local([I || #{id := I} <- Started], []),
             NotStartedIds = [I || #{id := I} <- NotStarted],
             %% try triggering elections until one succeeds
-            _ = lists:any(fun (N) -> ok == trigger_election(N) end,
-                          sort_by_local(StartedIds, [])),
             %% TODO: handle case where no election was successfully triggered
-            case members(hd(StartedIds),
+            {value, TriggeredId} = lists:search(fun (N) ->
+                                                        ok == trigger_election(N)
+                                                end, StartedIds),
+            %% the triggered id is likely to become the leader so try that first
+            case members(TriggeredId,
                          length(ServerConfigs) * Timeout) of
                 {ok, _, Leader} ->
                     ?INFO("ra: started cluster ~s with ~b servers~n"
-                          "~b servers failed to start: ~w~n"
-                          "Leader: ~w", [ClusterName, length(ServerConfigs),
-                                         length(NotStarted), NotStartedIds,
-                                         Leader]),
+                          "~b servers failed to start: ~w~nLeader: ~w",
+                          [ClusterName, length(ServerConfigs),
+                           length(NotStarted), NotStartedIds,
+                           Leader]),
                     % we have a functioning cluster
                     {ok, StartedIds, NotStartedIds};
                 Err ->
@@ -792,15 +794,13 @@ process_command(ServerId, Command, Timeout)
     process_command(ServerId, Command, #{timeout => Timeout});
 process_command(ServerId, Command, Options) when is_map(Options) ->
     Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
-    ReplyFrom = case Options of
-                    #{reply_from := local} ->
-                        local;
-                    #{reply_from := {member, Member}} ->
-                        {member, Member};
+    ReplyMode = case Options of
+                    #{reply_from := ReplyFrom} ->
+                        {await_consensus, #{reply_from => ReplyFrom}};
                     _ ->
-                        leader
+                        %% use plain reply mode for backwards compatibility
+                        await_consensus
                 end,
-    ReplyMode = {await_consensus, #{reply_from => ReplyFrom}},
     ra_server_proc:command(ServerId, usr(Command, ReplyMode), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
