@@ -17,7 +17,9 @@
          install_snap_rpc_timeout,
          await_condition_timeout,
          max_pipeline_count,
-         ra_event_formatter]).
+         ra_event_formatter,
+         force_restart_as_single_member_cluster
+        ]).
 
 %% API functions
 -export([start_server/2,

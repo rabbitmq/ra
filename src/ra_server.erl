@@ -193,12 +193,18 @@
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
-                            broadcast_time => non_neg_integer(), % ms
-                            tick_timeout => non_neg_integer(), % ms
-                            install_snap_rpc_timeout => non_neg_integer(), % ms
+                            % in ms
+                            broadcast_time => non_neg_integer(),
+                            % in ms
+                            tick_timeout => non_neg_integer(),
+                            % in ms
+                            install_snap_rpc_timeout => non_neg_integer(),
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
-                            ra_event_formatter => {module(), atom(), [term()]}}.
+                            ra_event_formatter => {module(), atom(), [term()]},
+                            %% used for forced boot only
+                            force_restart_as_single_member_cluster => boolean()
+                        }.
 
 -type config() :: ra_server_config().
 

@@ -258,7 +258,9 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
+init(Config0 = #{id := Id,
+                 cluster_name := ClusterName,
+                 force_restart_as_single_member_cluster := ShouldForceBoot}) ->
     process_flag(trap_exit, true),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     Config = #{counter := Counter,
@@ -274,7 +276,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                     ClusterName),
 
     % ensure each relevant erlang node is connected
-    Peers = maps:keys(maps:remove(Id, Cluster)),
+    Peers = peers_to_preconnect_to(Id, Cluster, ShouldForceBoot),
     %% as most messages are sent using noconnect we explicitly attempt to
     %% connect to all relevant nodes
     _ = spawn(fun () ->
@@ -973,6 +975,14 @@ handle_enter(RaftState, OldRaftState,
     end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
+
+-spec peers_to_preconnect_to(Id :: ra_server_id(),
+                             Cluster :: ra_cluster(),
+                             ForcedBoot :: boolean()) -> [ra_server_id()].
+peers_to_preconnect_to(_Id, _Cluster, true = _ForcedBoot) ->
+    [];
+peers_to_preconnect_to(Id, Cluster, false = _ForcedBoot) ->
+    maps:keys(maps:remove(Id, Cluster)).
 
 queue_take(N, Q) ->
     queue_take(N, Q, []).

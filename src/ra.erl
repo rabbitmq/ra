@@ -49,6 +49,7 @@
          restart_server/1,
          restart_server/2,
          restart_server/3,
+         restart_server_as_single_node/2,
          % deprecated
          stop_server/1,
          stop_server/2,
@@ -196,6 +197,21 @@ restart_server(System, ServerId, AddConfig)
         {error, _} = Err -> Err;
         {'EXIT', Err} -> {error, Err}
     end.
+
+%% @doc Forces a ra server to boot as a standalone node.
+%% This must ONLY be used to recover a node from a cluster that
+%% has permanently lost a quorum (majority) of nodes.
+%% The force booted node will no longer be aware of its peers
+%% but will successfully boot, assuming no on-disk log data operation
+%% issues. Later other nodes can be [re-]added to it to restore
+%% the cluster to its original size.
+%%
+%% @param ServerId the ra server id of the server to force boot.
+%% @end
+-spec restart_server_as_single_node(atom(), ra_server_id()) -> ok | {error, term()}.
+restart_server_as_single_node(System, ServerId) ->
+    ExtraOpts = #{force_restart_as_single_member_cluster => true},
+    restart_server(System, ServerId, ExtraOpts).
 
 %% @doc Stops a ra server in the default system
 %% @param ServerId the ra_server_id() of the server
