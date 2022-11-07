@@ -1,7 +1,7 @@
 {application,ra,
              [{description,"Raft library"},
               {vsn,"2.4.0"},
-              {licenses,["Apache","MPL"]},
+              {licenses,["Apache-2.0","MPL-2.0"]},
               {links,[{"github","https://github.com/rabbitmq/ra"}]},
               {modules,[]},
               {registered,[ra_sup]},
