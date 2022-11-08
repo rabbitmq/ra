@@ -715,7 +715,12 @@ overview(#?MODULE{last_index = LastIndex,
 write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ConfigPath = filename:join(Dir, "config"),
     % clean config of potentially unserialisable data
-    Config = maps:without([parent, counter, has_changed], Config0),
+    Config = maps:without([parent,
+                           counter,
+                           has_changed,
+                           %% don't write system config to disk as it will
+                           %% be updated each time
+                           system_config], Config0),
     ok = ra_lib:write_file(ConfigPath,
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok.

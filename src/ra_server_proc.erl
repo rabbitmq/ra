@@ -185,6 +185,7 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
 %% used to query the raft state rather than the machine state
 -spec state_query(server_loc(),
                   all |
+                  overview |
                   members |
                   initial_members |
                   machine, timeout()) ->
@@ -194,6 +195,7 @@ state_query(ServerLoc, Spec, Timeout) ->
 
 -spec local_state_query(server_loc(),
                         all |
+                        overview |
                         members |
                         initial_members |
                         machine, timeout()) ->
@@ -260,6 +262,8 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Id),
                                                       Config0),
+    MsgQData = maps:get(message_queue_data, SysConf, on_heap),
+    process_flag(message_queue_data, MsgQData),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
@@ -1471,6 +1475,8 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
     end.
 
 do_state_query(all, State) -> State;
+do_state_query(overview, State) ->
+    ra_server:overview(State);
 do_state_query(machine, #{machine_state := MacState}) ->
     MacState;
 do_state_query(members, #{cluster := Cluster}) ->
@@ -1481,7 +1487,9 @@ do_state_query(initial_members, #{log := Log}) ->
             InitialMembers;
         _ ->
             error
-    end.
+    end;
+do_state_query(Query, _State) ->
+    {error, {unknown_query, Query}}.
 
 config_defaults(ServerId) ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,

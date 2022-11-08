@@ -1,6 +1,7 @@
 -module(ra_system).
 
 -include("ra.hrl").
+-include("ra_server.hrl").
 -export([
          start/1,
          start_default/0,
@@ -40,7 +41,11 @@
                     segment_max_entries => non_neg_integer(),
                     segment_compute_checksums => boolean(),
                     snapshot_chunk_size => non_neg_integer(),
-                    receive_snapshot_timeout => non_neg_integer()
+                    receive_snapshot_timeout => non_neg_integer(),
+                    default_max_pipeline_count => non_neg_integer(),
+                    default_max_append_entries_rpc_batch_size => non_neg_integer(),
+                    message_queue_data => on_heap | off_heap,
+                    wal_min_bin_vheap_size => non_neg_integer()
                    }.
 
 -export_type([
@@ -74,6 +79,12 @@ default_config() ->
     WalDataDir = application:get_env(ra, wal_data_dir, DataDir),
     WalGarbageCollect = application:get_env(ra, wal_garbage_collect, false),
     WalPreAllocate = application:get_env(ra, wal_pre_allocate, false),
+    DefaultMaxPipelineCount = application:get_env(ra, default_max_pipeline_count,
+                                                  ?DEFAULT_MAX_PIPELINE_COUNT),
+    DefaultAERBatchSize = application:get_env(ra, default_max_append_entries_rpc_batch_size,
+                                              ?AER_CHUNK_SIZE),
+
+    MessageQueueData = application:get_env(ra, server_message_queue_data, on_heap),
     #{name => default,
       data_dir => DataDir,
       wal_data_dir => WalDataDir,
@@ -87,6 +98,9 @@ default_config() ->
       wal_sync_method => WalSyncMethod,
       segment_max_entries => SegmentMaxEntries,
       segment_compute_checksums => SegmentComputeChecksums,
+      default_max_pipeline_count => DefaultMaxPipelineCount,
+      default_max_append_entries_rpc_batch_size => DefaultAERBatchSize,
+      message_queue_data => MessageQueueData,
       names =>
       #{wal => ra_log_wal,
         wal_sup => ra_log_wal_sup,
