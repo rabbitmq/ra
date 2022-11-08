@@ -68,7 +68,7 @@ handle_batch(Commands, #?MODULE{ref = Ref,
                         Inserts0#{Id => update_key(Key, Value, Data)};
                     _ ->
                         case ets:lookup(TblName, Id) of
-                            [{Id, _, _, _} = Data] ->
+                            [Data] ->
                                 Inserts0#{Id => update_key(Key, Value, Data)};
                             [] ->
                                 Data = {Id, undefined, undefined, undefined},
@@ -153,8 +153,7 @@ fetch(MetaName, Id, Key, Default) ->
 %%% internal
 
 maybe_fetch(MetaName, Id, Pos) ->
-    try ets:lookup_element(MetaName, Id, Pos) of
-        E -> E
+    try ets:lookup_element(MetaName, Id, Pos)
     catch
         _:badarg ->
             undefined
