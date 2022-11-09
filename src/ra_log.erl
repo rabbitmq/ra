@@ -721,8 +721,11 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
                            %% don't write system config to disk as it will
                            %% be updated each time
                            system_config], Config0),
-    ok = ra_lib:write_file(ConfigPath,
-                           list_to_binary(io_lib:format("~p.", [Config]))),
+    %% we don't want to block the supervisor init call if we can avoid it
+    _ = spawn_link(fun () ->
+                           ok = ra_lib:write_file(ConfigPath,
+                                                  list_to_binary(io_lib:format("~p.", [Config])))
+                   end),
     ok.
 
 -spec read_config(state() | file:filename()) ->
