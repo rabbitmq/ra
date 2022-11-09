@@ -1,5 +1,6 @@
 -module(ra_log_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -47,8 +48,20 @@ init_per_group(tests, Config) ->
                       UId = atom_to_binary(TestCase, utf8),
                       ra_directory:register_name(?SYS, UId, self(), undefined,
                                                  TestCase, TestCase),
-                      ra_log:init(#{uid => UId,
-                                    system_config => SysCfg})
+                      Log0 = ra_log:init(#{uid => UId,
+                                           system_config => SysCfg}),
+                      case ra_log:next_index(Log0) of
+                          1 ->
+                              receive
+                                  {ra_log_event, {written, {0, 0, 0}} = Evt} ->
+                                      {Log, _} = ra_log:handle_event(Evt, Log0),
+                                      Log
+                              after 2000 ->
+                                        exit(ra_log_event_timeout)
+                              end;
+                          _ ->
+                              Log0
+                      end
               end,
     [{init_fun, InitFun} | Config].
 

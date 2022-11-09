@@ -98,10 +98,11 @@ end_per_testcase(_, _Config) ->
 handle_overwrite(Config) ->
     Log0 = ra_log_init(Config),
     {ok, Log1} = ra_log:write([{1, 1, "value"},
-                                        {2, 1, "value"}], Log0),
+                               {2, 1, "value"}], Log0),
     receive
         {ra_log_event, {written, {1, 2, 1}}} -> ok
     after 2000 ->
+              flush(),
               exit(written_timeout)
     end,
     {ok, Log3} = ra_log:write([{1, 2, "value"}], Log1),
@@ -1244,24 +1245,6 @@ empty_mailbox(T) ->
     after T ->
               ok
     end.
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p", [Case]),
-    lg:stop(),
-    % this segfaults
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
 
 new_peer() ->
     #{next_index => 1,
@@ -1311,7 +1294,20 @@ ra_log_init(Config, Cfg0) ->
                        initial_access_pattern => ?config(access_pattern, Config)},
                      Cfg0),
     %% augment with default system config
-    ra_log:init(Cfg#{system_config => ra_system:default_config()}).
+    Log0 = ra_log:init(Cfg#{system_config => ra_system:default_config()}),
+    case ra_log:next_index(Log0) of
+        1 ->
+            receive
+                {ra_log_event, {written, {0, 0, 0}} = Evt} ->
+                    {Log, _} = ra_log:handle_event(Evt, Log0),
+                    Log
+            after 2000 ->
+                      exit(ra_log_event_timeout)
+            end;
+        _ ->
+            Log0
+    end.
+
 
 ra_log_take(From, To, Log0) ->
     {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),

@@ -39,6 +39,8 @@
          retry/2,
          retry/3,
          write_file/2,
+         write_file/3,
+         sync_file/1,
          lists_chunk/2,
          lists_detect_sort/1,
          is_dir/1,
@@ -310,10 +312,13 @@ retry(Func, Attempt, Sleep) ->
 
 
 write_file(Name, IOData) ->
+    write_file(Name, IOData, true).
+
+write_file(Name, IOData, DoSync) ->
     case file:open(Name, [binary, write, raw]) of
         {ok, Fd} ->
             case file:write(Fd, IOData) of
-                ok ->
+                ok when DoSync ->
                     case file:sync(Fd) of
                         ok ->
                             file:close(Fd);
@@ -321,6 +326,22 @@ write_file(Name, IOData) ->
                             _ = file:close(Fd),
                             Err
                     end;
+                ok ->
+                    ok;
+                Err ->
+                    _ = file:close(Fd),
+                    Err
+            end;
+        Err ->
+            Err
+    end.
+
+sync_file(Name) ->
+    case file:open(Name, [binary, write, raw]) of
+        {ok, Fd} ->
+            case file:sync(Fd) of
+                ok ->
+                    file:close(Fd);
                 Err ->
                     _ = file:close(Fd),
                     Err

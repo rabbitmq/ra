@@ -217,6 +217,7 @@ init(#{uid := UId,
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_first_entry(State0),
+    % State = State0,
     ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
            " first index ~b",
            [State#?MODULE.cfg#cfg.log_id,
@@ -722,7 +723,9 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
                            %% be updated each time
                            system_config], Config0),
     ok = ra_lib:write_file(ConfigPath,
-                           list_to_binary(io_lib:format("~p.", [Config]))),
+                           list_to_binary(io_lib:format("~p.", [Config])),
+                           false),
+    %% TODO: send a sync request to a syncer process?
     ok.
 
 -spec read_config(state() | file:filename()) ->
@@ -916,12 +919,11 @@ cache_read_sparse([Next | Rem] = Indexes, Cache, Num, Acc) ->
 
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
-    receive
-        {ra_log_event, {written, {0, 0, 0}}} -> ok
-    end,
-    State#?MODULE{first_index = 0,
-                  cache = #{},
-                  last_written_index_term = {0, 0}};
+    % receive
+    %     {ra_log_event, {written, {0, 0, 0}}} -> ok
+    % end,
+    State#?MODULE{first_index = 0
+                 };
 maybe_append_first_entry(State) ->
     State.
 
