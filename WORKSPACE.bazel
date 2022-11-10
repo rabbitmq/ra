@@ -30,3 +30,29 @@ git_repository(
     branch = "linux-rbe",
     remote = "https://github.com/rabbitmq/rbe-erlang-platform.git",
 )
+
+git_repository(
+    name = "rules_erlang",
+    branch = "experimental-gazelle-extension",
+    remote = "https://github.com/rabbitmq/rules_erlang.git"
+)
+
+load("@rules_erlang//:internal_deps.bzl", "rules_erlang_internal_deps")
+
+rules_erlang_internal_deps()
+
+load("@rules_erlang//:internal_setup.bzl", "rules_erlang_internal_setup")
+
+rules_erlang_internal_setup()
+
+load("@rules_erlang//gazelle:deps.bzl", "gazelle_deps")
+
+gazelle_deps()
+
+load("@rules_erlang//:rules_erlang.bzl", "erlang_config")
+
+erlang_config()
+
+load("@erlang_config//:defaults.bzl", "register_defaults")
+
+register_defaults()

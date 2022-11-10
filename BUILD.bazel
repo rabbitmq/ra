@@ -1,7 +1,15 @@
+load("@bazel_gazelle//:def.bzl", "gazelle")
+load("@rules_erlang//gazelle:def.bzl", "GAZELLE_ERLANG_RUNTIME_DEPS")
 load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
 load("@rules_erlang//:xref.bzl", "xref")
 load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
 load(":ra.bzl", "ra_suites")
+
+gazelle(
+    name = "gazelle",
+    data = GAZELLE_ERLANG_RUNTIME_DEPS,
+    gazelle = "@rules_erlang//gazelle:gazelle_erlang_binary",
+)
 
 NAME = "ra"
 
