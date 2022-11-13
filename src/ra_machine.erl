@@ -222,7 +222,7 @@
 -callback init(Conf :: machine_init_args()) -> state().
 
 -callback 'apply'(command_meta_data(), command(), State) ->
-    {State, reply(), effects()} | {State, reply()} when State :: term().
+    {State, reply(), effects() | effect()} | {State, reply()} when State :: term().
 
 %% Optional callbacks
 
