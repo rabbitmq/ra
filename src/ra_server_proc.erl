@@ -17,6 +17,7 @@
 
 %% State functions
 -export([
+         post_init/3,
          recover/3,
          recovered/3,
          leader/3,
@@ -257,7 +258,18 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 %%% gen_statem callbacks
 %%%===================================================================
 
-init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
+init(#{reply_to := ReplyTo} = Config) ->
+    %% we have a reply to key, perform init async
+    {ok, post_init, maps:remove(reply_to, Config),
+     [{next_event, internal, {go, ReplyTo}}]};
+init(Config) ->
+    %% no reply_to key, must have been started by an older node run synchronous
+    %% init
+    State = do_init(Config),
+    {ok, recover, State, [{next_event, cast, go}]}.
+
+do_init(#{id := Id,
+          cluster_name := ClusterName} = Config0) ->
     process_flag(trap_exit, true),
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Id),
@@ -309,7 +321,7 @@ init(Config0 = #{id := Id, cluster_name := ClusterName}) ->
                                 counter = Counter},
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
-    {ok, recover, State, [{next_event, cast, go}]}.
+    State.
 
 %% callback mode
 callback_mode() -> [state_functions, state_enter].
@@ -317,10 +329,18 @@ callback_mode() -> [state_functions, state_enter].
 %%%===================================================================
 %%% State functions
 %%%===================================================================
+
+post_init(enter, _OldState, State) ->
+    {keep_state, State, []};
+post_init(internal, {go, {ReplyToRef, ReplyToPid}}, Config) ->
+    State = do_init(Config),
+    ReplyToPid ! {ReplyToRef, ok},
+    {next_state, recover, State, [{next_event, internal, go}]}.
+
 recover(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
-recover(_EventType, go, State = #state{server_state = ServerState0}) ->
+recover(internal, go, State = #state{server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     %% we have to issue the next_event here so that the recovered state is
