@@ -63,7 +63,7 @@ start_server_rpc(System, UId, Config0) ->
                 undefined ->
                     case ra_system:lookup_name(System, server_sup) of
                         {ok, Name} ->
-                            supervisor:start_child({Name, node()}, [Config]);
+                            start_child(Name, Config);
                         Err ->
                             Err
                     end;
@@ -77,7 +77,7 @@ start_server_rpc(System, UId, Config0) ->
             end
     end.
 
-restart_server_rpc(System, {RaName, Node}, AddConfig)
+restart_server_rpc(System, {RaName, _Node}, AddConfig)
   when is_atom(System) ->
     case ra_system:fetch(System) of
         undefined ->
@@ -87,17 +87,16 @@ restart_server_rpc(System, {RaName, Node}, AddConfig)
                 {ok, Config0} ->
                     MutConfig = maps:with(?MUTABLE_CONFIG_KEYS, AddConfig),
                     {ok, Name} = ra_system:lookup_name(System, server_sup),
-                    case maps:merge(Config0, MutConfig) of
-                        Config0 ->
-                            %% the config has not changed
-                            Config = Config0#{system_config => SysCfg,
-                                              has_changed => false},
-                            supervisor:start_child({Name, Node}, [Config]);
-                        Config1 ->
-                            Config = Config1#{system_config => SysCfg,
-                                              has_changed => true},
-                            supervisor:start_child({Name, Node}, [Config])
-                    end;
+                    Config = case maps:merge(Config0, MutConfig) of
+                                 Config0 ->
+                                     %% the config has not changed
+                                     Config0#{system_config => SysCfg,
+                                              has_changed => false};
+                                 Config1 ->
+                                     Config1#{system_config => SysCfg,
+                                              has_changed => true}
+                             end,
+                    start_child(Name, Config);
                 Err ->
                     Err
             end
@@ -232,3 +231,23 @@ init([]) ->
                   restart => temporary,
                   start => {ra_server_sup, start_link, []}},
     {ok, {SupFlags, [ChildSpec]}}.
+
+start_child(Name, Config) ->
+    Ref = make_ref(),
+    case supervisor:start_child(Name, [Config#{reply_to => {Ref, self()}}]) of
+        {ok, Pid} ->
+            %% we have started the process now and have to wait for reply
+            %% that is sent after init but before state machine recovery
+            MRef = erlang:monitor(process, Pid),
+            receive
+                {Ref, ok} ->
+                    _ = erlang:demonitor(MRef),
+                    {ok, Pid};
+                {'DOWN', MRef, _, _, Reason} ->
+                    ?ERROR("Ra: failed to start ra server ~s, err ~s",
+                           [Name, Reason]),
+                    {error, Reason}
+            end;
+        Err ->
+            Err
+    end.
