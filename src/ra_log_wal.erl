@@ -84,8 +84,8 @@
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync | none,
                counter :: counters:counters_ref(),
-               open_mem_tbls_name :: atom(),
-               closed_mem_tbls_name :: atom(),
+               open_mem_tbls_tid :: ets:tid(),
+               closed_mem_tbls_tid :: ets:tid(),
                names :: ra_system:names(),
                explicit_gc = false :: boolean(),
                pre_allocate = false :: boolean()
@@ -265,8 +265,8 @@ init(#{dir := Dir} = Conf0) ->
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
                  counter = CRef,
-                 open_mem_tbls_name = OpenTblsName,
-                 closed_mem_tbls_name = ClosedTblsName,
+                 open_mem_tbls_tid = ets:whereis(OpenTblsName),
+                 closed_mem_tbls_tid = ets:whereis(ClosedTblsName),
                  names = Names,
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate},
@@ -306,8 +306,8 @@ handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
-                       open_mem_tbls_name = OpenTbl,
-                       closed_mem_tbls_name = ClosedTbl,
+                       open_mem_tbls_tid = OpenTbl,
+                       closed_mem_tbls_tid = ClosedTbl,
                        recovery_chunk_size = RecoveryChunkSize} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
@@ -326,7 +326,7 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     % It needs to be atomic so that readers don't accidentally
     % read partially recovered
     % tables mixed with old tables
-    RecoverConf = Conf#conf{open_mem_tbls_name = RecoverTid},
+    RecoverConf = Conf#conf{open_mem_tbls_tid = RecoverTid},
     All = [begin
                FBase = filename:basename(F),
                ?DEBUG("wal: recovering ~ts", [FBase]),
@@ -464,7 +464,7 @@ append_data(#state{conf = Cfg,
                 batch = Batch,
                 writers = Writers#{UId => {in_seq, Idx}} }.
 
-incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
+incr_batch(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
            #batch{writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
@@ -524,7 +524,7 @@ incr_batch(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
                 waiting = Waiting,
                 pending = [Pend | Data]}.
 
-update_mem_table(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
+update_mem_table(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
                  UId, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table and save
     % some disk space when it later is flushed to disk
@@ -547,7 +547,7 @@ update_mem_table(#conf{open_mem_tbls_name = OpnMemTbl} = Cfg,
             true = ets:insert(Tid, {Idx, Term, Entry})
     end.
 
-roll_over(#state{conf = #conf{open_mem_tbls_name = Tbl}} = State0) ->
+roll_over(#state{conf = #conf{open_mem_tbls_tid = Tbl}} = State0) ->
     State = complete_batch(State0),
     roll_over(Tbl, start_batch(State)).
 
@@ -651,8 +651,8 @@ close_file(Fd) ->
 
 close_open_mem_tables(MemTables,
                       #conf{segment_writer = TblWriter,
-                            open_mem_tbls_name = OpnMemTbls,
-                            closed_mem_tbls_name = CloseMemTbls},
+                            open_mem_tbls_tid = OpnMemTbls,
+                            closed_mem_tbls_tid = CloseMemTbls},
                       Filename) ->
     % insert into closed mem tables
     % so that readers can still resolve the table whilst it is being
@@ -724,7 +724,7 @@ complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
                                      writes = NumWrites},
-                      conf = #conf{open_mem_tbls_name = OpnTbl} = Cfg
+                      conf = #conf{open_mem_tbls_tid = OpnTbl} = Cfg
                       } = State0) ->
     % TS = erlang:system_time(microsecond),
     State = flush_pending(State0),

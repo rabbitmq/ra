@@ -35,8 +35,8 @@
 -record(cfg, {uid :: ra_uid(),
               counter :: undefined | counters:counters_ref(),
               directory :: file:filename(),
-              open_mem_tbls ::  atom(),
-              closed_mem_tbls :: atom(),
+              open_mem_tbls :: ets:tid(),
+              closed_mem_tbls :: ets:tid(),
               access_pattern = random :: access_pattern()
              }).
 
@@ -73,8 +73,8 @@ init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
     #?STATE{cfg = #cfg{uid = UId,
                        counter = Counter,
                        directory = Dir,
-                       open_mem_tbls = OpnMemTbls,
-                       closed_mem_tbls = ClsdMemTbls,
+                       open_mem_tbls = ets:whereis(OpnMemTbls),
+                       closed_mem_tbls = ets:whereis(ClsdMemTbls),
                        access_pattern = AccessPattern
                       },
             open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
