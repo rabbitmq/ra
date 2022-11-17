@@ -49,7 +49,7 @@ init(#{name := System,
        names := #{log_meta := TblName}}) ->
     process_flag(trap_exit, true),
     ok = ra_lib:make_dir(Dir),
-    MetaFile = filename:join(Dir, "meta.dets"),
+    MetaFile = filename:join(ra_lib:to_list(Dir), "meta.dets"),
     {ok, Ref} = dets:open_file(TblName, [{file, MetaFile},
                                          {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),

@@ -55,7 +55,7 @@
          %% typically <data_dir>/snapshots
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
-         directory :: file:filename(),
+         directory :: file:filename_all(),
          pending :: 'maybe'({pid(), ra_idxterm()}),
          accepting :: 'maybe'(#accept{}),
          current :: 'maybe'(ra_idxterm())}).
@@ -75,7 +75,7 @@
 %% Saves snapshot from external state to disk.
 %% Runs in a separate process.
 %% External storage should be available to read
--callback write(Location :: file:filename(),
+-callback write(Location :: file:filename_all(),
                 Meta :: meta(),
                 Ref :: term()) ->
     ok | {error, file_err() | term()}.
@@ -83,7 +83,7 @@
 
 %% Read the snapshot metadata and initialise a read state used in read_chunk/1
 %% The read state should contain all the information required to read a chunk
--callback begin_read(Location :: file:filename()) ->
+-callback begin_read(Location :: file:filename_all()) ->
     {ok, Meta :: meta(), ReadState :: term()}
     | {error, term()}.
 
@@ -91,11 +91,11 @@
 %% Returns a binary chunk of data and a continuation state
 -callback read_chunk(ReadState,
                      ChunkSizeBytes :: non_neg_integer(),
-                     Location :: file:filename()) ->
+                     Location :: file:filename_all()) ->
     {ok, Chunk :: term(), {next, ReadState} | last} | {error, term()}.
 
 %% begin a stateful snapshot acceptance process
--callback begin_accept(SnapDir :: file:filename(),
+-callback begin_accept(SnapDir :: file:filename_all(),
                        Meta :: meta()) ->
     {ok, AcceptState :: term()} | {error, term()}.
 
@@ -111,15 +111,15 @@
 
 %% Side-effect function
 %% Recover machine state from file
--callback recover(Location :: file:filename()) ->
+-callback recover(Location :: file:filename_all()) ->
     {ok, Meta :: meta(), State :: term()} | {error, term()}.
 
 %% validate the integrity of the snapshot
--callback validate(Location :: file:filename()) ->
+-callback validate(Location :: file:filename_all()) ->
     ok | {error, term()}.
 
 %% Only read meta data from snapshot
--callback read_meta(Location :: file:filename()) ->
+-callback read_meta(Location :: file:filename_all()) ->
     {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
@@ -127,7 +127,7 @@
             file_err() |
             term()}.
 
--spec init(ra_uid(), module(), file:filename()) ->
+-spec init(ra_uid(), module(), file:filename_all()) ->
     state().
 init(UId, Module, SnapshotsDir) ->
     State = #?MODULE{uid = UId,
@@ -191,7 +191,7 @@ accepting(#?MODULE{accepting = undefined}) ->
 accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
     Accepting.
 
--spec directory(state()) -> file:filename().
+-spec directory(state()) -> file:filename_all().
 directory(#?MODULE{directory = Dir}) -> Dir.
 
 -spec last_index_for(ra_uid()) -> 'maybe'(ra_index()).
@@ -349,7 +349,7 @@ recover(#?MODULE{module = Mod,
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     Mod:recover(SnapDir).
 
--spec read_meta(Module :: module(), Location :: file:filename()) ->
+-spec read_meta(Module :: module(), Location :: file:filename_all()) ->
     {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
@@ -360,7 +360,7 @@ read_meta(Module, Location) ->
     Module:read_meta(Location).
 
 -spec current_snapshot_dir(state()) ->
-    'maybe'(file:filename()).
+    'maybe'(file:filename_all()).
 current_snapshot_dir(#?MODULE{directory = Dir,
                               current = {Idx, Term}}) ->
     make_snapshot_dir(Dir, Idx, Term);

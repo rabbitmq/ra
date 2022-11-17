@@ -843,17 +843,19 @@ update_release_cursor(Config) ->
                                                     ?N2 => new_peer()},
                                              1, initial_state, Log1),
 
+    ct:pal("HERE"),
     Log3 = assert_log_events(Log2,
                              fun (L) ->
                                      {127, 2} == ra_log:snapshot_index_term(L)
                              end),
-    % Log3 = deliver_all_log_events(Log2, 500),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
     [{UId, 127}] = ets:lookup(ra_log_snapshot_state, ?config(uid, Config)),
     % this should delete a single segment
+    ct:pal("THERE"),
     ra_lib:retry(fun () ->
                          Segments = find_segments(Config),
+                         ct:pal("SEGMENTS ~p", [Segments]),
                          1 == length(Segments)
                  end, 10, 100),
     Log3b = validate_fold(128, 149, 2, Log3),
@@ -865,7 +867,6 @@ update_release_cursor(Config) ->
                              fun (L) ->
                                      {149, 2} == ra_log:snapshot_index_term(L)
                              end),
-    % Log5 = deliver_all_log_events(Log4, 500),
 
     [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
 
@@ -1232,7 +1233,7 @@ validate_rolled_reads(_Config) ->
 find_segments(Config) ->
     UId = ?config(uid, Config),
     ServerDataDir = ra_env:server_data_dir(default, UId),
-    filelib:wildcard(filename:join(ServerDataDir, "*.segment")).
+    ra_lib:list_files(ServerDataDir, ".segment").
 
 empty_mailbox() ->
     empty_mailbox(100).
@@ -1244,24 +1245,6 @@ empty_mailbox(T) ->
     after T ->
               ok
     end.
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p", [Case]),
-    lg:stop(),
-    % this segfaults
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
 
 new_peer() ->
     #{next_index => 1,

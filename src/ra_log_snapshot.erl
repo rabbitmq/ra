@@ -41,7 +41,7 @@ prepare(_Index, State) -> State.
 %% Snapshot Data (binary)
 %% @end
 
--spec write(file:filename(), meta(), term()) ->
+-spec write(file:filename_all(), meta(), term()) ->
     ok | {error, file_err()}.
 write(Dir, Meta, MacState) ->
     %% no compression on meta data to make sure reading it is as fast
@@ -127,7 +127,7 @@ read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
             {error, unexpected_eof}
     end.
 
--spec recover(file:filename()) ->
+-spec recover(file:filename_all()) ->
     {ok, meta(), term()} |
     {error, invalid_format |
      {invalid_version, integer()} |
@@ -154,7 +154,7 @@ validate(Dir) ->
 
 %% @doc reads the index and term from the snapshot file without reading the
 %% entire binary body. NB: this does not do checksum validation.
--spec read_meta(file:filename()) ->
+-spec read_meta(file:filename_all()) ->
     {ok, meta()} | {error, invalid_format |
                           {invalid_version, integer()} |
                           checksum_error |
@@ -212,7 +212,7 @@ parse_snapshot(<<MetaSize:32/unsigned, MetaBin:MetaSize/binary,
     {ok, Meta, binary_to_term(Rest)}.
 
 filename(Dir) ->
-    filename:join(Dir, "snapshot.dat").
+    filename:join(Dir, <<"snapshot.dat">>).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

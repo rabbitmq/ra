@@ -46,7 +46,8 @@
          ensure_dir/1,
          consult/1,
          maps_foreach/2,
-         maps_merge_with/3
+         maps_merge_with/3,
+         list_files/2
         ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -481,6 +482,15 @@ merge_with_1({K, V2, Iterator}, Map1, Map2, Combiner) ->
     end;
 merge_with_1(none, Result, _, _) ->
     Result.
+
+list_files(Dir, Ext) ->
+    case prim_file:list_dir(Dir) of
+        {error, enoent} ->
+            [];
+        {ok, Files} ->
+            [filename:join(Dir, F)
+             || F <- Files, filename:extension(F) == Ext]
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

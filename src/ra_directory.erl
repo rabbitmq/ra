@@ -39,15 +39,15 @@ init(System) when is_atom(System) ->
             init(Dir, Names)
     end.
 
--spec init(file:filename(), ra_system:names()) -> ok.
+-spec init(file:filename_all(), ra_system:names()) -> ok.
 init(Dir, #{directory := Name,
             directory_rev := NameRev}) ->
     _ = ets:new(Name, [named_table,
-                          public,
-                          {read_concurrency, true}
-                         ]),
+                       public,
+                       {read_concurrency, true}]),
     ok = ra_lib:make_dir(Dir),
-    Dets = filename:join(Dir, "names.dets"),
+    %% dets only accept file:name() not file:name_all()
+    Dets = filename:join(ra_lib:to_list(Dir), "names.dets"),
     {ok, NameRev} = dets:open_file(NameRev,
                                    [{file, Dets},
                                     {auto_save, 500},

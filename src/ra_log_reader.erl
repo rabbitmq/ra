@@ -34,7 +34,7 @@
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
               counter :: undefined | counters:counters_ref(),
-              directory :: file:filename(),
+              directory :: file:filename_all(),
               open_mem_tbls :: ets:tid(),
               closed_mem_tbls :: ets:tid(),
               access_pattern = random :: access_pattern()
@@ -62,7 +62,7 @@
 init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names) ->
     init(UId, Dir, FirstIdx, MaxOpen, random, SegRefs, Names, undefined).
 
--spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+-spec init(ra_uid(), file:filename_all(), ra_index(), non_neg_integer(),
            access_pattern(),
            [segment_ref()], ra_system:names(),
            undefined | counters:counters_ref()) -> state().
@@ -72,7 +72,7 @@ init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
   when is_binary(UId) ->
     #?STATE{cfg = #cfg{uid = UId,
                        counter = Counter,
-                       directory = Dir,
+                       directory = ra_lib:to_binary(Dir),
                        open_mem_tbls = ets:whereis(OpnMemTbls),
                        closed_mem_tbls = ets:whereis(ClsdMemTbls),
                        access_pattern = AccessPattern

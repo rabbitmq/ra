@@ -24,7 +24,7 @@
          code_change/3
          ]).
 
--record(state, {data_dir :: file:filename(),
+-record(state, {data_dir :: file:filename_all(),
                 system :: atom(),
                 counter :: counters:counters_ref(),
                 segment_conf = #{} :: ra_log_segment:ra_log_segment_options()}).
@@ -72,7 +72,7 @@ truncate_segments(SegWriter, Who, SegRef) ->
     % truncate all closed segment files
     gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
--spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
+-spec my_segments(atom() | pid(), ra_uid()) -> [file:filename_all()].
 my_segments(SegWriter, Who) ->
     maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     gen_server:call(SegWriter, {my_segments, Who}, infinity).
@@ -119,7 +119,7 @@ handle_call(overview, _From, State) ->
     {reply, get_overview(State), State}.
 
 segments_for(UId, #state{data_dir = DataDir}) ->
-    Dir = filename:join(DataDir, ra_lib:to_list(UId)),
+    Dir = filename:join(DataDir, UId),
     segment_files(Dir).
 
 handle_cast({mem_tables, Tables, WalFile}, State) ->
@@ -155,14 +155,15 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % file:copy(WalFile, BkFile),
     _ = prim_file:delete(WalFile),
     {noreply, State};
-handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
+handle_cast({truncate_segments, Who, {_From, _To, Name0} = SegRef},
             #state{segment_conf = SegConf} = State0) ->
     %% remove all segments below the provided SegRef
     %% Also delete the segref if the file hasn't changed
+    Name = ra_lib:to_binary(Name0),
     Files = segments_for(Who, State0),
     {_Keep, Discard} = lists:splitwith(
                          fun (F) ->
-                                 ra_lib:to_string(filename:basename(F)) =/= Name
+                                 ra_lib:to_binary(filename:basename(F)) =/= Name
                          end, lists:reverse(Files)),
     case Discard of
         [] ->
@@ -173,8 +174,8 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             _ = [_ = prim_file:delete(F) || F <- Remove],
             %% check if the pivot has changed
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
-            case ra_log_segment:segref(Seg) of
-                SegRef ->
+            case ra_log_segment:are_equal(ra_log_segment:segref(Seg), SegRef) of
+                true ->
                     _ = ra_log_segment:close(Seg),
                     %% it has not changed - we can delete that too
                     _ = prim_file:delete(Pivot),
@@ -221,7 +222,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
            #state{system = System,
                   data_dir = DataDir,
                   segment_conf = SegConf} = State) ->
-    Dir = filename:join(DataDir, binary_to_list(ServerUId)),
+    Dir = filename:join(DataDir, ServerUId),
 
     case open_file(Dir, SegConf) of
         enoent ->
@@ -338,13 +339,7 @@ find_segment_files(Dir) ->
     lists:reverse(segment_files(Dir)).
 
 segment_files(Dir) ->
-    case prim_file:list_dir(Dir) of
-        {ok, Files0} ->
-            Files = [filename:join(Dir, F) || F <- Files0, filename:extension(F) == ".segment"],
-            lists:sort(Files);
-        {error, enoent} ->
-            []
-    end.
+    lists:sort(ra_lib:list_files(Dir, ".segment")).
 
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_segment:filename(CurSeg),

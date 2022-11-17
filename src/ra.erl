@@ -92,8 +92,8 @@
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
 
 -type environment_param() ::
-    {data_dir, file:filename()} |
-    {wal_data_dir, file:filename()} |
+    {data_dir, file:filename_all()} |
+    {wal_data_dir, file:filename_all()} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()} |
@@ -140,7 +140,7 @@ start(Params) when is_list(Params) ->
 %% If the application is running it will be stopped and restarted.
 %% @param DataDir: the data directory to run the application in.
 %% @end
--spec start_in(DataDir :: file:filename()) ->
+-spec start_in(DataDir :: file:filename_all()) ->
     {ok, [Started]} | {error, term()}
       when Started :: term().
 start_in(DataDir) ->
@@ -411,7 +411,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                 case start_server(System, C) of
                     ok  -> true;
                     Err ->
-                        ?ERR("ra: failed to start a server ~w, error: ~p",
+                        ?ERR("ra: failed to start a server ~p0, error: ~p",
                               [C, Err]),
                         false
                 end

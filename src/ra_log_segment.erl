@@ -20,7 +20,8 @@
          max_count/1,
          filename/1,
          segref/1,
-         is_same_as/2]).
+         are_equal/2
+        ]).
 
 -export([dump/1,
          dump_index/1]).
@@ -381,11 +382,14 @@ segref(#state{range = undefined}) ->
     undefined;
 segref(#state{range = {Start, End},
               cfg = #cfg{filename = Fn}}) ->
-    {Start, End, ra_lib:to_string(filename:basename(Fn))}.
+    {Start, End, filename:basename(Fn)}.
 
--spec is_same_as(state(), file:filename_all()) -> boolean().
-is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
-    is_same_filename_all(Fn0, Fn).
+-spec are_equal(ra_log:segment_ref(), ra_log:segment_ref()) ->
+    boolean().
+are_equal({S, E, F1}, {S, E, F2}) ->
+    ra_lib:to_binary(F1) == ra_lib:to_binary(F2);
+are_equal(_, _) ->
+    false.
 
 -spec close(state()) -> ok.
 close(#state{cfg = #cfg{fd = Fd, mode = append}} = State) ->
@@ -399,13 +403,6 @@ close(#state{cfg = #cfg{fd = Fd}}) ->
     ok.
 
 %%% Internal
-
-is_same_filename_all(Fn, Fn) ->
-    true;
-is_same_filename_all(Fn0, Fn1) ->
-    B0 = filename:basename(Fn0),
-    B1 = filename:basename(Fn1),
-    ra_lib:to_list(B0) == ra_lib:to_list(B1).
 
 update_range(undefined, Idx) ->
     {Idx, Idx};

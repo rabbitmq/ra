@@ -163,8 +163,8 @@ delete_one_server_cluster(Config) ->
     {ok, _} = ra:delete_cluster(NodeIds),
     timer:sleep(250),
     S1DataDir = rpc:call(Node, ra_env, data_dir, []),
-    Wc = filename:join([S1DataDir, "*"]),
-    [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    % Wc = filename:join([S1DataDir, "*"]),
+    [] = [F || F <- element(2, file:list_dir(S1DataDir)), filelib:is_dir(F)],
     {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
     % assert all nodes are actually started
     [ok = slave:stop(S) || {_, S} <- NodeIds],
@@ -178,7 +178,8 @@ delete_one_server_cluster(Config) ->
               ok
     end,
     %% validate there is no data
-    Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    % Files = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
+    Files = [F || F <- element(2, file:list_dir(S1DataDir)), filelib:is_dir(F)],
     undefined = rpc:call(Node, ra_directory, uid_of, [?SYS, ClusterName]),
     undefined = rpc:call(Node, ra_log_meta, fetch, [ra_log_meta, UId, current_term]),
     ct:pal("Files  ~p", [Files]),

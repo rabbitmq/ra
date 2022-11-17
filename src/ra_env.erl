@@ -23,13 +23,12 @@ data_dir() ->
                       {ok, Cwd} = file:get_cwd(),
                       Cwd
               end,
-    Node = ra_lib:to_list(node()),
-    filename:join(DataDir, Node).
+    Node = ra_lib:to_binary(node()),
+    filename:join(ra_lib:to_binary(DataDir), Node).
 
 server_data_dir(System, UId) when is_atom(System) ->
     #{data_dir := Dir} = ra_system:fetch(System),
-    Me = ra_lib:to_list(UId),
-    filename:join(Dir, Me).
+    filename:join(Dir, UId).
 
 %% use this when interacting with Ra from a node without Ra running on it
 configure_logger(Module) ->

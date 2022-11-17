@@ -127,6 +127,7 @@ truncate_segments(Config) ->
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
+            ct:pal("TRUNC ~p", [Cur]),
             validate_segment_deleted(100, SegmentFile),
             % test a fully inclusive snapshot index _does_ delete the current
             % segment file
@@ -268,7 +269,7 @@ my_segments(Config) ->
         {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
-            ?assertEqual(SegmentFile, list_to_binary(MyFile)),
+            ?assertEqual(SegmentFile, ra_lib:to_binary(MyFile)),
             ?assert(filelib:is_file(SegmentFile))
     after 2000 ->
               exit(ra_log_event_timeout)

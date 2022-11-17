@@ -55,7 +55,7 @@
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
-                        File :: string()}.
+                        File :: file:filename_all()}.
 -type event_body() :: {written, {From :: ra_index(),
                                  To :: ra_index(),
                                  ToTerm :: ra_term()}} |
@@ -67,7 +67,7 @@
 -type event() :: {ra_log_event, event_body()}.
 
 -type effect() ::
-    {delete_snapshot, Dir :: file:filename(), ra_idxterm()} |
+    {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
     {monitor, process, log, pid()} |
     ra_snapshot:effect() |
     ra_server:effect().
@@ -79,7 +79,7 @@
 
 -record(cfg, {uid :: ra_uid(),
               log_id :: unicode:chardata(),
-              directory :: file:filename(),
+              directory :: file:filename_all(),
               snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
@@ -130,7 +130,7 @@ pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
-    SnapshotsDir = filename:join(Dir, "snapshots"),
+    SnapshotsDir = filename:join(Dir, <<"snapshots">>),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir),
     ok.
 
@@ -147,7 +147,7 @@ init(#{uid := UId,
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
-    SnapshotsDir = filename:join(Dir, "snapshots"),
+    SnapshotsDir = filename:join(Dir, <<"snapshots">>),
     Counter = maps:get(counter, Conf, undefined),
 
     %% ensure directories are there
@@ -713,7 +713,7 @@ overview(#?MODULE{last_index = LastIndex,
 
 -spec write_config(ra_server:config(), state()) -> ok.
 write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
-    ConfigPath = filename:join(Dir, "config"),
+    ConfigPath = filename:join(Dir, <<"config">>),
     % clean config of potentially unserialisable data
     Config = maps:without([parent,
                            counter,
@@ -725,12 +725,12 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok.
 
--spec read_config(state() | file:filename()) ->
+-spec read_config(state() | file:filename_all()) ->
     {ok, ra_server:config()} | {error, term()}.
 read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
-    ConfigPath = filename:join(Dir, "config"),
+    ConfigPath = filename:join(Dir, <<"config">>),
     ra_lib:consult(ConfigPath).
 
 -spec delete_everything(state()) -> ok.
@@ -1063,8 +1063,7 @@ incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
 server_data_dir(Dir, UId) ->
-    Me = ra_lib:to_list(UId),
-    filename:join(Dir, Me).
+    filename:join(Dir, UId).
 
 maps_with_values(Keys, Map) ->
     lists:foldr(

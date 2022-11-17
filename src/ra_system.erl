@@ -27,8 +27,8 @@
 
 -type config() :: #{name := atom(),
                     names := names(),
-                    data_dir := file:filename(),
-                    wal_data_dir => file:filename(),
+                    data_dir := file:filename_all(),
+                    wal_data_dir => file:filename_all(),
                     wal_max_size_bytes => non_neg_integer(),
                     wal_compute_checksums => boolean(),
                     wal_max_batch_size => non_neg_integer(),

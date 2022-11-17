@@ -92,7 +92,7 @@
               }).
 
 -record(wal, {fd :: 'maybe'(file:io_device()),
-              filename :: 'maybe'(file:filename()),
+              filename :: 'maybe'(file:filename_all()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
               entry_count = 0 :: non_neg_integer()
@@ -316,7 +316,7 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     %  losing any data
     %  As we have waited for the segment writer to finish processing it is
     %  assumed that any remaining wal files need to be re-processed.
-    WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
+    WalFiles = lists:sort(ra_lib:list_files(Dir, ".wal")),
     % First we recover all the tables using a temporary lookup table.
     % Then we update the actual lookup tables atomically.
     RecoverTid = ets:new(ra_log_recover_mem_tables,
@@ -616,7 +616,13 @@ prepare_file(File, Modes) ->
     end.
 
 make_tmp(File) ->
-    Tmp = filename:rootname(File) ++ ".tmp",
+    Tmp = case is_binary(File) of
+              false ->
+                  filename:rootname(File) ++ ".tmp";
+              true ->
+                  <<(filename:rootname(File))/binary, ".tmp">>
+          end,
+
     {ok, Fd} = file:open(Tmp, [write, binary, raw]),
     ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     ok = file:sync(Fd),
