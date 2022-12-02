@@ -47,8 +47,8 @@ which algorithms such as Raft significantly benefit from.
 
 ## Use Cases
 
-This library is primarily developed as the foundation for replication layer for
-replicated queues in a future version of RabbitMQ. The design it aims to replace uses
+This library is primarily developed as the foundation of a replication layer for
+[quorum queues](https://rabbitmq.com/quorum-queues.html) in RabbitMQ. The design it aims to replace uses
 a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
 which has two major shortcomings:
 
