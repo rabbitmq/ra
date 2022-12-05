@@ -574,7 +574,7 @@ add_member(ServerLoc, ServerId) ->
     {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
-                           {'$ra_join', ServerId, after_log_append},
+                           {'$ra_join', ServerId, await_consensus},
                            Timeout).
 
 
@@ -609,7 +609,7 @@ remove_member(ServerRef, ServerId) ->
     {error, cluster_change_not_permitted}.
 remove_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef,
-                           {'$ra_leave', ServerId, after_log_append},
+                           {'$ra_leave', ServerId, await_consensus},
                            Timeout).
 
 %% @doc Makes the server enter a pre-vote state and attempt to become the leader.

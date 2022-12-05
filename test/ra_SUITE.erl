@@ -50,6 +50,7 @@ all_tests() ->
      snapshot_installation,
      snapshot_installation_with_call_crash,
      add_member,
+     add_member_2,
      queue_example,
      ramp_up_and_ramp_down,
      start_and_join_then_leave_and_terminate,
@@ -544,6 +545,16 @@ consistent_query(Config) ->
 
 add_member(Config) ->
     Name = ?config(test_name, Config),
+    [A] = Cluster = start_local_cluster(1, Name, add_machine()),
+    {ok, _, Leader} = ra:process_command(A, 9),
+    C = {ra_server:name(Name, "2"), node()},
+    ok = ra:start_server(default, Name, C, add_machine(), Cluster),
+    {ok, _, _Leader} = ra:add_member(Leader, C),
+    {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
+    terminate_cluster([C | Cluster]).
+
+add_member_2(Config) ->
+    Name = ?config(test_name, Config),
     [A, _B] = Cluster = start_local_cluster(2, Name, add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9),
     C = {ra_server:name(Name, "3"), node()},
@@ -988,8 +999,8 @@ add_member(Ref, New) ->
     ok.
 
 start_and_join({ClusterName, _} = ServerRef, {_, _} = New) ->
-    {ok, _, _} = ra:add_member(ServerRef, New),
     ok = ra:start_server(default, ClusterName, New, add_machine(), [ServerRef]),
+    {ok, _, _} = ra:add_member(ServerRef, New),
     ok.
 
 start_local_cluster(Num, Name, Machine) ->
