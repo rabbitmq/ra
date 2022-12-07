@@ -88,7 +88,8 @@
                closed_mem_tbls_tid :: ets:tid(),
                names :: ra_system:names(),
                explicit_gc = false :: boolean(),
-               pre_allocate = false :: boolean()
+               pre_allocate = false :: boolean(),
+               compress_mem_tables = false :: boolean()
               }).
 
 -record(wal, {fd :: 'maybe'(file:io_device()),
@@ -132,7 +133,8 @@
                       hibernate_after => non_neg_integer(),
                       max_batch_size => non_neg_integer(),
                       garbage_collect => boolean(),
-                      min_bin_vheap_size => non_neg_integer()
+                      min_bin_vheap_size => non_neg_integer(),
+                      compress_mem_tables => boolean()
                      }.
 
 -export_type([wal_conf/0,
@@ -237,6 +239,7 @@ init(#{dir := Dir} = Conf0) ->
       sync_method := SyncMethod,
       garbage_collect := Gc,
       min_bin_vheap_size := MinBinVheapSize,
+      compress_mem_tables := CompressMemTables,
       names := #{wal := WalName,
                  open_mem_tbls := OpenTblsName,
                  closed_mem_tbls := ClosedTblsName} = Names} =
@@ -269,7 +272,8 @@ init(#{dir := Dir} = Conf0) ->
                  closed_mem_tbls_tid = ets:whereis(ClosedTblsName),
                  names = Names,
                  explicit_gc = Gc,
-                 pre_allocate = PreAllocate},
+                 pre_allocate = PreAllocate,
+                 compress_mem_tables = CompressMemTables},
     {ok, recover_wal(Dir, Conf)}.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -683,11 +687,19 @@ recovering_to_closed(RecoverTid, Filename) ->
 
 open_mem_table(Cfg, {UId, _Pid}) ->
     open_mem_table(Cfg, UId);
-open_mem_table(#conf{names = Names}, UId) ->
+open_mem_table(#conf{names = Names,
+                     compress_mem_tables = CompressTbls}, UId) ->
     % lookup the locally registered name of the process to use as ets
     % name
     ServerName = ra_directory:name_of(Names, UId),
-    Tid = ets:new(ServerName, [set, {write_concurrency, true}, public]),
+    Opts = case CompressTbls of
+               true ->
+                   [set, {write_concurrency, true}, public, compressed];
+               false ->
+                   [set, {write_concurrency, true}, public]
+           end,
+
+    Tid = ets:new(ServerName, Opts),
     % immediately give away ownership to ets process
     true = ra_log_ets:give_away(Names, Tid),
     Tid.
@@ -937,7 +949,8 @@ merge_conf_defaults(Conf) ->
                  write_strategy => default,
                  garbage_collect => false,
                  sync_method => datasync,
-                 min_bin_vheap_size => ?WAL_MIN_BIN_VHEAP_SIZE}, Conf).
+                 min_bin_vheap_size => ?WAL_MIN_BIN_VHEAP_SIZE,
+                 compress_mem_tables => false}, Conf).
 
 to_binary(Term) ->
     term_to_iovec(Term).

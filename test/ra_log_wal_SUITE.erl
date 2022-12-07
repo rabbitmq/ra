@@ -26,6 +26,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     basic_log_writes_compress_mem_table,
      same_uid_different_process,
      write_to_unavailable_wal_returns_error,
      write_many,
@@ -133,6 +134,26 @@ basic_log_writes(Config) ->
     undefined = mem_tbl_read(UId, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
     proc_lib:stop(Pid),
+    [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
+    ?assert(not ets:info(Tid, compressed)),
+    ok.
+
+basic_log_writes_compress_mem_table(Config) ->
+    ok = logger:set_primary_config(level, all),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{compress_mem_tables => true}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
+    ok = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
+    {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
+    % previous log value is still there
+    {12, 1, "value"} = mem_tbl_read(UId, 12),
+    undefined = mem_tbl_read(UId, 14),
+    ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    proc_lib:stop(Pid),
+    [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
+    ?assert(ets:info(Tid, compressed)),
     ok.
 
 same_uid_different_process(Config) ->
