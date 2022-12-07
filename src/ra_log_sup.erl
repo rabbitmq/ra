@@ -70,6 +70,7 @@ make_wal_conf(#{data_dir := DataDir,
     PreAlloc = maps:get(wal_pre_allocate, Cfg, false),
     MinBinVheapSize = maps:get(wal_min_bin_vheap_size, Cfg,
                                ?WAL_MIN_BIN_VHEAP_SIZE),
+    CompressMemTables = maps:get(compress_mem_tables, Cfg, false),
     #{name => WalName,
       names => Names,
       dir => WalDir,
@@ -83,5 +84,6 @@ make_wal_conf(#{data_dir := DataDir,
       hibernate_after => HibAfter,
       garbage_collect => Gc,
       pre_allocate => PreAlloc,
-      min_bin_vheap_size => MinBinVheapSize
+      min_bin_vheap_size => MinBinVheapSize,
+      compress_mem_tables => CompressMemTables
      }.

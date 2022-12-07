@@ -45,7 +45,8 @@
                     default_max_pipeline_count => non_neg_integer(),
                     default_max_append_entries_rpc_batch_size => non_neg_integer(),
                     message_queue_data => on_heap | off_heap,
-                    wal_min_bin_vheap_size => non_neg_integer()
+                    wal_min_bin_vheap_size => non_neg_integer(),
+                    compress_mem_tables => boolean()
                    }.
 
 -export_type([
@@ -85,6 +86,7 @@ default_config() ->
                                               ?AER_CHUNK_SIZE),
 
     MessageQueueData = application:get_env(ra, server_message_queue_data, on_heap),
+    CompressMemTables = application:get_env(ra, compress_mem_tables, false),
     #{name => default,
       data_dir => DataDir,
       wal_data_dir => WalDataDir,
@@ -101,6 +103,7 @@ default_config() ->
       default_max_pipeline_count => DefaultMaxPipelineCount,
       default_max_append_entries_rpc_batch_size => DefaultAERBatchSize,
       message_queue_data => MessageQueueData,
+      compress_mem_tables => CompressMemTables,
       names =>
       #{wal => ra_log_wal,
         wal_sup => ra_log_wal_sup,
