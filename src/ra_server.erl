@@ -1346,8 +1346,14 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
            machine_state := MacState,
            aux_state := Aux
           } = State) ->
-    O0 = maps:with([current_term, commit_index, last_applied,
-                    cluster, leader_id, voted_for], State),
+    O0 = maps:with([current_term,
+                    commit_index,
+                    last_applied,
+                    cluster,
+                    leader_id,
+                    voted_for,
+                    cluster_change_permitted,
+                    cluster_index_term ], State),
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
@@ -2069,7 +2075,9 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
-        update_term_and_voted_for(Term, undefined, State);
+        update_term_and_voted_for(Term, undefined,
+                                  State#{query_index => 0,
+                                         queries_waiting_heartbeats => queue:new()});
 update_term(_, State) ->
     State.
 
@@ -2595,9 +2603,9 @@ update_query_index(State, NewQueryIndex) ->
     State#{query_index => NewQueryIndex}.
 
 reset_query_index(#{cluster := Cluster} = State) ->
-    State#{cluster =>
-            maps:map(fun(_PeerId, Peer) -> Peer#{query_index => 0} end,
-                     Cluster)}.
+    State#{cluster => maps:map(fun(_PeerId, Peer) ->
+                                       Peer#{query_index => 0}
+                               end, Cluster)}.
 
 
 heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
