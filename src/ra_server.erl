@@ -681,7 +681,7 @@ handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
             %% Heartbeat reply for lower term. Ignoring
             {leader, State0, []};
         {CurLower, TermHigher} when CurLower < TermHigher ->
-            %% A node with higher term confirmed heartbeat. This should not happen
+            %% A node with higher term confirmed heartbeat.
             ?NOTICE("~s leader saw heartbeat_reply from ~w for term ~b "
                     "abdicates term: ~b!",
                     [LogId, PeerId, Term, CurTerm]),
@@ -1344,16 +1344,27 @@ handle_state_enter(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
 overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
            log := Log,
            machine_state := MacState,
-           aux_state := Aux
+           aux_state := Aux,
+           queries_waiting_heartbeats := Queries
           } = State) ->
-    O0 = maps:with([current_term, commit_index, last_applied,
-                    cluster, leader_id, voted_for], State),
+    NumQueries = queue:len(Queries),
+    O0 = maps:with([current_term,
+                    commit_index,
+                    last_applied,
+                    cluster,
+                    leader_id,
+                    voted_for,
+                    cluster_change_permitted,
+                    cluster_index_term,
+                    query_index
+                   ], State),
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
     O#{log => LogOverview,
        aux => Aux,
-       machine => MacOverview}.
+       machine => MacOverview,
+       num_waiting_queries => NumQueries}.
 
 cfg_to_map(Cfg) ->
     element(2, lists:foldl(
@@ -2069,7 +2080,10 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
 
 update_term(Term, State = #{current_term := CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
-        update_term_and_voted_for(Term, undefined, State);
+    %% reset query index here as a new term means a new query index
+    %% sequence
+    update_term_and_voted_for(Term, undefined,
+                              State#{query_index => 0});
 update_term(_, State) ->
     State.
 
@@ -2595,9 +2609,9 @@ update_query_index(State, NewQueryIndex) ->
     State#{query_index => NewQueryIndex}.
 
 reset_query_index(#{cluster := Cluster} = State) ->
-    State#{cluster =>
-            maps:map(fun(_PeerId, Peer) -> Peer#{query_index => 0} end,
-                     Cluster)}.
+    State#{cluster => maps:map(fun(_PeerId, Peer) ->
+                                       Peer#{query_index => 0}
+                               end, Cluster)}.
 
 
 heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->

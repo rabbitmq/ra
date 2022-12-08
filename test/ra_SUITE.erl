@@ -45,6 +45,8 @@ all_tests() ->
      local_query_stale,
      members,
      consistent_query,
+     consistent_query_minority,
+     consistent_query_leader_change,
      consistent_query_stale,
      server_catches_up,
      snapshot_installation,
@@ -541,6 +543,74 @@ consistent_query(Config) ->
                                     ?PROCESS_COMMAND_TIMEOUT),
     {ok, 14, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
+
+consistent_query_minority(Config) ->
+    [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                               add_machine()),
+    {ok, _, Leader} = ra:process_command(A, 9,
+                                         ?PROCESS_COMMAND_TIMEOUT),
+    [F1, F2] = Cluster -- [Leader],
+    ra:stop_server(F1),
+    ra:stop_server(F2),
+
+    {timeout, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    %% restart after a short sleep so that quorum is restored whilst the next
+    %% query is executing
+    _ = spawn(fun() ->
+                      timer:sleep(1000),
+                      ra:restart_server(F1),
+                      ok
+              end),
+    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end, 10000),
+    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    _ = terminate_cluster(Cluster),
+    ok.
+
+
+consistent_query_leader_change(Config) ->
+    %% this test reproduces a scenario that could cause a stale
+    %% read to be returned from `ra:consistent_query/2`
+    [A, B, C, D, E] = Cluster = start_local_cluster(5, ?config(test_name, Config),
+                                                    add_machine()),
+    ok = ra:transfer_leadership(A, A),
+    {ok, _, A} = ra:process_command(A, 9, ?PROCESS_COMMAND_TIMEOUT),
+    %% do two consistent queries, this will put query_index == 2 everywhere
+    {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
+    ok = ra:stop_server(E),
+    {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
+    %% restart B
+    ok = ra:stop_server(B),
+    ok = ra:restart_server(B),
+    %% B's query_index is now 0
+    %% Make B leader
+    ok = ra:transfer_leadership(A, B),
+    %% restart E
+    ok = ra:restart_server(E),
+    {ok, 9, B} = ra:consistent_query(B, fun(S) -> S end),
+
+    ok = ra:stop_server(A),
+    ok = ra:stop_server(C),
+    ok = ra:stop_server(D),
+
+    %% there is no quorum now so this should time out
+    case ra:consistent_query(B, fun(S) -> S end, 500) of
+        {timeout, _} ->
+            ok;
+        {ok, _, _} ->
+            ct:fail("consistent query should time out"),
+            ok
+    end,
+    ok = ra:restart_server(A),
+    ok = ra:restart_server(C),
+    ok = ra:restart_server(D),
+    {ok, 9, _} = ra:consistent_query(A, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(B, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(C, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(D, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(E, fun(S) -> S end),
+
+    terminate_cluster(Cluster),
+    ok.
 
 add_member(Config) ->
     Name = ?config(test_name, Config),
