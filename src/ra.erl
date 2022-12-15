@@ -710,7 +710,7 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 %% 6 characters.
 %% @end
 new_uid(Source) when is_binary(Source) ->
-    Prefix = ra_lib:derive_safe_string(ra_lib:to_binary(Source), 6),
+    Prefix = ra_lib:derive_safe_string(Source, 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
 
 

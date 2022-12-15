@@ -137,13 +137,18 @@ zpad_hex(Num) ->
 zpad_filename("", Ext, Num) ->
     lists:flatten(io_lib:format("~8..0B.~s", [Num, Ext]));
 zpad_filename(Prefix, Ext, Num) ->
-    lists:flatten(io_lib:format("~s_~8..0B.~s", [Prefix, Num, Ext])).
+    lists:flatten(io_lib:format("~ts_~8..0B.~ts", [Prefix, Num, Ext])).
 
 zpad_filename_incr(Fn) ->
-    case re:run(Fn, "(.*)([0-9]{8})(.*)", [{capture, all_but_first, list}]) of
+    Base = filename:basename(Fn),
+    Dir = filename:dirname(Fn),
+    case re:run(Base, "(.*)([0-9]{8})(.*)",
+                [{capture, all_but_first, list}]) of
         {match, [Prefix, NumStr, Ext]} ->
             Num = list_to_integer(NumStr),
-            lists:flatten(io_lib:format("~s~8..0B~s", [Prefix, Num+1, Ext]));
+            filename:join(Dir,
+                          lists:flatten(
+                            io_lib:format("~ts~8..0B~ts", [Prefix, Num+1, Ext])));
         _ ->
             undefined
     end.
@@ -506,6 +511,13 @@ make_uid_test() ->
 zpad_filename_incr_test() ->
     Fn = "/lib/blah/prefix_00000001.segment",
     Ex = "/lib/blah/prefix_00000002.segment",
+    Ex = zpad_filename_incr(Fn),
+    undefined = zpad_filename_incr("0000001"),
+    ok.
+
+zpad_filename_incr_utf8_test() ->
+    Fn = "/lib/🐰/prefix/00000001.segment",
+    Ex = "/lib/🐰/prefix/00000002.segment",
     Ex = zpad_filename_incr(Fn),
     undefined = zpad_filename_incr("0000001"),
     ok.

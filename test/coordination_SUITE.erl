@@ -467,7 +467,7 @@ start_follower(N, PrivDir) ->
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Host = get_current_host(),
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting secondary node with ~s on host ~s for node ~s", [Pa, Host, node()]),
+    ct:pal("starting secondary node with ~ts on host ~ts for node ~ts", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, ra, start, []),
     ok = ct_rpc:call(S, logger, set_primary_config,
