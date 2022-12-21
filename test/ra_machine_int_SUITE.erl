@@ -188,7 +188,7 @@ machine_replies(Config) ->
     ok.
 
 leader_monitors(Config) ->
-    ClusterName = ?config(priv_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
     Name = element(1, ServerId),
     Mod = ?config(modname, Config),

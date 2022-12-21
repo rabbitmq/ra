@@ -1152,7 +1152,7 @@ start_peer(Name, PrivDir) ->
     Host = get_current_host(),
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir],
                      " "),
-    ct:pal("starting peer node ~s on host ~s for node ~s with ~s",
+    ct:pal("starting peer node ~ts on host ~s for node ~ts with ~ts",
            [Name, Host, node(), Pa]),
     {ok, S} = slave:start_link(Host, Name, Pa),
     _ = rpc:call(S, ra, start, []),

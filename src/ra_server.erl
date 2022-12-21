@@ -2274,7 +2274,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
     ClusterChangePerm = case CurrentTerm of
                             Term ->
                                 ?DEBUG("~s: enabling ra cluster changes in"
-                                       " ~b", [LogId, Term]),
+                                       " ~b, index ~b", [LogId, Term, Idx]),
                                 true;
                             _ -> ClusterChangePerm0
                         end,

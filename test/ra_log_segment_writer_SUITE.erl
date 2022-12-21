@@ -269,7 +269,7 @@ my_segments(Config) ->
         {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
-            ?assertEqual(SegmentFile, list_to_binary(MyFile)),
+            ?assertEqual(SegmentFile, unicode:characters_to_binary(MyFile)),
             ?assert(filelib:is_file(SegmentFile))
     after 2000 ->
               exit(ra_log_event_timeout)

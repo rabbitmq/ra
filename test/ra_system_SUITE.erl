@@ -193,7 +193,7 @@ search_paths() ->
 start_child_node(N, _PrivDir) ->
     Host = get_current_host(),
     Pa = string:join(["-pa" | search_paths()], " "),
-    ct:pal("starting child node with ~s on host ~s for node ~s~n", [Pa, Host, node()]),
+    ct:pal("starting child node with ~ts on host ~ts for node ~ts~n", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     _ = rpc:call(S, application, ensure_all_started, [ra]),
     S.
