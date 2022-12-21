@@ -45,6 +45,7 @@ all_tests() ->
      local_query_stale,
      members,
      consistent_query,
+     consistent_query_after_restart,
      consistent_query_minority,
      consistent_query_leader_change,
      consistent_query_stale,
@@ -543,6 +544,27 @@ consistent_query(Config) ->
                                     ?PROCESS_COMMAND_TIMEOUT),
     {ok, 14, Leader} = ra:consistent_query(A, fun(S) -> S end),
     terminate_cluster(Cluster).
+
+new_value(A, _) ->
+    A.
+
+consistent_query_after_restart(Config) ->
+    DataDir = filename:join([?config(priv_dir, Config), "data"]),
+    [A, B]  = Cluster = start_local_cluster(2, ?config(test_name, Config),
+                                            {simple, fun ?MODULE:new_value/2, 0}),
+    %% this test occasionally reproduces a stale read bug after a restart
+    %% NB: occasionally....
+    [begin
+         {ok, _, _} = ra:process_command(A, N, ?PROCESS_COMMAND_TIMEOUT),
+         application:stop(ra),
+         restart_ra(DataDir),
+         ok = ra:restart_server(A),
+         ok = ra:restart_server(B),
+         ?assertMatch({ok, N, _}, ra:consistent_query(A, fun(S) -> S end))
+     end || N <- lists:seq(1, 30)],
+
+    terminate_cluster(Cluster),
+    ok.
 
 consistent_query_minority(Config) ->
     [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),

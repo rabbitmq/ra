@@ -1483,7 +1483,8 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
 
 become(leader, #{cluster := Cluster, log := Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster) + 2, random, Log0),
-    State#{log => Log};
+    State#{log => Log,
+           cluster_change_permitted => false};
 become(follower, #{log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
     %% time
