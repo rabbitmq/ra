@@ -207,7 +207,10 @@ ct_test(
     name = "ra_SUITE",
     compiled_suites = [":ra_SUITE_beam_files"],
     data = glob(["test/ra_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -228,7 +231,10 @@ ct_test(
     name = "ra_log_2_SUITE",
     compiled_suites = [":ra_log_2_SUITE_beam_files"],
     data = glob(["test/ra_log_2_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -284,7 +290,10 @@ ct_test(
     name = "ra_log_wal_SUITE",
     compiled_suites = [":ra_log_wal_SUITE_beam_files"],
     data = glob(["test/ra_log_wal_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -298,14 +307,20 @@ ct_test(
     name = "ra_machine_int_SUITE",
     compiled_suites = [":ra_machine_int_SUITE_beam_files"],
     data = glob(["test/ra_machine_int_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
     name = "ra_machine_version_SUITE",
     compiled_suites = [":ra_machine_version_SUITE_beam_files"],
     data = glob(["test/ra_machine_version_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -319,7 +334,10 @@ ct_test(
     name = "ra_server_SUITE",
     compiled_suites = [":ra_server_SUITE_beam_files"],
     data = glob(["test/ra_server_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@meck//:erlang_app",
+    ],
 )
 
 ct_test(
