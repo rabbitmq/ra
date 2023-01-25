@@ -1,3 +1,7 @@
+load("@rules_erlang//:erlang_bytecode2.bzl", "erlc_opts")
+load("@rules_erlang//:eunit2.bzl", "eunit")
+load("@rules_erlang//:ct.bzl", "assert_suites2", "ct_test")
+load(":app.bzl", "all_beam_files", "all_srcs", "all_test_beam_files", "test_suite_beam_files")
 load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@rules_erlang//gazelle:def.bzl", "GAZELLE_ERLANG_RUNTIME_DEPS")
 load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
@@ -11,57 +15,345 @@ gazelle(
     gazelle = "@rules_erlang//gazelle:gazelle_erlang_binary",
 )
 
+# gazelle:erlang_generate_beam_files_macro
+
 NAME = "ra"
 
-EXTRA_APPS = [
-    "sasl",
-    "crypto",
-]
+erlc_opts(
+    name = "erlc_opts",
+    values = select({
+        "@rules_erlang//:debug_build": [
+            "+debug_info",
+            "+warn_export_vars",
+            "+warn_shadow_vars",
+            "+warn_obsolete_guard",
+        ],
+        "//conditions:default": [
+            "+debug_info",
+            "+warn_export_vars",
+            "+warn_shadow_vars",
+            "+warn_obsolete_guard",
+            "+deterministic",
+        ],
+    }),
+    visibility = [":__subpackages__"],
+)
 
-DEPS = [
-    "@gen_batch_server//:erlang_app",
-]
+erlc_opts(
+    name = "test_erlc_opts",
+    values = select({
+        "@rules_erlang//:debug_build": [
+            "+debug_info",
+            "-DTEST=1",
+        ],
+        "//conditions:default": [
+            "+debug_info",
+            "-DTEST=1",
+            "+deterministic",
+        ],
+    }),
+    visibility = [":__subpackages__"],
+)
 
-RUNTIME_DEPS = [
-    "@aten//:erlang_app",
-    "@seshat//:erlang_app",
-]
+all_beam_files(name = "all_beam_files")
+
+all_test_beam_files(name = "all_test_beam_files")
+
+test_suite_beam_files(name = "test_suite_beam_files")
+
+all_srcs(name = "all_srcs")
 
 erlang_app(
+    name = "erlang_app",
+    srcs = [":all_srcs"],
     app_name = NAME,
-    extra_apps = EXTRA_APPS,
-    runtime_deps = RUNTIME_DEPS,
-    deps = DEPS,
+    beam_files = [":beam_files"],
+    extra_apps = [
+        "crypto",
+        "sasl",
+    ],
+    deps = [
+        "@aten//:erlang_app",
+        "@gen_batch_server//:erlang_app",
+        "@seshat//:erlang_app",
+    ],
 )
 
 test_erlang_app(
+    name = "test_erlang_app",
+    srcs = [":all_srcs"],
+    hdrs = [":public_and_private_hdrs"],
     app_name = NAME,
-    extra_apps = EXTRA_APPS,
-    runtime_deps = RUNTIME_DEPS,
-    deps = DEPS,
+    beam_files = [":test_beam_files"],
+    extra_apps = [
+        "crypto",
+        "sasl",
+    ],
+    deps = [
+        "@aten//:erlang_app",
+        "@gen_batch_server//:erlang_app",
+        "@seshat//:erlang_app",
+    ],
 )
 
-xref()
+xref(
+    name = "xref",
+    target = ":erlang_app",
+)
 
 plt(
     name = "base_plt",
-    apps = DEFAULT_PLT_APPS + EXTRA_APPS + [
-        "eunit",
-        "syntax_tools",
-        "erts",
-        "kernel",
-        "stdlib",
-        "common_test",
-        "inets",
-        "mnesia",
-        "ssh",
-        "ssl",
-    ],
-    deps = DEPS,
+    visibility = [":__subpackages__"],
+)
+
+plt(
+    name = "deps_plt",
+    for_target = ":erlang_app",
+    plt = "//:base_plt",
 )
 
 dialyze(
-    plt = ":base_plt",
+    name = "dialyze",
+    plt = ":deps_plt",
+    target = ":erlang_app",
 )
 
-ra_suites()
+eunit(
+    name = "eunit",
+    compiled_suites = [
+        ":test_consumer_beam",
+        ":test_enqueuer_beam",
+        ":test_erlang_node_helpers_beam",
+        ":test_nemesis_beam",
+        ":test_ra_fifo_beam",
+        ":test_ra_fifo_client_beam",
+        ":test_ra_fifo_index_beam",
+        ":test_ra_log_memory_beam",
+        ":test_ra_queue_beam",
+        ":test_tcp_inet_proxy_helpers_beam",
+    ],
+    eunit_mods = [
+        "consumer",
+        "enqueuer",
+        "erlang_node_helpers",
+        "nemesis",
+        "ra",
+        "ra_app",
+        "ra_bench",
+        "ra_counters",
+        "ra_dbg",
+        "ra_directory",
+        "ra_env",
+        "ra_fifo",
+        "ra_fifo_client",
+        "ra_fifo_index",
+        "ra_file_handle",
+        "ra_flru",
+        "ra_leaderboard",
+        "ra_lib",
+        "ra_log",
+        "ra_log_ets",
+        "ra_log_memory",
+        "ra_log_meta",
+        "ra_log_pre_init",
+        "ra_log_reader",
+        "ra_log_segment",
+        "ra_log_segment_writer",
+        "ra_log_snapshot",
+        "ra_log_sup",
+        "ra_log_wal",
+        "ra_log_wal_sup",
+        "ra_machine",
+        "ra_machine_ets",
+        "ra_machine_simple",
+        "ra_metrics_ets",
+        "ra_monitors",
+        "ra_queue",
+        "ra_server",
+        "ra_server_proc",
+        "ra_server_sup",
+        "ra_server_sup_sup",
+        "ra_snapshot",
+        "ra_sup",
+        "ra_system",
+        "ra_system_sup",
+        "ra_systems_sup",
+        "tcp_inet_proxy_helpers",
+    ],
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "coordination_SUITE",
+    compiled_suites = [":coordination_SUITE_beam_files"],
+    data = glob(["test/coordination_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "partitions_SUITE",
+    compiled_suites = [
+        ":partitions_SUITE_beam_files",
+        "test/enqueuer.beam",  # keep
+        "test/erlang_node_helpers.beam",  # keep
+        "test/nemesis.beam",  # keep
+        "test/ra_fifo.beam",  # keep
+        "test/ra_fifo_client.beam",  # keep
+        "test/ra_fifo_index.beam",  # keep
+        "test/tcp_inet_proxy_helpers.beam",  # keep
+    ],
+    data = glob(["test/partitions_SUITE_data/**/*"]),
+    deps = [
+        ":test_erlang_app",
+        "@inet_tcp_proxy_dist//:erlang_app",  # keep
+        "@proper//:erlang_app",  # keep
+    ],
+)
+
+ct_test(
+    name = "ra_2_SUITE",
+    compiled_suites = [":ra_2_SUITE_beam_files"],
+    data = glob(["test/ra_2_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_SUITE",
+    compiled_suites = [":ra_SUITE_beam_files"],
+    data = glob(["test/ra_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_dbg_SUITE",
+    compiled_suites = [":ra_dbg_SUITE_beam_files"],
+    data = glob(["test/ra_dbg_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_directory_SUITE",
+    compiled_suites = [":ra_directory_SUITE_beam_files"],
+    data = glob(["test/ra_directory_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_2_SUITE",
+    compiled_suites = [":ra_log_2_SUITE_beam_files"],
+    data = glob(["test/ra_log_2_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_SUITE",
+    compiled_suites = [":ra_log_SUITE_beam_files"],
+    data = glob(["test/ra_log_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_ets_SUITE",
+    compiled_suites = [":ra_log_ets_SUITE_beam_files"],
+    data = glob(["test/ra_log_ets_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_meta_SUITE",
+    compiled_suites = [":ra_log_meta_SUITE_beam_files"],
+    data = glob(["test/ra_log_meta_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_props_SUITE",
+    compiled_suites = [":ra_log_props_SUITE_beam_files"],
+    data = glob(["test/ra_log_props_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_segment_SUITE",
+    compiled_suites = [":ra_log_segment_SUITE_beam_files"],
+    data = glob(["test/ra_log_segment_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_segment_writer_SUITE",
+    compiled_suites = [":ra_log_segment_writer_SUITE_beam_files"],
+    data = glob(["test/ra_log_segment_writer_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_snapshot_SUITE",
+    compiled_suites = [":ra_log_snapshot_SUITE_beam_files"],
+    data = glob(["test/ra_log_snapshot_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_log_wal_SUITE",
+    compiled_suites = [":ra_log_wal_SUITE_beam_files"],
+    data = glob(["test/ra_log_wal_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_machine_ets_SUITE",
+    compiled_suites = [":ra_machine_ets_SUITE_beam_files"],
+    data = glob(["test/ra_machine_ets_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_machine_int_SUITE",
+    compiled_suites = [":ra_machine_int_SUITE_beam_files"],
+    data = glob(["test/ra_machine_int_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_machine_version_SUITE",
+    compiled_suites = [":ra_machine_version_SUITE_beam_files"],
+    data = glob(["test/ra_machine_version_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_props_SUITE",
+    compiled_suites = [":ra_props_SUITE_beam_files"],
+    data = glob(["test/ra_props_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_server_SUITE",
+    compiled_suites = [":ra_server_SUITE_beam_files"],
+    data = glob(["test/ra_server_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_snapshot_SUITE",
+    compiled_suites = [":ra_snapshot_SUITE_beam_files"],
+    data = glob(["test/ra_snapshot_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+ct_test(
+    name = "ra_system_SUITE",
+    compiled_suites = [":ra_system_SUITE_beam_files"],
+    data = glob(["test/ra_system_SUITE_data/**/*"]),
+    deps = [":test_erlang_app"],
+)
+
+alias(
+    name = "ra",
+    actual = ":erlang_app",
+    visibility = ["//visibility:public"],
+)
+
+assert_suites2()

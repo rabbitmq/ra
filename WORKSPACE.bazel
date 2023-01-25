@@ -33,8 +33,8 @@ git_repository(
 
 git_repository(
     name = "rules_erlang",
-    branch = "experimental-gazelle-extension",
     remote = "https://github.com/rabbitmq/rules_erlang.git"
+    tag = "3.9.1",
 )
 
 load("@rules_erlang//:internal_deps.bzl", "rules_erlang_internal_deps")
@@ -73,3 +73,27 @@ erlang_config(
 load("@erlang_config//:defaults.bzl", "register_defaults")
 
 register_defaults()
+
+load("@rules_erlang//:hex_pm.bzl", "hex_pm_erlang_app")
+
+hex_pm_erlang_app(
+    name = "aten",
+    version = "0.5.8",
+)
+
+hex_pm_erlang_app(
+    name = "gen_batch_server",
+    version = "0.8.8",
+)
+
+hex_pm_erlang_app(
+    name = "seshat",
+    build_file = "@//:BUILD.seshat",
+    version = "0.4.0",
+)
+
+hex_pm_erlang_app(
+    name = "proper",
+    build_file = "@//:BUILD.proper",
+    version = "1.4.0",
+)
