@@ -8,6 +8,51 @@ aten:
 - aten_sup
 gen_batch_server:
 - gen_batch_server
+inet_tcp_proxy_dist:
+- inet_tcp_proxy_dist
+- inet_tcp_proxy_dist_app
+- inet_tcp_proxy_dist_conn_sup
+- inet_tcp_proxy_dist_controller
+- inet_tcp_proxy_dist_sup
+meck:
+- meck
+- meck_args_matcher
+- meck_code
+- meck_code_gen
+- meck_cover
+- meck_expect
+- meck_history
+- meck_matcher
+- meck_proc
+- meck_ret_spec
+- meck_util
+proper:
+- proper
+- proper_arith
+- proper_array
+- proper_dict
+- proper_erlang_abstract_code
+- proper_fsm
+- proper_gb_sets
+- proper_gb_trees
+- proper_gen
+- proper_gen_next
+- proper_orddict
+- proper_ordsets
+- proper_prop_remover
+- proper_queue
+- proper_sa
+- proper_sets
+- proper_shrink
+- proper_statem
+- proper_symb
+- proper_target
+- proper_transformer
+- proper_types
+- proper_typeserver
+- proper_unicode
+- proper_unused_imports_remover
+- vararg
 ra:
 - ra
 - ra_app
