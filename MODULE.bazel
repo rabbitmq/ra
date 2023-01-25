@@ -1,6 +1,11 @@
 module(
     name = "ra",
-    version = "2.4.0",
+    version = "2.4.1",
+)
+
+bazel_dep(
+    name = "platforms",
+    version = "0.0.5",
 )
 
 bazel_dep(
