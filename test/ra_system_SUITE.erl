@@ -32,7 +32,8 @@ all_tests() ->
      start_clusters_in_systems,
      restart_system,
      ra_overview,
-     ra_overview_not_started
+     ra_overview_not_started,
+     stop_system
     ].
 
 groups() ->
@@ -161,6 +162,25 @@ ra_overview(Config) ->
 ra_overview_not_started(_Config) ->
     ?assertEqual(ra:overview(unstarted_system), system_not_started).
 
+stop_system(Config) ->
+    Sys = ?FUNCTION_NAME,
+    DataDir = ?config(data_dir, Config),
+    SysCfg = #{name => Sys,
+               data_dir => DataDir,
+               names => ra_system:derive_names(Sys)},
+    {ok, _} = application:ensure_all_started(ra),
+
+    ?assertEqual(undefined, ra_system:fetch(Sys)),
+    ?assertEqual(ok, ra_system:stop(Sys)),
+    ?assertEqual(undefined, ra_system:fetch(Sys)),
+
+    ?assertMatch({ok, _}, ra_system:start(SysCfg)),
+    ?assertMatch(#{name := Sys}, ra_system:fetch(Sys)),
+
+    ?assertEqual(ok, ra_system:stop(Sys)),
+    ?assertEqual(undefined, ra_system:fetch(Sys)),
+
+    ok.
 
 %% Utility
 

@@ -13,7 +13,8 @@
 
 %% API functions
 -export([start_link/0,
-         start_system/1]).
+         start_system/1,
+         stop_system/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -35,6 +36,23 @@ start_system(#{name := Name,
                      start => {ra_system_sup, start_link, [Config]}},
     supervisor:start_child(?MODULE, RaSystemsSup).
 
+-spec stop_system(ra_system:config() | atom()) -> ok | {error, any()}.
+stop_system(#{name := Name}) when is_atom(Name) ->
+    stop_system(Name);
+stop_system(Name) when is_atom(Name) ->
+    case supervisor:terminate_child(?MODULE, Name) of
+        ok ->
+            cleanup(Name);
+        {error, not_found} ->
+            cleanup(Name);
+        {error, _} = Error ->
+            Error
+    end.
+
+cleanup(Name) when is_atom(Name) ->
+    _ = supervisor:delete_child(?MODULE, Name),
+    _ = persistent_term:erase({'$ra_system', Name}),
+    ok.
 
 init([]) ->
     %% This is not something we want to expose. It helps test suites
