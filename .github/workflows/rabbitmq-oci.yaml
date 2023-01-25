@@ -7,18 +7,15 @@ on:
       rabbitmq_ref:
         description: The branch, tag or commit of rabbitmq-server to use
         default: main
-env:
-  GENERIC_UNIX_ARCHIVE: ${{ github.workspace }}/rabbitmq-server/bazel-bin/package-generic-unix.tar.xz
 jobs:
-
   build-publish-dev:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - image_tag_suffix: otp-max
-            otp_major: 25
+          - image_tag_suffix: otp-max-bazel
+            otp_version_id: 25_2
     steps:
       - name: Checkout Ra
         uses: actions/checkout@v3
@@ -36,6 +33,13 @@ jobs:
           repository: rabbitmq/rabbitmq-server
           ref: ${{ github.event.inputs.rabbitmq_ref }}
           path: rabbitmq-server
+
+      - name: Load RabbitMQ Version Info
+        id: load-rabbitmq-info
+        working-directory: rabbitmq-server
+        run: |
+          echo "RABBITMQ_SHA=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "RABBITMQ_REF=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
 
       - name: Mount Bazel Cache
         uses: actions/cache@v1
@@ -59,60 +63,63 @@ jobs:
             build:buildbuddy --disk_cache=
 
             build:buildbuddy --remote_download_toplevel
+
+            build --@io_bazel_rules_docker//transitions:enable=false
           EOF
 
-      - name: Load OTP Version Info
-        working-directory: rabbitmq-server
+      - name: Check OTP/Elixir versions used in RBE
         id: load-info
-        run: |
-          bazelisk build :otp_version --config=rbe-${{ matrix.otp_major }}
-          echo "::set-output name=otp::$(cat bazel-bin/otp_version.txt)"
-
-      - name: Load RabbitMQ Version Info
-        id: load-rabbitmq-info
         working-directory: rabbitmq-server
         run: |
-          echo "::set-output name=RABBITMQ_SHA::$(git rev-parse HEAD)"
-          echo "::set-output name=RABBITMQ_REF::$(git rev-parse --abbrev-ref HEAD)"
+          bazelisk build :otp_version :elixir_version \
+            --config=rbe \
+            --platforms=//bazel/platforms:erlang_linux_${{ matrix.otp_version_id }}_platform
+          echo "otp=$(cat bazel-bin/otp_version.txt)" >> $GITHUB_OUTPUT
+          echo "elixir=$(cat bazel-bin/elixir_version.txt)" >> $GITHUB_OUTPUT
 
-      - name: Build generic unix package with this ra
+      - name: Configure OTP & Elixir
+        uses: erlef/setup-beam@v1.15
+        with:
+          otp-version: ${{ steps.load-info.outputs.otp }}
+          elixir-version: ${{ steps.load-info.outputs.elixir }}
+
+      - name: Configure the ra override for this ra
         working-directory: rabbitmq-server
         run: |
-          sed -i"_orig" 's/    "ra",//' MODULE.bazel
-          sed -i"_orig" -E '/APP_VERSION/ s/3\.[0-9]+\.[0-9]+/${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}/' rabbitmq.bzl
-          bazelisk build :package-generic-unix \
-            --config=rbe-${{ matrix.otp_major }} \
-            --override_repository ra=${{ github.workspace }}/ra
+          sudo npm install --global --silent @bazel/buildozer
 
-      - name: Resolve generic unix package path
+          rules_erlang_version="$(cat MODULE.bazel | buildozer 'print version' -:rules_erlang)"
+          ra_repo="rules_erlang~$rules_erlang_version~erlang_package~ra"
+
+          cat << EOF >> user.bazelrc
+          build --override_repository $ra_repo=${{ github.workspace }}/ra
+          EOF
+
+      - name: Configure otp for the OCI image
+        working-directory: rabbitmq-server
         run: |
-          echo "::set-output name=ARTIFACT_PATH::$(readlink -f ${GENERIC_UNIX_ARCHIVE})"
-        id: resolve-artifact-path
+          buildozer 'set tars ["@otp_src_${{ matrix.otp_version_id }}//file"]' \
+            //packaging/docker-image:otp_source
 
-      - name: Save the package as a workflow artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: rabbitmq-package-generic-unix-${{ steps.load-info.outputs.otp }}.tar.xz
-          path: ${{ steps.resolve-artifact-path.outputs.ARTIFACT_PATH }}
+      - name: Build
+        working-directory: rabbitmq-server
+        run: |
+          bazelisk build //packaging/docker-image:rabbitmq \
+            --config=buildbuddy
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
-
-      - name: Cache Docker layers
-        uses: actions/cache@v2
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-${{ github.event.pull_request.head.sha || github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.image_tag_suffix }}-buildx-
+      - name: Load
+        working-directory: rabbitmq-server
+        run: |
+          bazelisk run //packaging/docker-image:rabbitmq \
+            --config=buildbuddy
 
       - name: Check for Push Credentials
         id: authorized
         run: |
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-            echo "::set-output name=PUSH::true"
+            echo "PUSH=true" >> $GITHUB_OUTPUT
           else
-            echo "::set-output name=PUSH::false"
+            echo "PUSH=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Login to DockerHub
@@ -122,13 +129,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Expand generic-unix-package
-        working-directory: rabbitmq-server/packaging/docker-image
-        run: |
-          xzcat ${GENERIC_UNIX_ARCHIVE} | tar xvf -
-
-      - name: Compute Image Tags
-        id: compute-tags
+      - name: Tag and Push
+        if: steps.authorized.outputs.PUSH == 'true'
+        working-directory: rabbitmq-server
         run: |
           RABBIT_REF=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_REF }}
           RABBIT_SHA=${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}
@@ -146,34 +149,16 @@ jobs:
           echo "Will tag with ${TAG_3}"
           echo "Will tag with ${TAG_4}"
 
-          echo "::set-output name=TAG_1::${TAG_1}"
-          echo "::set-output name=TAG_2::${TAG_2}"
-          echo "::set-output name=TAG_3::${TAG_3}"
-          echo "::set-output name=TAG_4::${TAG_4}"
+          docker tag bazel/packaging/docker-image:rabbitmq \
+            pivotalrabbitmq/rabbitmq:${TAG_1}
+          docker tag bazel/packaging/docker-image:rabbitmq \
+            pivotalrabbitmq/rabbitmq:${TAG_2}
+          docker tag bazel/packaging/docker-image:rabbitmq \
+            pivotalrabbitmq/rabbitmq:${TAG_3}
+          docker tag bazel/packaging/docker-image:rabbitmq \
+            pivotalrabbitmq/rabbitmq:${TAG_4}
 
-      - name: Build and push
-        uses: docker/build-push-action@v2
-        with:
-          context: rabbitmq-server/packaging/docker-image
-          push: ${{ steps.authorized.outputs.PUSH }}
-          tags: |
-            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_1 }}
-            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_2 }}
-            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_3 }}
-            pivotalrabbitmq/rabbitmq:${{ steps.compute-tags.outputs.TAG_4 }}
-          build-args: |
-            SKIP_PGP_VERIFY=true
-            PGP_KEYSERVER=pgpkeys.eu
-            OTP_VERSION=${{ steps.load-info.outputs.otp }}
-            SKIP_OTP_VERIFY=true
-            RABBITMQ_BUILD=rabbitmq_server-${{ steps.load-rabbitmq-info.outputs.RABBITMQ_SHA }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
-
-      # Temp fix
-      # https://github.com/docker/build-push-action/issues/252
-      # https://github.com/moby/buildkit/issues/1896
-      - name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          docker push pivotalrabbitmq/rabbitmq:${TAG_1}
+          docker push pivotalrabbitmq/rabbitmq:${TAG_2}
+          docker push pivotalrabbitmq/rabbitmq:${TAG_3}
+          docker push pivotalrabbitmq/rabbitmq:${TAG_4}
