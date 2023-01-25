@@ -1,39 +1,9 @@
-load(
-    "@bazel_tools//tools/build_defs/repo:http.bzl",
-    "http_archive",
-)
-load(
-    "@bazel_tools//tools/build_defs/repo:git.bzl",
-    "git_repository",
-)
-
-http_archive(
-    name = "io_buildbuddy_buildbuddy_toolchain",
-    sha256 = "48546946879b1fd2dcba327ba15776c822f2ce9a9ef1077be9bf3ecadcc1564a",
-    strip_prefix = "buildbuddy-toolchain-b2f5e7e3b126c6d7cf243227147478c0959bfc95",
-    urls = ["https://github.com/buildbuddy-io/buildbuddy-toolchain/archive/b2f5e7e3b126c6d7cf243227147478c0959bfc95.zip"],
-)
-
-load("@io_buildbuddy_buildbuddy_toolchain//:deps.bzl", "buildbuddy_deps")
-
-buildbuddy_deps()
-
-load("@io_buildbuddy_buildbuddy_toolchain//:rules.bzl", "buildbuddy")
-
-buildbuddy(
-    name = "buildbuddy_toolchain",
-    llvm = True,
-)
-
-git_repository(
-    name = "rbe",
-    branch = "linux-rbe",
-    remote = "https://github.com/rabbitmq/rbe-erlang-platform.git",
-)
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 git_repository(
     name = "rules_erlang",
-    remote = "https://github.com/rabbitmq/rules_erlang.git"
+    remote = "https://github.com/rabbitmq/rules_erlang.git",
     tag = "3.9.1",
 )
 
@@ -48,6 +18,13 @@ rules_erlang_internal_setup()
 load("@rules_erlang//gazelle:deps.bzl", "gazelle_deps")
 
 gazelle_deps()
+
+http_archive(
+    name = "io_buildbuddy_buildbuddy_toolchain",
+    sha256 = "a2a5cccec251211e2221b1587af2ce43c36d32a42f5d881737db3b546a536510",
+    strip_prefix = "buildbuddy-toolchain-829c8a574f706de5c96c54ca310f139f4acda7dd",
+    urls = ["https://github.com/buildbuddy-io/buildbuddy-toolchain/archive/829c8a574f706de5c96c54ca310f139f4acda7dd.tar.gz"],
+)
 
 load(
     "@rules_erlang//:rules_erlang.bzl",
@@ -74,26 +51,19 @@ load("@erlang_config//:defaults.bzl", "register_defaults")
 
 register_defaults()
 
-load("@rules_erlang//:hex_pm.bzl", "hex_pm_erlang_app")
+load("@io_buildbuddy_buildbuddy_toolchain//:deps.bzl", "buildbuddy_deps")
 
-hex_pm_erlang_app(
-    name = "aten",
-    version = "0.5.8",
+buildbuddy_deps()
+
+load("@io_buildbuddy_buildbuddy_toolchain//:rules.bzl", "buildbuddy")
+
+buildbuddy(
+    name = "buildbuddy_toolchain",
+    llvm = True,
 )
 
-hex_pm_erlang_app(
-    name = "gen_batch_server",
-    version = "0.8.8",
-)
-
-hex_pm_erlang_app(
-    name = "seshat",
-    build_file = "@//:BUILD.seshat",
-    version = "0.4.0",
-)
-
-hex_pm_erlang_app(
-    name = "proper",
-    build_file = "@//:BUILD.proper",
-    version = "1.4.0",
+git_repository(
+    name = "rbe",
+    branch = "linux-rbe",
+    remote = "https://github.com/rabbitmq/rbe-erlang-platform.git",
 )

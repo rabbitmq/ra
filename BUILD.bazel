@@ -6,8 +6,7 @@ load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@rules_erlang//gazelle:def.bzl", "GAZELLE_ERLANG_RUNTIME_DEPS")
 load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
 load("@rules_erlang//:xref.bzl", "xref")
-load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
-load(":ra.bzl", "ra_suites")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 
 gazelle(
     name = "gazelle",
@@ -194,19 +193,19 @@ ct_test(
     name = "partitions_SUITE",
     compiled_suites = [
         ":partitions_SUITE_beam_files",
-        "test/enqueuer.beam",  # keep
-        "test/erlang_node_helpers.beam",  # keep
-        "test/nemesis.beam",  # keep
-        "test/ra_fifo.beam",  # keep
-        "test/ra_fifo_client.beam",  # keep
-        "test/ra_fifo_index.beam",  # keep
-        "test/tcp_inet_proxy_helpers.beam",  # keep
+        "test/enqueuer.beam",
+        "test/erlang_node_helpers.beam",
+        "test/nemesis.beam",
+        "test/ra_fifo.beam",
+        "test/ra_fifo_client.beam",
+        "test/ra_fifo_index.beam",
+        "test/tcp_inet_proxy_helpers.beam",
     ],
     data = glob(["test/partitions_SUITE_data/**/*"]),
     deps = [
         ":test_erlang_app",
-        "@inet_tcp_proxy_dist//:erlang_app",  # keep
-        "@proper//:erlang_app",  # keep
+        "@inet_tcp_proxy_dist//:erlang_app",
+        "@proper//:erlang_app",
     ],
 )
 

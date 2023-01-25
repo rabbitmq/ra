@@ -66,6 +66,7 @@ erlang_package.git_package(
 
 erlang_package.hex_package(
     name = "seshat",
+    sha256 = "2c3deec7ff86e0d0c05edebd3455c8363123c227be292ffffc1a05eec08bff63",
     version = "0.4.0",
 )
 
