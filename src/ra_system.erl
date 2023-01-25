@@ -10,7 +10,9 @@
          store/1,
          fetch/1,
          fetch/2,
-         lookup_name/2
+         lookup_name/2,
+         stop/1,
+         stop_default/0
          ]).
 
 -type names() :: #{wal := atom(),
@@ -154,8 +156,15 @@ lookup_name(System, Key) when is_atom(System) ->
             {ok, Name}
     end.
 
-
 derive(N, Suff) ->
     S = atom_to_binary(N, utf8),
     binary_to_atom(<<"ra_", S/binary, "_", Suff/binary>>, utf8).
 
+-spec stop(ra_system:config() | atom()) -> ok | {error, any()}.
+stop(System) ->
+    ra_systems_sup:stop_system(System).
+
+-spec stop_default() -> ok | {error, any()}.
+stop_default() ->
+    #{name := Name} = default_config(),
+    stop(Name).
