@@ -1,3 +1,13 @@
+aten:
+- aten
+- aten_app
+- aten_detect
+- aten_detector
+- aten_emitter
+- aten_sink
+- aten_sup
+gen_batch_server:
+- gen_batch_server
 ra:
 - ra
 - ra_app
@@ -35,3 +45,8 @@ ra:
 - ra_system
 - ra_system_sup
 - ra_systems_sup
+seshat:
+- seshat
+- seshat_app
+- seshat_counters_server
+- seshat_sup
