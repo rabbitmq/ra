@@ -109,6 +109,7 @@ def all_beam_files(name = "all_beam_files"):
         hdrs = ["src/ra.hrl"],
         app_name = "ra",
         erlc_opts = "//:erlc_opts",
+        deps = ["@gen_batch_server//:erlang_app"],
     )
     erlang_bytecode(
         name = "ebin_ra_log_pre_init_beam",
@@ -165,6 +166,7 @@ def all_beam_files(name = "all_beam_files"):
         hdrs = ["src/ra.hrl"],
         app_name = "ra",
         erlc_opts = "//:erlc_opts",
+        deps = ["@gen_batch_server//:erlang_app"],
     )
     erlang_bytecode(
         name = "ebin_ra_log_wal_sup_beam",
@@ -405,6 +407,7 @@ def all_test_beam_files(name = "all_test_beam_files"):
         hdrs = ["src/ra.hrl"],
         app_name = "ra",
         erlc_opts = "//:test_erlc_opts",
+        deps = ["@gen_batch_server//:erlang_app"],
     )
     erlang_bytecode(
         name = "test_ra_log_pre_init_beam",
@@ -468,6 +471,7 @@ def all_test_beam_files(name = "all_test_beam_files"):
         hdrs = ["src/ra.hrl"],
         app_name = "ra",
         erlc_opts = "//:test_erlc_opts",
+        deps = ["@gen_batch_server//:erlang_app"],
     )
     erlang_bytecode(
         name = "test_ra_log_wal_sup_beam",
