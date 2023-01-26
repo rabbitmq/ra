@@ -168,6 +168,12 @@ stop_system(Config) ->
     SysCfg = #{name => Sys,
                data_dir => DataDir,
                names => ra_system:derive_names(Sys)},
+
+    _ = application:stop(ra),
+
+    ?assertEqual(undefined, erlang:whereis(ra_systems_sup)),
+    ?assertEqual(ok, ra_system:stop(Sys)),
+
     {ok, _} = application:ensure_all_started(ra),
 
     ?assertEqual(undefined, ra_system:fetch(Sys)),

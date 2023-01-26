@@ -40,17 +40,22 @@ start_system(#{name := Name,
 stop_system(#{name := Name}) when is_atom(Name) ->
     stop_system(Name);
 stop_system(Name) when is_atom(Name) ->
-    case supervisor:terminate_child(?MODULE, Name) of
-        ok ->
-            cleanup(Name);
-        {error, not_found} ->
-            cleanup(Name);
-        {error, _} = Error ->
-            Error
+    try
+        case supervisor:terminate_child(?MODULE, Name) of
+            ok ->
+                cleanup(Name);
+            {error, not_found} ->
+                cleanup(Name);
+            {error, _} = Error ->
+                Error
+        end
+    catch
+        exit:{noproc, _} ->
+            cleanup(Name)
     end.
 
 cleanup(Name) when is_atom(Name) ->
-    _ = supervisor:delete_child(?MODULE, Name),
+    _ = (catch supervisor:delete_child(?MODULE, Name)),
     _ = persistent_term:erase({'$ra_system', Name}),
     ok.
 
