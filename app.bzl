@@ -263,7 +263,7 @@ def all_beam_files(name = "all_beam_files"):
         name = "ebin_ra_system_beam",
         srcs = ["src/ra_system.erl"],
         outs = ["ebin/ra_system.beam"],
-        hdrs = ["src/ra.hrl"],
+        hdrs = ["src/ra.hrl", "src/ra_server.hrl"],
         app_name = "ra",
         erlc_opts = "//:erlc_opts",
     )
@@ -581,7 +581,7 @@ def all_test_beam_files(name = "all_test_beam_files"):
         testonly = True,
         srcs = ["src/ra_system.erl"],
         outs = ["test/ra_system.beam"],
-        hdrs = ["src/ra.hrl"],
+        hdrs = ["src/ra.hrl", "src/ra_server.hrl"],
         app_name = "ra",
         erlc_opts = "//:test_erlc_opts",
     )
