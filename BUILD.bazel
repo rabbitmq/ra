@@ -191,9 +191,22 @@ ct_test(
 
 ct_test(
     name = "partitions_SUITE",
-    compiled_suites = [":partitions_SUITE_beam_files"],
+    compiled_suites = [
+        ":partitions_SUITE_beam_files",
+        "test/erlang_node_helpers.beam",
+        "test/ra_fifo.beam",  # keep
+        "test/ra_fifo_index.beam",  # keep
+        "test/ra_fifo_client.beam",
+        "test/enqueuer.beam",
+        "test/nemesis.beam",
+        "test/tcp_inet_proxy_helpers.beam",
+    ],
     data = glob(["test/partitions_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@inet_tcp_proxy_dist//:erlang_app",  # keep
+        "@proper//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -205,7 +218,10 @@ ct_test(
 
 ct_test(
     name = "ra_SUITE",
-    compiled_suites = [":ra_SUITE_beam_files"],
+    compiled_suites = [
+        ":ra_SUITE_beam_files",
+        "test/ra_queue.beam",  # keep
+    ],
     data = glob(["test/ra_SUITE_data/**/*"]),
     deps = [
         ":test_erlang_app",
@@ -215,7 +231,11 @@ ct_test(
 
 ct_test(
     name = "ra_dbg_SUITE",
-    compiled_suites = [":ra_dbg_SUITE_beam_files"],
+    compiled_suites = [
+        ":ra_dbg_SUITE_beam_files",
+        "test/ra_fifo.beam",
+        "test/ra_fifo_index.beam",  # keep
+    ],
     data = glob(["test/ra_dbg_SUITE_data/**/*"]),
     deps = [":test_erlang_app"],
 )
@@ -262,7 +282,10 @@ ct_test(
     name = "ra_log_props_SUITE",
     compiled_suites = [":ra_log_props_SUITE_beam_files"],
     data = glob(["test/ra_log_props_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@proper//:erlang_app",
+    ],
 )
 
 ct_test(
@@ -327,12 +350,19 @@ ct_test(
     name = "ra_props_SUITE",
     compiled_suites = [":ra_props_SUITE_beam_files"],
     data = glob(["test/ra_props_SUITE_data/**/*"]),
-    deps = [":test_erlang_app"],
+    deps = [
+        ":test_erlang_app",
+        "@proper//:erlang_app",
+    ],
 )
 
 ct_test(
     name = "ra_server_SUITE",
-    compiled_suites = [":ra_server_SUITE_beam_files"],
+    compiled_suites = [
+        ":ra_server_SUITE_beam_files",
+        "test/ra_log_memory.beam",
+        "test/ra_queue.beam",  # keep
+    ],
     data = glob(["test/ra_server_SUITE_data/**/*"]),
     deps = [
         ":test_erlang_app",
