@@ -173,6 +173,9 @@
 -define(WAL_MIN_SIZE, 65536).
 %% The size of each WAL file chunk that is processed at a time during recovery
 -define(WAL_RECOVERY_CHUNK_SIZE, 33554432).
+%% segment defaults
+-define(SEGMENT_MAX_ENTRIES, 4096).
+-define(SEGMENT_MAX_PENDING, 1024).
 
 %% logging shim
 -define(DEBUG_IF(Bool, Fmt, Args),
