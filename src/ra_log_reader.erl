@@ -90,7 +90,7 @@ close(#?STATE{open_segments = Open}) ->
 update_segments(NewSegmentRefs,
                 #?STATE{open_segments = Open0,
                         segment_refs = SegmentRefs0} = State) ->
-    SegmentRefs = compact_seg_refs(NewSegmentRefs ++ SegmentRefs0),
+    SegmentRefs = compact_seg_refs(NewSegmentRefs, SegmentRefs0),
     %% check if any of the updated segrefs refer to open segments
     %% we close these segments so that they can be re-opened with updated
     %% indexes if needed
@@ -462,18 +462,19 @@ closed_mem_table_term_query0(Idx, [{_, _, From, To, Tid} | _Tail])
 closed_mem_table_term_query0(Idx, [_ | Tail]) ->
     closed_mem_table_term_query0(Idx, Tail).
 
-compact_seg_refs(SegRefs) ->
-    lists:reverse(
-      lists:foldl(
-        fun ({_, _, File} = S, Acc) ->
-                case lists:any(fun({_, _, F}) when F =:= File ->
-                                       true;
-                                  (_) -> false
-                               end, Acc) of
-                    true -> Acc;
-                    false -> [S | Acc]
-                end
-        end, [], SegRefs)).
+compact_seg_refs([], PreviousSegRefs) ->
+    PreviousSegRefs;
+compact_seg_refs(NewSegRefs, []) ->
+    NewSegRefs;
+compact_seg_refs(NewSegRefs,
+                 [{_, _, SegFile} | RemSegRefs] = PreviousSegRefs) ->
+    case lists:last(NewSegRefs) of
+        {_, _, SegFile} ->
+            % update information about the last previously seen segment
+            NewSegRefs ++ RemSegRefs;
+        _ ->
+            NewSegRefs ++ PreviousSegRefs
+    end.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
@@ -490,9 +491,9 @@ incr_counter(#cfg{counter = undefined}, _) ->
 
 compact_seg_refs_test() ->
     % {From, To, File}
-    Refs = [{10, 100, "2"}, {10, 75, "2"}, {10, 50, "2"}, {1, 9, "1"}],
-    [{10, 100, "2"}, {1, 9, "1"}] = compact_seg_refs(Refs),
-    ok.
+    NewRefs = [{10, 100, "2"}],
+    PrevRefs = [{10, 75, "2"}, {1, 9, "1"}],
+    ?assertEqual([{10, 100, "2"}, {1, 9, "1"}], compact_seg_refs(NewRefs, PrevRefs)).
 
 range_overlap_test() ->
     {undefined, 1, 10} = range_overlap(1, 10, 20, 30),
