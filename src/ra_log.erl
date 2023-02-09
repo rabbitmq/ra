@@ -288,24 +288,24 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
 -spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
            fun((log_entry(), Acc) -> Acc), Acc, state()) ->
     {Acc, state()} when Acc :: term().
-fold(From0, To00, Fun, Acc0,
+fold(From0, To0, Fun, Acc0,
      #?MODULE{cfg = Cfg,
               cache = Cache,
               first_index = FirstIdx,
               last_index = LastIdx,
               reader = Reader0} = State)
-  when To00 >= From0 ->
+  when To0 >= From0 andalso
+       To0 >= FirstIdx ->
     From = max(From0, FirstIdx),
-    To0 = min(To00, LastIdx),
+    To = min(To0, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
-    %% TODO: if using ETS cache we want to do fold as well and here just
-    %% work out what the lowest in range index is in the cache
+
     CacheOverlap = case ra_log_cache:range(Cache) of
                        {CacheFrom, CacheTo} ->
-                           ra_log_reader:range_overlap(From,
-                                                       To0, CacheFrom, CacheTo);
+                           ra_log_reader:range_overlap(From, To,
+                                                       CacheFrom, CacheTo);
                        _ ->
-                           {undefined, From, To0}
+                           {undefined, From, To}
                    end,
     case CacheOverlap of
         {undefined, F, T} ->
