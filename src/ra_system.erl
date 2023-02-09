@@ -89,7 +89,7 @@ default_config() ->
     DefaultAERBatchSize = application:get_env(ra, default_max_append_entries_rpc_batch_size,
                                               ?AER_CHUNK_SIZE),
 
-    MessageQueueData = application:get_env(ra, server_message_queue_data, on_heap),
+    MessageQueueData = application:get_env(ra, server_message_queue_data, off_heap),
     CompressMemTables = application:get_env(ra, compress_mem_tables, false),
     #{name => default,
       data_dir => DataDir,
