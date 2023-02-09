@@ -298,20 +298,27 @@ fold(From0, To00, Fun, Acc0,
     From = max(From0, FirstIdx),
     To0 = min(To00, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
-    CacheEntries = ra_log_cache:get_items(From, To0, Cache),
     %% TODO: if using ETS cache we want to do fold as well and here just
     %% work out what the lowest in range index is in the cache
-    To = case CacheEntries of
-             [] ->
-                 To0;
-             [{Idx, _, _} | _] ->
-                 NumRead = To0 - Idx + 1,
-                 ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
-                 Idx - 1
-         end,
-    {Reader, Acc1} = ra_log_reader:fold(From, To, Fun, Acc0, Reader0),
-    Acc = lists:foldl(Fun, Acc1, CacheEntries),
-    {Acc, State#?MODULE{reader = Reader}};
+    CacheOverlap = case ra_log_cache:range(Cache) of
+                       {CacheFrom, CacheTo} ->
+                           ra_log_reader:range_overlap(From,
+                                                       To0, CacheFrom, CacheTo);
+                       _ ->
+                           {undefined, From, To0}
+                   end,
+    case CacheOverlap of
+        {undefined, F, T} ->
+            {Reader, Acc} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
+            {Acc, State#?MODULE{reader = Reader}};
+        {CF, CT, F, T} ->
+            {Reader, Acc1} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
+            Acc = ra_log_cache:fold(CF, CT, Fun, Acc1, Cache),
+            NumRead = CT - CF + 1,
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
+            % Acc = lists:foldl(Fun, Acc1, CacheEntries),
+            {Acc, State#?MODULE{reader = Reader}}
+    end;
 fold(_From, _To, _Fun, Acc, State) ->
     {Acc, State}.
 
@@ -368,8 +375,7 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 %% forces the last index and last written index back to a prior index
 -spec set_last_index(ra_index(), state()) ->
     {ok, state()} | {not_found, state()}.
-set_last_index(Idx, #?MODULE{last_index = LastIdx,
-                             cache = Cache0,
+set_last_index(Idx, #?MODULE{cache = Cache0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
@@ -379,7 +385,7 @@ set_last_index(Idx, #?MODULE{last_index = LastIdx,
             {LWTerm, State2} = fetch_term(LWIdx, State1),
             %% this should always be found but still assert just in case
             true = LWTerm =/= undefined,
-            Cache = ra_log_cache:trim(Idx, LastIdx, Cache0),
+            Cache = ra_log_cache:set_last(Idx, Cache0),
             {ok, State2#?MODULE{last_index = Idx,
                                 last_term = Term,
                                 cache = Cache,
@@ -831,7 +837,7 @@ wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Data),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
     State#?MODULE{last_index = Idx, last_term = Term,
-                  cache = ra_log_cache:add(Idx, {Idx, Term, Data}, Cache)}.
+                  cache = ra_log_cache:add({Idx, Term, Data}, Cache)}.
 
 wal_write(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
@@ -841,7 +847,7 @@ wal_write(#?MODULE{cfg = #cfg{uid = UId,
         ok ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             State#?MODULE{last_index = Idx, last_term = Term,
-                          cache = ra_log_cache:add(Idx, {Idx, Term, Data}, Cache)};
+                          cache = ra_log_cache:add({Idx, Term, Data}, Cache)};
         {error, wal_down} ->
             exit(wal_down)
     end.
@@ -854,7 +860,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num, Cache} =
         lists:foldl(fun ({Idx, Term, Data} = Entry, {WC, N, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            C = ra_log_cache:add(Idx, Entry, C0),
+                            C = ra_log_cache:add(Entry, C0),
                             {[WalC | WC], N+1, C}
                     end, {[], 0, Cache0}, Entries),
 
@@ -869,32 +875,10 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
             exit(wal_down)
     end.
 
-truncate_cache(FromIdx, ToIdx,
-               #?MODULE{cache = Cache
-                        % last_written_index_term = {LastWrittenIdx, _},
-                        % last_index = LastIdx
-                       } = State,
+truncate_cache(_FromIdx, ToIdx,
+               #?MODULE{cache = Cache} = State,
                Effects) ->
-    % NeededCacheSize = LastIdx - LastWrittenIdx,
-    % Cache = case NeededCacheSize > map_size(Cache0) div 2 of
-    %             true ->
-    %                 %% if the range to be deleted is smaller than the
-    %                 %% remaining range truncate the cache by removing entries
-    %                 cache_without(FromIdx, ToIdx, Cache0);
-    %             false ->
-    %                 %% if there are fewer entries left than to be removed
-    %                 %% extract the remaining entries
-    %                 cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
-    %         end,
-
-    %% assert cache size, leave commented out
-    % case map_size(Cache) of
-    %     NeededCacheSize -> ok;
-    %     CacheSize ->
-    %         exit({invalid_cache_size, CacheSize, NeededCacheSize})
-    % end,
-
-    {State#?MODULE{cache = ra_log_cache:trim(FromIdx, ToIdx, Cache)}, Effects}.
+    {State#?MODULE{cache = ra_log_cache:trim(ToIdx, Cache)}, Effects}.
 
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),

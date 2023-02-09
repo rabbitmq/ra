@@ -5,22 +5,25 @@
 -export([
          init/0,
          reset/1,
-         add/3,
+         add/2,
          fetch/2,
          fetch/3,
          get_items/2,
          get_items/3,
-         trim/3,
+         fold/5,
+         trim/2,
+         set_last/2,
          flush/1,
          needs_flush/1,
-         size/1
+         size/1,
+         range/1
          ]).
 
 %% holds static or rarely changing fields
 % -record(cfg, {}).
 
 -record(?MODULE, {tbl :: ets:tid(),
-                  % range :: undefined | {ra:index(), ra:index()},
+                  range :: undefined | {ra:index(), ra:index()},
                   cache = #{} :: #{ra:index() => log_entry()}}).
 
 -opaque state() :: #?MODULE{}.
@@ -35,13 +38,26 @@ init() ->
     #?MODULE{tbl = Tid}.
 
 -spec reset(state()) -> state().
+reset(#?MODULE{range = undefined} = State) ->
+    State;
 reset(#?MODULE{tbl = Tid} = State) ->
     true = ets:delete_all_objects(Tid),
-    State#?MODULE{cache = #{}}.
+    State#?MODULE{cache = #{},
+                  range = undefined}.
 
--spec add(ra:index(), log_entry(), state()) -> state().
-add(Idx, Entry, #?MODULE{cache = Cache} = State) ->
-    State#?MODULE{cache = maps:put(Idx, Entry, Cache)}.
+-spec add(log_entry(), state()) -> state().
+add({Idx, _, _} = Entry, #?MODULE{range = {From, To},
+                         cache = Cache} = State)
+  when Idx == To+1 ->
+    State#?MODULE{cache = maps:put(Idx, Entry, Cache),
+                  range = {From, Idx}};
+add({Idx, _, _} = Entry, #?MODULE{range = undefined,
+                                  cache = Cache} = State) ->
+    State#?MODULE{cache = maps:put(Idx, Entry, Cache),
+                  range = {Idx, Idx}};
+add({Idx, _, _} = Entry, #?MODULE{range = {_From, To}} = State)
+  when Idx =< To ->
+    add(Entry, set_last(Idx - 1, State)).
 
 -spec fetch(ra:index(), state()) -> log_entry().
 fetch(Idx, State) ->
@@ -66,6 +82,19 @@ fetch(Idx, #?MODULE{tbl = Tid, cache = Cache}, Default) ->
             Item
     end.
 
+-spec fold(From :: ra:index(),
+           To :: ra:index(),
+           fun((log_entry(), Acc) -> Acc),
+               Acc,
+               state()) ->
+    Acc when Acc :: term().
+fold(To, To, Fun, Acc, State) ->
+    E = fetch(To, State),
+    Fun(E, Acc);
+fold(From, To, Fun, Acc, State) ->
+    E = fetch(From, State),
+    fold(From + 1, To, Fun, Fun(E, Acc), State).
+
 -spec get_items(From :: ra:index(), To :: ra:index(), state()) ->
     [log_entry()].
 get_items(From, To, #?MODULE{tbl = Tid, cache = Cache}) ->
@@ -78,12 +107,31 @@ get_items(From, To, #?MODULE{tbl = Tid, cache = Cache}) ->
 get_items(Indexes, #?MODULE{tbl = Tid, cache = Cache}) ->
     cache_read_sparse(Indexes, Cache, Tid, []).
 
--spec trim(ra:index(), ra:index(), state()) -> state().
-trim(From, To, #?MODULE{} = State)
-  when From > To ->
+-spec trim(ra:index(), state()) -> state().
+trim(_To, #?MODULE{range = undefined} = State) ->
     State;
-trim(From, To, #?MODULE{tbl = Tid, cache = Cache} = State) ->
-    State#?MODULE{cache = cache_without(From, To, Cache, Tid)}.
+trim(To, #?MODULE{tbl = Tid,
+                  range = {From, RangeTo},
+                  cache = Cache} = State)
+  when To >= From andalso
+       To < RangeTo ->
+    NewRange = {To + 1, RangeTo},
+    State#?MODULE{range = NewRange,
+                  cache = cache_without(From, To, Cache, Tid)};
+trim(_To, State) ->
+    reset(State).
+
+-spec set_last(ra:index(), state()) -> state().
+set_last(Idx, #?MODULE{tbl = Tid,
+                       range = {From, To},
+                       cache = Cache} = State)
+  when Idx >= From andalso
+       Idx =< To ->
+    NewRange = {From, Idx},
+    State#?MODULE{range = NewRange,
+                  cache = cache_without(Idx + 1, To, Cache, Tid)};
+set_last(_Idx, State) ->
+    reset(State).
 
 -spec flush(state()) -> state().
 flush(#?MODULE{tbl = Tid,
@@ -102,9 +150,17 @@ needs_flush(#?MODULE{cache = Cache}) ->
 size(#?MODULE{tbl = Tid, cache = Cache}) ->
     map_size(Cache) + ets:info(Tid, size).
 
+-spec range(state()) ->
+    undefined | {ra:index(), ra:index()}.
+range(#?MODULE{range = Range}) ->
+    Range.
+
 %% INTERNAL
 %%
 
+cache_without(FromIdx, Idx, Cache, _Tid)
+  when FromIdx > Idx ->
+    Cache;
 cache_without(Idx, Idx, Cache, Tid) ->
     _ = ets:delete(Tid, Idx),
     maps:remove(Idx, Cache);
