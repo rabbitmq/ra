@@ -397,10 +397,10 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                     {keep_state, State0, []}
             end
     end;
-leader(cast, {command, low, Command},
-       #state{conf = _Conf, delayed_commands = _Delayed} = State0) ->
-    ok = gen_statem:cast(self(), {command, normal, Command}),
-    {keep_state, State0, []};
+% leader(cast, {command, low, Command},
+%        #state{conf = _Conf, delayed_commands = _Delayed} = State0) ->
+%     ok = gen_statem:cast(self(), {command, normal, Command}),
+%     {keep_state, State0, []};
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{conf = Conf, delayed_commands = Delayed} = State0) ->
     case validate_reply_mode(ReplyMode) of
