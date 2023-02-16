@@ -64,6 +64,7 @@
     #{cfg := #cfg{},
       leader_id => 'maybe'(ra_server_id()),
       cluster := ra_cluster(),
+      passive_peers := [ra_server_id()],
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
@@ -327,6 +328,7 @@ init(#{id := Id,
     #{cfg => Cfg,
       current_term => CurrentTerm,
       cluster => Cluster0,
+      passive_peers => [],
       % There may be scenarios when a single server
       % starts up but hasn't
       % yet re-applied its noop command that we may receive other join
@@ -695,14 +697,19 @@ handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
                   [LogId, Cand]),
             {leader, State0, []};
         _ ->
-            ?INFO("~s: leader saw request_vote_rpc from ~w for term ~b "
-                  "abdicates term: ~b!",
-                  [LogId, Msg#request_vote_rpc.candidate_id, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}),
-             [{next_event, Msg}]}
+            case role(Cand, State0) of 
+                active -> 
+                    ?INFO("~s: leader saw request_vote_rpc from ~w for term ~b "
+                    "abdicates term: ~b!",
+                    [LogId, Msg#request_vote_rpc.candidate_id, Term, CurTerm]),
+                    {follower, update_term(Term, State0#{leader_id => undefined}),
+                    [{next_event, Msg}]};
+                passive ->
+                    exit(leader_saw_pre_vote_rpc_from_passive_node)
+            end        
     end;
 handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
-    Reply = #request_vote_result{term = Term, vote_granted = false},
+    Reply = #request_vote_result{term = Term, vote_granted = false, from = id(State)},
     {leader, State, [{reply, Reply}]};
 handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
@@ -713,11 +720,16 @@ handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
                   [LogId, Cand]),
             {leader, State0, []};
         _ ->
-            ?INFO("~s: leader saw pre_vote_rpc from ~w for term ~b"
-                  " abdicates term: ~b!",
-                  [LogId, Msg#pre_vote_rpc.candidate_id, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}),
-             [{next_event, Msg}]}
+            case role(Cand, State0) of 
+                active -> 
+                    ?INFO("~s: leader saw pre_vote_rpc from ~w for term ~b"
+                        " abdicates term: ~b!",
+                        [LogId, Msg#pre_vote_rpc.candidate_id, Term, CurTerm]),
+                    {follower, update_term(Term, State0#{leader_id => undefined}),
+                    [{next_event, Msg}]};
+                passive -> 
+                    exit(leader_saw_pre_vote_rpc_from_passive_node)
+            end
     end;
 handle_leader(#pre_vote_rpc{term = Term},
               #{current_term := CurTerm} = State0)
@@ -743,6 +755,7 @@ handle_leader({transfer_leadership, Member},
     ?DEBUG("~s: transfer leadership requested but unknown member ~w",
            [LogId, Member]),
     {leader, State, [{reply, {error, unknown_member}}]};
+% TODO: handle transfer leadership to passive member
 handle_leader({transfer_leadership, ServerId},
               #{cfg := #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~s: transfer leadership to ~w requested",
@@ -764,17 +777,34 @@ handle_leader(Msg, State) ->
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
-handle_candidate(#request_vote_result{term = Term, vote_granted = true},
+% For backwards compatibility with previous form of the record
+handle_candidate({request_vote_result, Term, Granted}, State) -> 
+    Vote = #request_vote_result{
+        term = Term,
+        vote_granted = Granted,
+        from = undefined
+    },
+    handle_candidate(Vote, State);
+handle_candidate(#request_vote_result{term = Term, vote_granted = true, from = From},
                  #{cfg := #cfg{id = Id,
                                log_id = LogId,
                                machine = Mac},
                    current_term := Term,
                    votes := Votes,
-                   cluster := Nodes} = State0) ->
-    NewVotes = Votes + 1,
+                   cluster := Nodes,
+                   passive_peers := PassivePeers
+                } = State0) ->
+
+    NewVotes = case lists:member(From, PassivePeers) of
+            false -> Votes + 1;
+            true -> 
+                ?WARN("Ignoring vote from passive peer ~p", [From]),
+                Votes
+    end,
     ?DEBUG("~s: vote granted for term ~b votes ~b",
           [LogId, Term, NewVotes]),
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    ActiveNodes = maps:keys(Nodes) -- PassivePeers,
+    case trunc(erlang:length(ActiveNodes) / 2) + 1 of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
             Noop = {noop, #{ts => erlang:system_time(millisecond)},
@@ -846,7 +876,7 @@ handle_candidate(#pre_vote_rpc{term = Term} = Msg,
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
-    Reply = #request_vote_result{term = Term, vote_granted = false},
+    Reply = #request_vote_result{term = Term, vote_granted = false, from = id(State)},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{}, State) ->
     %% just ignore pre_votes that aren't of a higher term
@@ -862,10 +892,13 @@ handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
-    call_for_election(candidate, State);
+    maybe_call_for_election(candidate, State);
 handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {candidate, State#{log => Log}, Effs};
+handle_candidate({command, normal,{'$ra_force_change_passive_members',NewPassive}}, State) -> 
+    force_change_passive_members(candidate, self(), NewPassive, State);
+    
 handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, []}.
@@ -907,20 +940,26 @@ handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
     {follower, State0#{votes => 0}, [{next_event, ISR}]};
+% TODO pre_vote_result backward compatibility
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
                 #{current_term := Term,
                   votes := Votes,
                   cfg := #cfg{log_id = LogId},
                   pre_vote_token := Token,
-                  cluster := Nodes} = State0) ->
+                  cluster := Nodes,
+                  passive_peers := PassivePeers
+                } = State0) ->
     ?DEBUG("~s: pre_vote granted ~w for term ~b votes ~b",
           [LogId, Token, Term, Votes + 1]),
+
+    % TODO filter votes from non-active nodes
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    ActiveNodes = maps:keys(Nodes) -- PassivePeers,
+    case trunc(erlang:length(ActiveNodes) / 2) + 1 of
         NewVotes ->
-            call_for_election(candidate, State);
+            maybe_call_for_election(candidate, State);
         _ ->
             {pre_vote, State#{votes => NewVotes}, []}
     end;
@@ -936,7 +975,7 @@ handle_pre_vote(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {pre_vote, State, []};
 handle_pre_vote(election_timeout, State) ->
-    call_for_election(pre_vote, State);
+    maybe_call_for_election(pre_vote, State);
 handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -944,6 +983,8 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {pre_vote, State#{log => Log}, Effs};
+handle_pre_vote({command, normal,{'$ra_force_change_passive_members',NewPassive}}, State) -> 
+    force_change_passive_members(pre_vote, self(), NewPassive, State);
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
     {pre_vote, State, []}.
@@ -1101,13 +1142,20 @@ handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 #{current_term := Term, voted_for := VotedFor,
-                  cfg := #cfg{log_id = LogId}} = State)
+                  cfg := #cfg{log_id = LogId, id = Id}} = State)
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
     ?DEBUG("~w: follower request_vote_rpc for ~w already voted for ~w in ~b",
            [LogId, Cand, VotedFor, Term]),
-    Reply = #request_vote_result{term = Term, vote_granted = false},
-    {follower, State, [{reply, Reply}]};
+    case role(Id, State) of
+        passive ->
+            {follower, State, []};
+        active ->
+            Reply = #request_vote_result{term = Term, 
+                                         vote_granted = false,
+                                         from = id(State)},
+            {follower, State, [{reply, Reply}]}
+    end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
@@ -1121,7 +1169,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             ?INFO("~s: granting vote for ~w with last indexterm ~w"
                   " for term ~b previous term was ~b",
                   [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
-            Reply = #request_vote_result{term = Term, vote_granted = true},
+            Reply = #request_vote_result{term = Term, vote_granted = true, from = id(State1)},
             State = update_term_and_voted_for(Term, Cand, State1),
             {follower, State#{voted_for => Cand, current_term => Term},
              [{reply, Reply}]};
@@ -1130,7 +1178,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                   " candidate last log index term was: ~w~n"
                   " last log entry idxterm seen was: ~w",
                   [LogId, Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
-            Reply = #request_vote_result{term = Term, vote_granted = false},
+            Reply = #request_vote_result{term = Term, vote_granted = false, from = id(State0)},
             {follower, State1#{current_term => Term}, [{reply, Reply}]}
     end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
@@ -1139,7 +1187,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
   when Term < CurTerm ->
     ?INFO("~s: declining vote to ~w for term ~b, current term ~b",
           [LogId, Candidate, Term, CurTerm]),
-    Reply = #request_vote_result{term = CurTerm, vote_granted = false},
+    Reply = #request_vote_result{term = CurTerm, vote_granted = false, from = id(State)},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
                 State = #{current_term := CurTerm}) ->
@@ -1197,12 +1245,14 @@ handle_follower(#append_entries_reply{}, State) ->
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
 handle_follower(election_timeout, State) ->
-    call_for_election(pre_vote, State);
+    maybe_call_for_election(pre_vote, State);
 handle_follower(try_become_leader, State) ->
-    call_for_election(pre_vote, State);
+    maybe_call_for_election(pre_vote, State);
 handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {follower, State#{log => Log}, Effs};
+handle_follower({command, normal, {'$ra_force_change_passive_members', NewPassive}}, State) -> 
+    force_change_passive_members(follower, self(), NewPassive, State);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
@@ -1293,7 +1343,7 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
 handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout, State) ->
-    call_for_election(pre_vote, State);
+    maybe_call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout,
                        #{condition_timeout_changes := #{effects := Effects,
                                                         transition_to := TransitionTo}} = State) ->
@@ -1358,7 +1408,8 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
                     voted_for,
                     cluster_change_permitted,
                     cluster_index_term,
-                    query_index
+                    query_index,
+                    passive_peers
                    ], State),
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
@@ -1452,6 +1503,16 @@ system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
 -spec leader_id(ra_server_state()) -> 'maybe'(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
+
+-spec role(ra_server_id(), ra_server_state()) -> active | passive.
+role(Peer, State) ->
+    case maps:get(passive_peers, State, undefined) of
+        undefined -> active;
+        PassivePeers -> case lists:member(Peer, PassivePeers) of
+                     true -> passive;
+                     false -> active
+                 end
+    end.
 
 -spec clear_leader_id(ra_server_state()) -> ra_server_state().
 clear_leader_id(State) ->
@@ -1950,6 +2011,17 @@ log_read(Indexes, #{log := Log0} = State) ->
 %%% Internal functions
 %%%===================================================================
 
+maybe_call_for_election(RaftState, #{
+    cfg := #cfg{id = Id}
+} = State0) ->
+    case role(Id, State0) of
+        active ->
+            call_for_election(RaftState, State0);
+        passive ->
+            ?DEBUG("We are passive, not calling for election.", []),
+            {RaftState, State0, []}
+    end.
+
 call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                                current_term := CurrentTerm} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_ELECTIONS, 1),
@@ -1964,7 +2036,7 @@ call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                                        last_log_term = LastTerm}}
             || PeerId <- PeerIds],
     % vote for self
-    VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
+    VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true, from = Id},
     State = update_term_and_voted_for(NewTerm, Id, State0),
     {candidate, State#{leader_id => undefined, votes => 0},
      [{next_event, cast, VoteForSelf}, {send_vote_requests, Reqs}]};
@@ -1986,7 +2058,7 @@ call_for_election(pre_vote, #{cfg := #cfg{id = Id,
             || PeerId <- PeerIds],
     % vote for self
     VoteForSelf = #pre_vote_result{term = Term, token = Token,
-                                   vote_granted = true},
+                                   vote_granted = true, from = id(State0)},
     State = update_term_and_voted_for(Term, Id, State0),
     {pre_vote, State#{leader_id => undefined, votes => 0,
                       pre_vote_token => Token},
@@ -2004,11 +2076,22 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
+    case role(Cand, State) of
+        passive -> 
+            ?ERROR("We've received a request for vote from ~p passive node. "
+                   "This should never happen or we risk losing data.", [Cand]),
+            % this can actually happen during failover as new active members
+            % are already voting for themselves
+            % exit({FsmState, saw_pre_vote_from_passive_node, Cand});
+           ok;
+        active -> 
+            ok
+    end,
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version > ?RA_PROTO_VERSION->
             ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b",
                    [log_id(State0), Cand, Version]),
-            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false, id(State))}]};
         true when TheirMacVer == EffMacVer orelse
                   (TheirMacVer >= EffMacVer andalso
                    TheirMacVer =< OurMacVer) ->
@@ -2019,12 +2102,12 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
             {FsmState, State#{voted_for => Cand},
-             [{reply, pre_vote_result(Term, Token, true)}]};
+             [{reply, pre_vote_result(Term, Token, true, id(State))}]};
         true ->
             ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
                    " ours is ~b effective ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer]),
-            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false, id(State))},
                                start_election_timeout]};
         false ->
             ?DEBUG("~s: declining pre-vote for ~w for term ~b,"
@@ -2036,7 +2119,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                     {FsmState, State, [start_election_timeout]};
                 _ ->
                     {FsmState, State,
-                     [{reply, pre_vote_result(Term, Token, false)}]}
+                     [{reply, pre_vote_result(Term, Token, false, id(State))}]}
             end
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
@@ -2047,12 +2130,12 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
     ?DEBUG("~s declining pre-vote to ~w for term ~b, current term ~b",
            [log_id(State), Candidate, Term, CurTerm]),
     {FsmState, State,
-     [{reply, pre_vote_result(CurTerm, Token, false)}]}.
+     [{reply, pre_vote_result(CurTerm, Token, false, id(State))}]}.
 
-pre_vote_result(Term, Token, Success) ->
+pre_vote_result(Term, Token, Success, Id) ->
     #pre_vote_result{term = Term,
                      token = Token,
-                     vote_granted = Success}.
+                     vote_granted = Success, from = Id}.
 
 new_peer() ->
     #{next_index => 1,
@@ -2279,26 +2362,32 @@ apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts}
     end;
-apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
-           {Mod, _, State0, MacSt, Effects0, Notifys0, LastTs}) ->
+apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, ClusterChange, ReplyType}=CC},
+        {Mod, _, State0, MacSt, Effects0, Notifys0, LastTs}) ->
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
-                                   Effects0, Notifys0),
+                            Effects0, Notifys0),
+    ?DEBUG("Processing cluster change: ~p", [CC]),
+    {NewCluster, NewPassivePeers} = case ClusterChange of
+        {_Cluster, _Passives} -> ClusterChange;
+        Cluster -> {Cluster, []}
+    end,
     State = case State0 of
-                #{cluster_index_term := {CI, CT}}
-                  when Idx > CI andalso Term >= CT ->
-                    ?DEBUG("~s: applying ra cluster change to ~w",
-                           [log_id(State0), maps:keys(NewCluster)]),
-                    %% we are recovering and should apply the cluster change
-                    State0#{cluster => NewCluster,
-                            cluster_change_permitted => true,
-                            cluster_index_term => {Idx, Term}};
-                _  ->
-                    ?DEBUG("~s: committing ra cluster change to ~w",
-                           [log_id(State0), maps:keys(NewCluster)]),
-                    %% else just enable further cluster changes again
-                    State0#{cluster_change_permitted => true}
-            end,
-    {Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
+         #{cluster_index_term := {CI, CT}}
+           when Idx > CI andalso Term >= CT ->
+             ?DEBUG("~s: applying ra cluster change to ~w ~p ~p",
+                    [log_id(State0), maps:keys(NewCluster), NewCluster, NewPassivePeers]),
+             %% we are recovering and should apply the cluster change
+             State0#{cluster => NewCluster,
+                     passive_peers => NewPassivePeers,
+                     cluster_change_permitted => true,
+                     cluster_index_term => {Idx, Term}};
+         _  ->
+             ?DEBUG("~s: committing ra cluster change to ~w",
+                    [log_id(State0), maps:keys(NewCluster)]),
+             %% else just enable further cluster changes again
+             State0#{cluster_change_permitted => true}
+     end,
+{Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
 apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
            {CurModule, LastAppliedIdx,
             #{cfg := #cfg{log_id = LogId,
@@ -2422,24 +2511,32 @@ append_log_leader({CmdTag, _, _, _},
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
     {not_appended, cluster_change_not_permitted, State};
-append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-                  State = #{cluster := OldCluster}) ->
+append_log_leader({'$ra_join', From, {JoiningNode, Role}, ReplyMode},
+                  State = #{cluster := OldCluster, passive_peers := OldPassives}) ->
     case OldCluster of
         #{JoiningNode := _} ->
             % already a member do nothing
             % TODO: reply? If we don't reply the caller may block until timeout
             {not_appended, already_member, State};
         _ ->
-            Cluster = OldCluster#{JoiningNode => new_peer()},
-            append_cluster_change(Cluster, From, ReplyMode, State)
+            NewCluster = OldCluster#{JoiningNode => new_peer()},
+            NewPassives = case Role of 
+                passive -> 
+                    lists:uniq([JoiningNode | OldPassives]);
+                _ -> 
+                    OldPassives
+            end,
+            append_cluster_change(NewCluster, NewPassives, From, ReplyMode, State)
     end;
 append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
                   State = #{cfg := #cfg{log_id = LogId},
-                            cluster := OldCluster}) ->
+                            cluster := OldCluster,
+                            passive_peers := OldPassivePeers}) ->
     case OldCluster of
         #{LeavingServer := _} ->
             Cluster = maps:remove(LeavingServer, OldCluster),
-            append_cluster_change(Cluster, From, ReplyMode, State);
+            PassivePeers = lists:delete(LeavingServer, OldPassivePeers),
+            append_cluster_change(Cluster, PassivePeers, From, ReplyMode, State);
         _ ->
             ?DEBUG("~s: member ~w requested to leave but was not a member. "
                    "Members: ~w",
@@ -2460,8 +2557,13 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
     % change (can this even happen?) we should revert back to the last known
     % cluster
     case Cmd of
+        {'$ra_cluster_change', _, {Cluster, Passives}, _} ->
+            State#{cluster => Cluster,
+                   passive_peers => Passives,
+                   cluster_index_term => {Idx, Term}};
         {'$ra_cluster_change', _, Cluster, _} ->
             State#{cluster => Cluster,
+                   passive_peers => [],
                    cluster_index_term => {Idx, Term}};
         _ ->
             % revert back to previous cluster
@@ -2472,19 +2574,27 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                         State) ->
-    State#{cluster => Cluster,
-           cluster_index_term => {Idx, Term}};
+    case Cluster of
+        {NewCluster, NewPassives} ->
+            State#{cluster => NewCluster,
+                   passive_peers => NewPassives,
+                   cluster_index_term => {Idx, Term}};
+        NewCluster ->
+            State#{cluster => NewCluster,
+                   passive_peers => [],
+                   cluster_index_term => {Idx, Term}}
+    end;
 pre_append_log_follower(_, State) ->
     State.
 
-append_cluster_change(Cluster, From, ReplyMode,
+append_cluster_change(NewCluster, NewPassives, From, ReplyMode,
                       State = #{log := Log0,
                                 cluster := PrevCluster,
                                 cluster_index_term := {PrevCITIdx, PrevCITTerm},
                                 current_term := Term}) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
-    Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
+    Command = {'$ra_cluster_change', From, {NewCluster, NewPassives}, ReplyMode},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
     % TODO: is it safe to do change the cluster config with an async write?
@@ -2492,7 +2602,8 @@ append_cluster_change(Cluster, From, ReplyMode,
     Log = ra_log:append({NextIdx, Term, Command}, Log0),
     {ok, NextIdx, Term,
      State#{log => Log,
-            cluster => Cluster,
+            cluster => NewCluster,
+            passive_peers => NewPassives,
             cluster_change_permitted => false,
             cluster_index_term => IdxTerm,
             previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
@@ -2555,13 +2666,18 @@ query_indexes(#{cfg := #cfg{id = Id},
 
 match_indexes(#{cfg := #cfg{id = Id},
                 cluster := Cluster,
+                passive_peers := Passive,
                 log := Log}) ->
     {LWIdx, _} = ra_log:last_written(Log),
+    %% We have to use the list of active servers to know which commit id to consider
+    %% to be committed. 
+    ActivePeers = maps:keys(Cluster) -- Passive,
+    ActivePeerState = maps:with(ActivePeers, Cluster),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
                   (_K, #{match_index := Idx}, Acc) ->
                       [Idx | Acc]
-              end, [LWIdx], Cluster).
+              end, [LWIdx], ActivePeerState).
 
 -spec agreed_commit(list()) -> ra_index().
 agreed_commit(Indexes) ->
@@ -2570,7 +2686,7 @@ agreed_commit(Indexes) ->
     lists:nth(Nth, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
-    ?DEBUG("~s: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
+    ?DEBUG("~s: ~w received unhandled msg: ~p", [LogId, RaState, Msg]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
     {To, _} =  ra_log:last_index_term(Log0),
@@ -2775,6 +2891,28 @@ meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
     Name;
 meta_name(#{names := #{log_meta := Name}}) ->
     Name.
+
+force_change_passive_members(RaftState, _From, NewPassive, State) ->
+    ?DEBUG("[~p] Force change passive members: ~p", [RaftState, NewPassive]),
+    _Reply = ok,
+    % TODO: what are the conditions here we should go to pre_vote
+    % can we check if leader is dead?
+    % should we move to a "paused" state to wait for all passives to be changed?
+    % why are we not in prevote already if we killed the leader?
+    NewRaftState = case RaftState of 
+        candidate -> 
+            pre_vote;
+        follower -> 
+            pre_vote;
+        _ ->
+            RaftState
+    end,
+    {NewRaftState, State#{
+        passive_peers => NewPassive
+    }, [
+         % TODO how to reply?: {reply, From, Reply}
+        ]}.
+
 %%% ===================
 %%% Internal unit tests
 %%% ===================

@@ -115,7 +115,8 @@
 %% Section 4.2
 -record(request_vote_result,
         {term :: ra_term(),
-         vote_granted :: boolean()}).
+         vote_granted :: boolean(), 
+         from :: atom()}).
 
 %% pre-vote extension
 -record(pre_vote_rpc,
@@ -131,7 +132,8 @@
 -record(pre_vote_result,
         {term :: ra_term(),
          token :: reference(),
-         vote_granted :: boolean()}).
+         vote_granted :: boolean(),
+         from :: atom()}).
 
 -type snapshot_meta() :: #{index := ra_index(),
                            term := ra_term(),

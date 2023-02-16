@@ -43,6 +43,7 @@
 %% API
 -export([start_link/1,
          command/3,
+         local_command/3,
          cast_command/2,
          cast_command/3,
          query/4,
@@ -153,6 +154,11 @@ start_link(Config = #{id := Id}) ->
     ra_cmd_ret().
 command(ServerLoc, Cmd, Timeout) ->
     leader_call(ServerLoc, {command, normal, Cmd}, Timeout).
+
+-spec local_command(server_loc(), ra_command(), timeout()) ->
+    ra_cmd_ret().
+local_command(ServerLoc, Cmd, Timeout) ->
+    local_call(ServerLoc, {command, normal, Cmd}, Timeout).
 
 -spec cast_command(ra_server_id(), ra_command()) -> ok.
 cast_command(ServerId, Cmd) ->

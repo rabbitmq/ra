@@ -59,12 +59,14 @@
          %% membership changes
          add_member/2,
          add_member/3,
+         add_member/4,
          remove_member/2,
          remove_member/3,
          leave_and_terminate/3,
          leave_and_terminate/4,
          leave_and_delete_server/3,
          leave_and_delete_server/4,
+         force_change_passive_members/3,
          %% troubleshooting
          % deprecated
          overview/0,
@@ -479,6 +481,7 @@ start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
              id => ServerId,
              uid => UId,
              initial_members => ServerIds,
+             initial_passive_peers => [],
              log_init_args => #{uid => UId},
              machine => Machine},
     start_server(System, Conf).
@@ -564,7 +567,8 @@ delete_cluster(ServerIds, Timeout) ->
     {error, already_member} |
     {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId) ->
-    add_member(ServerLoc, ServerId, ?DEFAULT_TIMEOUT).
+    add_member(ServerLoc, ServerId, active, ?DEFAULT_TIMEOUT).
+
 
 %% @doc Same as `add_member/2' but also accepts a timeout.
 %% @see add_member/2
@@ -574,11 +578,21 @@ add_member(ServerLoc, ServerId) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
-add_member(ServerLoc, ServerId, Timeout) ->
+add_member(ServerLoc, ServerId, Role) when Role =:= active orelse Role =:= passive ->
+    add_member(ServerLoc, ServerId, Role,?DEFAULT_TIMEOUT);
+add_member(ServerLoc, ServerId, Timeout) when is_integer(Timeout) orelse Timeout =:= infinity ->
+    add_member(ServerLoc, ServerId, active, Timeout).
+
+add_member(ServerLoc, ServerId, Role, Timeout) -> 
     ra_server_proc:command(ServerLoc,
-                           {'$ra_join', ServerId, after_log_append},
+                           {'$ra_join', {ServerId, Role}, after_log_append},
                            Timeout).
 
+% TODO this call times out currently as there is no reply
+force_change_passive_members({_, _} = ServerLoc, NewPassiveMembers, Timeout) ->
+    ra_server_proc:local_command(ServerLoc,
+                           {'$ra_force_change_passive_members', NewPassiveMembers},
+                           Timeout).
 
 %% @doc Removes a server from the cluster's membership configuration.
 %% This function returns after appending a cluster membership change
