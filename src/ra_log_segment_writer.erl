@@ -225,7 +225,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
 
     case open_file(Dir, SegConf) of
         enoent ->
-            ?WARN("segment_writer: skipping segment as directory ~s does "
+            ?DEBUG("segment_writer: skipping segment as directory ~s does "
                   "not exist", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
@@ -381,7 +381,7 @@ open_file(Dir, SegConf) ->
             _ = prim_file:delete(File),
             open_file(Dir, SegConf);
         {error, enoent} ->
-            ?WARN("segment_writer: failed to open segment file ~s "
+            ?DEBUG("segment_writer: failed to open segment file ~s "
                   "error: enoent", [File]),
             enoent;
         Err ->
