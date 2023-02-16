@@ -516,10 +516,6 @@ leader(EventType, Msg, State0) ->
         {leader, State1, Effects1} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             {keep_state, State, Actions};
-        {follower, State1, Effects1} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
-            Monitors = ra_monitors:remove_all(machine, State#state.monitors),
-            next_state(follower, State#state{monitors = Monitors}, Actions);
         {stop, State1, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
@@ -534,9 +530,9 @@ leader(EventType, Msg, State0) ->
                 false ->
                     next_state(terminating_leader, State, Actions)
             end;
-        {await_condition, State1, Effects1} ->
+        {NextState, State1, Effects1} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
-            next_state(await_condition, State, Actions)
+            next_state(NextState, State, Actions)
     end.
 
 candidate(enter, OldState, State0) ->
@@ -662,7 +658,9 @@ follower(enter, OldState, #state{server_state = ServerState} = State0) ->
                                maybe_set_election_timeout(TimeoutLen, State1,
                                                           Actions0)
                        end,
-    {keep_state, State#state{delayed_commands = queue:new()}, Actions};
+    Monitors = ra_monitors:remove_all(machine, State#state.monitors),
+    {keep_state, State#state{delayed_commands = queue:new(),
+                             monitors = Monitors}, Actions};
 follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(EventType, {local_call, Msg}, State) ->

@@ -808,11 +808,18 @@ aux_and_machine_monitor_leader_change(Config) ->
     meck:expect(Mod, apply,
                 fun
                     (_, {down, P, _} = Cmd, State) ->
-                        ct:pal("handling ~p", [Cmd]),
-                        {State, ok, {send_msg, Self, {got_down, machine, P}}};
+                        ct:pal("down handling ~p", [Cmd]),
+                        {lists:delete(P, State), ok,
+                         {send_msg, Self, {got_down, machine, P}}};
                     (_, {monitor, P} = Cmd, State) ->
                         ct:pal("handling ~p", [Cmd]),
-                        {State, ok, {monitor, process, P}}
+                        {[P | State], ok, {monitor, process, P}}
+                end),
+    meck:expect(Mod, state_enter,
+                fun (leader, State) ->
+                        [{monitor, process, P} || P <- State];
+                    (_, _) ->
+                        []
                 end),
     meck:expect(Mod, init_aux, fun (_) -> undefined end),
     meck:expect(Mod, handle_aux,
@@ -832,7 +839,7 @@ aux_and_machine_monitor_leader_change(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
-    [Follower1, _Follower2] = Cluster -- [Leader],
+    [Follower1, Follower2] = Cluster -- [Leader],
 
     P = spawn(fun () ->
                       receive
@@ -840,17 +847,38 @@ aux_and_machine_monitor_leader_change(Config) ->
                       end
               end),
     {ok, _, _} = ra:process_command(Leader, {monitor, P}),
-    ok = ra:cast_aux_command(Leader, {monitor, P}),
+    ok = ra:cast_aux_command(Follower2, {monitor, P}),
     ok = ra:cast_aux_command(Follower1, {monitor, P}),
-    ra:transfer_leadership(Leader, Follower1),
+    % timer:sleep(100),
+    LeaderPid = whereis(element(1, Leader)),
+    %% check the leader is monitoring P
+    await(fun () ->
+                  {monitored_by, M} = process_info(P, monitored_by),
+                  lists:member(LeaderPid, M)
+          end, 100),
+    ok = ra:transfer_leadership(Leader, Follower1),
+    {ok, _, Follower1 = _NewLeader} = ra:members(Follower1),
+    %% after a leader transfer P should no longer be monitored by the previous
+    %% leader as all machine monitors should be invalidated when a leader steps
+    %% down
+    await(fun () ->
+                  {monitored_by, M} = process_info(P, monitored_by),
+                  not lists:member(LeaderPid, M)
+          end, 100),
+    % terminate P with `normal'
     P ! pls_exit,
     %% assert both aux nodes have retained their monitors
-    %% but the new leader has not
+    %% and the new leader also got a mechine monitor down
     receive
         {got_down, aux, P} ->
             receive
                 {got_down, aux, P} ->
-                    ok
+                    receive
+                        {got_down, machine, P} ->
+                            ok
+                    after 2500 ->
+                              exit(got_down_machine)
+                    end
             after 2500 ->
                       exit(got_down_aux)
             end
@@ -905,3 +933,15 @@ assert_flush() ->
     after 0 ->
               ok
     end.
+
+await(_CondPred, 0) ->
+    ct:fail("await condition did not materialize");
+await(CondPred, N) ->
+    case CondPred() of
+        true ->
+            ok;
+        false ->
+            timer:sleep(100),
+            await(CondPred, N-1)
+    end.
+
