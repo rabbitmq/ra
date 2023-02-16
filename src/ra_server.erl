@@ -1843,8 +1843,8 @@ handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
 handle_down(RaftState, Type, Pid, Info, #{cfg := #cfg{log_id = LogId}} = State) ->
-    ?INFO("~s: handle_down: unexpected ~w ~w exited with ~W",
-          [LogId, Type, Pid, Info, 10]),
+    ?DEBUG("~s: handle_down: unexpected ~w ~w exited with ~W",
+           [LogId, Type, Pid, Info, 10]),
     {RaftState, State, []}.
 
 -spec handle_node_status(ra_state(), machine | aux,

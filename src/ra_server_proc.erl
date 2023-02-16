@@ -674,8 +674,8 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
                   "Command is dropped.", [log_id(State)]),
             {keep_state, State, []};
         LeaderId ->
-            ?INFO("~s: follower leader cast - redirecting to ~w ",
-                  [log_id(State), LeaderId]),
+            ?DEBUG("~s: follower leader cast - redirecting to ~w ",
+                   [log_id(State), LeaderId]),
             ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
             {keep_state, State, []}
     end;
@@ -1524,9 +1524,9 @@ maybe_redirect(From, Msg, #state{pending_commands = Pending,
     Leader = leader_id(State),
     case LeaderMon of
         undefined ->
-            ?INFO("~s: leader call - leader not known. "
-                  "Command will be forwarded once leader is known.",
-                  [log_id(State)]),
+            ?DEBUG("~s: leader call - leader not known. "
+                   "Command will be forwarded once leader is known.",
+                   [log_id(State)]),
             {keep_state,
              State#state{pending_commands = [{From, Msg} | Pending]}};
         _ when Leader =/= undefined ->
