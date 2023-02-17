@@ -50,6 +50,8 @@
          restart_server/1,
          restart_server/2,
          restart_server/3,
+         force_restart_server/3,
+         force_restart_server/4,
          % deprecated
          stop_server/1,
          stop_server/2,
@@ -170,13 +172,7 @@ restart_server(ServerId) ->
     ok | {error, term()}.
 restart_server(System, ServerId)
   when is_atom(System) ->
-    % don't match on return value in case it is already running
-    case catch ra_server_sup_sup:restart_server(System, ServerId, #{}) of
-        {ok, _} -> ok;
-        {ok, _, _} -> ok;
-        {error, _} = Err -> Err;
-        {'EXIT', Err} -> {error, Err}
-    end.
+    restart_server(System, ServerId, #{}).
 
 %% @doc Restarts a previously successfully started ra server
 %% @param System the system identifier
@@ -199,6 +195,38 @@ restart_server(System, ServerId, AddConfig)
         {error, _} = Err -> Err;
         {'EXIT', Err} -> {error, Err}
     end.
+
+%% @doc Restarts a previously successfully started ra server in a new cluster configuration
+%% through inclusion filter of nodes.
+%% This function call is designed mostly for a data recovery purposes.
+%% Allows to forcely restart a server in a new restricted membership configuration.
+%% @param System the system identifier
+%% @param ServerId the ra_server_id() of the server
+%% @param FilterNodes to test against membership configuration
+%% @returns the same ra:restart_server/2
+%% @end
+
+-spec force_restart_server(atom(), ra_server_id(), [node()]) ->
+          ok | {error, term()}.
+force_restart_server(System, ServerId, FilterNodes)
+  when is_list(FilterNodes) ->
+    force_restart_server(System, ServerId, FilterNodes, #{}).
+
+%% @doc Same as `force_restart_server/3' but accepts additional config parameters
+%% @see ra:restart_server/3.
+%% @param System the system identifier
+%% @param ServerId the ra_server_id() of the server
+%% @param FilterNodes to test against membership configuration
+%% @param AddConfig additional config parameters to be merged into the
+%% original config.
+%% @returns the same ra:restart_server/2
+%% @end
+
+-spec force_restart_server(atom(), ra_server_id(), [node()], ra_server:mutable_config()) ->
+    ok | {error, term()}.
+force_restart_server(System, ServerId, FilterNodes, AddConfig)
+  when is_list(FilterNodes) ->
+    restart_server(System, ServerId, AddConfig#{filter_nodes => FilterNodes}).
 
 %% @doc Stops a ra server in the default system
 %% @param ServerId the ra_server_id() of the server
@@ -450,7 +478,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             end
     end.
 
-%% @doc Starts a new distributed ra cluster.
+%% @doc Starts server in a new distributed ra cluster.
 %% @param ClusterName the name of the cluster.
 %% @param ServerId the ra_server_id() of the server
 %% @param Machine The {@link ra_machine:machine/0} configuration.

@@ -32,6 +32,7 @@ all_tests() ->
      stop_server_idemp,
      minority,
      start_servers,
+     force_restart,
      server_recovery,
      process_command,
      process_command_reply_from_local,
@@ -282,6 +283,36 @@ start_servers(Config) ->
     {ok, _, _} = ra:process_command(N3, 5, ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
+force_restart(Config) ->
+    %% Sanity check to guarantee that default configuration doesn't break cluster consistency
+    %%
+
+    Name = ?config(test_name, Config),
+
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+
+    Nodes = [ N1, N2,
+              N3
+            ],
+
+    {ok, Res, Failed} = ra:start_cluster(default, Name, _Machine = add_machine(), Nodes),
+
+    {ok, 10, _} = ra:process_command(N1, 10),
+    {ok, 15, _} = ra:process_command(N2, 5),
+    {ok, 20, _} = ra:process_command(N3, 5),
+
+    [_, _, _] = terminate_cluster(Nodes),
+
+    [ begin ok = ra:force_restart_server(default, N, [node()]),
+            ok
+      end || N <- Nodes
+    ],
+
+    {ok, 25, _} = ra:process_command(N1, 5),
+    {ok, 30, _} = ra:process_command(N2, 5),
+    {ok, 35, _} = ra:process_command(N3, 5).
 
 server_recovery(Config) ->
     N1 = nth_server_name(Config, 1),
@@ -306,6 +337,8 @@ server_recovery(Config) ->
     % issue command
     {ok, _, _Leader} = ra:process_command(N, 5, ?PROCESS_COMMAND_TIMEOUT),
     terminate_cluster([N1, N2]).
+
+%%
 
 process_command(Config) ->
     [A, _B, _C] = Cluster =

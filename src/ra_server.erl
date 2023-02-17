@@ -84,7 +84,8 @@
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => 'maybe'(non_neg_integer())
+      commit_latency => 'maybe'(non_neg_integer()),
+      filter_nodes => 'maybe'([node()])
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -205,7 +206,9 @@
                             install_snap_rpc_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
-                            ra_event_formatter => {module(), atom(), [term()]}}.
+                            ra_event_formatter => {module(), atom(), [term()]},
+                            %% distribution setup
+                            filter_nodes => 'maybe'([node()])}.
 
 -type config() :: ra_server_config().
 
@@ -347,7 +350,8 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+      pending_consistent_queries => [],
+      filter_nodes => maps:get(filter_nodes, Config, undefined)}.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer,
@@ -357,7 +361,7 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~s: recovering state machine version ~b:~b from index ~b to ~b",
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
-    {#{log := Log0} = State, _} =
+    {#{log := Log0} = State1, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
                          %% Clear out the effects to avoid building
@@ -373,9 +377,12 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
-    State#{log => Log,
-           %% reset commit latency as recovery may calculate a very old value
-           commit_latency => 0}.
+
+    State2 = State1#{cluster => validate_cluster(State1),
+                     log => Log,
+                     %% reset commit latency as recovery may calculate a very old value
+                     commit_latency => 0},
+    State2.
 
 -spec handle_leader(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
@@ -1246,16 +1253,17 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                   end,
 
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-            State = State0#{cfg => Cfg,
-                            log => Log,
-                            current_term => Term,
-                            commit_index => SnapIndex,
-                            last_applied => SnapIndex,
-                            cluster => make_cluster(Id, ClusterIds),
-                            machine_state => MacState},
+            State1 = State0#{cfg => Cfg,
+                             log => Log,
+                             current_term => Term,
+                             commit_index => SnapIndex,
+                             last_applied => SnapIndex,
+                             cluster => make_cluster(Id, ClusterIds),
+                             machine_state => MacState},
+            State2 = State1#{ cluster => validate_cluster(State1) },
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
-            {follower, persist_last_applied(State), [{reply, Reply} | Effs]};
+            {follower, persist_last_applied(State2), [{reply, Reply} | Effs]};
         next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
             State = State0#{log => Log},
@@ -1476,7 +1484,6 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
                          }) ->
     Res = ra_machine:query(MacMod, QueryFun, MacState),
     {{Last, Term}, Res}.
-
 
 
 % Internal
@@ -2149,6 +2156,20 @@ make_cluster(Self, Nodes) ->
             Cluster#{Self => new_peer()}
     end.
 
+validate_cluster(State) ->
+    Filter = maps:get(filter_nodes, State),
+    Cluster0 = maps:get(cluster, State),
+    case Filter of
+        undefined ->
+            Cluster0;
+        _ ->
+            maps:filter(fun ({Name, Node}, _) -> Res = lists:member(Node, Filter),
+                                                 Res orelse ?INFO("~p is filtered on node: ~s", [Name, Node]),
+                                                 Res
+                        end, Cluster0)
+    end.
+
+
 initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     PeerIds = peer_ids(State),
     NextIdx = ra_log:next_index(Log),
@@ -2248,9 +2269,11 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
                     ?DEBUG("~s: applying ra cluster change to ~w",
                            [log_id(State0), maps:keys(NewCluster)]),
                     %% we are recovering and should apply the cluster change
-                    State0#{cluster => NewCluster,
-                            cluster_change_permitted => true,
-                            cluster_index_term => {Idx, Term}};
+                    State1 = State0#{cluster => NewCluster,
+                                     cluster_change_permitted => true,
+                                     cluster_index_term => {Idx, Term}},
+                    State2 = State1#{cluster => validate_cluster(State1)},
+                    State2;
                 _  ->
                     ?DEBUG("~s: committing ra cluster change to ~w",
                            [log_id(State0), maps:keys(NewCluster)]),
