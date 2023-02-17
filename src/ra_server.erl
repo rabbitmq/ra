@@ -355,9 +355,10 @@ recover(#{cfg := #cfg{log_id = LogId,
           commit_index := CommitIndex,
           last_applied := LastApplied} = State0) ->
     ?DEBUG("~s: recovering state machine version ~b:~b from index ~b to ~b",
-           [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex]),
+           [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
-    {#{log := Log0} = State, _} =
+    {#{log := Log0,
+       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State, _} =
         apply_to(CommitIndex,
                  fun(E, S) ->
                          %% Clear out the effects to avoid building
@@ -370,7 +371,7 @@ recover(#{cfg := #cfg{log_id = LogId,
     After = erlang:system_time(millisecond),
     ?DEBUG("~s: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
-           [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
+           [LogId, EffMacVerAfter, MacVer, LastApplied, CommitIndex, After - Before]),
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
     State#{log => Log,
@@ -1964,25 +1965,26 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
+    MaxLocalVersion = max(OurMacVer, EffMacVer),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version > ?RA_PROTO_VERSION->
             ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b",
                    [log_id(State0), Cand, Version]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
-        true when TheirMacVer >= EffMacVer andalso
-                  TheirMacVer =< OurMacVer ->
+        true when TheirMacVer == EffMacVer orelse
+                  TheirMacVer == MaxLocalVersion ->
             ?DEBUG("~s: granting pre-vote for ~w"
-                   " machine version (their:ours) ~b:~b"
+                   " machine version (their:ours:effective) ~b:~b:~b"
                    " with last indexterm ~w"
                    " for term ~b previous term ~b",
-                   [log_id(State0), Cand, TheirMacVer, OurMacVer,
+                   [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
             {FsmState, State#{voted_for => Cand},
              [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
             ?DEBUG("~s: declining pre-vote for ~w their machine version ~b"
-                   " ours is ~b",
-                   [log_id(State0), Cand, TheirMacVer, OurMacVer]),
+                   " ours is ~b effective ~b",
+                   [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
                                start_election_timeout]};
         false ->

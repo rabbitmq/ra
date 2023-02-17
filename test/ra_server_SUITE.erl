@@ -4,11 +4,11 @@
 %%
 -module(ra_server_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include("src/ra.hrl").
 -include("src/ra_server.hrl").
--include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 all() ->
@@ -947,7 +947,8 @@ follower_pre_vote(_Config) ->
     ra_server:handle_follower(Msg#pre_vote_rpc{version = ?RA_PROTO_VERSION - 1},
                               State),
 
-    % disallow pre votes from higher machine version
+    % disallow pre votes from a machine version version higher than both
+    % our local and effective machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
@@ -956,30 +957,47 @@ follower_pre_vote(_Config) ->
 
     Cfg = maps:get(cfg, State),
 
+    % allow votes from a higher machine version when the effective machine
+    % version of is the same, but the local machine version is lower
+    {follower, _,
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}} | _]} =
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 1},
+                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                                        machine_version = 0}}),
+
     % disallow votes from a lower machine version when the effective machine
     % version is higher
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
-    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
-                              State#{cfg => Cfg#cfg{effective_machine_version = 1,
-                                                    machine_version = 1}}),
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
+                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                                        machine_version = 1}}),
+
+    %% disallow pre votes for any version in between local and effective
+    {follower, _,
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = false}} | _]} =
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
+                                  State#{cfg => Cfg#cfg{effective_machine_version = 3,
+                                                        machine_version = 2}}),
 
     % allow votes from a lower machine version when the effective machine
     % version is lower too
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}} | _]} =
-    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
-                              State#{cfg => Cfg#cfg{effective_machine_version = 0,
-                                                    machine_version = 1}}),
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
+                                  State#{cfg => Cfg#cfg{effective_machine_version = 0,
+                                                        machine_version = 1}}),
 
     % allow votes for the same machine version
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
-    ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
-                              State#{cfg => Cfg#cfg{machine_version = 2}}),
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
+                                  State#{cfg => Cfg#cfg{machine_version = 2}}),
 
     % fail due to lower term
     % return failure and immediately enter pre_vote phase as there are
