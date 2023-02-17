@@ -41,6 +41,7 @@
                     wal_garbage_collect => boolean(),
                     wal_pre_allocate => boolean(),
                     segment_max_entries => non_neg_integer(),
+                    segment_max_pending => non_neg_integer(),
                     segment_compute_checksums => boolean(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer(),
@@ -68,8 +69,12 @@ start_default() ->
 
 -spec default_config() -> ra_system:config().
 default_config() ->
-    SegmentMaxEntries = application:get_env(ra, segment_max_entries, 4096),
-    SegmentComputeChecksums = application:get_env(ra, segment_compute_checksums, true),
+    SegmentMaxEntries = application:get_env(ra, segment_max_entries,
+                                            ?SEGMENT_MAX_ENTRIES),
+    SegmentMaxPending = application:get_env(ra, segment_max_pending,
+                                            ?SEGMENT_MAX_PENDING),
+    SegmentComputeChecksums = application:get_env(ra, segment_compute_checksums,
+                                                  true),
     WalMaxSizeBytes = application:get_env(ra, wal_max_size_bytes,
                                           ?WAL_DEFAULT_MAX_SIZE_BYTES),
     WalComputeChecksums = application:get_env(ra, wal_compute_checksums, true),
@@ -101,6 +106,7 @@ default_config() ->
       wal_pre_allocate => WalPreAllocate,
       wal_sync_method => WalSyncMethod,
       segment_max_entries => SegmentMaxEntries,
+      segment_max_pending => SegmentMaxPending,
       segment_compute_checksums => SegmentComputeChecksums,
       default_max_pipeline_count => DefaultMaxPipelineCount,
       default_max_append_entries_rpc_batch_size => DefaultAERBatchSize,

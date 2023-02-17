@@ -30,8 +30,6 @@
 -define(VERSION, 2).
 -define(MAGIC, "RASG").
 -define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
--define(DEFAULT_INDEX_MAX_COUNT, 4096).
--define(DEFAULT_MAX_PENDING, 1024).
 -define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
 -define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
 -define(BLOCK_SIZE, 4096). %% assumed block size
@@ -45,8 +43,8 @@
 -type ra_segment_index() :: #{ra_index() => index_record_data()}.
 
 -record(cfg, {version :: non_neg_integer(),
-              max_count = ?DEFAULT_INDEX_MAX_COUNT :: non_neg_integer(),
-              max_pending = ?DEFAULT_MAX_PENDING :: non_neg_integer(),
+              max_count = ?SEGMENT_MAX_ENTRIES :: non_neg_integer(),
+              max_pending = ?SEGMENT_MAX_PENDING :: non_neg_integer(),
               filename :: file:filename_all(),
               fd :: 'maybe'(file:io_device()),
               index_size :: pos_integer(),
@@ -116,7 +114,7 @@ open(Filename, Options) ->
 process_file(true, Mode, Filename, Fd, Options) ->
     case read_header(Fd) of
         {ok, Version, MaxCount} ->
-            MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
+            MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
             IndexRecordSize = index_record_size(Version),
             IndexSize = MaxCount * IndexRecordSize,
             {NumIndexRecords, DataOffset, Range, Index} =
@@ -150,8 +148,8 @@ process_file(true, Mode, Filename, Fd, Options) ->
             Err
     end;
 process_file(false, Mode, Filename, Fd, Options) ->
-    MaxCount = maps:get(max_count, Options, ?DEFAULT_INDEX_MAX_COUNT),
-    MaxPending = maps:get(max_pending, Options, ?DEFAULT_MAX_PENDING),
+    MaxCount = maps:get(max_count, Options, ?SEGMENT_MAX_ENTRIES),
+    MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
     ComputeChecksums = maps:get(compute_checksums, Options, true),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
