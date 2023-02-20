@@ -1095,13 +1095,13 @@ register_external_log_reader({_, Node} = ServerId)
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
 -spec member_overview(ra_server_id()) ->
-    ra_server_proc:ra_leader_call_ret(map()).
+    ra_server_proc:ra_local_call_ret(map()).
 member_overview(ServerId) ->
     member_overview(ServerId, ?DEFAULT_TIMEOUT).
 
 -spec member_overview(ra_server_id(),
                       timeout()) ->
-    ra_server_proc:ra_leader_call_ret(map()).
+    ra_server_proc:ra_local_call_ret(map()).
 member_overview(ServerId, Timeout) ->
     ra_server_proc:local_state_query(ServerId, overview, Timeout).
 

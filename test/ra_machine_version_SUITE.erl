@@ -29,6 +29,7 @@ all() ->
 all_tests() ->
     [
      server_with_higher_version_needs_quorum_to_be_elected,
+     server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
      unversioned_machine_never_sees_machine_version_command,
      unversioned_can_change_to_versioned,
      server_upgrades_machine_state_on_noop_command,
@@ -132,6 +133,66 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
     {ok, _, Leader3} = ra:members(Leader2, 60000),
 
     ?assertNotEqual(LastFollower, Leader3),
+    ok.
+
+server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher(Config) ->
+    ok = ra_env:configure_logger(logger),
+    LogFile = filename:join([?config(priv_dir, Config), "ra.log"]),
+    LogConfig = #{config => #{type => {file, LogFile}}, level => debug},
+    logger:add_handler(ra_handler, logger_std_h, LogConfig),
+    ok = logger:set_primary_config(level, all),
+    ct:pal("handler config ~p", [logger:get_handler_config()]),
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, _, S) -> {S, ok} end),
+    Cluster = ?config(cluster, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    [Follower1, Follower2] = lists:delete(Leader, Cluster),
+    timer:sleep(100),
+    %% leader and follower 1 are v2s
+    ra:stop_server(?SYS, Leader),
+    ra:stop_server(?SYS, Follower1),
+    ra:stop_server(?SYS, Follower2),
+    meck:expect(Mod, version, fun () ->
+                                      New = [whereis(element(1, Leader)),
+                                             whereis(element(1, Follower1))],
+                                      case lists:member(self(), New) of
+                                          true -> 2;
+                                          _  -> 1
+                                      end
+                              end),
+    ra:restart_server(?SYS, Leader),
+    ra:restart_server(?SYS, Follower1),
+    timer:sleep(100),
+    {ok, _, Leader2} = ra:members(Leader, 2000),
+    ra:restart_server(?SYS, Follower2),
+    %% need to wait until the restarted Follower2 discovers the current
+    %% effective machine version
+    await(fun () ->
+                  case ra:member_overview(Follower2) of
+                      {ok, #{effective_machine_version := 2,
+                             machine_version := 1}, _} ->
+                          true;
+                      _ ->
+                          false
+                  end
+          end, 100),
+    %% at this point the effective machine version known by all members is 2
+    %% but Follower2's local machine version is 1 as it hasn't been "upgraded"
+    %% yet
+    %% stop the leader to trigger an election that Follower2 must not win
+    ra:stop_server(?SYS, Leader2),
+    ExpectedLeader = case Leader2 of
+                         Follower1 -> Leader;
+                         _ -> Follower1
+                     end,
+    %% follower 1 should now be elected
+    ?assertMatch({ok, _,  ExpectedLeader}, ra:members(ExpectedLeader, 60000)),
+
     ok.
 
 unversioned_machine_never_sees_machine_version_command(Config) ->
@@ -397,4 +458,15 @@ flush() ->
             flush()
     after 0 ->
               ok
+    end.
+
+await(_CondPred, 0) ->
+    ct:fail("await condition did not materialize");
+await(CondPred, N) ->
+    case CondPred() of
+        true ->
+            ok;
+        false ->
+            timer:sleep(100),
+            await(CondPred, N-1)
     end.
