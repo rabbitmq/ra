@@ -976,12 +976,22 @@ follower_pre_vote(_Config) ->
                                                         machine_version = 1}}),
 
     %% disallow pre votes for any version in between local and effective
+    %% when effective is higher
     {follower, _,
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
                                   State#{cfg => Cfg#cfg{effective_machine_version = 3,
                                                         machine_version = 2}}),
+
+    %% allow pre votes for any version higher than the effective and lower
+    %% than local when effective is lower than local
+    {follower, _,
+     [{reply, #pre_vote_result{term = Term, token = Token,
+                               vote_granted = true}} | _]} =
+        ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
+                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                                        machine_version = 3}}),
 
     % allow votes from a lower machine version when the effective machine
     % version is lower too
