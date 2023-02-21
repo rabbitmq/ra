@@ -1965,14 +1965,14 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
-    MaxLocalVersion = max(OurMacVer, EffMacVer),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version > ?RA_PROTO_VERSION->
             ?DEBUG("~s: declining pre-vote for ~w for protocol version ~b",
                    [log_id(State0), Cand, Version]),
             {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
         true when TheirMacVer == EffMacVer orelse
-                  TheirMacVer == MaxLocalVersion ->
+                  (TheirMacVer >= EffMacVer andalso
+                   TheirMacVer =< OurMacVer) ->
             ?DEBUG("~s: granting pre-vote for ~w"
                    " machine version (their:ours:effective) ~b:~b:~b"
                    " with last indexterm ~w"
