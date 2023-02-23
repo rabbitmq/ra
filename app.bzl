@@ -858,7 +858,6 @@ def all_srcs(name = "all_srcs"):
     )
     filegroup(
         name = "priv",
-        srcs = [],
     )
     filegroup(
         name = "private_hdrs",
@@ -870,7 +869,6 @@ def all_srcs(name = "all_srcs"):
     )
     filegroup(
         name = "public_hdrs",
-        srcs = [],
     )
     filegroup(
         name = "srcs",
