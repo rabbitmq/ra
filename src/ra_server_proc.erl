@@ -483,10 +483,17 @@ leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
+                              [{{timeout, {Node, Status}}, rand:uniform(9000) + 1000, delayed_inform_member}]);
 leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
+leader({timeout, {Node, Status}}, delayed_inform_member, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_status(?FUNCTION_NAME, init, State0#state.server_state, Node, Status),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+                                       cast,
+                                       State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
@@ -616,7 +623,8 @@ pre_vote(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 pre_vote(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
+                              [{{timeout, {Node, Status}}, rand:uniform(9000) + 1000, delayed_inform_member}]);
 pre_vote(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 pre_vote(_, tick_timeout, State0) ->
@@ -762,7 +770,14 @@ follower(info, {node_event, Node, up}, State) ->
     end;
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
+                              [{{timeout, {Node, Status}}, rand:uniform(9000) + 1000, delayed_inform_member}]);
+follower({timeout, {Node, Status}}, delayed_inform_member, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_status(?FUNCTION_NAME, init, State0#state.server_state, Node, Status),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+                                       cast,
+                                       State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 follower(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
     {keep_state, handle_tick_metrics(State),
@@ -911,7 +926,8 @@ await_condition(info, {node_event, Node, down}, State) ->
     end;
 await_condition(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
+                              [{{timeout, {Node, Status}}, rand:uniform(9000) + 1000, delayed_inform_member}]);
 await_condition(enter, OldState, #state{conf = Conf} = State0) ->
     {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
     Actions = [{state_timeout, Conf#conf.await_condition_timeout,
@@ -1734,9 +1750,13 @@ can_execute_on_member(leader, Member, State) ->
 can_execute_on_member(_RaftState, _Member, _State) ->
     false.
 
+handle_node_status_change(Node, Status, InfoList, RaftState, State) ->
+    handle_node_status_change(Node, Status, InfoList, RaftState, State, []).
+
 handle_node_status_change(Node, Status, InfoList, RaftState,
                           #state{monitors = Monitors0,
-                                 server_state = ServerState0} = State0) ->
+                                 server_state = ServerState0} = State0,
+                          Actions0) ->
     {Comps, Monitors} = ra_monitors:handle_down(Node, Monitors0),
     {_, ServerState, Effects} =
         lists:foldl(
@@ -1748,7 +1768,8 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
           end, {RaftState, ServerState0, []}, Comps),
     {State, Actions} = handle_effects(RaftState, Effects, cast,
                                       State0#state{server_state = ServerState,
-                                                   monitors = Monitors}),
+                                                   monitors = Monitors},
+                                     Actions0),
     {keep_state, State, Actions}.
 
 handle_process_down(Pid, Info, RaftState,

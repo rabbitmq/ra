@@ -27,6 +27,8 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
+         cluster_update/3,
+         handle_status/5,
          overview/1,
          metrics/1,
          is_new/1,
@@ -345,6 +347,7 @@ init(#{id := Id,
       machine_state => MacState,
       %% aux state is transient and needs to be initialized every time
       aux_state => ra_machine:init_aux(MacMod, Name),
+      status_steps => [],
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => []}.
@@ -1333,6 +1336,13 @@ tick(#{cfg := #cfg{effective_machine_module = MacMod},
     Now = erlang:system_time(millisecond),
     ra_machine:tick(MacMod, Now, MacState).
 
+cluster_update(#{cfg := #cfg{effective_machine_module = MacMod},
+        machine_state := MacState,
+        cluster := Cluster,
+        leader_id := Leader
+       }, Node, Status) ->
+    ra_machine:cluster_update(MacMod, Leader, maps:keys(Cluster), MacState, Node, Status).
+
 -spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
     {ra_server_state() | eol, effects()}.
 handle_state_enter(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
@@ -1432,6 +1442,19 @@ handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod
             {RaftState, State0#{log => Log, aux_state => Aux}, Effects};
         undefined ->
             {RaftState, State0, []}
+    end.
+
+handle_status(RaftState, Cmd, #{cfg := #cfg{effective_machine_module = MacMod},
+                                machine_state := MacState,
+                                cluster := Cluster,
+                                leader_id := Leader,
+                                status_steps := Steps
+                               } = State0, Node, Status) ->
+    case ra_machine:handle_status(MacMod, RaftState, Leader, Cmd, maps:keys(Cluster), MacState, Node, Status, Steps) of
+        undefined ->
+            {RaftState, State0,[]};
+        {NewSteps, Effects} ->
+            {RaftState, State0#{status_steps => NewSteps}, Effects}
     end.
 
 % property helpers
@@ -1843,6 +1866,10 @@ handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
 handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
+
+handle_down(RaftState, status, Pid, Info, State)
+  when is_pid(Pid) ->
+    handle_status(RaftState, {down, Pid, Info}, State, undefined, undefined);
 handle_down(RaftState, Type, Pid, Info, #{cfg := #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~s: handle_down: unexpected ~w ~w exited with ~W",
            [LogId, Type, Pid, Info, 10]),
