@@ -175,6 +175,7 @@ restart_server(System, ServerId)
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
+        {badrpc, Reason} -> {error, Reason};
         {'EXIT', Err} -> {error, Err}
     end.
 
@@ -197,6 +198,7 @@ restart_server(System, ServerId, AddConfig)
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
+        {badrpc, Reason} -> {error, Reason};
         {'EXIT', Err} -> {error, Err}
     end.
 

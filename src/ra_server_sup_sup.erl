@@ -39,7 +39,7 @@
 -include("ra.hrl").
 
 -spec start_server(System :: atom(), ra_server:ra_server_config()) ->
-    supervisor:startchild_ret() | {error, not_new | system_not_started}.
+    supervisor:startchild_ret() | {error, not_new | system_not_started} | {badrpc, term()}.
 start_server(System, #{id := NodeId,
                        uid := UId} = Config)
   when is_atom(System) ->
@@ -47,7 +47,7 @@ start_server(System, #{id := NodeId,
     rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]).
 
 -spec restart_server(atom(), ra_server_id(), ra_server:mutable_config()) ->
-    supervisor:startchild_ret() | {error, system_not_started}.
+    supervisor:startchild_ret() | {error, system_not_started} | {badrpc, term()}.
 restart_server(System, {RaName, Node}, AddConfig) ->
     rpc:call(Node, ?MODULE, restart_server_rpc,
              [System, {RaName, Node}, AddConfig]).
