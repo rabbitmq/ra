@@ -108,7 +108,6 @@ init_per_testcase(TestCase, Config) ->
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics, [named_table, public, {write_concurrency, true}]),
-    ra_file_handle:start_link(),
     [{ra_log_ets, Ets},
      {writer_id, {UId, self()}},
      {test_case, TestCase},
@@ -117,7 +116,6 @@ init_per_testcase(TestCase, Config) ->
 
 end_per_testcase(_TestCase, Config) ->
     proc_lib:stop(?config(ra_log_ets, Config)),
-    proc_lib:stop(ra_file_handle),
     Config.
 
 basic_log_writes(Config) ->
@@ -885,27 +883,6 @@ await_written({UId, _} = Id, {From, To, Term} = Written) ->
               flush(),
               throw({written_timeout, To})
     end.
-
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p", [Case]),
-    lg:stop(),
-    % this segfaults
-    % timer:sleep(2000),
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
-
 
 % mem table read functions
 % the actual logic is implemented in ra_log

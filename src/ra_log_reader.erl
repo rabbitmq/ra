@@ -45,7 +45,7 @@
 -record(?STATE, {cfg :: #cfg{},
                  first_index = 0 :: ra_index(),
                  segment_refs = [] :: [segment_ref()],
-                 open_segments = ra_flru:new(1, fun flru_handler/1) :: ra_flru:state()
+                 open_segments :: ra_flru:state()
                 }).
 
 -opaque state() :: #?STATE{}.
@@ -70,14 +70,18 @@ init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
      #{open_mem_tbls := OpnMemTbls,
        closed_mem_tbls := ClsdMemTbls}, Counter)
   when is_binary(UId) ->
-    #?STATE{cfg = #cfg{uid = UId,
-                       counter = Counter,
-                       directory = Dir,
-                       open_mem_tbls = ets:whereis(OpnMemTbls),
-                       closed_mem_tbls = ets:whereis(ClsdMemTbls),
-                       access_pattern = AccessPattern
-                      },
-            open_segments = ra_flru:new(MaxOpen, fun flru_handler/1),
+    Cfg = #cfg{uid = UId,
+               counter = Counter,
+               directory = Dir,
+               open_mem_tbls = ets:whereis(OpnMemTbls),
+               closed_mem_tbls = ets:whereis(ClsdMemTbls),
+               access_pattern = AccessPattern},
+    FlruHandler = fun ({_, Seg}) ->
+                          _ = ra_log_segment:close(Seg),
+                          decr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1)
+                  end,
+    #?STATE{cfg = Cfg,
+            open_segments = ra_flru:new(MaxOpen, FlruHandler),
             first_index = FirstIdx,
             segment_refs = SegRefs}.
 
@@ -250,7 +254,7 @@ segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
 
 segment_term_query0(Idx, [{From, To, Filename} | _], Open0,
                     #cfg{directory = Dir,
-                         access_pattern = AccessPattern})
+                         access_pattern = AccessPattern} = Cfg)
   when Idx >= From andalso Idx =< To ->
     case ra_flru:fetch(Filename, Open0) of
         {ok, Seg, Open} ->
@@ -258,8 +262,11 @@ segment_term_query0(Idx, [{From, To, Filename} | _], Open0,
             {Term, Open};
         error ->
             AbsFn = filename:join(Dir, Filename),
-            {ok, Seg} = ra_log_segment:open(AbsFn, #{mode => read,
-                                                     access_pattern => AccessPattern}),
+            {ok, Seg} = ra_log_segment:open(AbsFn,
+                                            #{mode => read,
+                                              access_pattern => AccessPattern}),
+
+            incr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1),
             Term = ra_log_segment:term_query(Seg, Idx),
             {Term, ra_flru:insert(Filename, Seg, Open0)}
     end;
@@ -401,10 +408,6 @@ segment_sparse_read(#?STATE{segment_refs = SegRefs,
               Acc
       end, {OpenSegs, Indexes, 0, Entries0}, SegRefs).
 
-flru_handler({_, Seg}) ->
-    _ = ra_log_segment:close(Seg),
-    ok.
-
 %% like lists:splitwith but without reversing the accumulator
 sparse_read_split(Fun, [E | Rem] = All, Acc) ->
     case Fun(E) of
@@ -418,7 +421,7 @@ sparse_read_split(_Fun, [], Acc) ->
 
 
 get_segment(#cfg{directory = Dir,
-                 access_pattern = AccessPattern}, Open0, Fn) ->
+                 access_pattern = AccessPattern} = Cfg, Open0, Fn) ->
     case ra_flru:fetch(Fn, Open0) of
         {ok, S, Open1} ->
             {S, Open1};
@@ -429,6 +432,7 @@ get_segment(#cfg{directory = Dir,
                                        access_pattern => AccessPattern})
             of
                 {ok, S} ->
+                    incr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1),
                     {S, ra_flru:insert(Fn, S, Open0)};
                 {error, Err} ->
                     exit({ra_log_failed_to_open_segment, Err,
@@ -484,6 +488,11 @@ incr_counter(#cfg{counter = undefined}, _, _) ->
 incr_counter(#cfg{counter = Cnt}, {Ix, N}) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
 incr_counter(#cfg{counter = undefined}, _) ->
+    ok.
+
+decr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:sub(Cnt, Ix, N);
+decr_counter(#cfg{counter = undefined}, _, _) ->
     ok.
 
 -ifdef(TEST).

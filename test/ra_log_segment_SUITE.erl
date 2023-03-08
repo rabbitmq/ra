@@ -6,6 +6,7 @@
 %%
 -module(ra_log_segment_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -51,11 +52,9 @@ init_per_testcase(TestCase, Config) ->
                 [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics,
                 [named_table, public, {write_concurrency, true}]),
-    ra_file_handle:start_link(),
     [{test_case, TestCase}, {data_dir, Dir} | Config].
 
 end_per_testcase(_, Config) ->
-    exit(whereis(ra_file_handle), normal),
     Config.
 
 
@@ -379,26 +378,6 @@ write_until_full(Idx, Term, Data, Seg0) ->
 %%% Internal
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
-
-start_profile(Config, Modules) ->
-    Dir = ?config(priv_dir, Config),
-    Case = ?config(test_case, Config),
-    GzFile = filename:join([Dir, "lg_" ++ atom_to_list(Case) ++ ".gz"]),
-    ct:pal("Profiling to ~p", [GzFile]),
-
-    lg:trace(Modules, lg_file_tracer,
-             GzFile, #{running => false, mode => profile}).
-
-stop_profile(Config) ->
-    Case = ?config(test_case, Config),
-    ct:pal("Stopping profiling for ~p", [Case]),
-    lg:stop(),
-    % this segfaults
-    % timer:sleep(2000),
-    Dir = ?config(priv_dir, Config),
-    Name = filename:join([Dir, "lg_" ++ atom_to_list(Case)]),
-    lg_callgrind:profile_many(Name ++ ".gz.*", Name ++ ".out",#{}),
-    ok.
 
 read_sparse(R, Idxs) ->
     {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
