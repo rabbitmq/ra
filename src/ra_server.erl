@@ -106,10 +106,8 @@
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
-                              {await_consensus,
-                               command_reply_options()} |
-                              {notify,
-                               command_correlation(), pid()} |
+                              {await_consensus, command_reply_options()} |
+                              {notify, command_correlation(), pid()} |
                               noreply.
 
 -type command() :: {command_type(), command_meta(),
@@ -472,7 +470,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           NextIndex = max(min(NI-1, LastIdx), MI),
                           ?DEBUG("~s: leader received last_index ~b"
                                  " from ~w with term ~b "
-                                 "- expected term ~b. Setting"
+                                 "- expected term ~b. Setting "
                                  "next_index to ~b",
                                  [LogId, LastIdx, PeerId, LastTerm, EntryTerm,
                                   NextIndex]),
@@ -1001,16 +999,19 @@ handle_follower(#append_entries_rpc{term = Term,
                     {NextState, State,
                      [cast_reply(Id, LeaderId, Reply) | Effects]};
                 _ ->
-                    State = lists:foldl(fun pre_append_log_follower/2,
-                                        State0, Entries),
+                    State1 = lists:foldl(fun pre_append_log_follower/2,
+                                         State0, Entries),
                     case ra_log:write(Entries, Log1) of
-                        {ok, Log} ->
-                            evaluate_commit_index_follower(State#{log => Log},
-                                                           Effects0);
+                        {ok, Log2} ->
+                            {NextState, State, Effects} =
+                                evaluate_commit_index_follower(State1#{log => Log2},
+                                                               Effects0),
+                                {NextState, State,
+                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             {await_condition,
-                             State#{log => Log1,
-                                    condition => fun wal_down_condition/2},
+                             State1#{log => Log1,
+                                     condition => fun wal_down_condition/2},
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -1548,14 +1549,14 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
                                  leader_id := LeaderId,
                                  last_applied := LastApplied0,
                                  current_term := Term,
-                                 log := Log} = State0, Effects0)
+                                 log := Log0} = State0, Effects0)
   when LeaderId =/= undefined ->
     %% take the minimum of the last index seen and the commit index
     %% This may mean we apply entries that have not yet been fsynced locally.
     %% This is ok as the append_entries_rpc with the updated commit index would
     %% ensure no uncommitted entries from a previous term have been truncated
     %% from the log
-    {Idx, _} = ra_log:last_index_term(Log),
+    {Idx, _} = ra_log:last_index_term(Log0),
     ApplyTo = min(Idx, CommitIndex),
 
     % need to catch a termination throw
@@ -1627,9 +1628,11 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                          max_pipeline_count = MaxPipelineCount},
                              commit_index := CommitIndex,
                              log := Log,
-                             cluster := Cluster} = State,
-                           Effects) ->
+                             cluster := Cluster} = State0,
+                           Effects0) ->
     NextLogIdx = ra_log:next_index(Log),
+    %% TODO: refactor this please, why does make_rpc_effect need to take the
+    %% full state
     maps:fold(
       fun (I, _, Acc) when I =:= Id ->
               %% oneself
@@ -1637,8 +1640,8 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
           (_, #{status := suspended}, Acc) ->
               Acc;
           (_, #{status := {sending_snapshot, _}}, Acc) ->
-              %% if a peers is currently receiving a snapshot
-              %% we should not pipeline
+              %% if a peer is currently receiving a snapshot
+              %% do not send any append entries rpcs
               Acc;
           (PeerId, #{next_index := NextIdx,
                      commit_index_sent := CI,
@@ -1651,11 +1654,24 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               NumInFlight = NextIdx - MatchIdx - 1,
               case NumInFlight < MaxPipelineCount of
                   true ->
+                      %% use the last list of entries as a cache
+                      %% for the next to potentially avoid additional reads
+                      %% from the log
+                      EntryCache = case Effs of
+                                       [{send_rpc, _,
+                                         #append_entries_rpc{entries = Es}}
+                                        | _] ->
+                                           Es;
+                                       _ ->
+                                           []
+                                   end,
                       %% ensure we don't pass a batch size that would allow
                       %% the peer to go over the max pipeline count
-                      BatchSize = min(MaxBatchSize, MaxPipelineCount - NumInFlight),
+                      BatchSize = min(MaxBatchSize,
+                                      MaxPipelineCount - NumInFlight),
                       {NewNextIdx, Eff, S} =
-                          make_rpc_effect(PeerId, Peer0, BatchSize, S0),
+                      make_rpc_effect(PeerId, Peer0, BatchSize, S0,
+                                      EntryCache),
                       Peer = Peer0#{next_index => NewNextIdx,
                                     commit_index_sent => CommitIndex},
                       NewNumInFlight = NewNextIdx - MatchIdx - 1,
@@ -1668,7 +1684,15 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               end;
           (_, _, Acc) ->
               Acc
-      end, {State, false, Effects}, Cluster).
+      end, {State0, false, add_flush_event(State0, Effects0)}, Cluster).
+
+add_flush_event(#{log := Log}, Effects) ->
+    case ra_log:needs_cache_flush(Log) of
+        true ->
+            [{next_event, {ra_log_event, flush_cache}} | Effects];
+        false ->
+            Effects
+    end.
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),
@@ -1691,15 +1715,19 @@ make_rpcs_for(Peers, State) ->
                       {S, [Eff | Effs]}
               end, {State, []}, Peers).
 
+make_rpc_effect(PeerId, Peer, MaxBatchSize, State) ->
+    make_rpc_effect(PeerId, Peer, MaxBatchSize, State, []).
+
 make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                 #{cfg := #cfg{id = Id}, log := Log0,
-                  current_term := Term} = State) ->
+                  current_term := Term} = State, EntryCache) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when is_integer(PrevTerm) ->
             make_append_entries_rpc(PeerId, PrevIdx,
                                     PrevTerm, MaxBatchSize,
-                                    State#{log => Log});
+                                    State#{log => Log},
+                                    EntryCache);
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
             % to send a snapshot.
@@ -1708,7 +1736,8 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                     % Previous index is the same as snapshot index
                     make_append_entries_rpc(PeerId, PrevIdx,
                                             PrevTerm, MaxBatchSize,
-                                            State#{log => Log});
+                                            State#{log => Log},
+                                            EntryCache);
                 {LastIdx, _} ->
                     SnapState = ra_log:snapshot_state(Log),
                     %% don't increment the next index here as we will do
@@ -1723,13 +1752,12 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
 make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                         #{log := Log0, current_term := Term,
                           cfg := #cfg{id = Id},
-                          commit_index := CommitIndex} = State) ->
+                          commit_index := CommitIndex} = State,
+                       EntryCache) ->
     {LastIndex, _} = ra_log:last_index_term(Log0),
     From = PrevIdx + 1,
     To = min(LastIndex, PrevIdx + Num),
-    {Entries, Log} = ra_log:fold(From, To,
-                                 fun (E, A) -> [E | A] end,
-                                 [], Log0),
+    {Entries, Log} = log_read(From, To, EntryCache, Log0),
     {To + 1,
      {send_rpc, PeerId,
       #append_entries_rpc{entries = lists:reverse(Entries),
@@ -1739,6 +1767,17 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                           prev_log_term = PrevTerm,
                           leader_commit = CommitIndex}},
      State#{log => Log}}.
+
+log_read(From, To, [], Log0) ->
+    ra_log:fold(From, To, fun (E, A) -> [E | A] end, [], Log0);
+log_read(From0, To, Cache, Log0) ->
+    {From, Entries0} = log_fold_cache(From0, To, Cache, []),
+    ra_log:fold(From, To, fun (E, A) -> [E | A] end, Entries0, Log0).
+
+log_fold_cache(From, To, [{From, _, _} = Entry | Rem], Acc) ->
+    log_fold_cache(From + 1, To, Rem, [Entry | Acc]);
+log_fold_cache(From, _To, _Cache, Acc) ->
+    {From, Acc}.
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
@@ -1903,8 +1942,8 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     {error, ra_server_state()}.
 log_read(Indexes, #{log := Log0} = State) ->
     {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
-    {ok,
-     [Data || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
+    {ok, [Data
+          || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
      State#{log => Log}}.
 
 %%%===================================================================

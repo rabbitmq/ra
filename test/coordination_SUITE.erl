@@ -111,11 +111,12 @@ start_stop_restart_delete_on_remote(Config) ->
 start_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3,s4,s5]],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
+    ra:members(hd(Started)),
     % assert all nodes are actually started
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader

@@ -150,13 +150,13 @@
 
 -spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
-write(From, Wal, Idx, Term, Entry) ->
-    named_cast(Wal, {append, From, Idx, Term, Entry}).
+write(From, Wal, Idx, Term, Cmd) ->
+    named_cast(Wal, {append, From, Idx, Term, Cmd}).
 
 -spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     ok | {error, wal_down}.
-truncate_write(From, Wal, Idx, Term, Entry) ->
-   named_cast(Wal, {truncate, From, Idx, Term, Entry}).
+truncate_write(From, Wal, Idx, Term, Cmd) ->
+   named_cast(Wal, {truncate, From, Idx, Term, Cmd}).
 
 -spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
     ok | {error, wal_down}.
@@ -960,7 +960,7 @@ merge_conf_defaults(Conf) ->
                  write_strategy => default,
                  garbage_collect => false,
                  sync_method => datasync,
-                 min_bin_vheap_size => ?WAL_MIN_BIN_VHEAP_SIZE,
+                 min_bin_vheap_size => ?MIN_BIN_VHEAP_SIZE,
                  compress_mem_tables => false}, Conf).
 
 to_binary(Term) ->

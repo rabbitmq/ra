@@ -27,6 +27,8 @@
                    directory := atom(),
                    directory_rev := atom()}.
 
+
+%% NB: keep this below 32 keys to ensure it is always a small map
 -type config() :: #{name := atom(),
                     names := names(),
                     data_dir := file:filename(),
@@ -49,7 +51,10 @@
                     default_max_append_entries_rpc_batch_size => non_neg_integer(),
                     message_queue_data => on_heap | off_heap,
                     wal_min_bin_vheap_size => non_neg_integer(),
-                    compress_mem_tables => boolean()
+                    server_min_bin_vheap_size => non_neg_integer(),
+                    compress_mem_tables => boolean(),
+                    low_priority_commands_flush_size => non_neg_integer(),
+                    low_priority_commands_in_memory_size => non_neg_integer()
                    }.
 
 -export_type([
@@ -87,13 +92,24 @@ default_config() ->
     WalDataDir = application:get_env(ra, wal_data_dir, DataDir),
     WalGarbageCollect = application:get_env(ra, wal_garbage_collect, false),
     WalPreAllocate = application:get_env(ra, wal_pre_allocate, false),
+    WalMinBinVheapSize = application:get_env(ra, wal_min_bin_vheap_size,
+                                             ?MIN_BIN_VHEAP_SIZE),
+    ServerMinBinVheapSize = application:get_env(ra, server_min_bin_vheap_size,
+                                                ?MIN_BIN_VHEAP_SIZE),
     DefaultMaxPipelineCount = application:get_env(ra, default_max_pipeline_count,
                                                   ?DEFAULT_MAX_PIPELINE_COUNT),
     DefaultAERBatchSize = application:get_env(ra, default_max_append_entries_rpc_batch_size,
                                               ?AER_CHUNK_SIZE),
-
-    MessageQueueData = application:get_env(ra, server_message_queue_data, on_heap),
+    MessageQueueData = application:get_env(ra, server_message_queue_data, off_heap),
     CompressMemTables = application:get_env(ra, compress_mem_tables, false),
+    SnapshotChunkSize = application:get_env(ra, snapshot_chunk_size,
+                                            ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
+    ReceiveSnapshotTimeout = application:get_env(ra, receive_snapshot_timeout,
+                                                 ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
+    LowPriorityCommandsFlushSize = application:get_env(ra, low_priority_commands_flush_size ,
+                                                       ?FLUSH_COMMANDS_SIZE),
+    LowPriorityInMemSize = application:get_env(ra, low_priority_commands_in_memory_size,
+                                               ?FLUSH_COMMANDS_SIZE),
     #{name => default,
       data_dir => DataDir,
       wal_data_dir => WalDataDir,
@@ -105,6 +121,7 @@ default_config() ->
       wal_garbage_collect => WalGarbageCollect,
       wal_pre_allocate => WalPreAllocate,
       wal_sync_method => WalSyncMethod,
+      wal_min_bin_vheap_size => WalMinBinVheapSize,
       segment_max_entries => SegmentMaxEntries,
       segment_max_pending => SegmentMaxPending,
       segment_compute_checksums => SegmentComputeChecksums,
@@ -112,19 +129,23 @@ default_config() ->
       default_max_append_entries_rpc_batch_size => DefaultAERBatchSize,
       message_queue_data => MessageQueueData,
       compress_mem_tables => CompressMemTables,
-      names =>
-      #{wal => ra_log_wal,
-        wal_sup => ra_log_wal_sup,
-        log_sup => ra_log_sup,
-        log_ets => ra_log_ets,
-        log_meta => ra_log_meta,
-        open_mem_tbls =>  ra_log_open_mem_tables,
-        closed_mem_tbls =>  ra_log_closed_mem_tables,
-        segment_writer => ra_log_segment_writer,
-        server_sup => ra_server_sup_sup,
-        directory => ra_directory,
-        directory_rev => ra_directory_reverse
-       }}.
+      snapshot_chunk_size => SnapshotChunkSize,
+      server_min_bin_vheap_size => ServerMinBinVheapSize,
+      receive_snapshot_timeout => ReceiveSnapshotTimeout,
+      low_priority_commands_flush_size => LowPriorityCommandsFlushSize,
+      low_priority_commands_in_memory_size => LowPriorityInMemSize,
+      names => #{wal => ra_log_wal,
+                 wal_sup => ra_log_wal_sup,
+                 log_sup => ra_log_sup,
+                 log_ets => ra_log_ets,
+                 log_meta => ra_log_meta,
+                 open_mem_tbls =>  ra_log_open_mem_tables,
+                 closed_mem_tbls =>  ra_log_closed_mem_tables,
+                 segment_writer => ra_log_segment_writer,
+                 server_sup => ra_server_sup_sup,
+                 directory => ra_directory,
+                 directory_rev => ra_directory_reverse
+                }}.
 
 derive_names(SysName) when is_atom(SysName) ->
     #{wal => derive(SysName, <<"log_wal">>),

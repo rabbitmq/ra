@@ -1126,6 +1126,7 @@ gather_applied([], Timeout) ->
         {ra_event, _Leader, {applied, Corrs}} ->
             gather_applied(Corrs, Timeout)
     after 2000 ->
+              flush(),
               exit(ra_event_timeout)
     end;
 gather_applied(Acc, Timeout) ->
