@@ -28,6 +28,10 @@ The following Raft features are implemented:
 
 ![Actions](https://github.com/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
 
+### Safety Verification
+
+We [continuously test](https://github.com/rabbitmq/ra-kv-store#jepsen-test) RA with the [Jepsen](https://github.com/jepsen-io/jepsen) distributed system verification framework.
+
 ## Supported Erlang/OTP Versions
 
 Ra supports the following Erlang/OTP versions:
