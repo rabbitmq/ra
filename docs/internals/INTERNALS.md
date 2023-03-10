@@ -58,7 +58,7 @@ are application-specific.
 ### apply/3
 
 `apply/3` is the primary function that is called for every command in the
-Raft log. It takes Raft state machine metadata as a map (most importantly the Raft index and current term),
+Raft log. It takes the Raft state machine metadata as a map (most importantly the Raft index and current term),
 a command and the current state.
 
 It must return the new state, a list of effects (in execution order) and a reply.
@@ -94,7 +94,7 @@ Under normal operation only the leader that first applies an entry will attempt 
 Followers process the same set of commands but simply throw away any effects returned by
 the state machine.
 
-To ensure we not re-issue effects on recovery each `ra` server persists its `last_applied` index.
+To ensure we do not re-issue effects on recovery each `ra` server persists its `last_applied` index.
 When the server restarts it replays its log until this point and throws away any resulting effects as they
 should already have been issued.
 
@@ -141,8 +141,8 @@ callback.
 
 ### Calling a function
 
-The `{mod_call, module(), function(), Args :: [term()]}` to call an arbitrary
-function. Care need to be taken not to block the `ra` process whilst doing so.
+The `{mod_call, module(), function(), Args :: [term()]}` effect will ask the leader
+to call an arbitrary function. Care need to be taken not to block the `ra` process whilst doing so.
 It is recommended that expensive operations are done in another process.
 
 The `mod_call` effect is useful for e.g. updating an ETS table of committed entries
@@ -155,7 +155,7 @@ to maintain a timer on behalf of the state machine and commit a `timeout` comman
 when the timer triggers. If setting the time to `infinity`, the timer will not be started
 and any running timer with same name will be cancelled.
 
-The timer is relative and setting another timer with same name before the current 
+The timer is relative and setting another timer with the same name before the current 
 timer runs out results in the current timer being reset.
 
 All timers are invalidated when the leader changes. State machines should
@@ -185,10 +185,10 @@ effect can be used to give Ra cluster members a hint to trigger a snapshot.
 This effect, when emitted, is evaluated on all nodes and not just the leader.
 
 It is not guaranteed that a snapshot will be taken. A decision to take
-a snapshot or delay is taken using a number of internal Ra state factors.
+a snapshot or to delay it is taken using a number of internal Ra state factors.
 The goal is to minimise disk I/O activity when possible.
 
-### State Machine Versioning
+## State Machine Versioning
 
 It is eventually necessary to make changes to the state machine
 code. Any changes to a state machine that would result in a different end state when
@@ -198,7 +198,7 @@ should be considered breaking.
 As Ra state machines need to be deterministic any changes to the logic inside the `apply/3` function
  _needs to be enabled at the same index on all members of a Ra cluster_.
 
-#### Versioning API
+### Versioning API
 
 Ra considers all state machines versioned starting with version 0. State machines
 that need to be updated with breaking changes need to implement the optional
@@ -242,9 +242,9 @@ For smaller (but still breaking) changes that can be handled in the original
 module it is also possible to switch based on the `machine_version` key included in the meta
 data passed to `apply/3`.
 
-#### Runtime Behaviour
+### Runtime Behaviour
 
-New versions are enabled whenever a there is a quorum of members with a higher version and
+New versions are enabled whenever there is a quorum of members with a higher version and
 one of them is elected leader. The leader will commit the new version to the
 log and each follower will move to the new version when this log entry is applied.
 Followers that do not yet have the new version available will receive log entries from the leader
@@ -260,7 +260,7 @@ bump may be for several versions so it may be necessary to handle multiple
 state transformations.
 
 
-#### Limitations
+### Limitations
 
 Ra does not support the Erlang hot code swapping mechanism.
 
@@ -375,7 +375,7 @@ Config = #{cluster_name => <<"ra-cluster-1">>,
 ## Group Membership
 
 Ra implements the single server cluster membership change strategy
-covered in [Consensus: Bridging Theory and Practice][https://raft.github.io/raft.pdf].
+covered in [Consensus: Bridging Theory and Practice](https://raft.github.io/raft.pdf).
 In practice that means that join and leave requests are processed sequentially one by one.
 
 The functions that manage cluster members, `ra:add_member/2` and `ra:remove_member/2`, respectively,
@@ -517,7 +517,7 @@ write operations pending in its mailbox.
 After each batch it notifies each Ra server that had a write in
 that batch so that it can consider the entry written.
 
-The WAL tries to adapt to load by dynamically increasing the max number of
+The WAL tries to adapt the load by dynamically increasing the max number of
 writes per batch, trading latency for throughput.
 
 Depending on the system a call to `fsync(1)` can block for several milliseconds.
