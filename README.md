@@ -30,7 +30,8 @@ The following Raft features are implemented:
 
 ### Safety Verification
 
-We [continuously test](https://github.com/rabbitmq/ra-kv-store#jepsen-test) RA with the [Jepsen](https://github.com/jepsen-io/jepsen) distributed system verification framework.
+Ra is [continuously tested](https://github.com/rabbitmq/ra-kv-store#jepsen-test) with the [Jepsen](https://github.com/jepsen-io/jepsen)
+distributed system verification framework.
 
 ## Supported Erlang/OTP Versions
 
