@@ -483,7 +483,7 @@ leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    Effects = ra_server:handle_status(?FUNCTION_NAME, init, State0#state.server_state, Node, Status),
+    Effects = ra_server:handle_status(?FUNCTION_NAME, State0#state.server_state, Node, Status),
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
@@ -518,13 +518,13 @@ leader({call, From}, trigger_election, State) ->
 leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 leader(cast, {add_member, ServerId, Res}, State0) ->
-    Effects = ra_server:handle_status(?FUNCTION_NAME, add_member_result, State0#state.server_state, ServerId, Res),
+    Effects = ra_server:handle_status(?FUNCTION_NAME, State0#state.server_state, ServerId, {add_member, Res}),
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
     {keep_state, State, Actions};
 leader(cast, {remove_member, ServerId, Res}, State0) ->
-    Effects = ra_server:handle_status(?FUNCTION_NAME, remove_member_result, State0#state.server_state, ServerId, Res),
+    Effects = ra_server:handle_status(?FUNCTION_NAME, State0#state.server_state, ServerId, {remove_member, Res}),
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),

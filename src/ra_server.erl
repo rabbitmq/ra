@@ -27,7 +27,7 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
-         handle_status/5,
+         handle_status/4,
          overview/1,
          metrics/1,
          is_new/1,
@@ -1436,12 +1436,12 @@ handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod
             {RaftState, State0, []}
     end.
 
-handle_status(RaftState, Cmd, #{cfg := #cfg{effective_machine_module = MacMod},
+handle_status(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
                                 machine_state := MacState,
                                 cluster := Cluster,
                                 leader_id := Leader
                                } = _State0, Node, Status) ->
-    ra_machine:handle_status(MacMod, RaftState, Leader, Cmd, maps:keys(Cluster), MacState, Node, Status).
+    ra_machine:handle_status(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Node, Status).
 
 % property helpers
 
