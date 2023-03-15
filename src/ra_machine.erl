@@ -71,6 +71,7 @@
 -export([init/2,
          apply/4,
          tick/3,
+         handle_status/8,
          state_enter/3,
          overview/2,
          query/3,
@@ -200,6 +201,7 @@
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
+                     handle_status/7,
                      state_enter/2,
                      init_aux/1,
                      handle_aux/6,
@@ -229,6 +231,8 @@
 -callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
+
+-callback handle_status(any(), any(), any(), any(), any(), any(), any()) -> effects().
 
 -callback init_aux(Name :: atom()) -> term().
 
@@ -276,6 +280,9 @@ apply(Mod, Metadata, Cmd, State) ->
 -spec tick(module(), milliseconds(), state()) -> effects().
 tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
+
+handle_status(Mod, RaftState, Leader, Cmd, Cluster, State, Node, Status) ->
+    ?OPT_CALL(Mod:handle_status(RaftState, Leader, Cmd, Cluster, State, Node, Status), undefined).
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->

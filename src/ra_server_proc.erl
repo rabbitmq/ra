@@ -483,7 +483,12 @@ leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
-    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+    Effects = ra_server:handle_status(?FUNCTION_NAME, init, State0#state.server_state, Node, Status),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+                                       cast,
+                                       State0),
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State,
+                              Actions);
 leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
@@ -512,6 +517,18 @@ leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
+leader(cast, {add_member, ServerId, Res}, State0) ->
+    Effects = ra_server:handle_status(?FUNCTION_NAME, add_member_result, State0#state.server_state, ServerId, Res),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+                                       cast,
+                                       State0),
+    {keep_state, State, Actions};
+leader(cast, {remove_member, ServerId, Res}, State0) ->
+    Effects = ra_server:handle_status(?FUNCTION_NAME, remove_member_result, State0#state.server_state, ServerId, Res),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+                                       cast,
+                                       State0),
+    {keep_state, State, Actions};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects1} ->
@@ -1188,6 +1205,57 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
+handle_effect(_RaftState, {add_member, Conf, ServerId, Members}, _EventType,
+              #state{server_state = SS} = State, Actions) ->
+    #{name := System} = ra_server:system_config(SS),
+    Me = self(),
+    spawn(fun() ->
+                  Res = case ra:start_server(System, Conf) of
+                            ok ->
+                                case ra:add_member(Members, ServerId) of
+                                    {ok, _, _} = R ->
+                                        R;
+                                    {timeout, _} ->
+                                        ra:force_delete_server(System, ServerId),
+                                        ra:remove_member(Members, ServerId),
+                                        {error, timeout};
+                                    E ->
+                                        ra:force_delete_server(System, ServerId),
+                                        E
+                                end;
+                            E ->
+                                E
+                        end,
+                  ok = gen_statem:cast(Me, {add_member, ServerId, Res})
+          end),
+    {State, Actions};
+handle_effect(_RaftState, {remove_member, ServerId, Members}, _EventType,
+              #state{server_state = SS} = State, Actions) ->
+    #{name := System} = ra_server:system_config(SS),
+    Me = self(),
+    spawn(fun() ->
+                  Res = case ra:remove_member(Members, ServerId) of
+                            {ok, _, _Leader} = R ->
+                                case ra:force_delete_server(System, ServerId) of
+                                    ok ->
+                                        R;
+                                    {error, {badrpc, nodedown}} ->
+                                        R;
+                                    {error, {badrpc, {'EXIT', {badarg, _}}}} ->
+                                        R;
+                                    {error, Err} = Err ->
+                                        {error, Err, R};
+                                    Err ->
+                                        {error, Err, R}
+                                end;
+                            {timeout, _} ->
+                                {error, timeout};
+                            E ->
+                                E
+                        end,
+                  ok = gen_statem:cast(Me, {remove_member, ServerId, Res})
+          end),
+    {State, Actions};
 handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
     State = send_applied_notifications(State0, Nots),
@@ -1716,9 +1784,13 @@ can_execute_on_member(leader, Member, State) ->
 can_execute_on_member(_RaftState, _Member, _State) ->
     false.
 
+handle_node_status_change(Node, Status, InfoList, RaftState, State) ->
+    handle_node_status_change(Node, Status, InfoList, RaftState, State, []).
+
 handle_node_status_change(Node, Status, InfoList, RaftState,
                           #state{monitors = Monitors0,
-                                 server_state = ServerState0} = State0) ->
+                                 server_state = ServerState0} = State0,
+                          Actions0) ->
     {Comps, Monitors} = ra_monitors:handle_down(Node, Monitors0),
     {_, ServerState, Effects} =
         lists:foldl(
@@ -1730,7 +1802,8 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
           end, {RaftState, ServerState0, []}, Comps),
     {State, Actions} = handle_effects(RaftState, Effects, cast,
                                       State0#state{server_state = ServerState,
-                                                   monitors = Monitors}),
+                                                   monitors = Monitors},
+                                      Actions0),
     {keep_state, State, Actions}.
 
 handle_process_down(Pid, Info, RaftState,
