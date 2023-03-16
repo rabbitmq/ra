@@ -235,7 +235,7 @@
 -callback handle_status(ra_server:ra_state(),
                         ra_server_id(),
                         [ra_server_id()],
-                        state(),
+                        MacState :: state(),
                         node(),
                         nodeup | nodedown |
                         {add_member_result, Result} |
@@ -288,6 +288,15 @@ apply(Mod, Metadata, Cmd, State) ->
 tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
+-spec handle_status(module(),
+                    ra_server:ra_state(),
+                    ra_server_id(),
+                    [ra_server_id()],
+                    MacState :: state(),
+                    node(),
+                    nodeup | nodedown |
+                    {add_member_result, Result} |
+                    {remove_member_result, Result}) -> effects().
 handle_status(Mod, RaftState, Leader, Cluster, State, Node, Status) ->
     ?OPT_CALL(Mod:handle_status(RaftState, Leader, Cluster, State, Node, Status), undefined).
 
