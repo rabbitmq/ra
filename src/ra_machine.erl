@@ -232,7 +232,14 @@
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
--callback handle_status(any(), any(), any(), any(), any(), any()) -> effects().
+-callback handle_status(ra_server:ra_state(),
+                        ra_server_id(),
+                        [ra_server_id()],
+                        state(),
+                        node(),
+                        nodeup | nodedown |
+                        {add_member_result, Result} |
+                        {remove_member_result, Result}) -> effects().
 
 -callback init_aux(Name :: atom()) -> term().
 
