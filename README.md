@@ -434,7 +434,18 @@ To change log level to `debug` for all applications, use
 ``` erl
 logger:set_primary_config(level, debug).
 ```
+## Ra versioning
 
+Ra attempts to follow [Semantic Versioning](https://semver.org/).
+
+The modules that form part of the public API are:
+* `ra`
+* `ra_machine`
+* `ra_system`
+* `ra_counters`
+* `ra_leaderboard`
+* `ra_env`
+* `ra_directory`
 
 ## Copyright and License
 
