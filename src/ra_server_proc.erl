@@ -1235,6 +1235,7 @@ handle_effect(_RaftState, {add_member, Conf, ServerId, Members}, _EventType,
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
     Me = self(),
+    %% Check if an member_eval pid is already ongoing. Do we need to monitor the pid?
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
@@ -1269,8 +1270,8 @@ handle_effect(_RaftState, {remove_member, ServerId, Members}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
-    io:format("OldPid value ~p~n",[OldPid]),
     Me = self(),
+    %% Check if an member_eval pid is already ongoing. Do we need to monitor the pid?
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
