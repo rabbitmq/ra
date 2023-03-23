@@ -499,11 +499,7 @@ leader({timeout, Status}, member_eval_timeout, State0) ->
     %% Default value of say ~1 hour after handling the effects. If there are
     %% effects (add/remove) the handling of adding/removing members will set the
     %% timer to a lower value once its down, to see if there is more to do. Enough?
-<<<<<<< Updated upstream
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, node, Status),
-=======
     Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, Status),
->>>>>>> Stashed changes
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
@@ -537,11 +533,7 @@ leader({call, From}, {log_fold, Fun, Term}, State) ->
 leader(cast, {add_member, ServerId, Res}, State0) ->
     %% Q: Effects should be [] here, as this is just delivering result. Perhaps
     %% is should be its own callback?
-<<<<<<< Updated upstream
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, ServerId, {add_member, Res}),
-=======
     Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, {add_member, ServerId, Res}),
->>>>>>> Stashed changes
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
@@ -553,11 +545,7 @@ leader(cast, {add_member, ServerId, Res}, State0) ->
 leader(cast, {remove_member, ServerId, Res}, State0) ->
     %% Q: Effects should be [] here, as this is just delivering result. Perhaps
     %% is should be its own callback?
-<<<<<<< Updated upstream
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, ServerId, {remove_member, Res}),
-=======
     Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, {remove_member, ServerId, Res}),
->>>>>>> Stashed changes
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
