@@ -27,7 +27,7 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
-         handle_status/4,
+         eval_members/4,
          overview/1,
          metrics/1,
          is_new/1,
@@ -85,7 +85,8 @@
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => 'maybe'(non_neg_integer())
+      commit_latency => 'maybe'(non_neg_integer()),
+      member_eval_pid => term()
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -346,7 +347,9 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+      pending_consistent_queries => [],
+      member_eval_pid => undefined
+      }.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer,
@@ -1436,12 +1439,12 @@ handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod
             {RaftState, State0, []}
     end.
 
-handle_status(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
+eval_members(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
                                 machine_state := MacState,
                                 cluster := Cluster,
                                 leader_id := Leader
                                } = _State0, Node, Status) ->
-    ra_machine:handle_status(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Node, Status).
+    ra_machine:eval_members(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Node, Status).
 
 % property helpers
 
@@ -1887,6 +1890,14 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};
+handle_down(RaftState, member_eval, _Pid, _Info, State) ->
+    #{member_eval_pid := _OldPid} = State,
+    %% Q: Unsure if this handling is needed, we could in ra_server_proc
+    %% just check if the process is alive?
+    %% Q: No effect is returned here. We should perhaps return an effect that
+    %% sets the timer to a lower value. But, that is currently done when the
+    %% spawned process sends its result
+    {RaftState, State#{member_eval_pid => undefined}, []};
 handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
