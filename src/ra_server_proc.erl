@@ -1553,6 +1553,7 @@ set_tick_timer(#state{conf = #conf{tick_timeout = TickTimeout}}, Actions) ->
 
 set_member_eval_timer(#state{conf = #conf{member_eval_timeout = Timeout}}, Actions) ->
     set_member_eval_timer(Timeout, Actions, default).
+%% Added reason to indicate 'who' set the timer and why...
 set_member_eval_timer(Timeout, Actions, Reason) when is_integer(Timeout) ->
     [{{timeout, Reason}, Timeout, member_eval_timeout} | Actions].
 
