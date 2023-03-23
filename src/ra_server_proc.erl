@@ -1235,7 +1235,7 @@ handle_effect(_RaftState, {add_member, Conf, ServerId, Members}, _EventType,
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
     Me = self(),
-    Pid = case is_pid(OldPid) of
+    Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
                   OldPid;
@@ -1271,7 +1271,7 @@ handle_effect(_RaftState, {remove_member, ServerId, Members}, _EventType,
     #{member_eval_pid := OldPid} = SS,
     io:format("OldPid value ~p~n",[OldPid]),
     Me = self(),
-    Pid = case is_pid(OldPid) of
+    Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
                   OldPid;
