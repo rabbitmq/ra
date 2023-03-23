@@ -27,7 +27,11 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
+<<<<<<< Updated upstream
          eval_members/4,
+=======
+         eval_members/3,
+>>>>>>> Stashed changes
          overview/1,
          metrics/1,
          is_new/1,
@@ -1443,8 +1447,13 @@ eval_members(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
                                 machine_state := MacState,
                                 cluster := Cluster,
                                 leader_id := Leader
+<<<<<<< Updated upstream
                                } = _State0, Node, Status) ->
     ra_machine:eval_members(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Node, Status).
+=======
+                               } = _State0, Status) ->
+    ra_machine:eval_members(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Status).
+>>>>>>> Stashed changes
 
 % property helpers
 

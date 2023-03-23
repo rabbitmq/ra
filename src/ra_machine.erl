@@ -71,7 +71,11 @@
 -export([init/2,
          apply/4,
          tick/3,
+<<<<<<< Updated upstream
          eval_members/7,
+=======
+         eval_members/6,
+>>>>>>> Stashed changes
          state_enter/3,
          overview/2,
          query/3,
@@ -201,7 +205,11 @@
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
+<<<<<<< Updated upstream
                      eval_members/6,
+=======
+                     eval_members/5,
+>>>>>>> Stashed changes
                      state_enter/2,
                      init_aux/1,
                      handle_aux/6,
@@ -236,10 +244,9 @@
                         ra_server_id(),
                         [ra_server_id()],
                         MacState :: state(),
-                        node(),
                         nodeup | nodedown |
-                        {add_member_result, Result} |
-                        {remove_member_result, Result}) -> effects().
+                        {add_member_result, Id, Result} |
+                        {remove_member_result, Id, Result}) -> effects().
 
 -callback init_aux(Name :: atom()) -> term().
 
@@ -293,12 +300,18 @@ tick(Mod, TimeMs, State) ->
                     ra_server_id(),
                     [ra_server_id()],
                     MacState :: state(),
-                    node(),
                     nodeup | nodedown |
+<<<<<<< Updated upstream
                     {add_member_result, Result} |
                     {remove_member_result, Result}) -> effects().
 eval_members(Mod, RaftState, Leader, Cluster, State, Node, Status) ->
     ?OPT_CALL(Mod:eval_members(RaftState, Leader, Cluster, State, Node, Status), undefined).
+=======
+                    {add_member_result, Id, Result} |
+                    {remove_member_result, Id, Result}) -> effects().
+eval_members(Mod, RaftState, Leader, Cluster, State, Status) ->
+    ?OPT_CALL(Mod:eval_members(RaftState, Leader, Cluster, State, Status), undefined).
+>>>>>>> Stashed changes
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->
