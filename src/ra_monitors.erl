@@ -135,10 +135,11 @@ basics_test() ->
     M1 = add(self(), machine, M0),
     [machine] = components(self(), M1),
     M2 = add(self(), aux, M1),
-    [aux, machine] = components(self(), M2),
+    [aux, machine] = lists:sort(components(self(), M2)),
     M3 = remove(self(), machine, M2),
     [aux] = components(self(), M3),
-    {[aux, machine], M5} = handle_down(self(), M2),
+    {Components, M5} = handle_down(self(), M2),
+    [aux, machine] = lists:sort(Components),
     [] = components(self(), M5),
     ok.
 
