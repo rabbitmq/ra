@@ -738,7 +738,6 @@ snapshot_installation_with_call_crash(Config) ->
     Name = ?config(test_name, Config),
     Servers = [N1, N2, N3],
     Mac = {module, ra_queue, #{}},
-    meck:new(gen_statem, [unstick, passthrough]),
 
     % start two servers
     {ok, [Leader0, _, Down], []}  = ra:start_cluster(default, Name, Mac, Servers),
@@ -753,16 +752,17 @@ snapshot_installation_with_call_crash(Config) ->
 
     {ok, _, _} = ra:process_command(Leader, deq),
 
-    meck:expect(gen_statem, call, fun (_,  #install_snapshot_rpc{}, _) ->
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_follower, fun (#install_snapshot_rpc{}, _) ->
                                           exit(timeout);
-                                      (A, B, C) ->
-                                          meck:passthrough([A, B, C])
+                                      (A, B) ->
+                                          meck:passthrough([A, B])
                                   end),
     %% start the down node again, catchup should involve sending a snapshot
     ok = ra:restart_server(?SYS, Down),
 
     timer:sleep(2500),
-    meck:unload(gen_statem),
+    meck:unload(ra_server),
 
     ?assert(try_n_times(
               fun () ->
