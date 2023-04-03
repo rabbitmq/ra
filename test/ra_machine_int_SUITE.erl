@@ -428,6 +428,8 @@ append_effect_follower(Config) ->
                        [ServerId, ServerId2, ServerId3]),
     {ok, Members, Leader} = ra:members(ServerId),
     [Follower | _] = lists:delete(Leader, Members),
+    %% send an untracked aux command, which should cause the follower to
+    %% forward the append effect to the known leader
     ok = ra:cast_aux_command(Follower, {cmd, noreply}),
     receive
         got_cmd2 ->
@@ -437,6 +439,8 @@ append_effect_follower(Config) ->
               exit(cmd2_timeout)
     end,
 
+    %% cast a tracked (correlated) command via aux handler
+    %% This should be rejected (as it is tracked).
     Corr = make_ref(),
     ok = ra:cast_aux_command(Follower, {cmd, {notify, Corr, self()}}),
     receive
@@ -445,6 +449,7 @@ append_effect_follower(Config) ->
             ok = ra:cast_aux_command(Leader2, {cmd, {notify, Corr, self()}}),
             receive
                 got_cmd2 ->
+                    %% the command was appended and applied
                     flush(),
                     ok
             after 1000 ->
