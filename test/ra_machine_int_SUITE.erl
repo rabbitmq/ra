@@ -40,6 +40,7 @@ all_tests() ->
      meta_data,
      append_effect,
      append_effect_with_notify,
+     append_effect_follower,
      timer_effect,
      log_effect,
      aux_eval,
@@ -398,6 +399,66 @@ append_effect_with_notify(Config) ->
     after 1000 ->
               flush(),
               exit(cmd2_timeout)
+    end,
+    ok.
+
+append_effect_follower(Config) ->
+    %% the append effect is issued against a follower from an aux handler
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun
+                                (_, {cmd2, "yo"}, State) ->
+                                    {State, ok, [{send_msg, Self, got_cmd2}]}
+                            end),
+    meck:expect(Mod, handle_aux, fun
+                                     (_, _, {cmd, ReplyMode}, Aux, Log, _MacState) ->
+                                         {no_reply, Aux, Log,
+                                          [{append, {cmd2, "yo"}, ReplyMode}]};
+                                     (_, _, _Evt, Aux, Log, _MacState) ->
+                                         {no_reply, Aux, Log}
+                                 end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+
+    ok = start_cluster(ClusterName, {module, Mod, #{}},
+                       [ServerId, ServerId2, ServerId3]),
+    {ok, Members, Leader} = ra:members(ServerId),
+    [Follower | _] = lists:delete(Leader, Members),
+    %% send an untracked aux command, which should cause the follower to
+    %% forward the append effect to the known leader
+    ok = ra:cast_aux_command(Follower, {cmd, noreply}),
+    receive
+        got_cmd2 ->
+            ok
+    after 1000 ->
+              flush(),
+              exit(cmd2_timeout)
+    end,
+
+    %% cast a tracked (correlated) command via aux handler
+    %% This should be rejected (as it is tracked).
+    Corr = make_ref(),
+    ok = ra:cast_aux_command(Follower, {cmd, {notify, Corr, self()}}),
+    receive
+        {ra_event, Follower, {rejected, {not_leader, Leader2, Corr}}}  ->
+            %% the command got rejected, resend to leader
+            ok = ra:cast_aux_command(Leader2, {cmd, {notify, Corr, self()}}),
+            receive
+                got_cmd2 ->
+                    %% the command was appended and applied
+                    flush(),
+                    ok
+            after 1000 ->
+                      flush(),
+                      exit(cmd2_timeout)
+            end
+    after 1000 ->
+              flush(),
+              exit(ra_event_timeout)
     end,
     ok.
 

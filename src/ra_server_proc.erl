@@ -1160,10 +1160,10 @@ handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
         false ->
             {State, Actions}
     end;
-handle_effect(leader, {append, Cmd}, _EvtType, State, Actions) ->
+handle_effect(_RaftState, {append, Cmd}, _EvtType, State, Actions) ->
     Evt = {command, normal, {'$usr', Cmd, noreply}},
     {State, [{next_event, cast, Evt} | Actions]};
-handle_effect(leader, {append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
+handle_effect(_RaftState, {append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
     Evt = {command, normal, {'$usr', Cmd, ReplyMode}},
     {State, [{next_event, cast, Evt} | Actions]};
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
