@@ -288,7 +288,7 @@ tick(Mod, TimeMs, State) ->
                    [ra_server_id()],
                    MacState :: state()) -> effects().
 eval_members(Mod, Leader, Cluster, State) ->
-    ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), undefined).
+    ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), []).
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->
