@@ -27,7 +27,7 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
-         eval_members/3,
+         eval_members/1,
          overview/1,
          metrics/1,
          is_new/1,
@@ -1439,12 +1439,12 @@ handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod
             {RaftState, State0, []}
     end.
 
-eval_members(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
-                                machine_state := MacState,
-                                cluster := Cluster,
-                                leader_id := Leader
-                               } = _State0, Status) ->
-    ra_machine:eval_members(MacMod, RaftState, Leader, maps:keys(Cluster), MacState, Status).
+eval_members(#{cfg := #cfg{effective_machine_module = MacMod},
+               machine_state := MacState,
+               cluster := Cluster,
+               leader_id := Leader
+              } = _State0) ->
+    ra_machine:eval_members(MacMod, Leader, maps:keys(Cluster), MacState).
 
 % property helpers
 
@@ -1890,14 +1890,9 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};
-handle_down(RaftState, member_eval, _Pid, _Info, State) ->
-    #{member_eval_pid := _OldPid} = State,
-    %% Q: Unsure if this handling is needed, we could in ra_server_proc
-    %% just check if the process is alive?
-    %% Q: No effect is returned here. We should perhaps return an effect that
-    %% sets the timer to a lower value. But, that is currently done when the
-    %% spawned process sends its result
-    {RaftState, State#{member_eval_pid => undefined}, []};
+handle_down(RaftState, member_eval, Pid, _Info, State) ->
+    #{member_eval_pid := Pid} = State,
+    {RaftState, State#{member_eval_pid => undefined}, [member_eval_timer]};
 handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);

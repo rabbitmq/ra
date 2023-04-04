@@ -487,19 +487,19 @@ leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     %% Q: when a node goes up/down, set the value to something low.
     %% 2 sec now for testing only. Some random value between 10-60 sec?
-    Actions = set_member_eval_timer(2000, [], {Status, Node}),
+    Actions = set_member_eval_timer(2000, []),
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
                               Actions);
 leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
-leader({timeout, Status}, member_eval_timeout, State0) ->
+leader(_, member_eval_timeout, State0) ->
     %% Q: timeout triggered, ask to evaluate members.
     %% Currently ignore if there are effects, and just sets timer to
     %% Default value of say ~1 hour after handling the effects. If there are
     %% effects (add/remove) the handling of adding/removing members will set the
     %% timer to a lower value once its down, to see if there is more to do. Enough?
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, Status),
+    Effects = ra_server:eval_members(State0#state.server_state),
     {State, Actions} = ?HANDLE_EFFECTS(Effects,
                                        cast,
                                        State0),
@@ -530,30 +530,6 @@ leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-leader(cast, {add_member, ServerId, Res}, State0) ->
-    %% Q: Effects should be [] here, as this is just delivering result. Perhaps
-    %% is should be its own callback?
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, {add_member, ServerId, Res}),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects,
-                                       cast,
-                                       State0),
-    %% Q: Sets timer to something lower, as something might have happend during
-    %% the processing of adding/removing members. The 'after_*_member' might not
-    %% be needed, but is currently a mechanism to give some info on what set the timer.
-    Actions0 = set_member_eval_timer(2000, Actions, after_add_member),
-    {keep_state, State, Actions0};
-leader(cast, {remove_member, ServerId, Res}, State0) ->
-    %% Q: Effects should be [] here, as this is just delivering result. Perhaps
-    %% is should be its own callback?
-    Effects = ra_server:eval_members(?FUNCTION_NAME, State0#state.server_state, {remove_member, ServerId, Res}),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects,
-                                       cast,
-                                       State0),
-    %% Q: Sets timer to something lower, as something might have happend during
-    %% the processing of adding/removing members. The 'after_*_member' might not
-    %% be needed, but is currently a mechanism to give some info on what set the timer.
-    Actions0 = set_member_eval_timer(2000, Actions, after_remove_member),
-    {keep_state, State, Actions0};
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects1} ->
@@ -1230,12 +1206,11 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(_RaftState, {add_member, Conf, ServerId, Members}, _EventType,
+handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
-    Me = self(),
-    %% Check if an member_eval pid is already ongoing. Do we need to monitor the pid?
+    %% Check if an member_eval pid is already ongoing.
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
@@ -1243,34 +1218,32 @@ handle_effect(_RaftState, {add_member, Conf, ServerId, Members}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                Res = case ra:start_server(System, Conf) of
-                                          ok ->
-                                              case ra:add_member(Members, ServerId) of
-                                                  {ok, _, _} = R ->
-                                                      R;
-                                                  {timeout, _} ->
-                                                      ra:force_delete_server(System, ServerId),
-                                                      ra:remove_member(Members, ServerId),
-                                                      {error, timeout};
-                                                  E ->
-                                                      ra:force_delete_server(System, ServerId),
-                                                      E
-                                              end;
-                                          E ->
-                                              E
-                                      end,
-                                ok = gen_statem:cast(Me, {add_member, ServerId, Res})
+                                %% Q: Since we are no longer responding with a result
+                                %% I assume the below is a bit overkill?
+                                case ra:start_server(System, Conf) of
+                                    ok ->
+                                        case ra:add_member(Members, ServerId) of
+                                            {ok, _, _} = R ->
+                                                R;
+                                            {timeout, _} ->
+                                                ra:force_delete_server(System, ServerId),
+                                                ra:remove_member(Members, ServerId),
+                                                {error, timeout};
+                                            E ->
+                                                ra:force_delete_server(System, ServerId),
+                                                E
+                                        end;
+                                    E ->
+                                        E
+                                end
                         end)
           end,
-    %% Q: Storing the Pid, but is monitoring needed, or just check if
-    %% process is alive in each lap?
     {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
                  server_state = SS#{member_eval_pid => Pid}}, Actions};
-handle_effect(_RaftState, {remove_member, ServerId, Members}, _EventType,
+handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
-    Me = self(),
     %% Check if an member_eval pid is already ongoing. Do we need to monitor the pid?
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
@@ -1279,30 +1252,29 @@ handle_effect(_RaftState, {remove_member, ServerId, Members}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                Res = case ra:remove_member(Members, ServerId) of
-                                          {ok, _, _Leader} = R ->
-                                              case ra:force_delete_server(System, ServerId) of
-                                                  ok ->
-                                                      R;
-                                                  {error, {badrpc, nodedown}} ->
-                                                      R;
-                                                  {error, {badrpc, {'EXIT', {badarg, _}}}} ->
-                                                      R;
-                                                  {error, Err} = Err ->
-                                                      {error, Err, R};
-                                                  Err ->
-                                                      {error, Err, R}
-                                              end;
-                                          {timeout, _} ->
-                                              {error, timeout};
-                                          E ->
-                                              E
-                                      end,
-                                ok = gen_statem:cast(Me, {remove_member, ServerId, Res})
+                                %% Q: Since we are no longer responding with a result
+                                %% I assume the below is a bit overkill?
+                                case ra:remove_member(Members, ServerId) of
+                                    {ok, _, _Leader} = R ->
+                                        case ra:force_delete_server(System, ServerId) of
+                                            ok ->
+                                                R;
+                                            {error, {badrpc, nodedown}} ->
+                                                R;
+                                            {error, {badrpc, {'EXIT', {badarg, _}}}} ->
+                                                R;
+                                            {error, Err} = Err ->
+                                                {error, Err, R};
+                                            Err ->
+                                                {error, Err, R}
+                                        end;
+                                    {timeout, _} ->
+                                        {error, timeout};
+                                    E ->
+                                        E
+                                end
                         end)
           end,
-    %% Q: Storing the Pid, but is monitoring needed, or just check if
-    %% process is alive in each lap?
     {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
                  server_state = SS#{member_eval_pid => Pid}}, Actions};
 handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
@@ -1429,6 +1401,8 @@ handle_effect(_, {demonitor, _ProcOrNode, Component, PidOrNode}, _,
     {State#state{monitors = Monitors}, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
+handle_effect(_, member_eval_timer, _, State, Actions) ->
+    {State, set_member_eval_timer(2000, Actions)};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     %% TODO: catch and log failures or rely on calling function never crashing
@@ -1552,11 +1526,9 @@ set_tick_timer(#state{conf = #conf{tick_timeout = TickTimeout}}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
 set_member_eval_timer(#state{conf = #conf{member_eval_timeout = Timeout}}, Actions) ->
-    set_member_eval_timer(Timeout, Actions, default).
-%% Added reason to indicate 'who' set the timer and why...
-set_member_eval_timer(Timeout, Actions, Reason) when is_integer(Timeout) ->
-    [{{timeout, Reason}, Timeout, member_eval_timeout} | Actions].
-
+    set_member_eval_timer(Timeout, Actions);
+set_member_eval_timer(Timeout, Actions) when is_integer(Timeout) ->
+    [{{timeout, member_eval_tick}, Timeout, member_eval_timeout} | Actions].
 
 follower_leader_change(Old, #state{pending_commands = Pending,
                                    leader_monitor = OldMRef} = New) ->

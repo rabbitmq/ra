@@ -71,7 +71,7 @@
 -export([init/2,
          apply/4,
          tick/3,
-         eval_members/6,
+         eval_members/4,
          state_enter/3,
          overview/2,
          query/3,
@@ -201,7 +201,7 @@
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
-                     eval_members/5,
+                     eval_members/3,
                      state_enter/2,
                      init_aux/1,
                      handle_aux/6,
@@ -232,13 +232,9 @@
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
--callback eval_members(ra_server:ra_state(),
-                        ra_server_id(),
-                        [ra_server_id()],
-                        MacState :: state(),
-                        nodeup | nodedown |
-                        {add_member_result, Id, Result} |
-                        {remove_member_result, Id, Result}) -> effects().
+-callback eval_members(ra_server_id(),
+                       [ra_server_id()],
+                       MacState :: state()) -> effects().
 
 -callback init_aux(Name :: atom()) -> term().
 
@@ -288,15 +284,11 @@ tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
 -spec eval_members(module(),
-                    ra_server:ra_state(),
-                    ra_server_id(),
-                    [ra_server_id()],
-                    MacState :: state(),
-                    nodeup | nodedown |
-                    {add_member_result, Id, Result} |
-                    {remove_member_result, Id, Result}) -> effects().
-eval_members(Mod, RaftState, Leader, Cluster, State, Status) ->
-    ?OPT_CALL(Mod:eval_members(RaftState, Leader, Cluster, State, Status), undefined).
+                   ra_server_id(),
+                   [ra_server_id()],
+                   MacState :: state()) -> effects().
+eval_members(Mod, Leader, Cluster, State) ->
+    ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), undefined).
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->
