@@ -1220,15 +1220,14 @@ handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                %% Q: Since we are no longer responding with a result
-                                %% I assume the below is a bit overkill?
-
                                 %% Get this process ID, which at the point of creation
                                 %% is the leader.
                                 ID = leader_id(State),
                                 {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
                                 case ID == Leader of
                                     true ->
+                                        %% Q: Since we are no longer responding with a result
+                                        %% I assume the below is a bit overkill?
                                         case ra:start_server(System, Conf) of
                                             ok ->
                                                 case ra:add_member(Members, ServerId) of
@@ -1265,14 +1264,14 @@ handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                %% Q: Since we are no longer responding with a result
-                                %% I assume the below is a bit overkill?
                                 %% Get this process ID, which at the point of creation
                                 %% is the leader.
                                 ID = leader_id(State),
                                 {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
                                 case ID == Leader of
                                     true ->
+                                        %% Q: Since we are no longer responding with a result
+                                        %% I assume the below is a bit overkill?
                                         case ra:remove_member(Members, ServerId) of
                                             {ok, _, _Leader} = R ->
                                                 case ra:force_delete_server(System, ServerId) of
