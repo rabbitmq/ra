@@ -494,11 +494,6 @@ leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
 leader(_, member_eval_timeout, State0) ->
-    %% Q: timeout triggered, ask to evaluate members.
-    %% Currently ignore if there are effects, and just sets timer to
-    %% Default value of say ~1 hour after handling the effects. If there are
-    %% effects (add/remove) the handling of adding/removing members will set the
-    %% timer to a lower value once its down, to see if there is more to do. Enough?
     Effect = ra_server:eval_members(State0#state.server_state),
     {State, Actions} = ?HANDLE_EFFECTS(Effect,
                                        cast,
