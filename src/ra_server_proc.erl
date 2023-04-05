@@ -499,8 +499,8 @@ leader(_, member_eval_timeout, State0) ->
     %% Default value of say ~1 hour after handling the effects. If there are
     %% effects (add/remove) the handling of adding/removing members will set the
     %% timer to a lower value once its down, to see if there is more to do. Enough?
-    Effects = ra_server:eval_members(State0#state.server_state),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects,
+    Effect = ra_server:eval_members(State0#state.server_state),
+    {State, Actions} = ?HANDLE_EFFECTS(Effect,
                                        cast,
                                        State0),
     {keep_state, State,
@@ -1102,7 +1102,9 @@ perform_local_query(QueryFun, Leader, ServerState, Conf) ->
             {error, Err}
     end.
 
-handle_effects(RaftState, Effects0, EvtType, State0) ->
+handle_effects(RaftState, Effect, EvtType, State0) when is_tuple(Effect) ->
+    handle_effects(RaftState, [Effect], EvtType, State0);
+handle_effects(RaftState, Effects0, EvtType, State0) when is_list(Effects0) ->
     handle_effects(RaftState, Effects0, EvtType, State0, []).
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.
@@ -1220,21 +1222,32 @@ handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
                   spawn(fun() ->
                                 %% Q: Since we are no longer responding with a result
                                 %% I assume the below is a bit overkill?
-                                case ra:start_server(System, Conf) of
-                                    ok ->
-                                        case ra:add_member(Members, ServerId) of
-                                            {ok, _, _} = R ->
-                                                R;
-                                            {timeout, _} ->
-                                                ra:force_delete_server(System, ServerId),
-                                                ra:remove_member(Members, ServerId),
-                                                {error, timeout};
+
+                                %% Get this process ID, which at the point of creation
+                                %% is the leader.
+                                ID = leader_id(State),
+                                {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
+                                case ID == Leader of
+                                    true ->
+                                        case ra:start_server(System, Conf) of
+                                            ok ->
+                                                case ra:add_member(Members, ServerId) of
+                                                    {ok, _, _} = R ->
+                                                        R;
+                                                    {timeout, _} ->
+                                                        ra:force_delete_server(System, ServerId),
+                                                        ra:remove_member(Members, ServerId),
+                                                        {error, timeout};
+                                                    E ->
+                                                        ra:force_delete_server(System, ServerId),
+                                                        E
+                                                end;
                                             E ->
-                                                ra:force_delete_server(System, ServerId),
                                                 E
                                         end;
-                                    E ->
-                                        E
+                                    false ->
+                                        %% No longer active leader, do nothing
+                                        ok
                                 end
                         end)
           end,
@@ -1254,24 +1267,34 @@ handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
                   spawn(fun() ->
                                 %% Q: Since we are no longer responding with a result
                                 %% I assume the below is a bit overkill?
-                                case ra:remove_member(Members, ServerId) of
-                                    {ok, _, _Leader} = R ->
-                                        case ra:force_delete_server(System, ServerId) of
-                                            ok ->
-                                                R;
-                                            {error, {badrpc, nodedown}} ->
-                                                R;
-                                            {error, {badrpc, {'EXIT', {badarg, _}}}} ->
-                                                R;
-                                            {error, Err} = Err ->
-                                                {error, Err, R};
-                                            Err ->
-                                                {error, Err, R}
+                                %% Get this process ID, which at the point of creation
+                                %% is the leader.
+                                ID = leader_id(State),
+                                {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
+                                case ID == Leader of
+                                    true ->
+                                        case ra:remove_member(Members, ServerId) of
+                                            {ok, _, _Leader} = R ->
+                                                case ra:force_delete_server(System, ServerId) of
+                                                    ok ->
+                                                        R;
+                                                    {error, {badrpc, nodedown}} ->
+                                                        R;
+                                                    {error, {badrpc, {'EXIT', {badarg, _}}}} ->
+                                                        R;
+                                                    {error, Err} = Err ->
+                                                        {error, Err, R};
+                                                    Err ->
+                                                        {error, Err, R}
+                                                end;
+                                            {timeout, _} ->
+                                                {error, timeout};
+                                            E ->
+                                                E
                                         end;
-                                    {timeout, _} ->
-                                        {error, timeout};
-                                    E ->
-                                        E
+                                    false ->
+                                        %% No longer active leader, do nothing
+                                        ok
                                 end
                         end)
           end,

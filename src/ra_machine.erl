@@ -234,7 +234,7 @@
 
 -callback eval_members(ra_server_id(),
                        [ra_server_id()],
-                       MacState :: state()) -> effects().
+                       MacState :: state()) -> effect().
 
 -callback init_aux(Name :: atom()) -> term().
 
@@ -286,9 +286,9 @@ tick(Mod, TimeMs, State) ->
 -spec eval_members(module(),
                    ra_server_id(),
                    [ra_server_id()],
-                   MacState :: state()) -> effects().
+                   MacState :: state()) -> effect().
 eval_members(Mod, Leader, Cluster, State) ->
-    ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), []).
+    ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), undefined).
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->
