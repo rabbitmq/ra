@@ -1444,7 +1444,16 @@ eval_members(#{cfg := #cfg{effective_machine_module = MacMod},
                cluster := Cluster,
                leader_id := Leader
               } = _State0) ->
-    ra_machine:eval_members(MacMod, Leader, maps:keys(Cluster), MacState).
+    case ra_machine:eval_members(MacMod, Leader, maps:keys(Cluster), MacState) of
+        undefined ->
+            [];
+        member_eval_backoff = Effect->
+            [Effect];
+        {add_member, _Conf, _ServerId, _Members, _RFun} = Effect ->
+            Effect;
+        {remove_member, _ServerId, _Members, _RFun} = Effect ->
+            Effect
+    end.
 
 % property helpers
 

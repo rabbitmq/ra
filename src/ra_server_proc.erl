@@ -1097,10 +1097,10 @@ perform_local_query(QueryFun, Leader, ServerState, Conf) ->
             {error, Err}
     end.
 
-handle_effects(RaftState, Effect, EvtType, State0) when is_tuple(Effect) ->
-    handle_effects(RaftState, [Effect], EvtType, State0);
 handle_effects(RaftState, Effects0, EvtType, State0) when is_list(Effects0) ->
-    handle_effects(RaftState, Effects0, EvtType, State0, []).
+    handle_effects(RaftState, Effects0, EvtType, State0, []);
+handle_effects(RaftState, Effect, EvtType, State0) ->
+    handle_effect(RaftState, Effect, EvtType, State0, []).
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.
 handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
@@ -1203,7 +1203,7 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
+handle_effect(leader, {add_member, Conf, ServerId, Members, ResultFun}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
@@ -1227,7 +1227,7 @@ handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
                                             ok ->
                                                 case ra:add_member(Members, ServerId) of
                                                     {ok, _, _} = R ->
-                                                        R;
+                                                        ResultFun(R);
                                                     {timeout, _} ->
                                                         ra:force_delete_server(System, ServerId),
                                                         ra:remove_member(Members, ServerId),
@@ -1247,7 +1247,7 @@ handle_effect(leader, {add_member, Conf, ServerId, Members}, _EventType,
           end,
     {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
                  server_state = SS#{member_eval_pid => Pid}}, Actions};
-handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
+handle_effect(leader, {remove_member, ServerId, Members, ResultFun}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{member_eval_pid := OldPid} = SS,
@@ -1269,6 +1269,7 @@ handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
                                         %% I assume the below is a bit overkill?
                                         case ra:remove_member(Members, ServerId) of
                                             {ok, _, _Leader} = R ->
+                                                ResultFun(R),
                                                 case ra:force_delete_server(System, ServerId) of
                                                     ok ->
                                                         R;
@@ -1294,6 +1295,10 @@ handle_effect(leader, {remove_member, ServerId, Members}, _EventType,
           end,
     {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
                  server_state = SS#{member_eval_pid => Pid}}, Actions};
+
+handle_effect(leader, member_eval_backoff, EventType,
+              State, Actions) ->
+    handle_effect(leader, member_eval_timer, EventType, State, Actions);
 handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
     State = send_applied_notifications(State0, Nots),
