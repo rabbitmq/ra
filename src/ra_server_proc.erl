@@ -62,7 +62,8 @@
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
 %% Utilisation average calculations are all in μs.
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
--define(DEFAULT_MEMBER_EVAL_TIMEOUT, 60000).
+-define(DEFAULT_EVAL_MEMBERS_TIMEOUT, 60000*60).
+-define(DEFAULT_EVAL_MEMBERS_EVENT_TIMEOUT, 60000).
 
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
@@ -127,7 +128,8 @@
                install_snap_rpc_timeout :: non_neg_integer(),
                aten_poll_interval = 1000 :: non_neg_integer(),
                counter :: undefined | counters:counters_ref(),
-               member_eval_timeout = ?DEFAULT_MEMBER_EVAL_TIMEOUT :: non_neg_integer()
+               eval_members_timeout :: non_neg_integer(),
+               eval_members_event_timeout :: non_neg_integer()
               }).
 
 -record(state, {conf :: #conf{},
@@ -296,6 +298,15 @@ do_init(#{id := Id,
                                         end, Peers)
               end),
     TickTime = maps:get(tick_timeout, Config),
+
+    %% Do we want these values to be configurable? And if yes,
+    %% both of them or nah. If we do, need to make sure the
+    %% event timeout is at least 10 seconds (as that is the lower
+    %% random value at the moment
+    EvalMembersTimeout = maps:get(eval_members_timeout, Config,
+                                 ?DEFAULT_EVAL_MEMBERS_TIMEOUT),
+    EvalMembersEventTimeout = maps:get(eval_members_event_timeout, Config,
+                                      ?DEFAULT_EVAL_MEMBERS_EVENT_TIMEOUT),
     InstallSnapRpcTimeout = maps:get(install_snap_rpc_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
     RaEventFormatterMFA = maps:get(ra_event_formatter, Config, undefined),
@@ -311,6 +322,8 @@ do_init(#{id := Id,
                                 name = Key,
                                 tick_timeout = TickTime,
                                 await_condition_timeout = AwaitCondTimeout,
+                                eval_members_timeout = EvalMembersTimeout,
+                                eval_members_event_timeout = EvalMembersEventTimeout,
                                 ra_event_formatter = RaEventFormatterMFA,
                                 flush_commands_size = FlushCommandsSize,
                                 snapshot_chunk_size = SnapshotChunkSize,
@@ -483,23 +496,26 @@ leader(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State, []};
 leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
-leader(info, {Status, Node, InfoList}, State0)
+leader(info, {Status, Node, InfoList},
+       #state{conf = #conf{eval_members_event_timeout = Timeout}} = State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     %% Q: when a node goes up/down, set the value to something low.
     %% 2 sec now for testing only. Some random value between 10-60 sec?
-    Actions = set_member_eval_timer(2000, []),
+    MinimumTimeout = 10000,
+    T = rand:uniform(Timeout-MinimumTimeout) + MinimumTimeout,
+    Actions = set_eval_members_timer(T, []),
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
                               Actions);
 leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
-leader(_, member_eval_timeout, State0) ->
+leader(_, eval_members_timeout, State0) ->
     Effect = ra_server:eval_members(State0#state.server_state),
     {State, Actions} = ?HANDLE_EFFECTS(Effect,
                                        cast,
                                        State0),
     {keep_state, State,
-     set_member_eval_timer(State, Actions)};
+     set_eval_members_timer(State, Actions)};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState = State1#state.server_state,
@@ -1098,9 +1114,7 @@ perform_local_query(QueryFun, Leader, ServerState, Conf) ->
     end.
 
 handle_effects(RaftState, Effects0, EvtType, State0) when is_list(Effects0) ->
-    handle_effects(RaftState, Effects0, EvtType, State0, []);
-handle_effects(RaftState, Effect, EvtType, State0) ->
-    handle_effect(RaftState, Effect, EvtType, State0, []).
+    handle_effects(RaftState, Effects0, EvtType, State0, []).
 % effect handler: either executes an effect or builds up a list of
 % gen_statem 'Actions' to be returned.
 handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
@@ -1203,11 +1217,11 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(leader, {add_member, Conf, ServerId, Members, ResultFun}, _EventType,
+handle_effect(leader, {add_member, NewMembers, ServerLoc}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
-    #{member_eval_pid := OldPid} = SS,
-    %% Check if an member_eval pid is already ongoing.
+    #{eval_members_pid := OldPid} = SS,
+    %% Check if an eval_members pid is already ongoing.
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
@@ -1221,37 +1235,38 @@ handle_effect(leader, {add_member, Conf, ServerId, Members, ResultFun}, _EventTy
                                 {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
                                 case ID == Leader of
                                     true ->
-                                        %% Q: Since we are no longer responding with a result
-                                        %% I assume the below is a bit overkill?
-                                        case ra:start_server(System, Conf) of
-                                            ok ->
-                                                case ra:add_member(Members, ServerId) of
-                                                    {ok, _, _} = R ->
-                                                        ResultFun(R);
-                                                    {timeout, _} ->
-                                                        ra:force_delete_server(System, ServerId),
-                                                        ra:remove_member(Members, ServerId),
-                                                        {error, timeout};
-                                                    E ->
-                                                        ra:force_delete_server(System, ServerId),
-                                                        E
-                                                end;
-                                            E ->
-                                                E
-                                        end;
+                                        %% Looping over all nodes to add, and apply a 'result fun' on them
+                                        lists:map(fun({{ServerId, Conf}, ResultFun}) ->
+                                                          case ra:start_server(System, Conf) of
+                                                              ok ->
+                                                                  case ra:add_member(ServerLoc, ServerId) of
+                                                                      {ok, _, _} = R ->
+                                                                          ResultFun(R);
+                                                                      {timeout, _} ->
+                                                                          ra:force_delete_server(System, ServerId),
+                                                                          ra:remove_member(ServerLoc, ServerId),
+                                                                          {error, timeout};
+                                                                      E ->
+                                                                          ra:force_delete_server(System, ServerId),
+                                                                          E
+                                                                  end;
+                                                              E ->
+                                                                  E
+                                                          end
+                                                  end, NewMembers);
                                     false ->
                                         %% No longer active leader, do nothing
                                         ok
                                 end
                         end)
           end,
-    {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
-                 server_state = SS#{member_eval_pid => Pid}}, Actions};
-handle_effect(leader, {remove_member, ServerId, Members, ResultFun}, _EventType,
+    {State#state{monitors = ra_monitors:add(Pid, eval_members, Monitors),
+                 server_state = SS#{eval_members_pid => Pid}}, Actions};
+handle_effect(leader, {remove_member, RemoveMembers, ServerLoc}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
-    #{member_eval_pid := OldPid} = SS,
-    %% Check if an member_eval pid is already ongoing. Do we need to monitor the pid?
+    #{eval_members_pid := OldPid} = SS,
+    %% Check if an eval_members pid is already ongoing. Do we need to monitor the pid?
     Pid = case is_pid(OldPid) andalso is_process_alive(OldPid) of
               true ->
                   %% There is already a process working, do nothing
@@ -1265,40 +1280,41 @@ handle_effect(leader, {remove_member, ServerId, Members, ResultFun}, _EventType,
                                 {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
                                 case ID == Leader of
                                     true ->
-                                        %% Q: Since we are no longer responding with a result
-                                        %% I assume the below is a bit overkill?
-                                        case ra:remove_member(Members, ServerId) of
-                                            {ok, _, _Leader} = R ->
-                                                ResultFun(R),
-                                                case ra:force_delete_server(System, ServerId) of
-                                                    ok ->
-                                                        R;
-                                                    {error, {badrpc, nodedown}} ->
-                                                        R;
-                                                    {error, {badrpc, {'EXIT', {badarg, _}}}} ->
-                                                        R;
-                                                    {error, Err} = Err ->
-                                                        {error, Err, R};
-                                                    Err ->
-                                                        {error, Err, R}
-                                                end;
-                                            {timeout, _} ->
-                                                {error, timeout};
-                                            E ->
-                                                E
-                                        end;
+                                        %% Looping over all nodes to remove, and apply a 'result fun' on them
+                                        lists:map(fun({ServerId, ResultFun}) ->
+                                                          case ra:remove_member(ServerLoc, ServerId) of
+                                                              {ok, _, _Leader} = R ->
+                                                                  ResultFun(R),
+                                                                  case ra:force_delete_server(System, ServerId) of
+                                                                      ok ->
+                                                                          R;
+                                                                      {error, {badrpc, nodedown}} ->
+                                                                          R;
+                                                                      {error, {badrpc, {'EXIT', {badarg, _}}}} ->
+                                                                          R;
+                                                                      {error, Err} = Err ->
+                                                                          {error, Err, R};
+                                                                      Err ->
+                                                                          {error, Err, R}
+                                                                  end;
+                                                              {timeout, _} ->
+                                                                  {error, timeout};
+                                                              E ->
+                                                                  E
+                                                          end
+                                                  end, RemoveMembers);
                                     false ->
                                         %% No longer active leader, do nothing
                                         ok
                                 end
                         end)
           end,
-    {State#state{monitors = ra_monitors:add(Pid, member_eval, Monitors),
-                 server_state = SS#{member_eval_pid => Pid}}, Actions};
+    {State#state{monitors = ra_monitors:add(Pid, eval_members, Monitors),
+                 server_state = SS#{eval_members_pid => Pid}}, Actions};
 
-handle_effect(leader, member_eval_backoff, EventType,
+handle_effect(leader, eval_members_backoff, EventType,
               State, Actions) ->
-    handle_effect(leader, member_eval_timer, EventType, State, Actions);
+    handle_effect(leader, eval_members_timer, EventType, State, Actions);
 handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
     State = send_applied_notifications(State0, Nots),
@@ -1423,8 +1439,12 @@ handle_effect(_, {demonitor, _ProcOrNode, Component, PidOrNode}, _,
     {State#state{monitors = Monitors}, Actions};
 handle_effect(_, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
-handle_effect(_, member_eval_timer, _, State, Actions) ->
-    {State, set_member_eval_timer(2000, Actions)};
+handle_effect(_, eval_members_timer, _,
+              #state{conf = #conf{eval_members_event_timeout = Timeout}} = State,
+              Actions) ->
+    MinimumTimeout = 10000,
+    T = rand:uniform(Timeout-MinimumTimeout) + MinimumTimeout,
+    {State, set_eval_members_timer(T, Actions)};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     %% TODO: catch and log failures or rely on calling function never crashing
@@ -1537,7 +1557,7 @@ election_timeout_action(long, #conf{broadcast_time = Timeout,
 % that are stale to ensure liveness
 set_timers(State) ->
     set_timers(State,
-               [fun set_tick_timer/2, fun set_member_eval_timer/2],
+               [fun set_tick_timer/2, fun set_eval_members_timer/2],
                []).
 set_timers(_State, [], Actions) ->
     Actions;
@@ -1547,10 +1567,10 @@ set_timers(State, [F|T], Actions) ->
 set_tick_timer(#state{conf = #conf{tick_timeout = TickTimeout}}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
-set_member_eval_timer(#state{conf = #conf{member_eval_timeout = Timeout}}, Actions) ->
-    set_member_eval_timer(Timeout, Actions);
-set_member_eval_timer(Timeout, Actions) when is_integer(Timeout) ->
-    [{{timeout, member_eval_tick}, Timeout, member_eval_timeout} | Actions].
+set_eval_members_timer(#state{conf = #conf{eval_members_timeout = Timeout}}, Actions) ->
+    set_eval_members_timer(Timeout, Actions);
+set_eval_members_timer(Timeout, Actions) when is_integer(Timeout) ->
+    [{{timeout, eval_members_tick}, Timeout, eval_members_timeout} | Actions].
 
 follower_leader_change(Old, #state{pending_commands = Pending,
                                    leader_monitor = OldMRef} = New) ->

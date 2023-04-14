@@ -86,7 +86,7 @@
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => 'maybe'(non_neg_integer()),
-      member_eval_pid => term()
+      eval_members_pid => term()
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -348,7 +348,7 @@ init(#{id := Id,
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
       pending_consistent_queries => [],
-      member_eval_pid => undefined
+      eval_members_pid => undefined
       }.
 
 recover(#{cfg := #cfg{log_id = LogId,
@@ -1447,12 +1447,13 @@ eval_members(#{cfg := #cfg{effective_machine_module = MacMod},
     case ra_machine:eval_members(MacMod, Leader, maps:keys(Cluster), MacState) of
         undefined ->
             [];
-        member_eval_backoff = Effect->
+        %% Here for my own testing, might not be needed
+        eval_members_backoff = Effect->
             [Effect];
-        {add_member, _Conf, _ServerId, _Members, _RFun} = Effect ->
-            Effect;
-        {remove_member, _ServerId, _Members, _RFun} = Effect ->
-            Effect
+        {add_member, _NewMembers, _ServerLoc} = Effect ->
+            [Effect];
+        {remove_member, _RemoveMembers, _ServerLoc} = Effect ->
+            [Effect]
     end.
 
 % property helpers
@@ -1899,9 +1900,9 @@ handle_down(RaftState, snapshot_writer, Pid, Info,
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};
-handle_down(RaftState, member_eval, Pid, _Info, State) ->
-    #{member_eval_pid := Pid} = State,
-    {RaftState, State#{member_eval_pid => undefined}, [member_eval_timer]};
+handle_down(RaftState, eval_members, Pid, _Info, State) ->
+    #{eval_members_pid := Pid} = State,
+    {RaftState, State#{eval_members_pid => undefined}, [eval_members_timer]};
 handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
