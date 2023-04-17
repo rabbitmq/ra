@@ -501,6 +501,7 @@ leader(info, {Status, Node, InfoList},
   when Status =:= nodedown orelse Status =:= nodeup ->
     %% Q: when a node goes up/down, set the value to something low.
     %% 2 sec now for testing only. Some random value between 10-60 sec?
+    %% Between 10 sec and Timeout value. Add check to make sure its over 10.
     MinimumTimeout = 10000,
     T = rand:uniform(Timeout-MinimumTimeout) + MinimumTimeout,
     Actions = set_eval_members_timer(T, []),
@@ -1383,6 +1384,7 @@ handle_effect(_, {timer, Name, T}, _, State, Actions) ->
 handle_effect(_, eval_members_timer, _,
               #state{conf = #conf{eval_members_event_timeout = Timeout}} = State,
               Actions) ->
+    %% Between 10 sec and Timeout value. Add check to make sure its over 10.
     MinimumTimeout = 10000,
     T = rand:uniform(Timeout-MinimumTimeout) + MinimumTimeout,
     {State, set_eval_members_timer(T, Actions)};
