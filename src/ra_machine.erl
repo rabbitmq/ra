@@ -137,6 +137,8 @@
     {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
+    {add_members, [{{ra_server_id(), machine_init_args()}, fun()}], [ra_server_id()]} |
+    {remove_members, [{ra_server_id(), fun()}], [ra_server_id()]} |
     garbage_collection.
 
 %% Effects are data structures that can be returned by {@link apply/3} to ask
@@ -286,7 +288,7 @@ tick(Mod, TimeMs, State) ->
 -spec eval_members(module(),
                    ra_server_id(),
                    [ra_server_id()],
-                   MacState :: state()) -> effect().
+                   MacState :: state()) -> effect() | undefined.
 eval_members(Mod, Leader, Cluster, State) ->
     ?OPT_CALL(Mod:eval_members(Leader, Cluster, State), undefined).
 

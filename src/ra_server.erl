@@ -1450,9 +1450,9 @@ eval_members(#{cfg := #cfg{effective_machine_module = MacMod},
         %% Here for my own testing, might not be needed
         eval_members_backoff = Effect->
             [Effect];
-        {add_member, _NewMembers, _ServerLoc} = Effect ->
+        {add_members, _NewMembers, _ServerLoc} = Effect ->
             [Effect];
-        {remove_member, _RemoveMembers, _ServerLoc} = Effect ->
+        {remove_members, _RemoveMembers, _ServerLoc} = Effect ->
             [Effect]
     end.
 

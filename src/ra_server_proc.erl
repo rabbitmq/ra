@@ -1217,7 +1217,7 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(leader, {add_member, NewMembers, ServerLoc}, _EventType,
+handle_effect(leader, {add_members, Members, ServerLoc}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{eval_members_pid := OldPid} = SS,
@@ -1229,40 +1229,13 @@ handle_effect(leader, {add_member, NewMembers, ServerLoc}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                %% Get this process ID, which at the point of creation
-                                %% is the leader.
-                                ID = leader_id(State),
-                                {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
-                                case ID == Leader of
-                                    true ->
-                                        %% Looping over all nodes to add, and apply a 'result fun' on them
-                                        lists:map(fun({{ServerId, Conf}, ResultFun}) ->
-                                                          case ra:start_server(System, Conf) of
-                                                              ok ->
-                                                                  case ra:add_member(ServerLoc, ServerId) of
-                                                                      {ok, _, _} = R ->
-                                                                          ResultFun(R);
-                                                                      {timeout, _} ->
-                                                                          ra:force_delete_server(System, ServerId),
-                                                                          ra:remove_member(ServerLoc, ServerId),
-                                                                          {error, timeout};
-                                                                      E ->
-                                                                          ra:force_delete_server(System, ServerId),
-                                                                          E
-                                                                  end;
-                                                              E ->
-                                                                  E
-                                                          end
-                                                  end, NewMembers);
-                                    false ->
-                                        %% No longer active leader, do nothing
-                                        ok
-                                end
+                                add_members(System, State,
+                                            ServerLoc, Members)
                         end)
           end,
     {State#state{monitors = ra_monitors:add(Pid, eval_members, Monitors),
                  server_state = SS#{eval_members_pid => Pid}}, Actions};
-handle_effect(leader, {remove_member, RemoveMembers, ServerLoc}, _EventType,
+handle_effect(leader, {remove_members, Members, ServerLoc}, _EventType,
               #state{server_state = SS, monitors = Monitors} = State, Actions) ->
     #{name := System} = ra_server:system_config(SS),
     #{eval_members_pid := OldPid} = SS,
@@ -1274,44 +1247,12 @@ handle_effect(leader, {remove_member, RemoveMembers, ServerLoc}, _EventType,
               false ->
                   %% No process working, safe to spawn a new one.
                   spawn(fun() ->
-                                %% Get this process ID, which at the point of creation
-                                %% is the leader.
-                                ID = leader_id(State),
-                                {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
-                                case ID == Leader of
-                                    true ->
-                                        %% Looping over all nodes to remove, and apply a 'result fun' on them
-                                        lists:map(fun({ServerId, ResultFun}) ->
-                                                          case ra:remove_member(ServerLoc, ServerId) of
-                                                              {ok, _, _Leader} = R ->
-                                                                  ResultFun(R),
-                                                                  case ra:force_delete_server(System, ServerId) of
-                                                                      ok ->
-                                                                          R;
-                                                                      {error, {badrpc, nodedown}} ->
-                                                                          R;
-                                                                      {error, {badrpc, {'EXIT', {badarg, _}}}} ->
-                                                                          R;
-                                                                      {error, Err} = Err ->
-                                                                          {error, Err, R};
-                                                                      Err ->
-                                                                          {error, Err, R}
-                                                                  end;
-                                                              {timeout, _} ->
-                                                                  {error, timeout};
-                                                              E ->
-                                                                  E
-                                                          end
-                                                  end, RemoveMembers);
-                                    false ->
-                                        %% No longer active leader, do nothing
-                                        ok
-                                end
+                                remove_members(System, State,
+                                               ServerLoc, Members)
                         end)
           end,
     {State#state{monitors = ra_monitors:add(Pid, eval_members, Monitors),
                  server_state = SS#{eval_members_pid => Pid}}, Actions};
-
 handle_effect(leader, eval_members_backoff, EventType,
               State, Actions) ->
     handle_effect(leader, eval_members_timer, EventType, State, Actions);
@@ -1944,6 +1885,73 @@ send_applied_notifications(#state{} = State, Nots) ->
             State;
         _ ->
             State#state{pending_notifys = RemNots}
+    end.
+
+add_members(System, State, ServerLoc, NewMembers) ->
+    %% Get this process ID, which at the point of creation
+    %% is the leader.
+    ID = leader_id(State),
+    {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
+    case ID == Leader of
+        true ->
+            %% Looping over all nodes to add, and apply a 'result fun' on them
+            lists:map(
+              fun({{ServerId, Conf}, ResultFun}) ->
+                  case ra:start_server(System, Conf) of
+                      ok ->
+                          case ra:add_member(ServerLoc, ServerId) of
+                              {ok, _, _} = R ->
+                                  ResultFun(R);
+                              {timeout, _} ->
+                                  ra:force_delete_server(System, ServerId),
+                                  ra:remove_member(ServerLoc, ServerId),
+                                  {error, timeout};
+                              E ->
+                                  ra:force_delete_server(System, ServerId),
+                                  E
+                          end;
+                      E ->
+                          E
+                  end
+              end, NewMembers);
+        false ->
+            %% No longer active leader, do nothing
+            ok
+    end.
+
+remove_members(System, State, ServerLoc, RemoveMembers) ->
+    %% Get this process ID, which at the point of creation
+    %% is the leader.
+    ID = leader_id(State),
+    {ok, _, Leader} = ra:consistent_query(ID, fun(_X) -> _X end),
+    case ID == Leader of
+        true ->
+            %% Looping over all nodes to remove, and apply a 'result fun' on them
+            lists:map(fun({ServerId, ResultFun}) ->
+                          case ra:remove_member(ServerLoc, ServerId) of
+                              {ok, _, _Leader} = R ->
+                                  ResultFun(R),
+                                  case ra:force_delete_server(System, ServerId) of
+                                      ok ->
+                                          R;
+                                      {error, {badrpc, nodedown}} ->
+                                          R;
+                                      {error, {badrpc, {'EXIT', {badarg, _}}}} ->
+                                          R;
+                                      {error, Err} = Err ->
+                                          {error, Err, R};
+                                      Err ->
+                                          {error, Err, R}
+                                  end;
+                              {timeout, _} ->
+                                  {error, timeout};
+                              E ->
+                                  E
+                          end
+                      end, RemoveMembers);
+        false ->
+            %% No longer active leader, do nothing
+            ok
     end.
 
 make_command(Type, {call, From}, Data, Mode) ->
