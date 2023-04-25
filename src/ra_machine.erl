@@ -236,7 +236,7 @@
 
 -callback eval_members(ra_server_id(),
                        [ra_server_id()],
-                       MacState :: state()) -> effect().
+                       MacState :: state()) -> effect() | undefined.
 
 -callback init_aux(Name :: atom()) -> term().
 
