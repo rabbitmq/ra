@@ -126,7 +126,13 @@
                receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer(),
                install_snap_rpc_timeout :: non_neg_integer(),
                aten_poll_interval = 1000 :: non_neg_integer(),
-               counter :: undefined | counters:counters_ref()
+               counter :: undefined | counters:counters_ref(),
+               mb_length_hist_long_term_window = 30000 :: non_neg_integer(),
+               mb_length_hist_short_term_window = 2000 :: non_neg_integer(),
+               mb_length_hist_granularity = 500 :: pos_integer(),
+               mb_length_low_load_limit = 100 :: non_neg_integer(),
+               mb_length_high_load_threshold = 5000 :: non_neg_integer(),
+               mb_length_acceptable_load_increase = 1.20 :: float()
               }).
 
 -record(state, {conf :: #conf{},
@@ -138,7 +144,8 @@
                 low_priority_commands :: ra_ets_queue:state(),
                 election_timeout_set = false :: boolean(),
                 %% the log index last time gc was forced
-                pending_notifys = #{} :: #{pid() => [term()]}
+                pending_notifys = #{} :: #{pid() => [term()]},
+                mb_length_hist = [] :: [{integer(), non_neg_integer()}]
                }).
 
 %%%===================================================================
@@ -383,6 +390,7 @@ leader(EventType, {leader_cast, Msg}, State) ->
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
        #state{conf = Conf,
               server_state = ServerState0} = State0) ->
+    State1 = take_mailbox_length_sample(State0),
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% normal priority commands are written immediately
@@ -391,20 +399,21 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                 ra_server:handle_leader({command, Cmd}, ServerState0),
             {State, Actions} =
                 ?HANDLE_EFFECTS(Effects, EventType,
-                                State0#state{server_state = ServerState}),
+                                State1#state{server_state = ServerState}),
             {keep_state, State, Actions};
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
-                    {keep_state, State0, [{reply, From, Error}]};
+                    {keep_state, State1, [{reply, From, Error}]};
                 _ ->
-                    {keep_state, State0, []}
+                    {keep_state, State1, []}
             end
     end;
 leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
        #state{conf = Conf,
               low_priority_commands = Delayed} = State0) ->
+    State1 = take_mailbox_length_sample(State0),
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% cache the low priority command until the flush_commands message
@@ -422,29 +431,30 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
                 _ ->
                     ok
             end,
-            State = State0#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
+            State = State1#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
-                    {keep_state, State0, [{reply, From, Error}]};
+                    {keep_state, State1, [{reply, From, Error}]};
                 _ ->
-                    {keep_state, State0, []}
+                    {keep_state, State1, []}
             end
     end;
 leader(EventType, {aux_command, Cmd}, State0) ->
+    State1 = take_mailbox_length_sample(State0),
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
-                                                     Cmd, State0#state.server_state),
+                                                     Cmd, State1#state.server_state),
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
+                        State1#state{server_state = ServerState}),
     {keep_state, State#state{server_state = ServerState}, Actions};
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               server_state = ServerState0,
               low_priority_commands = Delayed0} = State0) ->
-
+    State1 = take_mailbox_length_sample(State0),
     {Commands, Delayed} = ra_ets_queue:take(Size, Delayed0),
     %% write a batch of delayed commands
     {leader, ServerState, Effects} =
@@ -452,7 +462,7 @@ leader(EventType, flush_commands,
 
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
+                        State1#state{server_state = ServerState}),
     case ra_ets_queue:len(Delayed) of
         0 ->
             ok;
@@ -472,14 +482,15 @@ leader({call, From}, {state_query, Spec},
 leader({call, From}, {consistent_query, QueryFun},
        #state{conf = Conf,
               server_state = ServerState0} = State0) ->
+    State1 = take_mailbox_length_sample(State0),
     {leader, ServerState1, Effects} =
         ra_server:handle_leader({consistent_query, From, QueryFun},
                                 ServerState0),
     incr_counter(Conf, ?C_RA_SRV_CONSISTENT_QUERIES, 1),
-    {State1, Actions} =
+    {State2, Actions} =
         ?HANDLE_EFFECTS(Effects, {call, From},
-                        State0#state{server_state = ServerState1}),
-    {keep_state, State1, Actions};
+                        State1#state{server_state = ServerState1}),
+    {keep_state, State2, Actions};
 leader({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, leader}}]};
 leader(info, {node_event, _Node, _Evt}, State) ->
@@ -494,24 +505,26 @@ leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
-    {State1, RpcEffs} = make_rpcs(State0),
-    ServerState = State1#state.server_state,
+    State1 = take_mailbox_length_sample(State0),
+    {State2, RpcEffs} = make_rpcs(State1),
+    ServerState = State2#state.server_state,
     Effects = ra_server:tick(ServerState),
-    {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
-                                        cast, State1),
+    {State3, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
+                                        cast, State2),
     %% try sending any pending applied notifications again
-    State = send_applied_notifications(State2, #{}),
+    State = send_applied_notifications(State3, #{}),
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0,
               conf = #conf{}} = State0) ->
+    State1 = take_mailbox_length_sample(State0),
     % the machine timer timed out, add a timeout message
     Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
     {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
                                                              ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
-                                       State0#state{server_state =
+                                       State1#state{server_state =
                                                         ServerState}),
     {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
@@ -519,26 +532,27 @@ leader({call, From}, trigger_election, State) ->
 leader({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 leader(EventType, Msg, State0) ->
-    case handle_leader(Msg, State0) of
-        {leader, State1, Effects1} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
+    State1 = take_mailbox_length_sample(State0),
+    case handle_leader(Msg, State1) of
+        {leader, State2, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State2),
             {keep_state, State, Actions};
-        {stop, State1, Effects} ->
+        {stop, State2, Effects} ->
             % interact before shutting down in case followers need
             % to know about the new commit index
-            {State, _Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+            {State, _Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
             {stop, normal, State};
-        {delete_and_terminate, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = send_rpcs(State2),
+        {delete_and_terminate, State2, Effects} ->
+            {State3, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
+            State = send_rpcs(State3),
             case ra_server:is_fully_replicated(State#state.server_state) of
                 true ->
                     {stop, {shutdown, delete}, State};
                 false ->
                     next_state(terminating_leader, State, Actions)
             end;
-        {NextState, State1, Effects1} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
+        {NextState, State2, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State2),
             next_state(NextState, State, Actions)
     end.
 
@@ -705,11 +719,12 @@ follower({call, From}, {state_query, Spec},
     Reply = {ok, do_state_query(Spec, ServerState), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, {aux_command, Cmd}, State0) ->
+    State1 = take_mailbox_length_sample(State0),
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
-                                                     State0#state.server_state),
+                                                     State1#state.server_state),
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
+                        State1#state{server_state = ServerState}),
     {keep_state, State#state{server_state = ServerState}, Actions};
 follower({call, From}, trigger_election, State) ->
     ?DEBUG("~s: election triggered by ~w", [log_id(State), element(1, From)]),
@@ -772,29 +787,31 @@ follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 follower(_, tick_timeout, State0) ->
-    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
+    State1 = take_mailbox_length_sample(State0),
+    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State1),
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, State0) ->
-    case handle_follower(Msg, State0) of
-        {follower, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = follower_leader_change(State0, State2),
+    State1 = take_mailbox_length_sample(State0),
+    case handle_follower(Msg, State1) of
+        {follower, State2, Effects} ->
+            {State3, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
+            State = follower_leader_change(State1, State3),
             {keep_state, State, Actions};
-        {pre_vote, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {pre_vote, State2, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
             next_state(pre_vote, State, Actions);
-        {await_condition, State1, Effects} ->
-            {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = follower_leader_change(State0, State2),
+        {await_condition, State2, Effects} ->
+            {State3, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
+            State = follower_leader_change(State1, State3),
             next_state(await_condition, State, Actions);
-        {receive_snapshot, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {receive_snapshot, State2, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
             next_state(receive_snapshot, State, Actions);
-        {delete_and_terminate, State1, Effects} ->
-            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
+        {delete_and_terminate, State2, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
             next_state(terminating_follower, State, Actions)
     end.
 
@@ -1300,11 +1317,18 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
     {State, Actions};
 handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
               #state{server_state = ServerState0} = State0, Actions0) ->
-    incr_counter(State0#state.conf, ?C_RA_SRV_RELEASE_CURSORS, 1),
-    {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
-                                                             ServerState0),
-    State1 = State0#state{server_state = ServerState},
-    handle_effects(RaftState, Effects, EvtType, State1, Actions0);
+    case should_release_cursor(State0) of
+        true ->
+            incr_counter(
+              State0#state.conf, ?C_RA_SRV_RELEASE_CURSORS, 1),
+            {ServerState, Effects} = ra_server:update_release_cursor(
+                                       Index, MacState,
+                                       ServerState0),
+            State1 = State0#state{server_state = ServerState},
+            handle_effects(RaftState, Effects, EvtType, State1, Actions0);
+        false ->
+            {State0, Actions0}
+    end;
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
@@ -1819,3 +1843,133 @@ make_command(Type, {call, From}, Data, Mode) ->
 make_command(Type, _, Data, Mode) ->
     Ts = erlang:system_time(millisecond),
     {Type, #{ts => Ts}, Data, Mode}.
+
+take_mailbox_length_sample(
+  #state{conf = #conf{mb_length_hist_long_term_window = TimeWindow,
+                      mb_length_hist_granularity = Granularity},
+         mb_length_hist = Hist} = State) ->
+    %% From the current timestamp, we compute the index in our "sliding array"
+    %% of samples.
+    Now = erlang:system_time(millisecond),
+    RoundedNow = Now div Granularity * Granularity,
+
+    %% Drop samples out of `TimeWindow'.
+    Hist1 = lists:filter(
+              fun({Ts, _}) -> RoundedNow - Ts =< TimeWindow end,
+              Hist),
+
+    %% Query the mailbox length and store it in the history.
+    {_, MailboxLength} = erlang:process_info(self(), message_queue_len),
+    Hist2 = case Hist1 of
+                [{RoundedNow, OldLength} | _Rest]
+                  when OldLength >= MailboxLength ->
+                    Hist1;
+                [{RoundedNow, _OldLength} | Rest] ->
+                    [{RoundedNow, MailboxLength} | Rest];
+                _ ->
+                    [{RoundedNow, MailboxLength} | Hist1]
+            end,
+    State#state{mb_length_hist = Hist2}.
+
+should_release_cursor(#state{conf = Conf, mb_length_hist = Hist}) ->
+    case compute_mailbox_length_avg(Conf, Hist) of
+        {ShortTermAvg, LongTermAvg} ->
+            case is_server_overloaded(Conf, ShortTermAvg, LongTermAvg) of
+                false ->
+                    ?DEBUG(
+                       "Accepting \"release cursor\" move, "
+                       "Ra server is not overloaded", []),
+                    true;
+                true ->
+                    ?DEBUG(
+                       "DENYING \"release cursor\" move, "
+                       "Ra server is overloaded", []),
+                    false
+            end;
+        undefined ->
+            ?DEBUG(
+               "Skipping \"release cursor\" move, "
+               "not enough data points to compute Ra server overload", []),
+            false
+    end.
+
+compute_mailbox_length_avg(
+  #conf{mb_length_hist_long_term_window = LongTermWin,
+        mb_length_hist_short_term_window = ShortTermWin},
+  [{LastTimestamp, _MailboxLength} | _] = Hist) ->
+    EarliestShortTermTs = LastTimestamp - ShortTermWin,
+    EarliestLongTermTs = LastTimestamp - LongTermWin,
+    compute_mailbox_length_avg1(
+      Hist,
+      EarliestShortTermTs, 0, 0,
+      EarliestLongTermTs, 0, 0).
+
+compute_mailbox_length_avg1(
+  [{Timestamp, _MailboxLength}],
+  _EarliestShortTermTs, _STTotal, _STCount,
+  EarliestLongTermTs, _LTTotal, _LTCount)
+  when Timestamp > EarliestLongTermTs ->
+    %% Not enough samples to make a decision.
+    undefined;
+compute_mailbox_length_avg1(
+  [{Timestamp, MailboxLength} | Rest],
+  EarliestShortTermTs, STTotal, STCount,
+  EarliestLongTermTs, _LTTotal, _LTCount)
+  when Timestamp > EarliestShortTermTs ->
+    STTotal1 = STTotal + MailboxLength,
+    STCount1 = STCount + 1,
+    compute_mailbox_length_avg1(
+      Rest,
+      EarliestShortTermTs, STTotal1, STCount1,
+      EarliestLongTermTs, STTotal1, STCount1);
+compute_mailbox_length_avg1(
+  [{_Timestamp, MailboxLength} | Rest],
+  EarliestShortTermTs, STTotal, STCount,
+  EarliestLongTermTs, LTTotal, LTCount) ->
+    LTTotal1 = LTTotal + MailboxLength,
+    LTCount1 = LTCount + 1,
+    compute_mailbox_length_avg1(
+      Rest,
+      EarliestShortTermTs, STTotal, STCount,
+      EarliestLongTermTs, LTTotal1, LTCount1);
+compute_mailbox_length_avg1(
+  [],
+  _EarliestShortTermTs, STTotal, STCount,
+  _EarliestLongTermTs, LTTotal, LTCount) ->
+    {STTotal div STCount, LTTotal div LTCount}.
+
+is_server_overloaded(
+  #conf{mb_length_low_load_limit = LowLoadLimit},
+  ShortTermAvg, _LongTermAvg)
+  when ShortTermAvg =< LowLoadLimit ->
+    ?DEBUG(
+       "Ra server load: not overloaded, "
+       "mailbox length below \"low load\" limit (~b <= ~b)",
+       [ShortTermAvg, LowLoadLimit]),
+    false;
+is_server_overloaded(
+  #conf{mb_length_high_load_threshold = HighLoadThreshold},
+  ShortTermAvg, _LongTermAvg)
+  when ShortTermAvg > HighLoadThreshold ->
+    ?DEBUG(
+       "Ra server load: OVERLOADED, "
+       "mailbox length above \"high load\" threshold (~b > ~b)",
+       [ShortTermAvg, HighLoadThreshold]),
+    true;
+is_server_overloaded(
+  #conf{mb_length_acceptable_load_increase = AcceptableLoadIncrease},
+  ShortTermAvg, LongTermAvg) ->
+    case ShortTermAvg > (LongTermAvg * AcceptableLoadIncrease) of
+        false ->
+            ?DEBUG(
+               "Ra server load: not overloaded, "
+               "mailbox length below acceptable increase (~b <= ~b * ~p)",
+               [ShortTermAvg, LongTermAvg, AcceptableLoadIncrease]),
+            false;
+        true ->
+            ?DEBUG(
+               "Ra server load: OVERLOADED, "
+               "mailbox length above acceptable increase (~b > ~b * ~p)",
+               [ShortTermAvg, LongTermAvg, AcceptableLoadIncrease]),
+            true
+    end.
