@@ -81,6 +81,7 @@
 -record(cfg, {uid :: ra_uid(),
               log_id :: unicode:chardata(),
               directory :: file:filename(),
+              mailbox_length_high_load_limit = 5000 :: non_neg_integer(),
               snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
@@ -601,14 +602,54 @@ snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
                             MacVersion :: ra_machine:version(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState,
-                      #?MODULE{snapshot_state = SnapState} = State) ->
+update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
+    case should_release_cursor(State) of
+        true ->
+            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
+        false ->
+            {State, []}
+    end.
+
+should_release_cursor(#?MODULE{cfg = Cfg, snapshot_state = SnapState}) ->
     case ra_snapshot:pending(SnapState) of
         undefined ->
-            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
+            %% TODO: Take into account the last time a the release cursor was
+            %% moved.
+            case is_server_overloaded(Cfg) of
+                false ->
+                    ?DEBUG(
+                       "Accepting \"release cursor\" move, "
+                       "Ra server is not overloaded", []),
+                    true;
+                true ->
+                    ?DEBUG(
+                       "DENYING \"release cursor\" move, "
+                       "Ra server is overloaded", []),
+                    false
+            end;
         _ ->
             % if a snapshot is in progress don't even evaluate
-            {State, []}
+            ?DEBUG(
+               "DENYING \"release cursor\" move, "
+               "snapshotting already in progress", []),
+            false
+    end.
+
+is_server_overloaded(#cfg{mailbox_length_high_load_limit = HighLoadLimit}) ->
+    {_, MailboxLen} = erlang:process_info(self(), message_queue_len),
+    case MailboxLen > HighLoadLimit of
+        true ->
+            ?DEBUG(
+               "Ra server load: OVERLOADED, "
+               "mailbox length above \"high load\" limit (~b > ~b)",
+               [MailboxLen, HighLoadLimit]),
+            true;
+        false ->
+            ?DEBUG(
+               "Ra server load: not overloaded, "
+               "mailbox length below \"high load\" limit (~b <= ~b)",
+               [MailboxLen, HighLoadLimit]),
+            false
     end.
 
 -spec flush_cache(state()) -> state().
