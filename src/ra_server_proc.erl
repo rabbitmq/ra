@@ -500,8 +500,7 @@ leader(info, {Status, Node, InfoList},
        #state{conf = #conf{eval_members_event_timeout = Timeout}} = State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     %% roughly 1/3 plus minus the value as a timeout
-    Modifier = Timeout div 3,
-    T = rand:uniform(Modifier) + (Timeout - (Modifier div 2)),
+    T = plus_minus_one_third_of_time(Timeout),
     Actions = set_eval_members_timer(T, []),
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0,
                               Actions);
@@ -1383,8 +1382,8 @@ handle_effect(_, eval_members_timer, _,
               #state{conf = #conf{eval_members_event_timeout = Timeout}} = State,
               Actions) ->
     %% roughly 1/3 plus minus the value as a timeout
-    Modifier = Timeout div 3,
-    T = rand:uniform(Modifier) + (Timeout - (Modifier div 2)),
+
+    T = plus_minus_one_third_of_time(Timeout),
     {State, set_eval_members_timer(T, Actions)};
 handle_effect(_, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
@@ -1498,7 +1497,7 @@ election_timeout_action(long, #conf{broadcast_time = Timeout,
 % that are stale to ensure liveness
 set_timers(State) ->
     set_timers(State,
-               [fun set_tick_timer/2, fun set_eval_members_timer/2],
+               [fun set_tick_timer/2, fun set_init_eval_members_timer/2],
                []).
 set_timers(_State, [], Actions) ->
     Actions;
@@ -1508,10 +1507,21 @@ set_timers(State, [F|T], Actions) ->
 set_tick_timer(#state{conf = #conf{tick_timeout = TickTimeout}}, Actions) ->
     [{{timeout, tick}, TickTimeout, tick_timeout} | Actions].
 
+set_init_eval_members_timer(#state{conf = #conf{
+                                             eval_members_timeout = Timeout
+                                            }},
+                            Actions) ->
+    T = plus_minus_one_third_of_time(Timeout),
+    set_eval_members_timer(T, Actions).
+
 set_eval_members_timer(#state{conf = #conf{eval_members_timeout = Timeout}}, Actions) ->
     set_eval_members_timer(Timeout, Actions);
 set_eval_members_timer(Timeout, Actions) when is_integer(Timeout) ->
     [{{timeout, eval_members_tick}, Timeout, eval_members_timeout} | Actions].
+
+plus_minus_one_third_of_time(Timeout) ->
+    Modifier = Timeout div 3,
+    rand:uniform(Modifier) + (Timeout - (Modifier div 2)).
 
 follower_leader_change(Old, #state{pending_commands = Pending,
                                    leader_monitor = OldMRef} = New) ->
