@@ -181,6 +181,7 @@
                               cluster_name := ra_cluster_name(),
                               log_init_args := ra_log:ra_log_init_args(),
                               initial_members := [ra_server_id()],
+                              initial_passive_peers := [ra_server_id()],
                               machine := machine_conf(),
                               friendly_name => unicode:chardata(),
                               metrics_key => term(),
@@ -251,6 +252,7 @@ init(#{id := Id,
                                       ?AER_CHUNK_SIZE),
     MaxAERBatchSize = maps:get(max_append_entries_rpc_batch_size, Config,
                                DefaultMaxAERBatchSize),
+    InitialPassivePeers = maps:get(initial_passive_peers, Config, []),
     MetricKey = case Config of
                     #{metrics_key := K} ->
                         K;
@@ -328,7 +330,7 @@ init(#{id := Id,
     #{cfg => Cfg,
       current_term => CurrentTerm,
       cluster => Cluster0,
-      passive_peers => [],
+      passive_peers => InitialPassivePeers,
       % There may be scenarios when a single server
       % starts up but hasn't
       % yet re-applied its noop command that we may receive other join
@@ -755,21 +757,27 @@ handle_leader({transfer_leadership, Member},
     ?DEBUG("~s: transfer leadership requested but unknown member ~w",
            [LogId, Member]),
     {leader, State, [{reply, {error, unknown_member}}]};
-% TODO: handle transfer leadership to passive member
 handle_leader({transfer_leadership, ServerId},
               #{cfg := #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~s: transfer leadership to ~w requested",
            [LogId, ServerId]),
     %% TODO find a timeout
-    gen_statem:cast(ServerId, try_become_leader),
-    {await_condition,
-     State#{condition => fun transfer_leadership_condition/2,
-            condition_timeout_changes => #{effects => [],
-                                           transition_to => leader}},
-     [{reply, ok}]};
+    case role(ServerId, State) of 
+        passive -> 
+            {leader, State, [{reply, {error, passive_member}}]};
+        active -> 
+            gen_statem:cast(ServerId, try_become_leader),
+            {await_condition,
+            State#{condition => fun transfer_leadership_condition/2,
+                    condition_timeout_changes => #{effects => [],
+                                                transition_to => leader}},
+            [{reply, ok}]}
+    end;
 handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {leader, State#{log => Log}, Effs};
+handle_leader({command, normal,{'$ra_force_change_passive_members', NewPassive}}, State) -> 
+    force_change_passive_members(leader, NewPassive, State);
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, []}.
@@ -795,6 +803,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true, from = F
                    passive_peers := PassivePeers
                 } = State0) ->
 
+    % TODO refactor
     NewVotes = case lists:member(From, PassivePeers) of
             false -> Votes + 1;
             true -> 
@@ -896,8 +905,8 @@ handle_candidate(election_timeout, State) ->
 handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {candidate, State#{log => Log}, Effs};
-handle_candidate({command, normal,{'$ra_force_change_passive_members',NewPassive}}, State) -> 
-    force_change_passive_members(candidate, self(), NewPassive, State);
+handle_candidate({command, normal,{'$ra_force_change_passive_members', NewPassive}}, State) -> 
+    force_change_passive_members(candidate, NewPassive, State);
     
 handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
@@ -942,7 +951,7 @@ handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
     {follower, State0#{votes => 0}, [{next_event, ISR}]};
 % TODO pre_vote_result backward compatibility
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
-                                 token = Token},
+                                 token = Token, from = From},
                 #{current_term := Term,
                   votes := Votes,
                   cfg := #cfg{log_id = LogId},
@@ -953,15 +962,20 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
     ?DEBUG("~s: pre_vote granted ~w for term ~b votes ~b",
           [LogId, Token, Term, Votes + 1]),
 
-    % TODO filter votes from non-active nodes
-    NewVotes = Votes + 1,
-    State = update_term(Term, State0),
-    ActiveNodes = maps:keys(Nodes) -- PassivePeers,
-    case trunc(erlang:length(ActiveNodes) / 2) + 1 of
-        NewVotes ->
-            maybe_call_for_election(candidate, State);
-        _ ->
-            {pre_vote, State#{votes => NewVotes}, []}
+    case role(From, State0) of 
+        active -> 
+            NewVotes = Votes + 1,
+            State = update_term(Term, State0),
+            ActiveNodes = maps:keys(Nodes) -- PassivePeers,
+            case trunc(erlang:length(ActiveNodes) / 2) + 1 of
+                NewVotes ->
+                    maybe_call_for_election(candidate, State);
+                _ ->
+                    {pre_vote, State#{votes => NewVotes}, []}
+            end;
+        passive -> 
+            ?WARN("Received a pre_vote from a passive node", [From]),
+            {pre_vote, State0, []}
     end;
 handle_pre_vote(#pre_vote_result{vote_granted = false}, State) ->
     %% just handle negative results to avoid printing an unhandled message log
@@ -983,8 +997,8 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {pre_vote, State#{log => Log}, Effs};
-handle_pre_vote({command, normal,{'$ra_force_change_passive_members',NewPassive}}, State) -> 
-    force_change_passive_members(pre_vote, self(), NewPassive, State);
+handle_pre_vote({command, normal,{'$ra_force_change_passive_members', NewPassive}}, State) -> 
+    force_change_passive_members(pre_vote, NewPassive, State);
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
     {pre_vote, State, []}.
@@ -1166,13 +1180,18 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
     LastIdxTerm = last_idx_term(State1),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true ->
-            ?INFO("~s: granting vote for ~w with last indexterm ~w"
-                  " for term ~b previous term was ~b",
-                  [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
-            Reply = #request_vote_result{term = Term, vote_granted = true, from = id(State1)},
-            State = update_term_and_voted_for(Term, Cand, State1),
-            {follower, State#{voted_for => Cand, current_term => Term},
-             [{reply, Reply}]};
+            case role(id(State1), State1) of
+                passive ->
+                    {follower, State1, []}; 
+                active -> 
+                    ?INFO("~s: granting vote for ~w with last indexterm ~w"
+                        " for term ~b previous term was ~b",
+                        [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
+                    Reply = #request_vote_result{term = Term, vote_granted = true, from = id(State1)},
+                    State = update_term_and_voted_for(Term, Cand, State1),
+                    {follower, State#{voted_for => Cand, current_term => Term},
+                    [{reply, Reply}]}
+            end;
         false ->
             ?INFO("~s: declining vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
@@ -1252,7 +1271,7 @@ handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {follower, State#{log => Log}, Effs};
 handle_follower({command, normal, {'$ra_force_change_passive_members', NewPassive}}, State) -> 
-    force_change_passive_members(follower, self(), NewPassive, State);
+    force_change_passive_members(follower, NewPassive, State);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
@@ -2892,9 +2911,8 @@ meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
 meta_name(#{names := #{log_meta := Name}}) ->
     Name.
 
-force_change_passive_members(RaftState, _From, NewPassive, State) ->
+force_change_passive_members(RaftState, NewPassive, State) ->
     ?DEBUG("[~p] Force change passive members: ~p", [RaftState, NewPassive]),
-    _Reply = ok,
     % TODO: what are the conditions here we should go to pre_vote
     % can we check if leader is dead?
     % should we move to a "paused" state to wait for all passives to be changed?
@@ -2909,9 +2927,7 @@ force_change_passive_members(RaftState, _From, NewPassive, State) ->
     end,
     {NewRaftState, State#{
         passive_peers => NewPassive
-    }, [
-         % TODO how to reply?: {reply, From, Reply}
-        ]}.
+    }, [{reply, ok}]}.
 
 %%% ===================
 %%% Internal unit tests

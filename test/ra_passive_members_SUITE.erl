@@ -29,7 +29,6 @@ groups() ->
     ].
 
 init_per_testcase(_TestCase, Config) ->
-    rpc_all([node()], ra_groups, set_active_nodes, [undefined]),
     Config.
 
 we_did_not_break_simple_things(Config) ->
@@ -90,8 +89,7 @@ given_2_node_cluster_with_1_passive(Config) ->
 
     assert_cluster_down(NewCluster),
 
-    _ = ra:force_change_passive_members(NewMemberId, [OriginalLeader], 5000), % todo assert return value
-    ct:pal("Forced cluster change"),
+    ok = ra:force_change_passive_members(NewMemberId, [OriginalLeader], 5000),
     
     {ok, NewCluster, NewMemberId} = ra:members(NewMemberId),
     
@@ -127,7 +125,7 @@ given_2_node_cluster_with_1_passive_on_failover_leader_returns_both_stop(Config)
 
     assert_cluster_down(NewCluster),
 
-    _ = ra:force_change_passive_members(NewMemberId, [OriginalLeader], 5000), % todo assert return value
+    ok = ra:force_change_passive_members(NewMemberId, [OriginalLeader], 5000),
     ct:pal("Forced cluster change"),
     
     start_member(NewCluster, OriginalNode),
@@ -181,10 +179,9 @@ given_5_node_cluster_with_2_passive_on_failover(Config) ->
     
 
     assert_cluster_down(NewCluster),
-    ct:pal("Configuring passive ~p nodes to be active ~p", [PassiveNodes, ActiveMembers]),
+
     [begin 
-        _ = ra:force_change_passive_members(M, ActiveMembers, 5000), % todo assert return value
-        ok
+        ok = ra:force_change_passive_members(M, ActiveMembers, 5000)
     end || M <- PassiveServerIds],
     
     Overviews = overviews(PassiveServerIds),
@@ -372,11 +369,6 @@ assert_server_down({_Proc, _Node} = ServerId) ->
             ct:pal("assert_server_down result: ~p", [Other]),
             ?assert(false)
     end.
-
-% we set it on the local node as well as many ra operations are rpc from
-% the ct node to the cluster nodes
-set_active_nodes(AllNodes, ActiveNodes) ->
-    rpc_all([node()] ++ AllNodes, ra_groups, set_active_nodes, [ActiveNodes]).
 
 shuffle(List) ->
     lists:sort(fun(_A, _B) -> rand:uniform(2) =:= 1 end, List).

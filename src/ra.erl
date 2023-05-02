@@ -588,7 +588,8 @@ add_member(ServerLoc, ServerId, Role, Timeout) ->
                            {'$ra_join', {ServerId, Role}, after_log_append},
                            Timeout).
 
-% TODO this call times out currently as there is no reply
+-spec force_change_passive_members(ra_server_id(), [ra_server_id()], timeout()) ->
+    ra_cmd_ret().
 force_change_passive_members({_, _} = ServerLoc, NewPassiveMembers, Timeout) ->
     ra_server_proc:local_command(ServerLoc,
                            {'$ra_force_change_passive_members', NewPassiveMembers},
