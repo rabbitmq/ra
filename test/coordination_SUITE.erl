@@ -29,6 +29,9 @@ all() ->
 
 all_tests() ->
     [
+     nonvoter_catches_up,
+     nonvoter_catches_up_after_restart,
+     nonvoter_catches_up_after_leader_restart,
      start_stop_restart_delete_on_remote,
      start_cluster,
      start_or_restart_cluster,
@@ -389,6 +392,118 @@ disconnected_node_catches_up(Config) ->
                   ra:member_overview(DownServerId),
               SI /= undefined
       end, 200),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, init_non_voter => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    NonVoter = {nonvoter, #{nvid => <<"test">>}},
+    ?assertMatch(#{Group := #{voter_status := NonVoter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := NonVoter},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{voter_status := NonVoter}, _},
+                 ra:member_overview(C)),
+
+    await_condition(
+      fun () ->
+          {ok, #{voter_status := {voter, #{nvid := <<"test">>}}}, _} = ra:member_overview(C),
+          true
+      end, 200),
+    ?assertMatch(#{Group := #{voter_status := {voter, #{nvid := <<"test">>}}}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := {voter, #{nvid := <<"test">>}}},
+                 ra:key_metrics(C)),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up_after_restart(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, init_non_voter => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    NonVoter = {nonvoter, #{nvid => <<"test">>}},
+    ?assertMatch(#{Group := #{voter_status := NonVoter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := NonVoter},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{voter_status := NonVoter}, _},
+                 ra:member_overview(C)),
+    ok = ra:stop_server(?SYS, C),
+    ok = ra:restart_server(?SYS, C),
+
+    await_condition(
+      fun () ->
+          {ok, #{voter_status := {voter, #{nvid := <<"test">>}}}, _} = ra:member_overview(C),
+           true
+      end, 200),
+    ?assertMatch(#{Group := #{voter_status := {voter, #{nvid := <<"test">>}}}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := {voter, #{nvid := <<"test">>}}},
+                 ra:key_metrics(C)),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up_after_leader_restart(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, init_non_voter => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    NonVoter = {nonvoter, #{nvid => <<"test">>}},
+    ?assertMatch(#{Group := #{voter_status := NonVoter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := NonVoter},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{voter_status := NonVoter}, _},
+                 ra:member_overview(C)),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
+
+    await_condition(
+      fun () ->
+          {ok, #{voter_status := {voter, #{nvid := <<"test">>}}}, _} = ra:member_overview(C),
+          true
+      end, 200),
+    ?assertMatch(#{Group := #{voter_status := {voter, #{nvid := <<"test">>}}}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{voter_status := {voter, #{nvid := <<"test">>}}},
+                 ra:key_metrics(C)),
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.

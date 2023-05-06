@@ -644,6 +644,7 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
                 end,
     Meta = #{index => Idx,
              cluster => ClusterServerIds,
+             cluster_state => Cluster,
              machine_version => MacVersion},
     % The release cursor index is the last entry _not_ contributing
     % to the current state. I.e. the last entry that can be discarded.

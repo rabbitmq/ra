@@ -20,6 +20,7 @@ all() ->
      follower_aer_term_mismatch_snapshot,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
+     append_entries_reply_success_promotes_nonvoter,
      append_entries_reply_success,
      append_entries_reply_no_success,
      follower_request_vote,
@@ -41,10 +42,12 @@ all() ->
      follower_machine_version,
      follower_install_snapshot_machine_version,
      leader_server_join,
+     leader_server_join_nonvoter,
      leader_server_leave,
      leader_is_removed,
      follower_cluster_change,
      leader_applies_new_cluster,
+     leader_applies_new_cluster_nonvoter,
      leader_appends_cluster_change_then_steps_before_applying_it,
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
@@ -54,6 +57,7 @@ all() ->
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
+     leader_received_append_entries_reply_and_promotes_voter,
      leader_replies_to_append_entries_rpc_with_lower_term,
      follower_aer_1,
      follower_aer_2,
@@ -274,6 +278,10 @@ election_timeout(_Config) ->
                            candidate_id = N1}},
         {N3, _}]}]} =
         ra_server:handle_follower(Msg, State),
+
+    % non-voters ignore election_timeout
+    NVState = State#{voter_status => {nonvoter, test}},
+    {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
     % pre_vote
     {pre_vote, #{current_term := 5, votes := 0,
@@ -796,6 +804,89 @@ candidate_handles_append_entries_rpc(_Config) ->
     = ra_server:handle_candidate(EmptyAE, State),
     ok.
 
+append_entries_reply_success_promotes_nonvoter(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    NonVoter = {nonvoter, #{target => 3, nvid => <<"test">>}},
+    Cluster = #{N1 => new_peer_with(#{next_index => 5, match_index => 4}),
+                N2 => new_peer_with(#{next_index => 1, match_index => 0,
+                                      commit_index_sent => 3,
+                                      voter_status => NonVoter}),
+                N3 => new_peer_with(#{next_index => 2, match_index => 1})},
+    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
+                             last_applied => 1,
+                             cluster => Cluster,
+                             machine_state => <<"hi1">>},
+    Ack = #append_entries_reply{term = 5, success = true,
+                                     next_index = 4,
+                                     last_index = 3, last_term = 5},
+
+    % doesn't progress commit_index, non voter ack doesn't raise majority
+    {leader, #{cluster := #{N2 := #{next_index := 4,
+                                    match_index := 3,
+                                    voter_status := NonVoter}},
+               commit_index := 1,
+               last_applied := 1,
+               machine_state := <<"hi1">>} = State1,
+     [{next_event, info, pipeline_rpcs},
+      {next_event, {command, {'$ra_join', _,
+        #{id := N2, voter_status := {voter, _}}, noreply}} = RaJoin}
+     ]} = ra_server:handle_leader({N2, Ack}, State0),
+
+    % pipeline to N3
+    {leader, #{cluster := #{N3 := #{next_index := 4,
+                                    match_index := 1}},
+               commit_index := 1,
+               last_applied := 1,
+               machine_state := <<"hi1">>} = State2,
+     [{send_rpc, N3,
+       #append_entries_rpc{term = 5, leader_id = N1,
+                           prev_log_index = 1,
+                           prev_log_term = 1,
+                           leader_commit = 1,
+                           entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                      {3, 5, {'$usr', _, <<"hi3">>, _}}]}
+      }]} = ra_server:handle_leader(pipeline_rpcs, State1),
+
+    % ra_join translates into cluster update
+    {leader, #{cluster := #{N2 := #{next_index := 5,
+                                    match_index := 3,
+                                    voter_status := {voter, _}}},
+               cluster_change_permitted := false,
+               commit_index := 1,
+               last_applied := 1,
+               machine_state := <<"hi1">>} = State3,
+     [{send_rpc, N3,
+       #append_entries_rpc{term = 5, leader_id = N1,
+                           prev_log_index = 3,
+                           prev_log_term = 5,
+                           leader_commit = 1,
+                           entries = [{4, 5, {'$ra_cluster_change', _,
+                                              #{N2 := #{voter_status := {voter, _}}},
+                                              _}}]}},
+      {send_rpc, N2,
+       #append_entries_rpc{term = 5, leader_id = N1,
+                           prev_log_index = 3,
+                           prev_log_term = 5,
+                           leader_commit = 1,
+                           entries = [{4, 5, {'$ra_cluster_change', _,
+                                              #{N2 := #{voter_status := {voter, _}}},
+                                              _}}]}}
+     ]} = ra_server:handle_leader(RaJoin, State2),
+
+    Ack2 = #append_entries_reply{term = 5, success = true,
+                                     next_index = 5,
+                                     last_index = 4, last_term = 5},
+
+    % voter ack, raises commit_index
+    {leader, #{cluster := #{N2 := #{next_index := 5,
+                                    match_index := 4}},
+               commit_index := 3,
+               last_applied := 3,
+               machine_state := <<"hi3">>},
+     [{next_event, info, pipeline_rpcs},
+      {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
+    ok.
+
 append_entries_reply_success(_Config) ->
 
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
@@ -918,6 +1009,11 @@ follower_request_vote(_Config) ->
      [{reply, #request_vote_result{term = 6, vote_granted = true}}]} =
     ra_server:handle_follower(Msg#request_vote_rpc{last_log_index = 4},
                             State),
+
+    % non-voters ignore request_vote_rpc
+    NVState = State#{voter_status => {nonvoter, test}},
+    {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
+
      ok.
 
 follower_pre_vote(_Config) ->
@@ -1032,6 +1128,11 @@ follower_pre_vote(_Config) ->
                                vote_granted = true}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_index = 4},
                               State),
+
+    % non-voters ignore pre_vote_rpc
+    NVState = State#{voter_status => {nonvoter, test}},
+    {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
+
     ok.
 
 pre_vote_receives_pre_vote(_Config) ->
@@ -1305,17 +1406,18 @@ leader_server_join(_Config) ->
                cluster_change_permitted := false} = _State1, Effects} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            N4, await_consensus}}, State0),
+    % new member should join as voter
     [
      {send_rpc, N4,
       #append_entries_rpc{entries =
                           [_, _, _, {4, 5, {'$ra_cluster_change', _,
                                             #{N1 := _, N2 := _,
-                                              N3 := _, N4 := _},
+                                              N3 := _, N4 := #{voter_status := {voter, _}}},
                                             await_consensus}}]}},
      {send_rpc, N3,
       #append_entries_rpc{entries =
                           [{4, 5, {'$ra_cluster_change', _,
-                                   #{N1 := _, N2 := _, N3 := _, N4 := _},
+                                   #{N1 := _, N2 := _, N3 := _, N4 := #{voter_status := {voter, _}}},
                                    await_consensus}}],
                           term = 5, leader_id = N1,
                           prev_log_index = 3,
@@ -1324,7 +1426,49 @@ leader_server_join(_Config) ->
      {send_rpc, N2,
       #append_entries_rpc{entries =
                           [{4, 5, {'$ra_cluster_change', _,
-                                   #{N1 := _, N2 := _, N3 := _, N4 := _},
+                                   #{N1 := _, N2 := _, N3 := _, N4 := #{voter_status := {voter, _}}},
+                                   await_consensus}}],
+                          term = 5, leader_id = N1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 3}}
+     | _] = Effects,
+    ok.
+
+leader_server_join_nonvoter(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3})},
+    State0 = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    % raft servers should switch to the new configuration after log append
+    % and further cluster changes should be disallowed
+    {leader, #{cluster := #{N1 := _, N2 := _, N3 := _, N4 := _},
+               commit_index := Target,
+               cluster_change_permitted := false} = _State1, Effects} =
+        ra_server:handle_leader({command, {'$ra_join', meta(),
+                                           #{id => N4, init_non_voter => <<"test">>}, await_consensus}}, State0),
+    % new member should join as non-voter
+    [
+     {send_rpc, N4,
+      #append_entries_rpc{entries =
+                          [_, _, _, {4, 5, {'$ra_cluster_change', _,
+                                            #{N1 := _, N2 := _,
+                                              N3 := _, N4 := #{voter_status := {nonvoter, #{target := Target}}}},
+                                            await_consensus}}]}},
+     {send_rpc, N3,
+      #append_entries_rpc{entries =
+                          [{4, 5, {'$ra_cluster_change', _,
+                                   #{N1 := _, N2 := _, N3 := _, N4 := #{voter_status := {nonvoter, #{target := Target}}}},
+                                   await_consensus}}],
+                          term = 5, leader_id = N1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 3}},
+     {send_rpc, N2,
+      #append_entries_rpc{entries =
+                          [{4, 5, {'$ra_cluster_change', _,
+                                   #{N1 := _, N2 := _, N3 := _, N4 := #{voter_status := {nonvoter, #{target := Target}}}},
                                    await_consensus}}],
                           term = 5, leader_id = N1,
                           prev_log_index = 3,
@@ -1438,13 +1582,11 @@ leader_applies_new_cluster(_Config) ->
 
     ?assert(not maps:get(cluster_change_permitted, State2)),
 
-    % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true,
                                     next_index = 5,
                                     last_index = 4, last_term = 5},
     % leader does not yet have consensus as will need at least 3 votes
     {leader, State3 = #{commit_index := 3,
-
                         cluster_change_permitted := false,
                         cluster_index_term := {4, 5},
                         cluster := #{N2 := #{next_index := 5,
@@ -1457,6 +1599,37 @@ leader_applies_new_cluster(_Config) ->
                          cluster := #{N3 := #{next_index := 5,
                                               match_index := 4}}},
      _Effects} = ra_server:handle_leader({N3, AEReply}, State3),
+     ok.
+
+leader_applies_new_cluster_nonvoter(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3})},
+
+    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    Command = {command, {'$ra_join', meta(), #{id => N4, init_non_voter => <<"test">>}, await_consensus}},
+    % cluster records index and term it was applied to determine whether it has
+    % been applied
+    {leader, #{cluster_index_term := {4, 5},
+               cluster := #{N1 := _, N2 := _,
+                            N3 := _, N4 := _} } = State1, _} =
+        ra_server:handle_leader(Command, State),
+    {leader, State2, _} =
+        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+
+    ?assert(not maps:get(cluster_change_permitted, State2)),
+
+    % replies coming in
+    AEReply = #append_entries_reply{term = 5, success = true,
+                                    next_index = 5,
+                                    last_index = 4, last_term = 5},
+   % new peer doesn't count until it reaches its matching target, leader needs only 2 votes
+   {leader, _State3 = #{commit_index := 4,
+                        cluster_change_permitted := true,
+                        cluster := #{N2 := #{next_index := 5,
+                                             match_index := 4}}},
+     _} = ra_server:handle_leader({N2, AEReply}, State2#{votes => 1}),
     ok.
 
 leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
@@ -1703,8 +1876,7 @@ follower_installs_snapshot(_Config) ->
     Term = 2, % leader term
     Idx = 3,
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm,
-                                                   maps:keys(Config)),
+                                  meta = snap_meta(Idx, LastTerm, Config),
                                   chunk_state = {1, last},
                                   data = []},
     {receive_snapshot, FState1,
@@ -1716,10 +1888,10 @@ follower_installs_snapshot(_Config) ->
                         {#{index => Idx,
                            term => Term,
                            cluster => maps:keys(Config),
+                           cluster_state => Config,
                            machine_version => 0},
                          []}
                 end),
-
     {follower, #{current_term := Term,
                  commit_index := Idx,
                  last_applied := Idx,
@@ -1761,8 +1933,7 @@ follower_receives_stale_snapshot(_Config) ->
     LastTerm = 1, % snapshot term
     Idx = 2,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm,
-                                                   maps:keys(Config)),
+                                  meta = snap_meta(Idx, LastTerm, Config),
                                   chunk_state = {1, last},
                                   data = []},
     %% this should be a rare occurrence, rather than implement a special
@@ -1780,8 +1951,7 @@ receive_snapshot_timeout(_Config) ->
     LastTerm = 1, % snapshot term
     Idx = 6,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm,
-                                                   maps:keys(Config)),
+                                  meta = snap_meta(Idx, LastTerm, Config),
                                   chunk_state = {1, last},
                                   data = []},
     {receive_snapshot, FState1,
@@ -1812,8 +1982,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                          []}
                 end),
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm,
-                                                   maps:keys(Config)),
+                                  meta = snap_meta(Idx, LastTerm, Config),
                                   chunk_state = {1, last},
                                   data = []},
     {follower, FState1, _} = ra_server:handle_receive_snapshot(ISRpc, FState0),
@@ -1948,6 +2117,32 @@ leader_receives_install_snapshot_result(_Config) ->
                               true;
                          (_) -> false end, Effects)),
     ok.
+
+leader_received_append_entries_reply_and_promotes_voter(_config) ->
+    N3 = ?N3, State = base_state(3, ?FUNCTION_NAME),
+    AER = #append_entries_reply{term = 5, success = true,
+                                next_index = 5,
+                                last_index = 4, last_term = 5},
+
+    % Permanent voter
+    State1 = set_peer_voter_status(State, N3, {voter, #{nvid => <<"test">>}}),
+    {leader, _,
+     [{next_event,info,pipeline_rpcs}]
+    } = ra_server:handle_leader({N3, AER}, State1),
+
+    % Permanent non-voter
+    State2 = set_peer_voter_status(State, N3, {nonvoter, test}),
+    {leader, _,
+     [{next_event,info,pipeline_rpcs}]
+    } = ra_server:handle_leader({N3, AER}, State2),
+
+    % Promotion
+    State3 = set_peer_voter_status(State, N3,
+        {nonvoter, #{target => 4}}),
+    {leader, _,
+     [{next_event,info,pipeline_rpcs},
+      {next_event, {command, {'$ra_join', _, #{id := N3, voter_status := {voter, _}}, _}}}]
+    } = ra_server:handle_leader({N3, AER}, State3).
 
 follower_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
@@ -2456,6 +2651,11 @@ set_peer_query_index(State, PeerId, QueryIndex) ->
     #{PeerId := Peer} = Cluster,
     State#{cluster := Cluster#{PeerId => Peer#{query_index => QueryIndex}}}.
 
+set_peer_voter_status(State, PeerId, VoterStatus) ->
+    #{cluster := Cluster} = State,
+    #{PeerId := Peer} = Cluster,
+    State#{cluster := Cluster#{PeerId => Peer#{voter_status => VoterStatus}}}.
+
 leader_heartbeat_reply_lower_term(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
@@ -2593,17 +2793,19 @@ new_peer() ->
       match_index => 0,
       query_index => 0,
       commit_index_sent => 0,
+      voter_status => {voter, #{nvid => <<"test">>}},
       status => normal}.
 
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
 
 snap_meta(Idx, Term) ->
-    snap_meta(Idx, Term, []).
+    snap_meta(Idx, Term, #{}).
 
 snap_meta(Idx, Term, Cluster) ->
     #{index => Idx,
       term => Term,
-      cluster => Cluster,
+      cluster => maps:keys(Cluster),
+      cluster_state => Cluster,
       machine_version => 0}.
 

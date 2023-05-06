@@ -33,16 +33,33 @@
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
+%% Transient ID that uniquely identifies any new non-voter.
+-type ra_nvid() :: binary().
+
 %% Identifies a Ra server (node) in a Ra cluster.
 %%
 %% Ra servers need to be registered stable names (names that are reachable
 %% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
+%% Specifies server configuration for a new cluster member.
+%% Both `ra:add_member` and `ra:start_server` must be called with the same value.
+-type ra_new_server() :: #{id := ra_server_id(),
+
+                           %% If set, server will start as non-voter until later promoted by the
+                           %% leader.
+                           init_non_voter => ra_nvid()}.
+
 -type ra_peer_status() :: normal |
                           {sending_snapshot, pid()} |
                           suspended |
                           disconnected.
+
+-type ra_voter_status() :: {voter, ra_voter_state()} |
+                           {nonvoter, ra_voter_state()}.
+
+-type ra_voter_state() :: #{nvid => ra_nvid(),
+                            target => ra_index()}.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
@@ -50,6 +67,8 @@
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
+                           %% whether the peer is part of the consensus
+                           voter_status := ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
                            status := ra_peer_status()}.
@@ -139,6 +158,7 @@
 -type snapshot_meta() :: #{index := ra_index(),
                            term := ra_term(),
                            cluster := ra_cluster_servers(),
+                           cluster_state => ra_cluster(),  %% TODO replace `cluster`
                            machine_version := ra_machine:version()}.
 
 -record(install_snapshot_rpc,
