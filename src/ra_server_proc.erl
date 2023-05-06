@@ -784,11 +784,19 @@ follower(_, tick_timeout, State0) ->
      set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-follower(EventType, Msg, State0) ->
+follower(EventType, Msg, #state{conf = #conf{name = Name},
+                                server_state = SS0} = State0) ->
+    Voter0 = ra_server:voter_status(SS0),
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = follower_leader_change(State0, State2),
+            State = #state{server_state = SS} = follower_leader_change(State0, State2),
+            case ra_server:voter_status(SS) of
+                Voter0 ->
+                    ok;
+                Voter ->
+                    true = ets:update_element(ra_state, Name, {3, Voter})
+            end,
             {keep_state, State, Actions};
         {pre_vote, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -1029,7 +1037,8 @@ format_status(Opt, [_PDict, StateName,
 handle_enter(RaftState, OldRaftState,
              #state{conf = #conf{name = Name},
                     server_state = ServerState0} = State) ->
-    true = ets:insert(ra_state, {Name, RaftState}),
+    Voter = ra_server:voter_status(ServerState0),
+    true = ets:insert(ra_state, {Name, RaftState, Voter}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
     case RaftState == leader orelse OldRaftState == leader of
@@ -1717,9 +1726,11 @@ handle_tick_metrics(State) ->
     _ = ets:insert(ra_metrics, Metrics),
     State.
 
-can_execute_locally(RaftState, TargetNode, State) ->
+can_execute_locally(RaftState, TargetNode,
+                    #state{server_state = ServerState} = State) ->
+    Voter = ra_server:voter_status(ServerState),
     case RaftState of
-        follower ->
+        follower when Voter =:= voter ->
             TargetNode == node();
         leader when TargetNode =/= node() ->
             %% We need to evaluate whether to send the message.

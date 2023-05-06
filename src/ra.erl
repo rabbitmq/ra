@@ -455,7 +455,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 
 %% @doc Starts a new distributed ra cluster.
 %% @param ClusterName the name of the cluster.
-%% @param ServerId the ra_server_id() of the server
+%% @param ServerId the ra_server_id() of the server, or a map with server id and settings.
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @param ServerIds a list of initial (seed) server configurations
 %% @returns
@@ -470,10 +470,13 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% forcefully deleted.
 %% @see start_server/1
 %% @end
--spec start_server(atom(), ra_cluster_name(), ra_server_id(),
+-spec start_server(atom(), ra_cluster_name(), ra_server_id() | ra_new_server(),
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
-start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
+start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds) ->
+    % Legacy start server, default to full voter
+    start_server(System, ClusterName, #{id => ServerId, voter => true}, Machine, ServerIds);
+start_server(System, ClusterName, #{id := {_, _} = ServerId, voter := Voter}, Machine, ServerIds)
   when is_atom(System) ->
     UId = new_uid(ra_lib:to_binary(ClusterName)),
     Conf = #{cluster_name => ClusterName,
@@ -481,6 +484,7 @@ start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
              uid => UId,
              initial_members => ServerIds,
              log_init_args => #{uid => UId},
+             voter => Voter,
              machine => Machine},
     start_server(System, Conf).
 
@@ -558,9 +562,10 @@ delete_cluster(ServerIds, Timeout) ->
 %% affect said cluster's availability characteristics (by increasing quorum node count).
 %%
 %% @param ServerLoc the ra server or servers to try to send the command to
-%% @param ServerId the ra server id of the new server.
+%% @param ServerId the ra server id of the new server, or a map with server id and settings.
 %% @end
--spec add_member(ra_server_id() | [ra_server_id()], ra_server_id()) ->
+-spec add_member(ra_server_id() | [ra_server_id()],
+                 ra_server_id() | ra_new_server()) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
@@ -571,7 +576,8 @@ add_member(ServerLoc, ServerId) ->
 %% @see add_member/2
 %% @end
 -spec add_member(ra_server_id() | [ra_server_id()],
-                 ra_server_id(), timeout()) ->
+                 ra_server_id() | ra_new_server(),
+                 timeout()) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
@@ -579,7 +585,6 @@ add_member(ServerLoc, ServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
                            {'$ra_join', ServerId, after_log_append},
                            Timeout).
-
 
 %% @doc Removes a server from the cluster's membership configuration.
 %% This function returns after appending a cluster membership change
@@ -1136,9 +1141,11 @@ key_metrics({Name, N} = ServerId) when N == node() ->
         _ ->
             case ets:lookup(ra_state, Name) of
                 [] ->
-                    Counters#{state => unknown};
-                [{_, State}] ->
-                    Counters#{state => State}
+                    Counters#{state => unknown,
+                              voter_status => unknown};
+                [{_, State, Voter}] ->
+                    Counters#{state => State,
+                              voter_status => Voter}
             end
     end;
 key_metrics({_, N} = ServerId) ->

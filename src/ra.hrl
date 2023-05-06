@@ -39,10 +39,18 @@
 %% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
+%% Specifies server configuration for a new cluster member.
+-type ra_new_server() :: #{id := ra_server_id(),
+                           voter := boolean()}.
+
 -type ra_peer_status() :: normal |
                           {sending_snapshot, pid()} |
                           suspended |
                           disconnected.
+
+-type ra_voter_status() :: voter | {nonvoter, ra_nonvoter_reason()}.
+
+-type ra_nonvoter_reason() :: init | #{target := ra_index()}.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
@@ -50,6 +58,8 @@
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
+                           %% whether the peer is part of the consensus
+                           voter_status := ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
                            status := ra_peer_status()}.

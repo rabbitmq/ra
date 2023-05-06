@@ -45,6 +45,7 @@ all_tests() ->
      external_reader,
      add_member_without_quorum,
      force_start_follower_as_single_member,
+     force_start_follower_as_single_member_nonvoter,
      initial_members_query
     ].
 
@@ -673,10 +674,51 @@ force_start_follower_as_single_member(Config) ->
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, [ServerId3]),
     {ok, _, _} = ra:add_member(ServerId3, ServerId4),
-    %% the membership has changed but member not running yet
     {timeout,_} = ra:process_command(ServerId3, {enq, banana}),
     %% start new member
     ok = ra:start_server(?SYS, Conf4),
+    {ok, _, ServerId3} = ra:members(ServerId4),
+    ok = enqueue(ServerId3, msg3),
+
+    ok.
+
+force_start_follower_as_single_member_nonvoter(Config) ->
+    ok = logger:set_primary_config(level, all),
+    %% ra:start_server should fail if the node already exists
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    InitialCluster = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, InitialCluster),
+    timer:sleep(100),
+    %% stop majority to simulate permanent outage
+    ok = ra:stop_server(?SYS, ServerId1),
+    ok = ra:stop_server(?SYS, ServerId2),
+
+    timer:sleep(100),
+    %% force the remaining node to change it's membership
+    ok = ra_server_proc:force_shrink_members_to_current_member(ServerId3),
+    {ok, [_], ServerId3} = ra:members(ServerId3),
+    ok = enqueue(ServerId3, msg1),
+
+    %% test that it works after restart
+    ok = ra:stop_server(?SYS, ServerId3),
+    ok = ra:restart_server(?SYS, ServerId3),
+    {ok, [_], ServerId3} = ra:members(ServerId3),
+    ok = enqueue(ServerId3, msg2),
+
+    %% add a member
+    ServerId4 = ?config(server_id4, Config),
+    UId4 = ?config(uid4, Config),
+    Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, [ServerId3]),
+    {ok, _, _} = ra:add_member(ServerId3, #{id => ServerId4, voter => false}),
+    %% the membership has changed but member not running yet
+    %% it is nonvoter and does not affect quorum size
+    {ok, _, _} = ra:process_command(ServerId3, {enq, banana}),
+    %% start new member
+    ok = ra:start_server(?SYS, Conf4#{voter => false}),
     {ok, _, ServerId3} = ra:members(ServerId4),
     ok = enqueue(ServerId3, msg3),
 
