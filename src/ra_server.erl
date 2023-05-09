@@ -49,6 +49,7 @@
          persist_last_applied/1,
          update_peer/3,
          register_external_log_reader/2,
+         update_disconnected_peers/3,
          handle_down/5,
          handle_node_status/6,
          terminate/2,
@@ -1634,20 +1635,14 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
     %% TODO: refactor this please, why does make_rpc_effect need to take the
     %% full state
     maps:fold(
-      fun (I, _, Acc) when I =:= Id ->
-              %% oneself
-              Acc;
-          (_, #{status := suspended}, Acc) ->
-              Acc;
-          (_, #{status := {sending_snapshot, _}}, Acc) ->
-              %% if a peer is currently receiving a snapshot
-              %% do not send any append entries rpcs
-              Acc;
-          (PeerId, #{next_index := NextIdx,
+      fun (PeerId, #{next_index := NextIdx,
+                     status := normal,
                      commit_index_sent := CI,
                      match_index := MatchIdx} = Peer0,
            {S0, More0, Effs} = Acc)
-            when NextIdx < NextLogIdx orelse CI < CommitIndex ->
+            when PeerId =/= Id andalso
+                 (NextIdx < NextLogIdx orelse CI < CommitIndex) ->
+              % the status is normal and
               % there are unsent items or a new commit index
               % check if the match index isn't too far behind the
               % next index
@@ -1825,6 +1820,19 @@ update_peer(PeerId, Update, #{cluster := Peers} = State)
 register_external_log_reader(Pid, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {State#{log => Log}, Effs}.
+
+-spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
+    ra_server_state().
+update_disconnected_peers(Node, nodeup, #{cluster := Peers} = State) ->
+    State#{cluster => maps:map(
+                        fun ({_, PeerNode}, #{status := disconnected} = Peer)
+                              when PeerNode == Node ->
+                                Peer#{status => normal};
+                            (_, Peer) ->
+                                Peer
+                        end, Peers)};
+update_disconnected_peers(_Node, _Status, State) ->
+    State.
 
 peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
      PeerKv =

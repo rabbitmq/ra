@@ -15,7 +15,6 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(info, true).
 -define(SYS, default).
 
 %%%===================================================================
@@ -42,7 +41,8 @@ all_tests() ->
      send_local_msg,
      local_log_effect,
      leaderboard,
-     bench
+     bench,
+     disconnected_node_catches_up
     ].
 
 groups() ->
@@ -332,6 +332,56 @@ local_log_effect(Config) ->
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
+disconnected_node_catches_up(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [{_, DownServerNode} = DownServerId, _] = Started -- [Leader],
+    timer:sleep(1000),
+
+    ok = slave:stop(DownServerNode),
+
+    ct:pal("Nodes ~p", [nodes()]),
+    [
+     ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    %% wait for leader to take a snapshot
+    await_condition(
+      fun () ->
+              {ok, #{log := #{snapshot_index := SI}}, _} =
+                  ra:member_overview(Leader),
+              SI /= undefined
+      end, 20),
+
+    DownServerNodeName =
+        case atom_to_binary(DownServerNode) of
+            <<Tag:2/binary, _/binary>> -> binary_to_atom(Tag, utf8)
+        end,
+
+    timer:sleep(5000),
+
+    start_follower(DownServerNodeName, PrivDir),
+
+    ok = ra:restart_server(?SYS, DownServerId),
+
+    %% wait for snapshot on restarted server
+    await_condition(
+      fun () ->
+              {ok, #{log := #{snapshot_index := SI}}, _} =
+                  ra:member_overview(DownServerId),
+              SI /= undefined
+      end, 200),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+
 leaderboard(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
@@ -437,18 +487,6 @@ test_local_msg(Leader, ReceiverNode, ExpectedSenderNode, CmdTag, Opts0) ->
 
 %% Utility
 
-node_setup(DataDir) ->
-    ok = ra_lib:make_dir(DataDir),
-    LogFile = filename:join([DataDir, atom_to_list(node()), "ra.log"]),
-    SaslFile = filename:join([DataDir, atom_to_list(node()), "ra_sasl.log"]),
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
-    application:stop(sasl),
-    application:start(sasl),
-    _ = error_logger:logfile({open, LogFile}),
-    _ = error_logger:tty(false),
-    ok.
-
 get_current_host() ->
     NodeStr = atom_to_list(node()),
     Host = re:replace(NodeStr, "^[^@]+@", "", [{return, list}]),
@@ -470,7 +508,8 @@ start_follower(N, PrivDir) ->
     Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
     ct:pal("starting secondary node with ~ts on host ~ts for node ~ts", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
-    _ = rpc:call(S, ra, start, []),
+    ok = ct_rpc:call(S, ?MODULE, node_setup, [PrivDir]),
+    _ = erpc:call(S, ra, start, []),
     ok = ct_rpc:call(S, logger, set_primary_config,
                      [level, all]),
     S.
@@ -498,6 +537,31 @@ apply(#{index := Idx}, {do_local_log, SenderPid, Opts}, State) ->
            end,
            {local, node(SenderPid)}},
     {State, ok, [Eff]};
-apply(_Meta, _Cmd, State) ->
-    {State, []}.
+apply(#{index := Idx}, _Cmd, State) ->
+    {State, ok, [{release_cursor, Idx, State}]}.
 
+node_setup(DataDir) ->
+    ok = ra_lib:make_dir(DataDir),
+    NodeDir = filename:join(DataDir, atom_to_list(node())),
+    ok = ra_lib:make_dir(NodeDir),
+    LogFile = filename:join(NodeDir, "ra.log"),
+    SaslFile = filename:join(NodeDir, "ra_sasl.log"),
+    logger:set_primary_config(level, debug),
+    Config = #{config => #{file => LogFile}},
+    logger:add_handler(ra_handler, logger_std_h, Config),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
+    _ = error_logger:tty(false),
+    ok.
+
+await_condition(_Fun, 0) ->
+    exit(condition_did_not_materialise);
+await_condition(Fun, Attempts) ->
+    case Fun() of
+        true -> ok;
+        false ->
+            timer:sleep(100),
+            await_condition(Fun, Attempts - 1)
+    end.
