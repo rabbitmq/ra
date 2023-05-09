@@ -16,7 +16,7 @@
 -export([
          recover/1,
          read_meta/2,
-         begin_read/1,
+         begin_read/2,
          read_chunk/3,
          delete/2,
 
@@ -35,6 +35,8 @@
          begin_accept/2,
          accept_chunk/4,
          abort_accept/1,
+
+         context/2,
 
          handle_down/3,
          current_snapshot_dir/1
@@ -68,6 +70,8 @@
 
 -export_type([state/0]).
 
+-optional_callbacks([context/0]).
+
 %% Side effect function
 %% Turn the current state into immutable reference.
 -callback prepare(Index :: ra_index(),
@@ -87,7 +91,9 @@
 
 %% Read the snapshot metadata and initialise a read state used in read_chunk/1
 %% The read state should contain all the information required to read a chunk
--callback begin_read(Location :: file:filename()) ->
+%% The Context is the map returned by the context/0 callback
+%% This can be used to inform the sender of receive capabilities.
+-callback begin_read(Location :: file:filename(), Context :: map()) ->
     {ok, Meta :: meta(), ReadState :: term()}
     | {error, term()}.
 
@@ -130,6 +136,8 @@
             checksum_error |
             file_err() |
             term()}.
+
+-callback context() -> map().
 
 -spec init(ra_uid(), module(), file:filename()) ->
     state().
@@ -310,6 +318,18 @@ abort_accept(#?MODULE{accepting = #accept{idxterm = {Idx, Term}},
     ok = delete(Dir, {Idx, Term}),
     State#?MODULE{accepting = undefined}.
 
+%% get the snapshot capabilities context of a remote node
+-spec context(state(), node()) -> map().
+context(#?MODULE{module = Mod}, Node) ->
+    try erpc:call(Node, Mod, ?FUNCTION_NAME, []) of
+        Result ->
+            Result
+    catch
+        error:{exception, undef, _} ->
+            #{}
+    end.
+
+
 
 -spec handle_down(pid(), Info :: term(), state()) ->
     state().
@@ -335,14 +355,15 @@ delete(Dir, {Idx, Term}) ->
     ok = ra_lib:recursive_delete(SnapDir),
     ok.
 
--spec begin_read(State :: state()) ->
+-spec begin_read(State :: state(), Context :: map()) ->
     {ok, Meta :: meta(), ReadState} |
     {error, term()} when ReadState :: term().
 begin_read(#?MODULE{module = Mod,
                     directory = Dir,
-                    current = {Idx, Term}}) ->
+                    current = {Idx, Term}},
+          Context) when is_map(Context) ->
     Location = make_snapshot_dir(Dir, Idx, Term),
-    Mod:begin_read(Location).
+    Mod:begin_read(Location, Context).
 
 
 -spec read_chunk(ReadState, ChunkSizeBytes :: non_neg_integer(),

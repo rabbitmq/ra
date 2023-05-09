@@ -678,7 +678,8 @@ snapshot_written_after_installation(Config) ->
                          end,
 
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta),
+    Context = #{},
+    Chunk = create_snapshot_chunk(Config, Meta, Context),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
@@ -726,7 +727,7 @@ snapshot_installation(Config) ->
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
@@ -775,7 +776,7 @@ append_after_snapshot_installation(Config) ->
                              end),
     %% do snapshot
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
@@ -806,7 +807,7 @@ written_event_after_snapshot_installation(Config) ->
     SnapIdx = 10,
     %% do snapshot in
     Meta = meta(SnapIdx, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
@@ -1274,7 +1275,7 @@ meta(Idx, Term, Cluster) ->
       cluster => Cluster,
       machine_version => 1}.
 
-create_snapshot_chunk(Config, #{index := Idx} =  Meta) ->
+create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
     ok = ra_lib:make_dir(OthDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
@@ -1288,7 +1289,7 @@ create_snapshot_chunk(Config, #{index := Idx} =  Meta) ->
         after 1000 ->
                   exit(snapshot_timeout)
         end,
-    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2),
+    {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2, Context),
     {ok, Chunk, _} = ra_snapshot:read_chunk(ChunkSt, 1000000000, Sn2),
     Chunk.
 

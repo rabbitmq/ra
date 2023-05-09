@@ -1565,11 +1565,12 @@ fold_log(From, Fun, Term, State) ->
 
 send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
                InstallTimeout, SnapState, Machine) ->
+    Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
-        ra_snapshot:begin_read(SnapState),
+        ra_snapshot:begin_read(SnapState, Context),
 
     %% only send the snapshot if the target server can accept it
-    TheirMacVer = rpc:call(ToNode, ra_machine, version, [Machine]),
+    TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
     case SnapMacVer > TheirMacVer of
         true ->

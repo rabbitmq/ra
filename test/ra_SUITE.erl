@@ -674,6 +674,18 @@ server_catches_up(Config) ->
     terminate_cluster([N3 | InitialNodes]).
 
 snapshot_installation(Config) ->
+    ra_env:configure_logger(logger),
+    ok = logger:set_primary_config(level, debug),
+
+    LogFile = filename:join(?config(priv_dir, Config), "ra.log"),
+    SaslFile = filename:join(?config(priv_dir, Config), "ra_sasl.log"),
+    logger:add_handler(ra_handler, logger_std_h,
+                       #{config => #{file => LogFile}}),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
+    _ = error_logger:tty(false),
     N1 = nth_server_name(Config, 1),
     N2 = nth_server_name(Config, 2),
     N3 = nth_server_name(Config, 3),
@@ -710,9 +722,9 @@ snapshot_installation(Config) ->
                      length(filelib:wildcard(
                               filename:join([Dir, "snapshots", "*"]))) > 0
              end,
-    ?assert(try_n_times(fun () -> TryFun(N2Dir) end, 20)),
-    ?assert(try_n_times(fun () -> TryFun(N3Dir) end, 20)),
-    ?assert(try_n_times(fun () -> TryFun(N1Dir) end, 20)),
+    ?assert(try_n_times(fun () -> TryFun(N2Dir) end, 100)),
+    ?assert(try_n_times(fun () -> TryFun(N3Dir) end, 100)),
+    ?assert(try_n_times(fun () -> TryFun(N1Dir) end, 100)),
 
     % then do some more
     [begin
