@@ -1,11 +1,16 @@
 module(
     name = "ra",
-    version = "2.4.0",
+    version = "2.4.1",
+)
+
+bazel_dep(
+    name = "platforms",
+    version = "0.0.5",
 )
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.8.2",
+    version = "3.9.7",
 )
 
 erlang_config = use_extension(
@@ -66,6 +71,7 @@ erlang_package.git_package(
 
 erlang_package.hex_package(
     name = "seshat",
+    sha256 = "2c3deec7ff86e0d0c05edebd3455c8363123c227be292ffffc1a05eec08bff63",
     version = "0.4.0",
 )
 
