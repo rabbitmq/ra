@@ -1235,40 +1235,49 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_, {reply, Reply}, EvtType, _, _) ->
     exit({undefined_reply, Reply, EvtType});
-handle_effect(leader, {send_snapshot, To, {SnapState, Id, Term}}, _,
+handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
                      install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0,
               Actions) ->
-    ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
-    %% leader effect only
-    Self = self(),
-    Machine = ra_server:machine(SS0),
-    Pid = spawn(fun () ->
-                        try send_snapshots(Self, Id, Term, To,
-                                           ChunkSize, InstallSnapTimeout,
-                                           SnapState, Machine) of
-                            _ -> ok
-                        catch
-                            C:timeout:S ->
-                                %% timeout is ok as we've already blocked
-                                %% for a while
-                                erlang:raise(C, timeout, S);
-                            C:E:S ->
-                                %% insert an arbitrary pause here as a primitive
-                                %% throttling operation as certain errors
-                                %% happen quickly
-                                ok = timer:sleep(5000),
-                                erlang:raise(C, E, S)
-                        end
-                end),
-    %% update the peer state so that no pipelined entries are sent during
-    %% the snapshot sending phase
-    SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid}}, SS0),
-    {State0#state{server_state = SS,
-                  monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
-                  Actions};
+    case lists:member(ToNode, [node() | nodes()]) of
+        true ->
+            %% node is connected
+            %% leader effect only
+            Self = self(),
+            Machine = ra_server:machine(SS0),
+            Pid = spawn(fun () ->
+                                try send_snapshots(Self, Id, Term, To,
+                                                   ChunkSize, InstallSnapTimeout,
+                                                   SnapState, Machine) of
+                                    _ -> ok
+                                catch
+                                    C:timeout:S ->
+                                        %% timeout is ok as we've already blocked
+                                        %% for a while
+                                        erlang:raise(C, timeout, S);
+                                    C:E:S ->
+                                        %% insert an arbitrary pause here as a primitive
+                                        %% throttling operation as certain errors
+                                        %% happen quickly
+                                        ok = timer:sleep(5000),
+                                        erlang:raise(C, E, S)
+                                end
+                        end),
+            ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
+            %% update the peer state so that no pipelined entries are sent during
+            %% the snapshot sending phase
+            SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid}}, SS0),
+            {State0#state{server_state = SS,
+                          monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
+             Actions};
+        false ->
+            ?DEBUG("~s: send_snapshot node ~s disconnected",
+                   [log_id(State0), ToNode]),
+            SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
+            {State0#state{server_state = SS}, Actions}
+    end;
 handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
     _ = spawn(fun() ->
@@ -1571,11 +1580,12 @@ fold_log(From, Fun, Term, State) ->
 
 send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
                InstallTimeout, SnapState, Machine) ->
+    Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
-        ra_snapshot:begin_read(SnapState),
+        ra_snapshot:begin_read(SnapState, Context),
 
     %% only send the snapshot if the target server can accept it
-    TheirMacVer = rpc:call(ToNode, ra_machine, version, [Machine]),
+    TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
     case SnapMacVer > TheirMacVer of
         true ->
@@ -1726,7 +1736,7 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
                           #state{monitors = Monitors0,
                                  server_state = ServerState0} = State0) ->
     {Comps, Monitors} = ra_monitors:handle_down(Node, Monitors0),
-    {_, ServerState, Effects} =
+    {_, ServerState1, Effects} =
         lists:foldl(
           fun (Comp, {R, S0, E0}) ->
                   {R, S, E} = ra_server:handle_node_status(R, Comp, Node,
@@ -1734,6 +1744,8 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
                                                            S0),
                   {R, S, E0 ++ E}
           end, {RaftState, ServerState0, []}, Comps),
+    ServerState = ra_server:update_disconnected_peers(Node, Status,
+                                                      ServerState1),
     {State, Actions} = handle_effects(RaftState, Effects, cast,
                                       State0#state{server_state = ServerState,
                                                    monitors = Monitors}),

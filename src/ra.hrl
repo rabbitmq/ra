@@ -39,7 +39,10 @@
 %% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
--type ra_peer_status() :: normal | {sending_snapshot, pid()} | suspended.
+-type ra_peer_status() :: normal |
+                          {sending_snapshot, pid()} |
+                          suspended |
+                          disconnected.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),

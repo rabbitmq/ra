@@ -6,6 +6,7 @@
 %%
 -module(ra_snapshot_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -export([
@@ -291,13 +292,14 @@ read_snapshot(Config) ->
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
+     Context = #{},
 
-    {ok, Meta, InitChunkState} = ra_snapshot:begin_read(State),
+     {ok, Meta, InitChunkState} = ra_snapshot:begin_read(State, Context),
 
-    <<_Crc:32/integer, Data/binary>> = read_all_chunks(InitChunkState, State, 1024, <<>>),
-    ?assertEqual(MacRef, binary_to_term(Data)),
+     <<_:32/integer, Data/binary>> = read_all_chunks(InitChunkState, State, 1024, <<>>),
+     ?assertEqual(MacRef, binary_to_term(Data)),
 
-    ok.
+     ok.
 
 read_all_chunks(ChunkState, State, Size, Acc) ->
     case ra_snapshot:read_chunk(ChunkState, Size, State) of
