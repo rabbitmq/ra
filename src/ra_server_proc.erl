@@ -51,7 +51,8 @@
          trigger_election/2,
          ping/2,
          log_fold/4,
-         transfer_leadership/3
+         transfer_leadership/3,
+         force_shrink_members_to_current_member/1
         ]).
 
 -export([send_rpc/3]).
@@ -207,6 +208,10 @@ trigger_election(ServerId, Timeout) ->
     ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
 transfer_leadership(ServerId, TargetServerId, Timeout) ->
     leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
+
+-spec force_shrink_members_to_current_member(ra_server_id()) -> ok.
+force_shrink_members_to_current_member(ServerId) ->
+    gen_statem_safe_call(ServerId, force_member_change, 5000).
 
 -spec ping(ra_server_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerId, Timeout) ->
@@ -482,7 +487,8 @@ leader(info, {node_event, _Node, _Evt}, State) ->
 leader(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 leader(info, {Status, Node, InfoList}, State0)
-  when Status =:= nodedown orelse Status =:= nodeup ->
+  when Status =:= nodedown orelse
+       Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
