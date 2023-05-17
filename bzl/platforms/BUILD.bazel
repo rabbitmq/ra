@@ -25,3 +25,11 @@ platform(
     ],
     parents = ["@rbe//config:platform"],
 )
+
+platform(
+    name = "erlang_linux_26_platform",
+    constraint_values = [
+        "@erlang_config//:erlang_26",
+    ],
+    parents = ["@rbe//config:platform"],
+)
