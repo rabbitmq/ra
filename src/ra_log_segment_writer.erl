@@ -104,9 +104,10 @@ await(SegWriter)  ->
 %%%===================================================================
 
 init([#{data_dir := DataDir,
+        name := SegWriterName,
         system := System} = Conf]) ->
     process_flag(trap_exit, true),
-    CRef = ra_counters:new(?MODULE, ?COUNTER_FIELDS),
+    CRef = ra_counters:new(SegWriterName, ?COUNTER_FIELDS),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     {ok, #state{system = System,
                 data_dir = DataDir,
