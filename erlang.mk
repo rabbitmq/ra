@@ -6104,7 +6104,7 @@ dialyze: $(if $(filter --src,$(DIALYZER_DIRS)),,deps app)
 else
 dialyze: $(DIALYZER_PLT)
 endif
-	$(verbose) dialyzer --no_native `$(ERL) \
+	$(verbose) dialyzer `$(ERL) \
 		-eval "$(subst $(newline),,$(call escape_dquotes,$(call filter_opts.erl)))" \
 		-extra $(ERLC_OPTS)` $(DIALYZER_DIRS) $(DIALYZER_OPTS) $(if $(wildcard ebin/),-pa ebin/)
 
