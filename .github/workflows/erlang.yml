@@ -7,7 +7,7 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "25"
+        - "26"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
