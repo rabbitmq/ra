@@ -229,7 +229,7 @@ start_link(#{name := Name} = Config)
 
 %%% Callbacks
 
--spec init(wal_conf()) -> {ok, state()}.
+-spec init(wal_conf()) -> {ok, state()} | {stop, wal_checksum_validation_failure}.
 init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       max_entries := MaxEntries,
@@ -276,7 +276,12 @@ init(#{dir := Dir} = Conf0) ->
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
                  compress_mem_tables = CompressMemTables},
-    {ok, recover_wal(Dir, Conf)}.
+    try recover_wal(Dir, Conf) of
+        Result ->
+            {ok, Result}
+    catch _:Err ->
+              Err
+    end.
 
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
