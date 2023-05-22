@@ -36,24 +36,20 @@ test_erlang_app(
 xref()
 
 plt(
-    name = "base_plt",
-    apps = DEFAULT_PLT_APPS + EXTRA_APPS + [
-        "eunit",
-        "syntax_tools",
-        "erts",
-        "kernel",
-        "stdlib",
-        "common_test",
-        "inets",
+    name = "deps_plt",
+    apps = DEFAULT_PLT_APPS + [
+        "compiler",
+        "tools",
+        "runtime_tools",
         "mnesia",
-        "ssh",
-        "ssl",
+        "eunit",
     ],
-    deps = DEPS,
+    for_target = ":erlang_app",
 )
 
 dialyze(
-    plt = ":base_plt",
+    size = "small",
+    plt = ":deps_plt",
 )
 
 ra_suites()
