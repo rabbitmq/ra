@@ -36,21 +36,47 @@ test_erlang_app(
 
 xref()
 
+PLT_APPS = DEFAULT_PLT_APPS + [
+    "compiler",
+    "tools",
+    "runtime_tools",
+    "mnesia",
+    "eunit",
+]
+
 plt(
     name = "deps_plt",
-    apps = DEFAULT_PLT_APPS + [
-        "compiler",
-        "tools",
-        "runtime_tools",
-        "mnesia",
-        "eunit",
-    ],
+    apps = PLT_APPS,
     for_target = ":erlang_app",
 )
 
 dialyze(
     size = "small",
     plt = ":deps_plt",
+)
+
+plt(
+    name = "test_deps_plt",
+    apps = PLT_APPS + [
+        "common_test",
+    ],
+    for_target = ":test_erlang_app",
+    deps = [
+        "@meck//:erlang_app",
+        "@proper//:erlang_app",
+    ],
+)
+
+dialyze(
+    name = "dialyze_tests",
+    size = "small",
+    beam = [
+        f.replace("test/", "").replace(".erl", "_beam_files")
+        for f in glob(["test/*_SUITE.erl"])
+    ] + [
+        ":test_helpers",
+    ],
+    plt = ":test_deps_plt",
 )
 
 eunit(
