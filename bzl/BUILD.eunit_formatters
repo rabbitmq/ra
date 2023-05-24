@@ -1,0 +1,10 @@
+load("@rules_erlang//:erlang_app.bzl", "DEFAULT_ERLC_OPTS", "erlang_app")
+
+erlang_app(
+    testonly = True,
+    app_name = "eunit_formatters",
+    app_version = "0.5.0",
+    erlc_opts = DEFAULT_ERLC_OPTS + [
+        "-Dnamespaced_dicts",
+    ],
+)

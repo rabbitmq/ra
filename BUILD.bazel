@@ -1,6 +1,7 @@
 load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
 load("@rules_erlang//:xref.bzl", "xref")
 load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
+load("@rules_erlang//:eunit2.bzl", "eunit")
 load(":ra.bzl", "ra_suites")
 
 NAME = "ra"
@@ -50,6 +51,18 @@ plt(
 dialyze(
     size = "small",
     plt = ":deps_plt",
+)
+
+eunit(
+    name = "eunit",
+    eunit_opts = [
+        "no_tty",
+        "{report, {eunit_progress, [colored, profile]}}",
+    ],
+    target = ":test_erlang_app",
+    deps = [
+        "@eunit_formatters//:erlang_app",
+    ],
 )
 
 ra_suites()
