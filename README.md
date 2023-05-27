@@ -273,7 +273,7 @@ ra:members({dyn_members, node()}).
 If a node wants to leave the cluster, it can use `ra:leave_and_terminate/3`
 and specify itself as the target:
 
-Temporarily add a new ndde, say `ra4@hostname.local`, to the cluster:
+Temporarily add a new node, say `ra4@hostname.local`, to the cluster:
 
 ``` erlang
 % Add a new member

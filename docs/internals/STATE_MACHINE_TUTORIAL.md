@@ -189,7 +189,7 @@ to the specified
 `pid`. Note that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
 options which are the least reliable message sending options. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
-To ensure message reliability normal [Autmatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
+To ensure message reliability normal [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
 like protocols between the state machine and the receiver should be implemented
 if needed.
 
