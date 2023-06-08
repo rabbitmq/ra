@@ -5,7 +5,7 @@ module(
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.10.2",
+    version = "3.10.5",
 )
 
 erlang_config = use_extension(
@@ -83,4 +83,21 @@ use_repo(
     "meck",
     "proper",
     "seshat",
+)
+
+erlang_dev_package = use_extension(
+    "@rules_erlang//bzlmod:extensions.bzl",
+    "erlang_package",
+    dev_dependency = True,
+)
+
+erlang_package.hex_package(
+    name = "eunit_formatters",
+    version = "0.5.0",
+    build_file = "@ra//bzl:BUILD.eunit_formatters",
+)
+
+use_repo(
+    erlang_dev_package,
+    "eunit_formatters",
 )

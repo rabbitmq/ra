@@ -18,6 +18,7 @@ def ra_suites():
 
     erlang_bytecode(
         name = "test_helpers",
+        erlc_opts = TEST_ERLC_OPTS,
         srcs = helpers,
         hdrs = hdrs,
         deps = [

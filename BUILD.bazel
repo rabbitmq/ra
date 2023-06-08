@@ -1,6 +1,7 @@
 load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
 load("@rules_erlang//:xref.bzl", "xref")
 load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
+load("@rules_erlang//:eunit2.bzl", "eunit")
 load(":ra.bzl", "ra_suites")
 
 NAME = "ra"
@@ -35,21 +36,60 @@ test_erlang_app(
 
 xref()
 
+PLT_APPS = DEFAULT_PLT_APPS + [
+    "compiler",
+    "tools",
+    "runtime_tools",
+    "mnesia",
+    "eunit",
+]
+
 plt(
     name = "deps_plt",
-    apps = DEFAULT_PLT_APPS + [
-        "compiler",
-        "tools",
-        "runtime_tools",
-        "mnesia",
-        "eunit",
-    ],
+    apps = PLT_APPS,
     for_target = ":erlang_app",
 )
 
 dialyze(
     size = "small",
     plt = ":deps_plt",
+)
+
+plt(
+    name = "test_deps_plt",
+    apps = PLT_APPS + [
+        "common_test",
+    ],
+    for_target = ":test_erlang_app",
+    deps = [
+        "@meck//:erlang_app",
+        "@proper//:erlang_app",
+    ],
+)
+
+dialyze(
+    name = "dialyze_tests",
+    size = "small",
+    beam = [
+        f.replace("test/", "").replace(".erl", "_beam_files")
+        for f in glob(["test/*_SUITE.erl"])
+    ] + [
+        ":test_helpers",
+    ],
+    plt = ":test_deps_plt",
+    tags = ["manual"],
+)
+
+eunit(
+    name = "eunit",
+    eunit_opts = [
+        "no_tty",
+        "{report, {eunit_progress, [colored, profile]}}",
+    ],
+    target = ":test_erlang_app",
+    deps = [
+        "@eunit_formatters//:erlang_app",
+    ],
 )
 
 ra_suites()
