@@ -724,6 +724,7 @@ overview(#?MODULE{last_index = LastIndex,
 -spec write_config(ra_server:config(), state()) -> ok.
 write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ConfigPath = filename:join(Dir, "config"),
+    TmpConfigPath = filename:join(Dir, "config.tmp"),
     % clean config of potentially unserialisable data
     Config = maps:without([parent,
                            counter,
@@ -731,8 +732,9 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
                            %% don't write system config to disk as it will
                            %% be updated each time
                            system_config], Config0),
-    ok = ra_lib:write_file(ConfigPath,
+    ok = ra_lib:write_file(TmpConfigPath,
                            list_to_binary(io_lib:format("~p.", [Config]))),
+    ok = prim_file:rename(TmpConfigPath, ConfigPath),
     ok.
 
 -spec read_config(state() | file:filename()) ->
