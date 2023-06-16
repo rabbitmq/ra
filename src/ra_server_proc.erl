@@ -301,7 +301,8 @@ do_init(#{id := Id,
             _ = spawn(fun () ->
                               [net_kernel:connect_node(N)
                                || N <- DisconnectedNodes]
-                      end)
+                      end),
+            ok
     end,
     TickTime = maps:get(tick_timeout, Config),
     InstallSnapRpcTimeout = maps:get(install_snap_rpc_timeout, Config),
