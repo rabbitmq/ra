@@ -218,7 +218,7 @@ init(#{uid := UId,
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
     State = maybe_append_first_entry(State0),
-    ?DEBUG("~s: ra_log:init recovered last_index_term ~w"
+    ?DEBUG("~ts: ra_log:init recovered last_index_term ~w"
            " first index ~b",
            [State#?MODULE.cfg#cfg.log_id,
             last_index_term(State),
@@ -431,7 +431,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
-            ?DEBUG("~s: written event did not find term ~b for index ~b "
+            ?DEBUG("~ts: written event did not find term ~b for index ~b "
                    "found ~w",
                    [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
             {State, []}
@@ -442,7 +442,7 @@ handle_event({written, {FromIdx, _, _}},
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - resend from cache
     Expected = LastWrittenIdx + 1,
-    ?DEBUG("~s: ra_log: written gap detected at ~b expected ~b!",
+    ?DEBUG("~ts: ra_log: written gap detected at ~b expected ~b!",
            [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
 handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
@@ -514,7 +514,7 @@ handle_event({snapshot_written, {Idx, Term} = Snap},
                       snapshot_state = SnapState} = State0) ->
     %% if the snapshot is stale we just want to delete it
     Current = ra_snapshot:current(SnapState),
-    ?INFO("~s: old snapshot_written received for index ~b in term ~b
+    ?INFO("~ts: old snapshot_written received for index ~b in term ~b
           current snapshot ~w, deleting old snapshot",
            [LogId, Idx, Term, Current]),
     Effects = [{delete_snapshot,
@@ -753,7 +753,7 @@ delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
     catch
         _:_ = Err ->
             ?WARN("ra_log:delete_everything/1 failed to delete "
-                  "directory ~s~n Error: ~p", [Dir, Err])
+                  "directory ~ts~n Error: ~p", [Dir, Err])
     end,
     ok.
 
@@ -822,7 +822,7 @@ delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
                                                                          UId, Pivot)
                     end),
             Active = ra_log_reader:segment_refs(Reader),
-            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b, pivot ~w",
+            ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~w",
                    [LogId, length(Obsolete), SnapIdx, length(Active), Pivot]),
             State = State0#?MODULE{reader = Reader},
             {State, log_update_effects(Readers, Pid, State)}
@@ -897,7 +897,7 @@ resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
         State -> State
     catch
         exit:wal_down ->
-            ?WARN("~s: ra_log: resending from ~b failed with wal_down",
+            ?WARN("~ts: ra_log: resending from ~b failed with wal_down",
                   [UId, Idx]),
             State0
     end.
@@ -906,7 +906,7 @@ resend_from0(Idx, #?MODULE{cfg = Cfg,
                            last_index = LastIdx,
                            last_resend_time = undefined,
                            cache = Cache} = State) ->
-    ?DEBUG("~s: ra_log: resending from ~b to ~b",
+    ?DEBUG("~ts: ra_log: resending from ~b to ~b",
            [State#?MODULE.cfg#cfg.log_id, Idx, LastIdx]),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, LastIdx - Idx + 1),
     lists:foldl(fun (I, Acc) ->

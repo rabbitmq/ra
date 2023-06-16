@@ -149,7 +149,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     % TODO: test scenario when server crashes after segments but before
     % deleting walfile
     % can we make segment writer idempotent somehow
-    ?DEBUG("segment_writer: deleting wal file: ~s",
+    ?DEBUG("segment_writer: deleting wal file: ~ts",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
     %% TODO: this should be a debug option config?
@@ -229,7 +229,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
 
     case open_file(Dir, SegConf) of
         enoent ->
-            ?DEBUG("segment_writer: skipping segment as directory ~s does "
+            ?DEBUG("segment_writer: skipping segment as directory ~ts does "
                   "not exist", [Dir]),
             %% clean up the tables for this process
             _ = ets:delete(Tid),
@@ -240,7 +240,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                                    Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
-                           directory ~s disappeared whilst writing",
+                           directory ~ts disappeared whilst writing",
                            [ServerUId, Dir]),
                     ok;
                 {Segment, Closed0} ->
@@ -279,7 +279,7 @@ send_segments(System, ServerUId, Tid, Segments) ->
         undefined ->
             ?DEBUG("ra_log_segment_writer: error sending "
                    "ra_log_event to: "
-                   "~s. Error: ~s",
+                   "~ts. Error: ~s",
                    [ServerUId, "No Pid"]),
             _ = ets:delete(Tid),
             _ = clean_closed_mem_tables(System, ServerUId, Tid),
@@ -293,7 +293,7 @@ clean_closed_mem_tables(System, UId, Tid) ->
     {ok, ClosedTbl} = ra_system:lookup_name(System, closed_mem_tbls),
     Tables = ets:lookup(ClosedTbl, UId),
     [begin
-         ?DEBUG("~w: cleaning closed table for '~s' range: ~b-~b",
+         ?DEBUG("~w: cleaning closed table for '~ts' range: ~b-~b",
                 [?MODULE, UId, From, To]),
          %% delete the entry in the closed table lookup
          true = ets:delete_object(ClosedTbl, O)
@@ -386,18 +386,18 @@ open_file(Dir, SegConf) ->
             %% a file was created by the segment header had not been
             %% synced. In this case it is typically safe to just delete
             %% and retry.
-            ?WARN("segment_writer: missing header in segment file ~s "
+            ?WARN("segment_writer: missing header in segment file ~ts "
                   "deleting file and retrying recovery", [File]),
             _ = prim_file:delete(File),
             open_file(Dir, SegConf);
         {error, enoent} ->
-            ?DEBUG("segment_writer: failed to open segment file ~s "
+            ?DEBUG("segment_writer: failed to open segment file ~ts "
                   "error: enoent", [File]),
             enoent;
         Err ->
             %% Any other error should be considered a hard error or else
             %% we'd risk data loss
-            ?WARN("segment_writer: failed to open segment file ~s "
+            ?WARN("segment_writer: failed to open segment file ~ts "
                   "error: ~W. Exiting", [File, Err, 10]),
             exit(Err)
     end.
