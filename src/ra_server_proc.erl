@@ -289,15 +289,20 @@ do_init(#{id := Id,
                                     ClusterName),
 
     % ensure each relevant erlang node is connected
-    Peers = maps:keys(maps:remove(Id, Cluster)),
-    %% as most messages are sent using noconnect we explicitly attempt to
-    %% connect to all relevant nodes
-    _ = spawn(fun () ->
-                      _ = lists:foreach(fun ({_, Node}) ->
-                                                net_kernel:connect_node(Node);
-                                            (_) -> node()
-                                        end, Peers)
-              end),
+    PeerNodes = [PeerNode ||
+                 {_, PeerNode} <- maps:keys(maps:remove(Id, Cluster))],
+    case PeerNodes -- nodes() of
+        [] ->
+            %% all peer nodes are connected
+            ok;
+        DisconnectedNodes ->
+            %% as most messages are sent using noconnect we explicitly attempt to
+            %% connect to all relevant nodes
+            _ = spawn(fun () ->
+                              [net_kernel:connect_node(N)
+                               || N <- DisconnectedNodes]
+                      end)
+    end,
     TickTime = maps:get(tick_timeout, Config),
     InstallSnapRpcTimeout = maps:get(install_snap_rpc_timeout, Config),
     AwaitCondTimeout = maps:get(await_condition_timeout, Config),
