@@ -436,7 +436,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             case members(TriggeredId,
                          length(ServerConfigs) * Timeout) of
                 {ok, _, Leader} ->
-                    ?INFO("ra: started cluster ~s with ~b servers~n"
+                    ?INFO("ra: started cluster ~ts with ~b servers~n"
                           "~b servers failed to start: ~w~nLeader: ~w",
                           [ClusterName, length(ServerConfigs),
                            length(NotStarted), NotStartedIds,

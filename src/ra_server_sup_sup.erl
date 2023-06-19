@@ -176,7 +176,7 @@ delete_data_directory(Directory) ->
                                      ok
                              catch
                                  _:_ = Err ->
-                                     ?WARN("ra: delete_server/1 failed to delete directory ~s~n"
+                                     ?WARN("ra: delete_server/1 failed to delete directory ~ts~n"
                                            "Error: ~p", [Directory, Err]),
                                      error
                              end
@@ -193,7 +193,7 @@ delete_data_directory(Directory) ->
 remove_all(System) when is_atom(System) ->
     #{names := #{server_sup := Sup}} = ra_system:fetch(System),
     _ = [begin
-             ?DEBUG("ra: terminating child ~w in system ~s~n", [Pid, System]),
+             ?DEBUG("ra: terminating child ~w in system ~ts~n", [Pid, System]),
              supervisor:terminate_child(Sup, Pid)
          end
          || {_, Pid, _, _} <- supervisor:which_children(Sup)],
@@ -244,7 +244,7 @@ start_child(Name, Config) ->
                     _ = erlang:demonitor(MRef),
                     {ok, Pid};
                 {'DOWN', MRef, _, _, Reason} ->
-                    ?ERROR("Ra: failed to start ra server ~s, err ~s",
+                    ?ERROR("Ra: failed to start ra server ~ts, err ~s",
                            [Name, Reason]),
                     {error, Reason}
             end;

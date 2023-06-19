@@ -54,7 +54,7 @@ init(#{name := System,
                                          {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
     TblName = dets:to_ets(TblName, TblName),
-    ?INFO("ra: meta data store initialised for system ~s. ~b record(s) recovered",
+    ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) recovered",
           [System, ets:info(TblName, size)]),
     {ok, #?MODULE{ref = Ref,
                   table_name = TblName}}.

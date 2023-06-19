@@ -135,7 +135,7 @@ zpad_hex(Num) ->
     lists:flatten(io_lib:format("~16.16.0B", [Num])).
 
 zpad_filename("", Ext, Num) ->
-    lists:flatten(io_lib:format("~8..0B.~s", [Num, Ext]));
+    lists:flatten(io_lib:format("~8..0B.~ts", [Num, Ext]));
 zpad_filename(Prefix, Ext, Num) ->
     lists:flatten(io_lib:format("~ts_~8..0B.~ts", [Prefix, Num, Ext])).
 
@@ -502,7 +502,7 @@ lists_chink_test() ->
 make_uid_test() ->
     U1 = make_uid(),
     U2 = make_uid(),
-    ?debugFmt("U1 ~s U2 ~s", [U1, U2]),
+    ?debugFmt("U1 ~ts U2 ~s", [U1, U2]),
     ?assertNotEqual(U1, U2),
     <<"ABCD", _/binary>> = make_uid("ABCD"),
     <<"ABCD", _/binary>> = make_uid(<<"ABCD">>),

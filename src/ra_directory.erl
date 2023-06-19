@@ -82,7 +82,7 @@ register_name(#{directory := Directory,
             ok;
         OtherUId ->
             ok = dets:insert(DirRev, {ServerName, UId}),
-            ?WARN("ra server with name ~s UId ~s replaces prior UId ~s",
+            ?WARN("ra server with name ~ts UId ~s replaces prior UId ~s",
                   [ServerName, UId, OtherUId]),
             ok
     end.
