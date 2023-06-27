@@ -42,7 +42,8 @@ all_tests() ->
      local_log_effect,
      leaderboard,
      bench,
-     disconnected_node_catches_up
+     disconnected_node_catches_up,
+     key_metrics
     ].
 
 groups() ->
@@ -381,6 +382,76 @@ disconnected_node_catches_up(Config) ->
     [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.
 
+key_metrics(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    Data = crypto:strong_rand_bytes(1024),
+    [begin
+         ok = ra:pipeline_command(Leader, {data, Data})
+     end || _ <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, {data, Data}),
+
+    timer:sleep(100),
+    TestId  = lists:last(Started),
+    ok = ra:stop_server(?SYS, TestId),
+    StoppedMetrics = ra:key_metrics(TestId),
+    ct:pal("StoppedMetrics  ~p", [StoppedMetrics]),
+    ?assertMatch(#{state := noproc,
+                   last_applied := LA,
+                   last_written_index := LW,
+                   commit_index := CI}
+                   when LA > 0 andalso
+                        LW > 0 andalso
+                        CI > 0,
+                 StoppedMetrics),
+    ok = ra:restart_server(?SYS, TestId),
+    await_condition(
+      fun () ->
+              Metrics = ra:key_metrics(TestId),
+              ct:pal("RecoverMetrics  ~p", [Metrics]),
+              recover == maps:get(state, Metrics)
+      end, 200),
+    {ok, _, _} = ra:process_command(Leader, {data, Data}),
+    await_condition(
+      fun () ->
+              Metrics = ra:key_metrics(TestId),
+              ct:pal("FollowerMetrics  ~p", [Metrics]),
+              follower == maps:get(state, Metrics)
+      end, 200),
+    [begin
+         M = ra:key_metrics(S),
+         ct:pal("Metrics ~p", [M]),
+         ?assertMatch(#{state := _,
+                        last_applied := LA,
+                        last_written_index := LW,
+                        commit_index := CI}
+                        when LA > 0 andalso
+                             LW > 0 andalso
+                             CI > 0, M)
+     end
+     || S <- Started],
+    ok = ra:transfer_leadership(Leader, TestId),
+    timer:sleep(1000),
+    [begin
+         M = ra:key_metrics(S),
+         ct:pal("Metrics ~p", [M]),
+         ?assertMatch(#{state := _,
+                        last_applied := LA,
+                        last_written_index := LW,
+                        commit_index := CI}
+                        when LA > 0 andalso
+                             LW > 0 andalso
+                             CI > 0, M)
+     end || S <- Started],
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
 
 leaderboard(Config) ->
     PrivDir = ?config(data_dir, Config),
@@ -537,6 +608,8 @@ apply(#{index := Idx}, {do_local_log, SenderPid, Opts}, State) ->
            end,
            {local, node(SenderPid)}},
     {State, ok, [Eff]};
+apply(#{index := _Idx}, {data, _}, State) ->
+    {State, ok, []};
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
 

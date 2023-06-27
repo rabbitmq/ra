@@ -324,6 +324,9 @@ init(#{id := Id,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig},
+    put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
 
     #{cfg => Cfg,
       current_term => CurrentTerm,
@@ -350,19 +353,21 @@ init(#{id := Id,
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer,
-                      effective_machine_version = EffMacVer},
+                      effective_machine_version = EffMacVer} = Cfg,
           commit_index := CommitIndex,
           last_applied := LastApplied} = State0) ->
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastApplied),
     ?DEBUG("~ts: recovering state machine version ~b:~b from index ~b to ~b",
            [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
     {#{log := Log0,
        cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State, _} =
         apply_to(CommitIndex,
-                 fun(E, S0) ->
+                 fun({Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
                          %% to avoid memory explosion
                          {Mod, LastAppl, S, MacSt, _E, _N, LastTs} = apply_with(E, S0),
+                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, Idx),
                          {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
                  end,
                  State0, []),
@@ -372,6 +377,7 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId, EffMacVerAfter, MacVer, LastApplied, CommitIndex, After - Before]),
     %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value
            commit_latency => 0}.
@@ -969,6 +975,7 @@ handle_follower(#append_entries_rpc{term = Term,
                             current_term := CurTerm})
   when Term >= CurTerm ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
+    ok = put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, LeaderCommit),
     %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
     State0 = update_term(Term, State00#{leader_id => LeaderId,
@@ -1129,15 +1136,14 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                   [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
             State = update_term_and_voted_for(Term, Cand, State1),
-            {follower, State#{voted_for => Cand, current_term => Term},
-             [{reply, Reply}]};
+            {follower, State, [{reply, Reply}]};
         false ->
             ?INFO("~ts: declining vote for ~w for term ~b,"
                   " candidate last log index term was: ~w~n"
                   " last log entry idxterm seen was: ~w",
                   [LogId, Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
-            {follower, State1#{current_term => Term}, [{reply, Reply}]}
+            {follower, update_term(Term, State1), [{reply, Reply}]}
     end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
                 State = #{current_term := CurTerm,
@@ -1189,8 +1195,8 @@ handle_follower(#install_snapshot_rpc{term = Term,
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
     Log = ra_log:set_snapshot_state(SS, Log0),
-    {receive_snapshot, State0#{log => Log,
-                               leader_id => LeaderId},
+    {receive_snapshot, update_term(Term, State0#{log => Log,
+                                                 leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#request_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
@@ -1262,19 +1268,19 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                   end,
 
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-            State = State0#{cfg => Cfg,
-                            log => Log,
-                            current_term => Term,
-                            commit_index => SnapIndex,
-                            last_applied => SnapIndex,
-                            cluster => make_cluster(Id, ClusterIds),
-                            machine_state => MacState},
+            State = update_term(Term,
+                                State0#{cfg => Cfg,
+                                        log => Log,
+                                        commit_index => SnapIndex,
+                                        last_applied => SnapIndex,
+                                        cluster => make_cluster(Id, ClusterIds),
+                                        machine_state => MacState}),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} | Effs]};
         next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
-            State = State0#{log => Log},
+            State = update_term(Term, State0#{log => Log}),
             {receive_snapshot, State, [{reply, Reply}]}
     end;
 handle_receive_snapshot({ra_log_event, Evt},
@@ -2144,6 +2150,7 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
             ok = ra_log_meta:store(MetaName, UId, current_term, Term),
             ok = ra_log_meta:store_sync(MetaName, UId, voted_for, VotedFor),
             incr_counter(Cfg, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, 1),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, Term),
             reset_query_index(State#{current_term => Term,
                                      voted_for => VotedFor})
     end.
@@ -2237,7 +2244,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
          #{last_applied := LastApplied,
            cfg := #cfg{machine_version = MacVer,
                        effective_machine_module = MacMod,
-                       effective_machine_version = EffMacVer},
+                       effective_machine_version = EffMacVer} = Cfg,
            machine_state := MacState0,
            log := Log0} = State0)
   when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
@@ -2257,6 +2264,8 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
     %% due to machine versioning all entries may not have been applied
     %%
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, AppliedTo),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, CommitLatency),
     {State#{last_applied => AppliedTo,
             log => Log,
             commit_latency => CommitLatency,
@@ -2549,12 +2558,14 @@ append_entries_reply(Term, Success, State = #{log := Log}) ->
                           last_index = LWIdx,
                           last_term = LWTerm}.
 
-evaluate_quorum(#{commit_index := CI0} = State0, Effects0) ->
+evaluate_quorum(#{cfg := Cfg,
+                  commit_index := CI0} = State0, Effects0) ->
     % TODO: shortcut function if commit index was not incremented
     State = #{commit_index := CI} = increment_commit_index(State0),
 
     Effects = case CI > CI0 of
                   true ->
+                      put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CI),
                       [{aux, eval} | Effects0];
                   false ->
                       Effects0
@@ -2797,6 +2808,11 @@ process_pending_consistent_queries(#{cluster_change_permitted := true,
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
 incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
+    ok.
+
+put_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:put(Cnt, Ix, N);
+put_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
 meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->

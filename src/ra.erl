@@ -78,7 +78,8 @@
          cast_aux_command/2,
          register_external_log_reader/1,
          member_overview/1,
-         member_overview/2
+         member_overview/2,
+         key_metrics/1
         ]).
 
 %% xref should pick these up
@@ -1106,6 +1107,43 @@ member_overview(ServerId) ->
     ra_server_proc:ra_local_call_ret(map()).
 member_overview(ServerId, Timeout) ->
     ra_server_proc:local_state_query(ServerId, overview, Timeout).
+
+%% @doc Returns a map of key metrics about a Ra member
+%%
+%% The keys and values may vary depending on what state
+%% the member is in. This function will never call into the
+%% Ra process itself so is likely to return swiftly even
+%% when the Ra process is busy (such as when it is recovering)
+%%
+%% @param ServerId the Ra server to obtain key metrics for
+%% @end
+key_metrics({Name, N} = ServerId) when N == node() ->
+    Fields = [last_applied,
+              commit_index,
+              snapshot_index,
+              last_written_index,
+              last_index,
+              commit_latency,
+              term],
+    Counters = case ra_counters:counters(ServerId, Fields) of
+                   undefined ->
+                       #{};
+                   C -> C
+               end,
+    case whereis(Name) of
+        undefined ->
+            Counters#{state => noproc};
+        _ ->
+            case ets:lookup(ra_state, Name) of
+                [] ->
+                    Counters#{state => unknown};
+                [{_, State}] ->
+                    Counters#{state => State}
+            end
+    end;
+key_metrics({_, N} = ServerId) ->
+    erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId]).
+
 
 %% internal
 

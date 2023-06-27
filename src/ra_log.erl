@@ -200,8 +200,10 @@ init(#{uid := UId,
                         reader = Reader,
                         snapshot_state = SnapshotState
                        },
-
+    put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     LastIdx = State000#?MODULE.last_index,
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
     % recover the last term
     {LastTerm0, State00} = case LastIdx of
                                SnapIdx ->
@@ -374,7 +376,8 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 %% forces the last index and last written index back to a prior index
 -spec set_last_index(ra_index(), state()) ->
     {ok, state()} | {not_found, state()}.
-set_last_index(Idx, #?MODULE{cache = Cache0,
+set_last_index(Idx, #?MODULE{cfg = Cfg,
+                             cache = Cache0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
@@ -385,6 +388,8 @@ set_last_index(Idx, #?MODULE{cache = Cache0,
             %% this should always be found but still assert just in case
             true = LWTerm =/= undefined,
             Cache = ra_log_cache:set_last(Idx, Cache0),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
             {ok, State2#?MODULE{last_index = Idx,
                                 last_term = Term,
                                 cache = Cache,
@@ -401,7 +406,8 @@ handle_event({written, {FromIdx, _ToIdx, _Term}},
     %% Just drop the event in this case as it is stale
     {State, []};
 handle_event({written, {FromIdx, ToIdx0, Term}},
-             #?MODULE{last_written_index_term = {LastWrittenIdx0,
+             #?MODULE{cfg = Cfg,
+                      last_written_index_term = {LastWrittenIdx0,
                                                  LastWrittenTerm0},
                       last_index = LastIdx,
                       snapshot_state = SnapState} = State0)
@@ -416,6 +422,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
+            ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
             {State#?MODULE{last_written_index_term = {ToIdx, Term}},
              %% delaying truncate_cache until the next event allows any entries
              %% that became committed to be read from cache rather than ETS
@@ -426,8 +433,10 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             % followers returning appending the entry and the leader committing
             % and processing a snapshot before the written event comes in.
             % ensure last_written_index_term does not go backwards
-            LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
+            LastWrittenIdx = max(LastWrittenIdx0, ToIdx),
+            LastWrittenIdxTerm = {LastWrittenIdx,
                                   max(LastWrittenTerm0, Term)},
+            ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastWrittenIdx),
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
@@ -491,13 +500,15 @@ handle_event({segments, Tid, NewSegs},
             {State, log_update_effects(Readers, Pid, State)}
     end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap},
-             #?MODULE{first_index = FstIdx,
+             #?MODULE{cfg = Cfg,
+                      first_index = FstIdx,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->
     % delete any segments outside of first_index
     {State, Effects0} = delete_segments(SnapIdx, State0),
     SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     %% delete old snapshot files
     %% This is done as an effect
     %% so that if an old snapshot is still being replicated
@@ -573,6 +584,9 @@ install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
                  #?MODULE{cfg = Cfg,
                          cache = Cache} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
+    ok = put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, SnapIdx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, SnapIdx),
     {State, Effs} = delete_segments(SnapIdx, State0),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
@@ -837,6 +851,7 @@ wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
     % and that prior entries should be considered stale
     ok = ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Cmd),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
+    ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
     State#?MODULE{last_index = Idx, last_term = Term,
                   cache = ra_log_cache:add(Entry, Cache)}.
 
@@ -847,6 +862,7 @@ wal_write(#?MODULE{cfg = #cfg{uid = UId,
     case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Cmd) of
         ok ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             State#?MODULE{last_index = Idx, last_term = Term,
                           cache = ra_log_cache:add(Entry, Cache)};
         {error, wal_down} ->
@@ -869,6 +885,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         ok ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
             State#?MODULE{last_index = LastIdx,
                           last_term = LastTerm,
                           cache = Cache};
@@ -1028,6 +1045,11 @@ log_update_wait_n(N) ->
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
 incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
+    ok.
+
+put_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
+    counters:put(Cnt, Ix, N);
+put_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
 server_data_dir(Dir, UId) ->

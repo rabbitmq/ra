@@ -270,6 +270,8 @@ init(Config) ->
 
 do_init(#{id := Id,
           cluster_name := ClusterName} = Config0) ->
+    Key = ra_lib:ra_server_id_to_local_name(Id),
+    true = ets:insert(ra_state, {Key, init}),
     process_flag(trap_exit, true),
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Id),
@@ -283,7 +285,6 @@ do_init(#{id := Id,
     UId = ra_server:uid(ServerState),
     % ensure ra_directory has the new pid
     #{names := Names} = SysConf,
-    Key = ra_lib:ra_server_id_to_local_name(Id),
     ok = ra_directory:register_name(Names, UId, self(),
                                     maps:get(parent, Config, undefined), Key,
                                     ClusterName),
@@ -1527,7 +1528,7 @@ config_defaults(ServerId) ->
       install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => ra_counters:new(ServerId, ?RA_COUNTER_FIELDS),
+      counter => ra_counters:new(ServerId, {persistent_term, ?FIELDSPEC_KEY}),
       system_config => ra_system:default_config()
      }.
 
