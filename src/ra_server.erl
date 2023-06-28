@@ -359,12 +359,11 @@ recover(#{cfg := #cfg{log_id = LogId,
     {#{log := Log0,
        cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State, _} =
         apply_to(CommitIndex,
-                 fun(E, S) ->
-                         %% Clear out the effects to avoid building
-                         %% up a long list of effects than then
-                         %% we throw away
-                         %% on server startup (queue recovery)
-                         setelement(5, apply_with(E, S), [])
+                 fun(E, S0) ->
+                         %% Clear out the effects and notifies map
+                         %% to avoid memory explosion
+                         {Mod, LastAppl, S, MacSt, _E, _N, LastTs} = apply_with(E, S0),
+                         {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
                  end,
                  State0, []),
     After = erlang:system_time(millisecond),
