@@ -65,7 +65,7 @@
 
 -type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
 
--type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
+-type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 
 -type states() :: leader | follower | candidate | await_condition.
 
