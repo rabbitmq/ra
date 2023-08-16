@@ -1,11 +1,11 @@
 module(
-    name = "ra",
-    version = "2.4.0",
+    name = "rabbitmq_ra",
+    version = "2.6.3",
 )
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.10.5",
+    version = "3.11.4",
 )
 
 erlang_config = use_extension(
@@ -94,7 +94,7 @@ erlang_dev_package = use_extension(
 erlang_package.hex_package(
     name = "eunit_formatters",
     version = "0.5.0",
-    build_file = "@ra//bzl:BUILD.eunit_formatters",
+    build_file = "@rabbitmq_ra//bzl:BUILD.eunit_formatters",
 )
 
 use_repo(
