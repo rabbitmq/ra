@@ -1,0 +1,27 @@
+shell_commands: &shell_commands
+- curl -O https://raw.githubusercontent.com/kerl/kerl/master/kerl
+- chmod a+x kerl
+- ./kerl update releases
+- ./kerl build ${ERLANG_VERSION}
+- ./kerl install ${ERLANG_VERSION} ~/kerl/${ERLANG_VERSION}
+- realpath ~/kerl/${ERLANG_VERSION}
+
+platforms:
+  macos:
+    environment:
+      ERLANG_VERSION: "25.0"
+      ERLANG_HOME: /Users/buildkite/kerl/25.0
+    shell_commands: *shell_commands
+    build_flags:
+    - --incompatible_strict_action_env
+    build_targets:
+    - '@rabbitmq_ra//:erlang_app'
+  ubuntu2004:
+    environment:
+      ERLANG_VERSION: "25.0"
+      ERLANG_HOME: /var/lib/buildkite-agent/kerl/25.0
+    shell_commands: *shell_commands
+    build_flags:
+    - --incompatible_strict_action_env
+    build_targets:
+    - '@rabbitmq_ra//:erlang_app'
