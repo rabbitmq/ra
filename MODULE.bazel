@@ -8,6 +8,12 @@ bazel_dep(
     version = "3.11.4",
 )
 
+bazel_dep(
+    name = "rabbitmq_seshat",
+    version = "0.6.1",
+    repo_name = "seshat",
+)
+
 erlang_config = use_extension(
     "@rules_erlang//bzlmod:extensions.bzl",
     "erlang_config",
@@ -70,11 +76,6 @@ erlang_package.git_package(
     branch = "master",
 )
 
-erlang_package.hex_package(
-    name = "seshat",
-    version = "0.4.0",
-)
-
 use_repo(
     erlang_package,
     "aten",
@@ -82,7 +83,6 @@ use_repo(
     "inet_tcp_proxy_dist",
     "meck",
     "proper",
-    "seshat",
 )
 
 erlang_dev_package = use_extension(
