@@ -86,18 +86,15 @@ jobs:
       - name: Configure the ra override for this ra
         working-directory: rabbitmq-server
         run: |
-          sudo npm install --global --silent @bazel/buildozer
-
-          rules_erlang_version="$(cat MODULE.bazel | buildozer 'print version' -:rules_erlang)"
-          ra_repo="rules_erlang~$rules_erlang_version~erlang_package~ra"
-
           cat << EOF >> user.bazelrc
-          build --override_repository $ra_repo=${{ github.workspace }}/ra
+          build --override_module rabbitmq_ra=${{ github.workspace }}/ra
           EOF
 
       - name: Configure otp for the OCI image
         working-directory: rabbitmq-server
         run: |
+          sudo npm install --global --silent @bazel/buildozer
+
           buildozer 'set tars ["@otp_src_${{ matrix.otp_version_id }}//file"]' \
             //packaging/docker-image:otp_source
 
