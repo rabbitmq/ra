@@ -452,7 +452,7 @@ dump_index(File) ->
 dump(File) ->
     {ok, S0} = open(File, #{mode => read}),
     {Idx, Last} = range(S0),
-    L = fold(S0, Idx, Last - Idx + 1, fun erlang:binary_to_term/1,
+    L = fold(S0, Idx, Last, fun erlang:binary_to_term/1,
              fun (E, A) -> [E | A] end, []),
     close(S0),
     lists:reverse(L).
