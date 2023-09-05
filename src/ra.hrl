@@ -269,6 +269,7 @@
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 -define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
 -define(C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, ?C_RA_LOG_RESERVED + 20).
+-define(C_RA_SRV_RESERVED, ?C_RA_LOG_RESERVED + 21).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -312,7 +313,38 @@
          {local_queries, ?C_RA_SRV_LOCAL_QUERIES, counter,
           "Total number of local queries"},
          {invalid_reply_mode_commands, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, counter,
-          "Total number of commands received with an invalid reply-mode"}
+          "Total number of commands received with an invalid reply-mode"},
+         {reserved_2, ?C_RA_SRV_RESERVED, counter, "Reserved counter"}
          ]).
 
--define(RA_COUNTER_FIELDS, ?RA_LOG_COUNTER_FIELDS ++ ?RA_SRV_COUNTER_FIELDS).
+-define(C_RA_SVR_METRIC_LAST_APPLIED, ?C_RA_SRV_RESERVED + 1).
+-define(C_RA_SVR_METRIC_COMMIT_INDEX, ?C_RA_SRV_RESERVED + 2).
+-define(C_RA_SVR_METRIC_SNAPSHOT_INDEX, ?C_RA_SRV_RESERVED + 3).
+-define(C_RA_SVR_METRIC_LAST_INDEX, ?C_RA_SRV_RESERVED + 4).
+-define(C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ?C_RA_SRV_RESERVED + 5).
+-define(C_RA_SVR_METRIC_COMMIT_LATENCY, ?C_RA_SRV_RESERVED + 6).
+-define(C_RA_SVR_METRIC_TERM, ?C_RA_SRV_RESERVED + 7).
+
+-define(RA_SRV_METRICS_COUNTER_FIELDS,
+        [
+         {last_applied, ?C_RA_SVR_METRIC_LAST_APPLIED, gauge,
+          "The last applied index. Can go backwards if a ra server is restarted."},
+         {commit_index, ?C_RA_SVR_METRIC_COMMIT_INDEX, counter,
+          "The current commit index."},
+         {snapshot_index, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, counter,
+          "The current snapshot index."},
+         {last_index, ?C_RA_SVR_METRIC_LAST_INDEX, counter,
+          "The last index of the log."},
+         {last_written_index, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, counter,
+          "The last fully written and fsynced index of the log."},
+         {commit_latency, ?C_RA_SVR_METRIC_COMMIT_LATENCY, gauge,
+          "Approximate time taken from an entry being written to the log until it is committed."},
+         {term, ?C_RA_SVR_METRIC_TERM, counter, "The current term."}
+        ]).
+
+-define(RA_COUNTER_FIELDS,
+        ?RA_LOG_COUNTER_FIELDS ++
+        ?RA_SRV_COUNTER_FIELDS ++
+        ?RA_SRV_METRICS_COUNTER_FIELDS).
+
+-define(FIELDSPEC_KEY, ra_seshat_fields_spec).
