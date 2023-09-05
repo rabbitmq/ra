@@ -43,9 +43,9 @@ init(System) when is_atom(System) ->
 init(Dir, #{directory := Name,
             directory_rev := NameRev}) ->
     _ = ets:new(Name, [named_table,
-                          public,
-                          {read_concurrency, true}
-                         ]),
+                       public,
+                       {read_concurrency, true}
+                      ]),
     ok = ra_lib:make_dir(Dir),
     Dets = filename:join(Dir, "names.dets"),
     {ok, NameRev} = dets:open_file(NameRev,
