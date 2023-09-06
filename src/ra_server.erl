@@ -2510,14 +2510,16 @@ append_log_leader({'$ra_join', From,
             Cluster = OldCluster#{JoiningNode => new_peer_with(#{voter_status => Voter})},
             append_cluster_change(Cluster, From, ReplyMode, State)
     end;
-append_log_leader({'$ra_join', From, #{id := JoiningNode, voter := WantVoter}, ReplyMode},
+append_log_leader({'$ra_join', From, #{id := JoiningNode,
+                                       voter := WantVoter}, ReplyMode},
                   State) ->
     % Shortcut to compute non-voter status
     VoterStatus = case WantVoter of
-                 true -> voter;
-                 false -> new_nonvoter(State)
-             end,
-    append_log_leader({'$ra_join', From, #{id => JoiningNode, voter_status => VoterStatus}, ReplyMode},
+                      true -> voter;
+                      false -> new_nonvoter(State)
+                  end,
+    append_log_leader({'$ra_join', From, #{id => JoiningNode,
+                                           voter_status => VoterStatus}, ReplyMode},
                       State);
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
                   State = #{cluster := OldCluster}) ->
@@ -2900,16 +2902,17 @@ new_nonvoter(#{commit_index := Target} = _State) ->
 -spec maybe_promote_voter(ra_server_id(), ra_server_state(), effects()) -> effects().
 maybe_promote_voter(PeerID, #{cluster := Cluster} = _State, Effects) ->
     % Unknown peer handled in the caller.
-    #{PeerID := #{match_index := MI, voter_status := OldStatus}} = Cluster,
+    #{PeerID := #{match_index := MI,
+                  voter_status := OldStatus}} = Cluster,
     case update_voter_status(OldStatus, MI) of
         OldStatus ->
             Effects;
         voter ->
             [{next_event,
-                {command, {'$ra_join',
-                    #{ts => os:system_time(millisecond)},
-                    #{id => PeerID, voter_status => voter},
-                noreply}}} |
+              {command, {'$ra_join',
+                         #{ts => os:system_time(millisecond)},
+                         #{id => PeerID, voter_status => voter},
+                         noreply}}} |
              Effects]
     end.
 
