@@ -1232,7 +1232,8 @@ handle_follower(#append_entries_reply{}, State) ->
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
 handle_follower(election_timeout,
-                #{cfg := #cfg{log_id = LogId}, voter_status := {nonvoter, _} = Voter} = State) ->
+                #{cfg := #cfg{log_id = LogId},
+                  voter_status := {nonvoter, _} = Voter} = State) ->
     ?DEBUG("~s: follower ignored election_timeout, non-voter: ~p0",
            [LogId, Voter]),
     {follower, State, []};
@@ -2259,8 +2260,11 @@ initialise_peers(State = #{cfg := #cfg{id = Id}, log := Log, cluster := Cluster0
     NextIdx = ra_log:next_index(Log),
     Cluster = maps:map(fun (PeerId, Self) when PeerId =:= Id ->
                                Self;
-                           (_, #{voter_status := Voter} = _Other) ->
-                               new_peer_with(#{next_index => NextIdx, voter_status => Voter})
+                           (_, Peer) ->
+                               %% if key not present we assume `voter' status
+                               Voter = maps:get(voter_status, Peer, voter),
+                               new_peer_with(#{next_index => NextIdx,
+                                               voter_status => Voter})
                        end, Cluster0),
     State#{cluster => Cluster}.
 
