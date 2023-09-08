@@ -1626,10 +1626,26 @@ read_chunks_and_send_rpc(RPC0,
             Res1
     end.
 
-validate_command_options(#{reply_mode := ReplyMode}, #state{conf = Conf}) ->
+validate_command_options(#{reply_mode := ReplyMode} = InputOptions,
+                         #state{conf = Conf,
+                                server_state =
+                                #{cfg := #cfg{effective_machine_version =
+                                              EffectiveMachineVersion}}}) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
-            {ok, #{reply_mode => ReplyMode}};
+            ValidOptions = #{reply_mode => ReplyMode},
+            case InputOptions of
+                #{minimum_effective_machine_version := Min}
+                  when Min > EffectiveMachineVersion ->
+                    {error, {minimum_effective_machine_version_mismatch,
+                             {minimum, Min},
+                             {actual, EffectiveMachineVersion}}};
+                #{minimum_effective_machine_version := Min} ->
+                    {ok,
+                     ValidOptions#{minimum_effective_machine_version => Min}};
+                _ ->
+                    {ok, ValidOptions}
+            end;
         {error, _} = Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             Error

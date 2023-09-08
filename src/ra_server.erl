@@ -111,7 +111,9 @@
                               {notify, command_correlation(), pid()} |
                               noreply.
 
--type command_options() :: #{reply_mode := command_reply_mode()}.
+-type command_options() :: #{reply_mode := command_reply_mode(),
+                             minimum_effective_machine_version =>
+                             ra_machine:version()}.
 
 -type command() :: {command_type(), command_meta(),
                     UserCommand :: term(), command_options()} |
