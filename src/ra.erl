@@ -537,7 +537,7 @@ delete_cluster(ServerIds) ->
 -spec delete_cluster(ServerIds :: [ra_server_id()], timeout()) ->
     {ok, Leader :: ra_server_id()} | {error, term()}.
 delete_cluster(ServerIds, Timeout) ->
-    DeleteCmd = {'$ra_cluster', delete, await_consensus},
+    DeleteCmd = {'$ra_cluster', delete, #{reply_mode => await_consensus}},
     case ra_server_proc:command(ServerIds, DeleteCmd, Timeout) of
         {ok, _, Leader} ->
             {ok, Leader};
@@ -577,7 +577,8 @@ add_member(ServerLoc, ServerId) ->
     {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
-                           {'$ra_join', ServerId, after_log_append},
+                           {'$ra_join', ServerId,
+                            #{reply_mode => after_log_append}},
                            Timeout).
 
 
@@ -612,7 +613,8 @@ remove_member(ServerRef, ServerId) ->
     {error, cluster_change_not_permitted}.
 remove_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef,
-                           {'$ra_leave', ServerId, after_log_append},
+                           {'$ra_leave', ServerId,
+                            #{reply_mode => after_log_append}},
                            Timeout).
 
 %% @doc Makes the server enter a pre-vote state and attempt to become the leader.
@@ -658,7 +660,7 @@ leave_and_terminate(System, ServerRef, ServerId) ->
                           ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc | system_not_started}.
 leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
-    LeaveCmd = {'$ra_leave', ServerId, await_consensus},
+    LeaveCmd = {'$ra_leave', ServerId, #{reply_mode => await_consensus}},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
@@ -697,7 +699,7 @@ leave_and_delete_server(System, ServerRef, ServerId) ->
                               ra_server_id(), timeout()) ->
     ok | timeout | {error, noproc}.
 leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
-    LeaveCmd = {'$ra_leave', ServerId, await_consensus},
+    LeaveCmd = {'$ra_leave', ServerId, #{reply_mode => await_consensus}},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
             ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
@@ -806,7 +808,8 @@ process_command(ServerId, Command, Options) when is_map(Options) ->
                         %% use plain reply mode for backwards compatibility
                         await_consensus
                 end,
-    ra_server_proc:command(ServerId, usr(Command, ReplyMode), Timeout).
+    CommandOptions = #{reply_mode => ReplyMode},
+    ra_server_proc:command(ServerId, usr(Command, CommandOptions), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
 %% @param ServerId the server id to send the command to
@@ -870,10 +873,12 @@ process_command(ServerId, Command) ->
                        Priority :: ra_server:command_priority()) -> ok.
 pipeline_command(ServerId, Command, Correlation, Priority)
   when Correlation /= no_correlation ->
-    Cmd = usr(Command, {notify, Correlation, self()}),
+    CommandOptions = #{reply_mode => {notify, Correlation, self()}},
+    Cmd = usr(Command, CommandOptions),
     ra_server_proc:cast_command(ServerId, Priority, Cmd);
 pipeline_command(ServerId, Command, no_correlation, Priority) ->
-    Cmd = usr(Command, noreply),
+    CommandOptions = #{reply_mode => noreply},
+    Cmd = usr(Command, CommandOptions),
     ra_server_proc:cast_command(ServerId, Priority, Cmd).
 
 %% @doc Same as `pipeline_command/4' but uses a hardcoded priority of `low'.
@@ -1147,12 +1152,12 @@ key_metrics({_, N} = ServerId) ->
 
 %% internal
 
--spec usr(UserCommand, ReplyMode) -> Command when
+-spec usr(UserCommand, Options) -> Command when
       UserCommand :: term(),
-      ReplyMode :: ra_server:command_reply_mode(),
-      Command :: {ra_server:command_type(), UserCommand, ReplyMode}.
-usr(Data, Mode) ->
-    {'$usr', Data, Mode}.
+      Options :: ra_server:command_options(),
+      Command :: {ra_server:command_type(), UserCommand, Options}.
+usr(Data, Options) ->
+    {'$usr', Data, Options}.
 
 sort_by_local([], Acc) ->
     Acc;

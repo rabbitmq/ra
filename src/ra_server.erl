@@ -111,8 +111,10 @@
                               {notify, command_correlation(), pid()} |
                               noreply.
 
+-type command_options() :: #{reply_mode := command_reply_mode()}.
+
 -type command() :: {command_type(), command_meta(),
-                    UserCommand :: term(), command_reply_mode()} |
+                    UserCommand :: term(), command_options()} |
                    {noop, command_meta(),
                     CurrentMachineVersion :: ra_machine:version()}.
 
@@ -216,6 +218,7 @@
               ra_msg/0,
               machine_conf/0,
               command/0,
+              command_options/0,
               command_type/0,
               command_meta/0,
               command_correlation/0,
@@ -510,7 +513,8 @@ handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId} = Cfg} = State00) ->
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
-                          {_, #{from := From}, _, after_log_append} ->
+                          {_, #{from := From}, _,
+                           #{reply_mode := after_log_append}} ->
                               [{reply, From,
                                 {wrap_reply, {Idx, Term}}} | Effects0];
                           _ ->
@@ -525,7 +529,8 @@ handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
         lists:foldl(fun(C, {S0, E}) ->
                             {ok, I, T, S} = append_log_leader(C, S0),
                             case C of
-                                {_, #{from := From}, _, after_log_append} ->
+                                {_, #{from := From}, _,
+                                 #{reply_mode := after_log_append}} ->
                                     {S, [{reply, From,
                                           {wrap_reply, {I, T}}} | E]};
                                 _ ->
@@ -1876,7 +1881,7 @@ handle_down(leader, machine, Pid, Info, State)
   when is_pid(Pid) ->
     %% commit command to be processed by state machine
     handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
-                            {down, Pid, Info}, noreply}},
+                            {down, Pid, Info}, #{reply_mode => noreply}}},
                   State);
 handle_down(RaftState, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
@@ -1924,7 +1929,8 @@ handle_node_status(leader, machine, Node, Status, _Infos, State)
     %% TODO: provide an option where the machine or aux can be provided with
     %% the node down reason
     Meta = #{ts => erlang:system_time(millisecond)},
-    handle_leader({command, {'$usr', Meta, {Status, Node}, noreply}}, State);
+    handle_leader({command, {'$usr', Meta, {Status, Node},
+                             #{reply_mode => noreply}}}, State);
 handle_node_status(RaftState, aux, Node, Status, _Infos, State)
   when is_atom(Node) ->
     handle_aux(RaftState, cast, {Status, Node}, State);
@@ -2296,7 +2302,7 @@ apply_with(_Cmd,
       when MacVer < Effective ->
     %% we cannot apply any further entries
     {Mod, LastAppliedIdx, State, MacSt, Effects, Notifys, LastTs};
-apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
+apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, CmdOptions}},
            {Module, _LastAppliedIdx,
             State = #{cfg := #cfg{effective_machine_version = MacVer}},
             MacSt, Effects0, Notifys0, LastTs}) ->
@@ -2305,13 +2311,13 @@ apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
     Ts = maps:get(ts, CmdMeta, LastTs),
     case ra_machine:apply(Module, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
-            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, CmdOptions,
                                            append_app_effects(AppEffs, Effects0),
                                            Notifys0),
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts};
         {NextMacSt, Reply} ->
-            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, CmdOptions,
                                            Effects0, Notifys0),
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts}
@@ -2424,10 +2430,11 @@ augment_command_meta(Idx, Term, MacVer, CmdMeta) ->
 
 add_reply(_, '$ra_no_reply', _, Effects, Notifys) ->
     {Effects, Notifys};
-add_reply(#{from := From}, Reply, await_consensus, Effects, Notifys) ->
+add_reply(#{from := From}, Reply,
+          #{reply_mode := await_consensus}, Effects, Notifys) ->
     {[{reply, From, {wrap_reply, Reply}} | Effects], Notifys};
 add_reply(#{from := From}, Reply,
-          {await_consensus, Options}, Effects, Notifys) ->
+          #{reply_mode := {await_consensus, Options}}, Effects, Notifys) ->
     Replier = case Options of
                   #{reply_from := local} ->
                       local;
@@ -2438,7 +2445,7 @@ add_reply(#{from := From}, Reply,
               end,
     ReplyEffect = {reply, From, {wrap_reply, Reply}, Replier},
     {[ReplyEffect | Effects], Notifys};
-add_reply(_, Reply, {notify, Corr, Pid},
+add_reply(_, Reply, #{reply_mode := {notify, Corr, Pid}},
           Effects, Notifys) ->
     % notify are casts and thus have to include their own pid()
     % reply with the supplied correlation so that the sending can do their
@@ -2450,7 +2457,7 @@ add_reply(_, Reply, {notify, Corr, Pid},
         _ ->
             {Effects, Notifys#{Pid => [CorrData]}}
     end;
-add_reply(_, _, _, % From, Reply, Mode
+add_reply(_, _, _, % From, Reply, Options
           Effects, Notifys) ->
     {Effects, Notifys}.
 
@@ -2459,7 +2466,7 @@ append_log_leader({CmdTag, _, _, _},
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
     {not_appended, cluster_change_not_permitted, State};
-append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
+append_log_leader({'$ra_join', From, JoiningNode, Options},
                   State = #{cluster := OldCluster}) ->
     case OldCluster of
         #{JoiningNode := _} ->
@@ -2468,15 +2475,15 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
             {not_appended, already_member, State};
         _ ->
             Cluster = OldCluster#{JoiningNode => new_peer()},
-            append_cluster_change(Cluster, From, ReplyMode, State)
+            append_cluster_change(Cluster, From, Options, State)
     end;
-append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
+append_log_leader({'$ra_leave', From, LeavingServer, Options},
                   State = #{cfg := #cfg{log_id = LogId},
                             cluster := OldCluster}) ->
     case OldCluster of
         #{LeavingServer := _} ->
             Cluster = maps:remove(LeavingServer, OldCluster),
-            append_cluster_change(Cluster, From, ReplyMode, State);
+            append_cluster_change(Cluster, From, Options, State);
         _ ->
             ?DEBUG("~ts: member ~w requested to leave but was not a member. "
                    "Members: ~w",
@@ -2514,14 +2521,14 @@ pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
 pre_append_log_follower(_, State) ->
     State.
 
-append_cluster_change(Cluster, From, ReplyMode,
+append_cluster_change(Cluster, From, Options,
                       State = #{log := Log0,
                                 cluster := PrevCluster,
                                 cluster_index_term := {PrevCITIdx, PrevCITTerm},
                                 current_term := Term}) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
-    Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
+    Command = {'$ra_cluster_change', From, Cluster, Options},
     NextIdx = ra_log:next_index(Log0),
     IdxTerm = {NextIdx, Term},
     % TODO: is it safe to do change the cluster config with an async write?

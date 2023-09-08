@@ -413,9 +413,9 @@ append_effect_follower(Config) ->
                                     {State, ok, [{send_msg, Self, got_cmd2}]}
                             end),
     meck:expect(Mod, handle_aux, fun
-                                     (_, _, {cmd, ReplyMode}, Aux, Log, _MacState) ->
+                                     (_, _, {cmd, Options}, Aux, Log, _MacState) ->
                                          {no_reply, Aux, Log,
-                                          [{append, {cmd2, "yo"}, ReplyMode}]};
+                                          [{append, {cmd2, "yo"}, Options}]};
                                      (_, _, _Evt, Aux, Log, _MacState) ->
                                          {no_reply, Aux, Log}
                                  end),

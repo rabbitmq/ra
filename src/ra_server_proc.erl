@@ -70,7 +70,7 @@
 -type query_fun() :: ra:query_fun().
 
 -type ra_command() :: {ra_server:command_type(), term(),
-                       ra_server:command_reply_mode()}.
+                       ra_server:command_options()}.
 
 -type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_server_id()} |
                                     {error, term()} |
@@ -387,13 +387,12 @@ leader(EventType, {local_call, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
-leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf,
-              server_state = ServerState0} = State0) ->
-    case validate_reply_mode(ReplyMode) of
-        ok ->
+leader(EventType, {command, normal, {CmdType, Data, Options0}},
+       #state{server_state = ServerState0} = State0) ->
+    case validate_command_options(Options0, State0) of
+        {ok, Options} ->
             %% normal priority commands are written immediately
-            Cmd = make_command(CmdType, EventType, Data, ReplyMode),
+            Cmd = make_command(CmdType, EventType, Data, Options),
             {leader, ServerState, Effects} =
                 ra_server:handle_leader({command, Cmd}, ServerState0),
             {State, Actions} =
@@ -401,7 +400,6 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                                 State0#state{server_state = ServerState}),
             {keep_state, State, Actions};
         Error ->
-            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
@@ -409,14 +407,13 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                     {keep_state, State0, []}
             end
     end;
-leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf,
-              low_priority_commands = Delayed} = State0) ->
-    case validate_reply_mode(ReplyMode) of
-        ok ->
+leader(EventType, {command, low, {CmdType, Data, Options0}},
+       #state{low_priority_commands = Delayed} = State0) ->
+    case validate_command_options(Options0, State0) of
+        {ok, Options} ->
             %% cache the low priority command until the flush_commands message
             %% arrives
-            Cmd = make_command(CmdType, EventType, Data, ReplyMode),
+            Cmd = make_command(CmdType, EventType, Data, Options),
             %% if there are no prior delayed commands
             %% (and thus no action queued to do so)
             %% queue a state timeout to flush them
@@ -432,7 +429,6 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             State = State0#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
-            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
@@ -514,7 +510,7 @@ leader({timeout, Name}, machine_timeout,
        #state{server_state = ServerState0,
               conf = #conf{}} = State0) ->
     % the machine timer timed out, add a timeout message
-    Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
+    Cmd = make_command('$usr', cast, {timeout, Name}, #{reply_mode => noreply}),
     {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
                                                              ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
@@ -559,7 +555,7 @@ candidate({call, From}, {leader_call, Msg},
 candidate(EventType, {local_call, Msg}, State) ->
     candidate(EventType, Msg, State);
 candidate(cast, {command, _Priority,
-                 {_CmdType, _Data, {notify, Corr, Pid}}},
+                 {_CmdType, _Data, #{reply_mode := {notify, Corr, Pid}}}},
           State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -612,7 +608,7 @@ pre_vote({call, From}, {leader_call, Msg},
 pre_vote(EventType, {local_call, Msg}, State) ->
     pre_vote(EventType, Msg, State);
 pre_vote(cast, {command, _Priority,
-                {_CmdType, _Data, {notify, Corr, Pid}}},
+                {_CmdType, _Data, #{reply_mode := {notify, Corr, Pid}}}},
          State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -680,7 +676,7 @@ follower({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 follower(EventType, {local_call, Msg}, State) ->
     follower(EventType, Msg, State);
-follower(_, {command, Priority, {_CmdType, Data, noreply}},
+follower(_, {command, Priority, {_CmdType, Data, #{reply_mode := noreply}}},
          State) ->
     % forward to leader
     case leader_id(State) of
@@ -695,7 +691,7 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
             {keep_state, State, []}
     end;
 follower(cast, {command, _Priority,
-                {_CmdType, _Data, {notify, Corr, Pid}}},
+                {_CmdType, _Data, #{reply_mode := {notify, Corr, Pid}}}},
          State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
@@ -1174,10 +1170,10 @@ handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
             {State, Actions}
     end;
 handle_effect(_RaftState, {append, Cmd}, _EvtType, State, Actions) ->
-    Evt = {command, normal, {'$usr', Cmd, noreply}},
+    Evt = {command, normal, {'$usr', Cmd, #{reply_mode => noreply}}},
     {State, [{next_event, cast, Evt} | Actions]};
-handle_effect(_RaftState, {append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
-    Evt = {command, normal, {'$usr', Cmd, ReplyMode}},
+handle_effect(_RaftState, {append, Cmd, Options}, _EvtType, State, Actions) ->
+    Evt = {command, normal, {'$usr', Cmd, Options}},
     {State, [{next_event, cast, Evt} | Actions]};
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
               State = #state{server_state = SS0}, Actions)
@@ -1628,6 +1624,25 @@ read_chunks_and_send_rpc(RPC0,
                                      ChunkSize, InstallTimeout, SnapState);
         last ->
             Res1
+    end.
+
+validate_command_options(#{reply_mode := ReplyMode}, #state{conf = Conf}) ->
+    case validate_reply_mode(ReplyMode) of
+        ok ->
+            {ok, #{reply_mode => ReplyMode}};
+        {error, _} = Error ->
+            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
+            Error
+    end;
+validate_command_options(MaybeReplyMode, _State) ->
+    %% Command options used to only be the reply modes. For backwards
+    %% compatibility, check that the options are a reply mode and if so, return
+    %% a `command_options' map with the reply mode set.
+    case validate_reply_mode(MaybeReplyMode) of
+        ok ->
+            {ok, #{reply_mode => MaybeReplyMode}};
+        {error, _} ->
+            {error, {unknown_options, MaybeReplyMode}}
     end.
 
 validate_reply_mode(after_log_append) ->

@@ -242,8 +242,10 @@ recover_restores_cluster_changes(_Config) ->
     % n2 joins
     {leader, #{cluster := Cluster,
                log := Log0}, _} =
-        ra_server:handle_leader({command, {'$ra_join', meta(),
-                                           N2, await_consensus}}, State),
+        ra_server:handle_leader({command,
+                                 {'$ra_join', meta(), N2,
+                                  #{reply_mode => await_consensus}}},
+                                State),
     ?assertEqual(2, maps:size(Cluster)),
     % intercept ra_log:init call to simulate persisted log data
     % ok = meck:new(ra_log, [passthrough]),
@@ -641,8 +643,9 @@ follower_handles_append_entries_rpc(_Config) ->
     AE = #append_entries_rpc{term = 5, leader_id = ?N1,
                              prev_log_index = 1, prev_log_term = 1,
                              leader_commit = 2,
-                             entries = [{2, 4, {'$usr', meta(), <<"hi">>,
-                                                after_log_append}}]},
+                             entries = [{2, 4,
+                                         {'$usr', meta(), <<"hi">>,
+                                          #{reply_mode => after_log_append}}}]},
 
     {follower,  #{log := Log},
      [{cast, N1, {N1, #append_entries_reply{term = 5, success = true,
@@ -1303,20 +1306,22 @@ leader_server_join(_Config) ->
     % and further cluster changes should be disallowed
     {leader, #{cluster := #{N1 := _, N2 := _, N3 := _, N4 := _},
                cluster_change_permitted := false} = _State1, Effects} =
-        ra_server:handle_leader({command, {'$ra_join', meta(),
-                                           N4, await_consensus}}, State0),
+        ra_server:handle_leader({command,
+                                 {'$ra_join', meta(), N4,
+                                  #{reply_mode => await_consensus}}},
+                                State0),
     [
      {send_rpc, N4,
       #append_entries_rpc{entries =
                           [_, _, _, {4, 5, {'$ra_cluster_change', _,
                                             #{N1 := _, N2 := _,
                                               N3 := _, N4 := _},
-                                            await_consensus}}]}},
+                                            #{reply_mode := await_consensus}}}]}},
      {send_rpc, N3,
       #append_entries_rpc{entries =
                           [{4, 5, {'$ra_cluster_change', _,
                                    #{N1 := _, N2 := _, N3 := _, N4 := _},
-                                   await_consensus}}],
+                                   #{reply_mode := await_consensus}}}],
                           term = 5, leader_id = N1,
                           prev_log_index = 3,
                           prev_log_term = 5,
@@ -1325,7 +1330,7 @@ leader_server_join(_Config) ->
       #append_entries_rpc{entries =
                           [{4, 5, {'$ra_cluster_change', _,
                                    #{N1 := _, N2 := _, N3 := _, N4 := _},
-                                   await_consensus}}],
+                                   #{reply_mode := await_consensus}}}],
                           term = 5, leader_id = N1,
                           prev_log_index = 3,
                           prev_log_term = 5,
@@ -1343,7 +1348,8 @@ leader_server_leave(_Config) ->
     % raft servers should switch to the new configuration after log append
     {leader, #{cluster := #{N1 := _, N2 := _, N3 := _}},
      [{send_rpc, N3, RpcN3}, {send_rpc, N2, RpcN2} | _]} =
-        ra_server:handle_leader({command, {'$ra_leave', meta(), ?N4, await_consensus}},
+        ra_server:handle_leader({command, {'$ra_leave', meta(), ?N4,
+                                           #{reply_mode => await_consensus}}},
                                 State),
     % the leaving server is no longer included
     #append_entries_rpc{term = 5, leader_id = N1,
@@ -1371,7 +1377,8 @@ leader_is_removed(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
 
     {leader, State1, _} =
-        ra_server:handle_leader({command, {'$ra_leave', meta(), ?N1, await_consensus}},
+        ra_server:handle_leader({command, {'$ra_leave', meta(), ?N1,
+                                           #{reply_mode => await_consensus}}},
                               State),
     {leader, State1b, _} =
         ra_server:handle_leader(written_evt({4, 4, 5}), State1),
@@ -1426,7 +1433,8 @@ leader_applies_new_cluster(_Config) ->
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
     State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
-    Command = {command, {'$ra_join', meta(), N4, await_consensus}},
+    Command = {command, {'$ra_join', meta(), N4,
+                         #{reply_mode => await_consensus}}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
     {leader, #{cluster_index_term := {4, 5},
@@ -1466,7 +1474,8 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
     State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
-    Command = {command, {'$ra_join', meta(), N4, await_consensus}},
+    Command = {command, {'$ra_join', meta(), N4,
+                         #{reply_mode => await_consensus}}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
     {leader, #{cluster_index_term := {4, 5},
@@ -1509,7 +1518,7 @@ command(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
     State = base_state(3, ?FUNCTION_NAME),
     Meta = meta(),
-    Cmd = {'$usr', Meta, <<"hi4">>, after_log_append},
+    Cmd = {'$usr', Meta, <<"hi4">>, #{reply_mode => after_log_append}},
     AE = #append_entries_rpc{entries = [{4, 5, Cmd}],
                              leader_id = N1,
                              term = 5,
@@ -1531,7 +1540,7 @@ command_notify(_Config) ->
     meck:expect(?FUNCTION_NAME,
                 apply, fun (_, Cmd, _) -> {Cmd, ok, [{aux, banana}]} end),
     Meta = meta(),
-    Cmd = {'$usr', Meta, <<"hi4">>, {notify, 99, self()}},
+    Cmd = {'$usr', Meta, <<"hi4">>, #{reply_mode => {notify, 99, self()}}},
     AE = #append_entries_rpc{entries = [{4, 5, Cmd}],
                              leader_id = N1,
                              term = 5,
@@ -1848,8 +1857,11 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                       end, ra_log:init(#{system_config => ra_system:default_config(),
                                          uid => <<>>}),
                       [{1, 1, {noop, meta(), 1}},
-                       {2, 2, {'$usr', meta(), {enq, apple}, after_log_append}},
-                       {3, 5, {2, {'$usr', meta(), {enq, pear}, after_log_append}}}]),
+                       {2, 2, {'$usr', meta(),
+                               {enq, apple},
+                               #{reply_mode => after_log_append}}},
+                       {3, 5, {2, {'$usr', meta(), {enq, pear},
+                                   #{reply_mode => after_log_append}}}}]),
     Cfg = #cfg{id = N1,
                uid = <<"n1">>,
                log_id = <<"n1">>,
@@ -1905,8 +1917,10 @@ leader_receives_install_snapshot_result(_Config) ->
                                          uid => <<>>}),
                       [{1, 1, {noop, meta(), MacVer}},
                        {2, 1, {noop, meta(), MacVer}},
-                       {3, 1, {'$usr', meta(), {enq,apple}, after_log_append}},
-                       {4, 1, {'$usr', meta(), {enq,pear}, after_log_append}}]),
+                       {3, 1, {'$usr', meta(), {enq,apple},
+                               #{reply_mode => after_log_append}}},
+                       {4, 1, {'$usr', meta(), {enq,pear},
+                               #{reply_mode => after_log_append}}}]),
     mock_machine(?FUNCTION_NAME),
     Cfg = #cfg{id = ?N1,
                uid = <<"n1">>,
@@ -2511,7 +2525,7 @@ list(L) when is_list(L) -> L;
 list(L) -> [L].
 
 entry(Idx, Term, Data) ->
-    {Idx, Term, {'$usr', meta(), Data, after_log_append}}.
+    {Idx, Term, {'$usr', meta(), Data, #{reply_mode => after_log_append}}}.
 
 empty_state(NumServers, Id) ->
     Servers = lists:foldl(fun(N, Acc) ->
@@ -2578,7 +2592,7 @@ usr_cmd(Data) ->
     {command, usr(Data)}.
 
 usr(Data) ->
-    {'$usr', meta(), Data, after_log_append}.
+    {'$usr', meta(), Data, #{reply_mode => after_log_append}}.
 
 meta() ->
     #{from => {self(), make_ref()},

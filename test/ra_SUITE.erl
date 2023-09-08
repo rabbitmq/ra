@@ -387,7 +387,7 @@ process_command_with_unknown_reply_mode(Config) ->
                             {simple, fun erlang:'+'/2, 9}),
     Command = 5,
     ReplyMode = bad_reply_mode,
-    RaCommand = {'$usr', Command, ReplyMode},
+    RaCommand = {'$usr', Command, #{reply_mode => ReplyMode}},
     ?assertEqual({error, {invalid_reply_mode, ReplyMode}},
                  ra_server_proc:command(A, RaCommand,
                                         ?PROCESS_COMMAND_TIMEOUT)),
