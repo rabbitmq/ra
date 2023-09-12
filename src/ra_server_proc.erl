@@ -387,11 +387,10 @@ leader(EventType, {local_call, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
-leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf,
-              server_state = ServerState0} = State0) ->
-    case validate_reply_mode(ReplyMode) of
-        ok ->
+leader(EventType, {command, normal, {CmdType, Data, Options}},
+       #state{server_state = ServerState0} = State0) ->
+    case validate_command_options(Options, State0) of
+        {ok, ReplyMode} ->
             %% normal priority commands are written immediately
             Cmd = make_command(CmdType, EventType, Data, ReplyMode),
             {leader, ServerState, Effects} =
@@ -401,7 +400,6 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                                 State0#state{server_state = ServerState}),
             {keep_state, State, Actions};
         Error ->
-            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
@@ -409,11 +407,10 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                     {keep_state, State0, []}
             end
     end;
-leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf,
-              low_priority_commands = Delayed} = State0) ->
-    case validate_reply_mode(ReplyMode) of
-        ok ->
+leader(EventType, {command, low, {CmdType, Data, Options}},
+       #state{low_priority_commands = Delayed} = State0) ->
+    case validate_command_options(Options, State0) of
+        {ok, ReplyMode} ->
             %% cache the low priority command until the flush_commands message
             %% arrives
             Cmd = make_command(CmdType, EventType, Data, ReplyMode),
@@ -432,7 +429,6 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
             State = State0#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
-            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
                 {call, From} ->
                     {keep_state, State0, [{reply, From, Error}]};
@@ -1628,6 +1624,19 @@ read_chunks_and_send_rpc(RPC0,
                                      ChunkSize, InstallTimeout, SnapState);
         last ->
             Res1
+    end.
+
+validate_command_options(#{reply_mode := ReplyMode}, State) ->
+    validate_command_options(ReplyMode, State);
+validate_command_options(ReplyMode, #state{conf = Conf}) ->
+    %% For backwards compatibility, check if the options were supplied as
+    %% just the reply mode.
+    case validate_reply_mode(ReplyMode) of
+        ok ->
+            {ok, ReplyMode};
+        {error, _} = Error ->
+            ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
+            Error
     end.
 
 validate_reply_mode(after_log_append) ->

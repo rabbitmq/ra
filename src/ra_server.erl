@@ -111,6 +111,8 @@
                               {notify, command_correlation(), pid()} |
                               noreply.
 
+-type command_options() :: #{reply_mode := command_reply_mode()}.
+
 -type command() :: {command_type(), command_meta(),
                     UserCommand :: term(), command_reply_mode()} |
                    {noop, command_meta(),
@@ -221,6 +223,7 @@
               command_correlation/0,
               command_priority/0,
               command_reply_mode/0,
+              command_options/0,
               ra_event_formatter_fun/0,
               effect/0,
               effects/0

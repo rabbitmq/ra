@@ -806,7 +806,8 @@ process_command(ServerId, Command, Options) when is_map(Options) ->
                         %% use plain reply mode for backwards compatibility
                         await_consensus
                 end,
-    ra_server_proc:command(ServerId, usr(Command, ReplyMode), Timeout).
+    CommandOptions = #{reply_mode => ReplyMode},
+    ra_server_proc:command(ServerId, usr(Command, CommandOptions), Timeout).
 
 %% @doc Same as `process_command/3' with the default timeout of 5000 ms.
 %% @param ServerId the server id to send the command to
@@ -1147,12 +1148,13 @@ key_metrics({_, N} = ServerId) ->
 
 %% internal
 
--spec usr(UserCommand, ReplyMode) -> Command when
+-spec usr(UserCommand, OptsOrReplyMode) -> Command when
       UserCommand :: term(),
-      ReplyMode :: ra_server:command_reply_mode(),
-      Command :: {ra_server:command_type(), UserCommand, ReplyMode}.
-usr(Data, Mode) ->
-    {'$usr', Data, Mode}.
+      OptsOrReplyMode :: ra_server:command_options() |
+                         ra_server:command_reply_mode(),
+      Command :: {ra_server:command_type(), UserCommand, OptsOrReplyMode}.
+usr(Data, Options) ->
+    {'$usr', Data, Options}.
 
 sort_by_local([], Acc) ->
     Acc;
