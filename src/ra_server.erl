@@ -1874,10 +1874,9 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_down(leader, machine, Pid, Info, State)
   when is_pid(Pid) ->
-    %% commit command to be processed by state machine
-    handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
-                            {down, Pid, Info}, noreply}},
-                  State);
+    % %% commit command to be processed by state machine
+    Eff = {next_event, {command, low, {'$usr', {down, Pid, Info}, noreply}}},
+    {leader, State, [Eff]};
 handle_down(RaftState, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
   when (RaftState == leader orelse

@@ -2440,15 +2440,15 @@ receive_snapshot_heartbeat_reply_dropped(_config) ->
 
 handle_down(_config) ->
     State0 = base_state(3, ?FUNCTION_NAME),
-    %% this should commit a command
-    {leader, #{log := Log} =  State, _} =
+    %% this should  return a next_event effect to commit a command
+    Pid = self(),
+    {leader, State,
+     [{next_event, {command, low, {'$usr', {down, Pid, noproc}, noreply}}}]} =
         ra_server:handle_down(leader, machine, self(), noproc, State0),
-    ?assertEqual({4, 5}, ra_log:last_index_term(Log)),
     %% this should be ignored as may happen if state machine doesn't demonitor
     %% on state changes
     {follower, State, []} =
         ra_server:handle_down(follower, machine, self(), noproc, State),
-
     ok.
 
 set_peer_query_index(State, PeerId, QueryIndex) ->
