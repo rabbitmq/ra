@@ -1626,8 +1626,17 @@ read_chunks_and_send_rpc(RPC0,
             Res1
     end.
 
-validate_command_options(#{reply_mode := ReplyMode}, State) ->
-    validate_command_options(ReplyMode, State);
+validate_command_options(#{reply_mode := ReplyMode} = Options,
+                         #state{server_state =
+                                #{cfg := #cfg{effective_machine_version =
+                                              MacVsn}}} = State) ->
+    case Options of
+        #{minimum_effective_machine_version := MinVsn} when MinVsn > MacVsn ->
+            {error, {mismatched_machine_version, {minimum, MinVsn},
+                                                 {actual, MacVsn}}};
+        _ ->
+            validate_command_options(ReplyMode, State)
+    end;
 validate_command_options(ReplyMode, #state{conf = Conf}) ->
     %% For backwards compatibility, check if the options were supplied as
     %% just the reply mode.
