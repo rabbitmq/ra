@@ -1,0 +1,76 @@
+name: Add to rabbitmq/bazel-central-registry@erlang-packages
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+jobs:
+  add-module:
+    runs-on: ubuntu-latest
+    steps:
+    - name: CHECKOUT
+      uses: actions/checkout@v3
+      with:
+        path: ra
+    - name: CHECKOUT rabbitmq/bazel-central-registry@erlang-packages
+      uses: actions/checkout@v3
+      with:
+        repository: rabbitmq/bazel-central-registry
+        path: bazel-central-registry
+        ref: erlang-packages
+    - name: PUBLISH TO rabbitmq/bazel-central-registry@erlang-packages
+      working-directory: bazel-central-registry
+      env:
+        MODULE_NAME: rabbitmq_ra
+        REPO_NAME: ra
+      run: |
+        VERSION="${{ github.ref_name }}"
+        VERSION="${VERSION#v}"
+        MAJOR="${VERSION:0:1}"
+
+        echo "VERSION: ${VERSION}"
+        echo "MAJOR: ${MAJOR}"
+
+        cat << EOF > ${MODULE_NAME}.json
+        {
+            "build_file": null,
+            "build_targets": [
+                "@${MODULE_NAME}//:${MODULE_NAME}",
+                "@${MODULE_NAME}//:erlang_app"
+            ],
+            "compatibility_level": "$((${MAJOR} - 1))",
+            "deps": [],
+            "module_dot_bazel": "${{ github.workspace }}/${REPO_NAME}/MODULE.bazel",
+            "name": "${MODULE_NAME}",
+            "patch_strip": 0,
+            "patches": [],
+            "presubmit_yml": "${{ github.workspace }}/${REPO_NAME}/.bcr/presubmit.yml",
+            "strip_prefix": "${REPO_NAME}-${VERSION}",
+            "test_module_build_targets": [],
+            "test_module_path": null,
+            "test_module_test_targets": [],
+            "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${REPO_NAME}-${VERSION}.tar.gz",
+            "version": "${VERSION}"
+        }
+        EOF
+
+        jq '.' ${MODULE_NAME}.json
+
+        bazel run //tools:add_module -- \
+          --input=${MODULE_NAME}.json
+
+        git diff
+    - name: CREATE PULL REQUEST
+      uses: peter-evans/create-pull-request@v5.0.2
+      with:
+        token: ${{ secrets.REPO_SCOPED_TOKEN }}
+        path: bazel-central-registry
+        title: Add ${{ github.repository }}@${{ github.ref_name }}
+        body: >
+           Automated changes created by
+           ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+           using the [create-pull-request](https://github.com/peter-evans/create-pull-request)
+           GitHub action in the ${{ github.workflow }} workflow.
+        commit-message: |
+          Add ${{ github.repository }}@${{ github.ref_name }}
+        branch: add-${{ github.repository }}@${{ github.ref_name }}
+        delete-branch: true

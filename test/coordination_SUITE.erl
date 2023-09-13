@@ -42,7 +42,8 @@ all_tests() ->
      local_log_effect,
      leaderboard,
      bench,
-     disconnected_node_catches_up
+     disconnected_node_catches_up,
+     key_metrics
     ].
 
 groups() ->
@@ -104,7 +105,6 @@ start_stop_restart_delete_on_remote(Config) ->
     ok = ra:force_delete_server(?SYS, NodeId),
     % idempotency
     ok = ra:force_delete_server(?SYS, NodeId),
-    timer:sleep(500),
     slave:stop(S1),
     ok.
 
@@ -138,7 +138,6 @@ start_or_restart_cluster(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    % timer:sleep(1000),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     %% this should restart
@@ -190,15 +189,19 @@ delete_one_server_cluster(Config) ->
 delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
-    {ok, _} = ra:delete_cluster(NodeIds),
-    timer:sleep(1000),
-    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
-    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
-    % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _} = ra:delete_cluster(ServerIds),
+    % timer:sleep(1000),
+    await_condition(
+      fun () ->
+              lists:all(
+                fun ({Name, Node}) ->
+                        undefined == erpc:call(Node, erlang, whereis, [Name])
+                end, ServerIds)
+      end, 100),
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -211,36 +214,43 @@ delete_two_server_cluster(Config) ->
 delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
-    {ok, _} = ra:delete_cluster(NodeIds),
-    timer:sleep(250),
-    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
-    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
-    % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _} = ra:delete_cluster(ServerIds),
+    await_condition(
+      fun () ->
+              lists:all(
+                fun ({Name, Node}) ->
+                        undefined == erpc:call(Node, erlang, whereis, [Name])
+                end, ServerIds)
+      end, 100),
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.
 
 delete_three_server_cluster_parallel(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
+    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     %% spawn a delete command to try cause it to commit more than
     %% one delete command
-    spawn(fun () -> {ok, _} = ra:delete_cluster(NodeIds) end),
-    spawn(fun () -> {ok, _} = ra:delete_cluster(NodeIds) end),
-    {ok, _} = ra:delete_cluster(NodeIds),
-    timer:sleep(250),
-    {error, _} = ra_server_proc:ping(hd(tl(NodeIds)), 50),
-    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
+    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+    {ok, _} = ra:delete_cluster(ServerIds),
+    await_condition(
+      fun () ->
+              lists:all(
+                fun ({Name, Node}) ->
+                        undefined == erpc:call(Node, erlang, whereis, [Name])
+                end, ServerIds)
+      end, 100),
     [begin
          true = rpc:call(S, ?MODULE, check_sup, [])
-     end || {_, S} <- NodeIds],
+     end || {_, S} <- ServerIds],
     % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.
 
 check_sup() ->
@@ -341,6 +351,7 @@ disconnected_node_catches_up(Config) ->
     {ok, _, Leader} = ra:members(hd(Started)),
 
     [{_, DownServerNode} = DownServerId, _] = Started -- [Leader],
+    %% the ra_directory DETS table has a 500ms autosave configuration
     timer:sleep(1000),
 
     ok = slave:stop(DownServerNode),
@@ -364,11 +375,12 @@ disconnected_node_catches_up(Config) ->
             <<Tag:2/binary, _/binary>> -> binary_to_atom(Tag, utf8)
         end,
 
-    timer:sleep(5000),
-
     start_follower(DownServerNodeName, PrivDir),
 
-    ok = ra:restart_server(?SYS, DownServerId),
+    await_condition(
+      fun () ->
+              ok == ra:restart_server(?SYS, DownServerId)
+      end, 100),
 
     %% wait for snapshot on restarted server
     await_condition(
@@ -377,6 +389,63 @@ disconnected_node_catches_up(Config) ->
                   ra:member_overview(DownServerId),
               SI /= undefined
       end, 200),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+key_metrics(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    Data = crypto:strong_rand_bytes(1024),
+    [begin
+         ok = ra:pipeline_command(Leader, {data, Data})
+     end || _ <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, {data, Data}),
+
+    timer:sleep(100),
+    TestId  = lists:last(Started),
+    ok = ra:stop_server(?SYS, TestId),
+    StoppedMetrics = ra:key_metrics(TestId),
+    ct:pal("StoppedMetrics  ~p", [StoppedMetrics]),
+    ?assertMatch(#{state := noproc,
+                   last_applied := LA,
+                   last_written_index := LW,
+                   commit_index := CI}
+                   when LA > 0 andalso
+                        LW > 0 andalso
+                        CI > 0,
+                 StoppedMetrics),
+    ok = ra:restart_server(?SYS, TestId),
+    await_condition(
+      fun () ->
+              Metrics = ra:key_metrics(TestId),
+              ct:pal("RecoverMetrics  ~p", [Metrics]),
+              recover == maps:get(state, Metrics)
+      end, 200),
+    {ok, _, _} = ra:process_command(Leader, {data, Data}),
+    await_condition(
+      fun () ->
+              Metrics = ra:key_metrics(TestId),
+              ct:pal("FollowerMetrics  ~p", [Metrics]),
+              follower == maps:get(state, Metrics)
+      end, 200),
+    [begin
+         M = ra:key_metrics(S),
+         ct:pal("Metrics ~p", [M]),
+         ?assertMatch(#{state := _,
+                        last_applied := LA,
+                        last_written_index := LW,
+                        commit_index := CI}
+                        when LA > 0 andalso
+                             LW > 0 andalso
+                             CI > 0, M)
+     end
+     || S <- Started],
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.
@@ -393,24 +462,30 @@ leaderboard(Config) ->
     %% synchronously get leader
     {ok, _, Leader} = ra:members(hd(Started)),
 
-    timer:sleep(500),
     %% assert leaderboard has correct leader on all nodes
-    [begin
-         L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
-         ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
-         ?assertEqual(Leader, L)
-     end || {_, N} <- NodeIds],
+    await_condition(
+      fun () ->
+              lists:all(fun (B) -> B end,
+                        [begin
+                             L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
+                             ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
+                             Leader == L
+                         end || {_, N} <- NodeIds])
+      end, 100),
 
     NextLeader = hd(lists:delete(Leader, Started)),
     ok = ra:transfer_leadership(Leader, NextLeader),
     {ok, _, NewLeader} = ra:members(hd(Started)),
 
-    timer:sleep(500),
-    [begin
-         L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
-         ct:pal("~w has ~w as leader expected ~w", [N, L, NewLeader]),
-         ?assertEqual(NewLeader, L)
-     end || {_, N} <- NodeIds],
+    await_condition(
+      fun () ->
+              lists:all(fun (B) -> B end,
+                        [begin
+                             L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
+                             ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
+                             NewLeader == L
+                         end || {_, N} <- NodeIds])
+      end, 100),
 
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
@@ -509,7 +584,7 @@ start_follower(N, PrivDir) ->
     ct:pal("starting secondary node with ~ts on host ~ts for node ~ts", [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
     ok = ct_rpc:call(S, ?MODULE, node_setup, [PrivDir]),
-    _ = erpc:call(S, ra, start, []),
+    ok = erpc:call(S, ra, start, []),
     ok = ct_rpc:call(S, logger, set_primary_config,
                      [level, all]),
     S.
@@ -537,6 +612,8 @@ apply(#{index := Idx}, {do_local_log, SenderPid, Opts}, State) ->
            end,
            {local, node(SenderPid)}},
     {State, ok, [Eff]};
+apply(#{index := _Idx}, {data, _}, State) ->
+    {State, ok, []};
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
 
@@ -559,9 +636,9 @@ node_setup(DataDir) ->
 await_condition(_Fun, 0) ->
     exit(condition_did_not_materialise);
 await_condition(Fun, Attempts) ->
-    case Fun() of
+    case catch Fun() of
         true -> ok;
-        false ->
+        _ ->
             timer:sleep(100),
             await_condition(Fun, Attempts - 1)
     end.

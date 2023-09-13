@@ -34,6 +34,7 @@ all_tests() ->
      send_msg_with_ra_event_and_cast_options,
      machine_replies,
      leader_monitors,
+     down_follows_all_low_priority_commands,
      follower_takes_over_monitor,
      deleted_cluster_emits_eol_effect,
      machine_state_enter_effects,
@@ -220,6 +221,59 @@ leader_monitors(Config) ->
                                                              monitored_by),
     ?assert(MonitoredByAfter =:= whereis(Name)),
     ra:stop_server(?SYS, ServerId),
+    ok.
+
+down_follows_all_low_priority_commands(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    {_Name1, _} = ServerId1 = ?config(server_id, Config),
+    {_Name2, _} = ServerId2 = ?config(server_id2, Config),
+    {_Name3, _} = ServerId3 = ?config(server_id3, Config),
+    Cluster = [ServerId1, ServerId2, ServerId3],
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        ct:pal("monitoring ~p", [Pid]),
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, {down, Pid, _}, State) ->
+                        {lists:delete(Pid, State), ok, []};
+                    (_, {cmd, Pid}, State) ->
+                        % ct:pal("handling ~p", [Cmd]),
+                        case lists:member(Pid, State) of
+                            true ->
+                                {State, ok};
+                            false ->
+                                {State, ok, [{send_msg, Self, {unexpected_cmd, Pid}}]}
+                        end
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    %% send some commands then exit swiftly
+    spawn(
+      fun () ->
+              {ok, ok, L} = ra:process_command(ServerId1, {monitor_me, self()}),
+              [ra:pipeline_command(L, {cmd, self()}) || _ <- lists:seq(1, 200)],
+              Self ! done,
+              ok
+      end),
+
+    receive
+        done ->
+            receive
+                {unexpected_cmd, _} ->
+                    ct:fail("Unexpexted command after down")
+            after 2000 ->
+                      ok
+            end
+    after 5000 ->
+              exit(done_Timeout)
+    end,
+
+
+    ra:stop_server(?SYS, ServerId1),
+    ra:stop_server(?SYS, ServerId2),
+    ra:stop_server(?SYS, ServerId3),
     ok.
 
 follower_takes_over_monitor(Config) ->

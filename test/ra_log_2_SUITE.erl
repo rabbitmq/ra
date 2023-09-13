@@ -116,8 +116,9 @@ handle_overwrite(Config) ->
     {2, 2} = ra_log:last_written(
                element(1, ra_log:handle_event({written, {1, 2, 2}}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    _ = deliver_all_log_events(Log, 1000),
+    _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
+    flush(),
     ok.
 
 receive_segment(Config) ->
@@ -125,21 +126,30 @@ receive_segment(Config) ->
     % write a few entries
     Entries = [{I, 1, <<"value_", I:32/integer>>} || I <- lists:seq(1, 3)],
 
+    {PreWritten, _} = ra_log:last_written(Log0),
     Log1 = lists:foldl(fun(E, Acc0) ->
                                ra_log:append(E, Acc0)
                        end, Log0, Entries),
-    Log2 = deliver_all_log_events(Log1, 500),
+    % Log2 = deliver_all_log_events(Log1, 500),
+    Log2 = deliver_log_events_cond(
+             Log1, fun (L) ->
+                           {PostWritten, _} = ra_log:last_written(L),
+                           PostWritten >= (PreWritten + 3)
+                   end, 100),
     {3, 1} = ra_log:last_written(Log2),
     UId = ?config(uid, Config),
     [MemTblTid] = [Tid || {Key, _, _, Tid}
                           <- ets:tab2list(ra_log_open_mem_tables), Key == UId],
+    ?assert(ets:info(MemTblTid) =/= undefined),
     % force wal roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    Log3 = deliver_all_log_events(Log2, 1500),
-    % validate ets table has been recovered
-    ?assert(lists:member(MemTblTid, ets:all()) =:= false),
-    [] = ets:tab2list(ra_log_open_mem_tables),
-    [] = ets:tab2list(ra_log_closed_mem_tables),
+    % Log3 = deliver_all_log_events(Log2, 1500),
+    Log3 = deliver_log_events_cond(
+             Log2, fun (_L) ->
+                           ets:info(MemTblTid) == undefined andalso
+                           [] =:= ets:tab2list(ra_log_open_mem_tables) andalso
+                           [] =:= ets:tab2list(ra_log_closed_mem_tables)
+                   end, 100),
     % validate reads
     {Entries, FinalLog} = ra_log_take(1, 3, Log3),
     ?assertEqual(length(Entries), 3),
@@ -226,7 +236,13 @@ validate_reads_for_overlapped_writes(Config) ->
     % write 350 - 500 in term 2
     Log4 = write_and_roll(350, 500, 2, Log3),
     Log5 = write_n(500, 551, 2, Log4),
-    Log6 = deliver_all_log_events(Log5, 200),
+    % Log6 = deliver_all_log_events(Log5, 200),
+    % ct:pal("LAST ~p", [ra_log:last_written(Log6)]),
+    Log6 = deliver_log_events_cond(
+          Log5, fun (L) ->
+                        {W, _} = ra_log:last_written(L),
+                        W >= 550
+                end, 100),
 
     Log7 = validate_fold(1, 199, 1, Log6),
     Log8 = validate_fold(200, 550, 2, Log7),
@@ -578,7 +594,7 @@ wal_crash_recover(Config) ->
     spawn(fun () -> proc_lib:stop(ra_log_segment_writer) end),
     Log3 = write_n(75, 100, 2, Log2),
     % wait long enough for the resend window to pass
-    timer:sleep(2000),
+    timer:sleep(1000),
     Log = assert_log_events(write_n(100, 101, 2,  Log3),
                             fun (L) ->
                                     {100, 2} == ra_log:last_written(L)
@@ -961,10 +977,24 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     {Log6, _} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
                                                     ?N2 => new_peer()},
                                              1, initial_state, Log5),
-    _Log = deliver_all_log_events(Log6, 500),
-
-    [_] = find_segments(Config),
+    deliver_log_events_cond(Log6,
+                            fun (_) ->
+                                    case find_segments(Config) of
+                                        [_] -> true;
+                                        _ -> false
+                                    end
+                            end, 100),
     ok.
+
+await_cond(_Fun, 0) ->
+    false;
+await_cond(Fun, N) ->
+    case Fun() of
+        true -> true;
+        false ->
+            timer:sleep(250),
+            await_cond(Fun, N -1)
+    end.
 
 transient_writer_is_handled(Config) ->
     Self = self(),
@@ -1013,8 +1043,6 @@ external_reader(Config) ->
     Log1 = write_n(200, 220, 2,
                    write_and_roll(1, 200, 2, Log0)),
 
-    timer:sleep(1000),
-
     Self = self(),
     Pid = spawn(
             fun () ->
@@ -1054,18 +1082,17 @@ external_reader(Config) ->
     end,
     ra_log_wal:force_roll_over(ra_log_wal),
 
-    _Log3 = deliver_all_log_events(Log2, 500),
-
-    %% this should result in a segment update
-    receive
-        {got, Evt2, Entries1} ->
-            ct:pal("got segs: ~w ~w", [Evt2, length(Entries1)]),
-            ok
-    after 2000 ->
-              flush(),
-              exit(got_timeout_2)
-    end,
-    timer:sleep(2000),
+    deliver_log_events_cond(
+      Log2, fun (_L) ->
+                    %% this should result in a segment update
+                    receive
+                        {got, Evt2, Entries1} ->
+                            ct:pal("got segs: ~p ~p", [Evt2, length(Entries1)]),
+                            true
+                    after 10 ->
+                              false
+                    end
+            end, 100),
     flush(),
     ok.
 
@@ -1138,6 +1165,52 @@ write_n(From, To, Term, Log0) ->
     Log.
 
 %% Utility functions
+
+deliver_log_events_cond(_Log0, _CondFun, 0) ->
+    flush(),
+    ct:fail("condition did not manifest");
+deliver_log_events_cond(Log0, CondFun, N) ->
+    receive
+        {ra_log_event, Evt} ->
+            ct:pal("log evt: ~p", [Evt]),
+            {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+            Log2 = lists:foldl(
+                    fun({send_msg, P, E}, Acc) ->
+                            P ! E,
+                            Acc;
+                       ({next_event, {ra_log_event, E}}, Acc0) ->
+                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            Acc;
+                       (_, Acc) ->
+                            Acc
+                    end, Log1, Effs),
+            [P ! E || {send_msg, P, E, _} <- Effs],
+            case CondFun(Log2) of
+                {false, Log} ->
+                    deliver_log_events_cond(Log, CondFun, N-1);
+                false ->
+                    deliver_log_events_cond(Log2, CondFun, N-1);
+                {true, Log} ->
+                    ct:pal("condition was true!!"),
+                    Log;
+                true ->
+                    ct:pal("condition was true!"),
+                    Log2
+            end
+    after 100 ->
+            case CondFun(Log0) of
+                {false, Log} ->
+                    deliver_log_events_cond(Log, CondFun, N-1);
+                false ->
+                    deliver_log_events_cond(Log0, CondFun, N-1);
+                {true, Log} ->
+                    ct:pal("condition was true!"),
+                    Log;
+                true ->
+                    ct:pal("condition was true!"),
+                    Log0
+            end
+    end.
 
 deliver_all_log_events(Log0, Timeout) ->
     receive
