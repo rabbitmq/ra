@@ -1175,7 +1175,7 @@ start_and_join({ClusterName, _} = ServerRef, {_, _} = New) ->
     ok.
 
 start_and_join_nonvoter({ClusterName, _} = ServerRef, {_, _} = New) ->
-    Server = #{id => New, init_non_voter => <<"test">>},
+    Server = #{id => New, non_voter_id => <<"test">>},
     {ok, _, _} = ra:add_member(ServerRef, Server),
     ok = ra:start_server(default, ClusterName, Server, add_machine(), [ServerRef]),
     ok.

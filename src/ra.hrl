@@ -48,7 +48,7 @@
 
                            %% If set, server will start as non-voter until later promoted by the
                            %% leader.
-                           init_non_voter => ra_nvid()}.
+                           non_voter_id => ra_nvid()}.
 
 -type ra_peer_status() :: normal |
                           {sending_snapshot, pid()} |

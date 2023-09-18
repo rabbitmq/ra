@@ -298,13 +298,20 @@ start_cluster_minority(Config) ->
 send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
-    %% spawn a receiver process on one node
+    % add permanent non-voter
     {ok, _, Leader} = ra:members(hd(NodeIds)),
+    {ok, _, _} = ra:process_command(Leader, banana),
+    New = #{id => NonVoter,
+            voter_status => {nonvoter, #{nvid => <<"test">>, target => 999}},
+            non_voter_id => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
     %% select a non-leader node to spawn on
     [{_, N} | _] = lists:delete(Leader, NodeIds),
     test_local_msg(Leader, N, N, send_local_msg, local),
@@ -312,36 +319,55 @@ send_local_msg(Config) ->
     test_local_msg(Leader, N, N, send_local_msg, [local, cast]),
     test_local_msg(Leader, N, N, send_local_msg, [local, cast, ra_event]),
     {_, LeaderNode} = Leader,
+    %% test the same but for a local pid (non-member)
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, local),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast, ra_event]),
-    %% test the same but for a local pid (non-member)
+    %% same for non-voter
+    {_, NonVoterNode} = NonVoter,
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, local),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, ra_event]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast, ra_event]),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
 local_log_effect(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
-    %% spawn a receiver process on one node
+    % add permanent non-voter
     {ok, _, Leader} = ra:members(hd(NodeIds)),
+    {ok, _, _} = ra:process_command(Leader, banana),
+    New = #{id => NonVoter,
+            voter_status => {nonvoter, #{nvid => <<"test">>, target => 999}},
+            non_voter_id => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
     %% select a non-leader node to spawn on
     [{_, N} | _] = lists:delete(Leader, NodeIds),
     test_local_msg(Leader, N, N, do_local_log, local),
     test_local_msg(Leader, N, N, do_local_log, [local, ra_event]),
     test_local_msg(Leader, N, N, do_local_log, [local, cast]),
     test_local_msg(Leader, N, N, do_local_log, [local, cast, ra_event]),
+    %% test the same but for a local pid (non-member)
     {_, LeaderNode} = Leader,
     test_local_msg(Leader, node(), LeaderNode, do_local_log, local),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast, ra_event]),
-    %% test the same but for a local pid (non-member)
+    %% same for non-voter
+    {_, NonVoterNode} = NonVoter,
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, local),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, ra_event]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast, ra_event]),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
@@ -408,7 +434,7 @@ nonvoter_catches_up(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, init_non_voter => <<"test">>},
+    New = #{id => C, non_voter_id => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
     NonVoter = {nonvoter, #{nvid => <<"test">>}},
@@ -444,7 +470,7 @@ nonvoter_catches_up_after_restart(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, init_non_voter => <<"test">>},
+    New = #{id => C, non_voter_id => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
     NonVoter = {nonvoter, #{nvid => <<"test">>}},
@@ -482,7 +508,7 @@ nonvoter_catches_up_after_leader_restart(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, init_non_voter => <<"test">>},
+    New = #{id => C, non_voter_id => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
     NonVoter = {nonvoter, #{nvid => <<"test">>}},

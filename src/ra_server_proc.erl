@@ -183,6 +183,7 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
 -spec state_query(server_loc(),
                   all |
                   overview |
+                  voters |
                   members |
                   initial_members |
                   machine, timeout()) ->
@@ -193,6 +194,7 @@ state_query(ServerLoc, Spec, Timeout) ->
 -spec local_state_query(server_loc(),
                         all |
                         overview |
+                        voters |
                         members |
                         initial_members |
                         machine, timeout()) ->
@@ -1519,6 +1521,12 @@ do_state_query(overview, State) ->
     ra_server:overview(State);
 do_state_query(machine, #{machine_state := MacState}) ->
     MacState;
+do_state_query(voters, #{cluster := Cluster}) ->
+    Voters = maps:filter(fun(_, Peer) ->
+                                 {Voter, _} = maps:get(voter_status, Peer, {voter, legacy}),
+                                 Voter == voter
+                         end, Cluster),
+    maps:keys(Voters);
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
 do_state_query(initial_members, #{log := Log}) ->
@@ -1735,8 +1743,8 @@ can_execute_locally(RaftState, TargetNode,
         leader when TargetNode =/= node() ->
             %% We need to evaluate whether to send the message.
             %% Only send if there isn't a local node for the target pid.
-            Members = do_state_query(members, State#state.server_state),
-            not lists:any(fun ({_, N}) -> N == TargetNode end, Members);
+            Voters = do_state_query(voters, State#state.server_state),
+            not lists:any(fun ({_, N}) -> N == TargetNode end, Voters);
         leader ->
             true;
         _ ->

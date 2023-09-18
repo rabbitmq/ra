@@ -1447,7 +1447,7 @@ leader_server_join_nonvoter(_Config) ->
                commit_index := Target,
                cluster_change_permitted := false} = _State1, Effects} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
-                                           #{id => N4, init_non_voter => <<"test">>}, await_consensus}}, State0),
+                                           #{id => N4, non_voter_id => <<"test">>}, await_consensus}}, State0),
     % new member should join as non-voter
     [
      {send_rpc, N4,
@@ -1608,7 +1608,7 @@ leader_applies_new_cluster_nonvoter(_Config) ->
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
     State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
-    Command = {command, {'$ra_join', meta(), #{id => N4, init_non_voter => <<"test">>}, await_consensus}},
+    Command = {command, {'$ra_join', meta(), #{id => N4, non_voter_id => <<"test">>}, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
     {leader, #{cluster_index_term := {4, 5},

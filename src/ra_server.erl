@@ -197,7 +197,7 @@
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
                               counter => counters:counters_ref(),
-                              init_non_voter => ra_nvid(),
+                              non_voter_id => ra_nvid(),
                               system_config => ra_system:config()}.
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
@@ -2899,19 +2899,21 @@ already_member(State) ->
 %%% Voter status helpers
 %%% ====================
 
--spec ensure_promotion_target(ra_voter_status(), ra_server_state()) ->
+-spec ensure_promotion_target(ra_voter_status(), ra_index()) ->
     {ok, ra_voter_status()} | {error, term()}.
 ensure_promotion_target({voter, Reason}, _) ->
     {ok, {voter, Reason}};
 ensure_promotion_target({nonvoter, #{target := _, nvid := _} = Reason}, _) ->
     {ok, {nonvoter, Reason}};
-ensure_promotion_target({nonvoter, #{nvid := _} = Reason}, #{commit_index := CI}) ->
-    {ok, {nonvoter, Reason#{target => CI}}};
+ensure_promotion_target({nonvoter, #{nvid := _} = Reason},
+                        #{log := Log}) ->
+    Target = ra_log:next_index(Log),
+    {ok, {nonvoter, Reason#{target => Target}}};
 ensure_promotion_target(_, _) ->
     {error, missing_nvid}.
 
 -spec init_voter_status(ra_server_config() | ra_new_server()) -> ra_voter_status().
-init_voter_status(#{init_non_voter := NVId}) ->
+init_voter_status(#{non_voter_id := NVId}) ->
     {nonvoter, #{nvid => NVId}};
 init_voter_status(_) ->
     {voter, #{}}.
@@ -2949,24 +2951,18 @@ maybe_promote_self(NewCluster, State) ->
 maybe_promote_peer(PeerID, #{cluster := Cluster}, Effects) ->
     % Unknown peer handled in the caller.
     #{PeerID := #{match_index := MI,
-                  voter_status := OldStatus}} = Cluster,
-    case update_voter_status(OldStatus, MI) of
-        OldStatus ->
-            Effects;
-        NewStatus ->
+                  voter_status := Status}} = Cluster,
+    case Status of
+        {nonvoter, #{target := Target} = Reason} when MI >= Target ->
             [{next_event,
               {command, {'$ra_join',
                          #{ts => os:system_time(millisecond)},
-                         #{id => PeerID, voter_status => NewStatus},
+                         #{id => PeerID, voter_status => {voter, Reason}},
                          noreply}}} |
-             Effects]
+             Effects];
+        _ ->
+            Effects
     end.
-
-update_voter_status({nonvoter, #{target := Target} = Reason}, MI)
-  when MI >= Target ->
-    {voter, Reason};
-update_voter_status(Permanent, _) ->
-    Permanent.
 
 -spec required_quorum(ra_cluster()) -> pos_integer().
 required_quorum(Cluster) ->
