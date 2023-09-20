@@ -306,9 +306,8 @@ init(#{id := Id,
                  0, InitialMachineState, {0, 0}};
             {#{index := Idx,
                term := Term,
-               cluster := ClusterNodes0,
-               machine_version := MacVersion} = Snapshot, MacSt} ->
-                ClusterNodes = maps:get(cluster_state, Snapshot, ClusterNodes0),
+               cluster := ClusterNodes,
+               machine_version := MacVersion}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
                 %% TODO: should this be Idx + 1?
@@ -1295,16 +1294,14 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           Cfg0
                   end,
 
-            {#{cluster := ClusterIds0} = Snapshot, MacState} = ra_log:recover_snapshot(Log),
-            ClusterIds = maps:get(cluster_state, Snapshot, ClusterIds0),
-            Cluster = make_cluster(Id, ClusterIds),
+            {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
             State = update_term(Term,
                                 State0#{cfg => Cfg,
                                         log => Log,
                                         commit_index => SnapIndex,
                                         last_applied => SnapIndex,
-                                        cluster => Cluster,
-                                        non_voter => get_non_voter(Cluster, State0),
+                                        cluster => make_cluster(Id, ClusterIds),
+                                        non_voter => get_non_voter(ClusterIds, State0),
                                         machine_state => MacState}),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
@@ -2244,15 +2241,17 @@ fetch_term(Idx, #{log := Log0} = State) ->
             {Term, State#{log => Log}}
     end.
 
+-spec make_cluster(ra_server_id(), ra_cluster_snapshot() | [ra_server_id()]) ->
+    ra_cluster().
 make_cluster(Self, Nodes0) when is_list(Nodes0) ->
     Nodes = lists:foldl(fun(N, Acc) ->
                                 Acc#{N => new_peer()}
                         end, #{}, Nodes0),
     append_self(Self, Nodes);
 make_cluster(Self, Nodes0) when is_map(Nodes0) ->
+    ct:pal("MAKE CLUSTER ~p", [[Self, Nodes0]]),
     Nodes = maps:map(fun(_, Peer0) ->
-                             Peer1 = maps:with([voter_status], Peer0),
-                             new_peer_with(Peer1)
+                             new_peer_with(Peer0)
                      end, Nodes0),
     append_self(Self, Nodes).
 
@@ -2268,8 +2267,8 @@ append_self(Self, Nodes) ->
 
 initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
     NextIdx = ra_log:next_index(Log),
-    Cluster = maps:map(fun (_, Peer) ->
-                               Peer1 = maps:with([voter_status], Peer),
+    Cluster = maps:map(fun (_, Peer0) ->
+                               Peer1 = maps:with([voter_status], Peer0),
                                Peer2 = Peer1#{next_index => NextIdx},
                                new_peer_with(Peer2)
                        end, Cluster0),
@@ -2917,7 +2916,12 @@ ensure_promotion_target(Voter, _) ->
     {ok, Voter}.
 
 %% Get non_voter of a given Id+UId from a (possibly new) cluster.
--spec get_non_voter(ra_cluster(), ra_server_id(), ra_uid(), boolean()) -> boolean().
+-spec get_non_voter(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
+                    ra_server_id(), ra_uid(), boolean()) ->
+    boolean().
+get_non_voter(_Cluster, _PeerId, _UId, Default) when is_list(_Cluster) ->
+    %% Legacy cluster snapshot does not retain voter_status.
+    Default;
 get_non_voter(Cluster, PeerId, UId, Default) ->
     case maps:get(PeerId, Cluster, undefined) of
         #{voter_status := #{uid := UId} = VoterStatus} ->
@@ -2928,7 +2932,9 @@ get_non_voter(Cluster, PeerId, UId, Default) ->
 
 %% Get this node's non_voter from a (possibly new) cluster.
 %% Defaults to last known-locally value.
--spec get_non_voter(ra_cluster(), ra_state()) -> boolean().
+-spec get_non_voter(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
+                    ra_state()) ->
+    boolean().
 get_non_voter(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
     Default = maps:get(non_voter, State, false),
     get_non_voter(Cluster, Id, UId, Default).

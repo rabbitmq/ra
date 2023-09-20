@@ -477,13 +477,14 @@ start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds) ->
     start_server(System, ClusterName, #{id => ServerId}, Machine, ServerIds);
 start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
   when is_atom(System) ->
-    UId = new_uid(ra_lib:to_binary(ClusterName)),
+    UId = maps:get(uid, Conf0,
+                   new_uid(ra_lib:to_binary(ClusterName))),
     Conf = #{cluster_name => ClusterName,
              uid => UId,
              initial_members => ServerIds,
              log_init_args => #{uid => UId},
              machine => Machine},
-    start_server(System, maps:merge(Conf, Conf0)).
+    start_server(System, maps:merge(Conf0, Conf)).
 
 %% @doc Starts a ra server in the default system
 %% @param Conf a ra_server_config() configuration map.
@@ -1134,7 +1135,7 @@ key_metrics({Name, N} = ServerId) when N == node() ->
     case whereis(Name) of
         undefined ->
             Counters#{state => noproc,
-                      non_voter => noproc};
+                      non_voter => unknown};
         _ ->
             case ets:lookup(ra_state, Name) of
                 [] ->

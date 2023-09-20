@@ -32,6 +32,7 @@ all_tests() ->
      take_snapshot,
      take_snapshot_crash,
      init_recover,
+     init_recover_voter_status,
      init_recover_multi_corrupt,
      init_recover_corrupt,
      read_snapshot,
@@ -139,6 +140,34 @@ init_recover(Config) ->
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
                               ?config(snap_dir, Config), undefined),
     Meta = meta(55, 2, [node()]),
+    {State1, [{monitor, process, snapshot_writer, _}]} =
+         ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
+    receive
+        {ra_log_event, {snapshot_written, IdxTerm}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm, State1),
+            ok
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+
+    %% open a new snapshot state to simulate a restart
+    Recover = ra_snapshot:init(UId, ra_log_snapshot,
+                               ?config(snap_dir, Config), undefined),
+    %% ensure last snapshot is recovered
+    %% it also needs to be validated as could have crashed mid write
+    undefined = ra_snapshot:pending(Recover),
+    {55, 2} = ra_snapshot:current(Recover),
+    55 = ra_snapshot:last_index_for(UId),
+
+    %% recover the meta data and machine state
+    {ok, Meta, ?FUNCTION_NAME} = ra_snapshot:recover(Recover),
+    ok.
+
+init_recover_voter_status(Config) ->
+    UId = ?config(uid, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot,
+                              ?config(snap_dir, Config), undefined),
+    Meta = meta(55, 2, #{node() => #{voter_status => test}}),
     {State1, [{monitor, process, snapshot_writer, _}]} =
          ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
     receive

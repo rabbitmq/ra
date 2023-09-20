@@ -65,14 +65,17 @@
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
                            %% whether the peer is part of the consensus
-                           voter_status := ra_voter_status(),
+                           voter_status => ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
                            status := ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
--type ra_cluster_servers() :: [ra_server_id()].
+%% Dehydrated cluster:
+-type ra_cluster_servers() :: [ra_server_id()].  % Deprecated
+-type ra_peer_snapshot() :: #{voter_status => ra_voter_status()}.
+-type ra_cluster_snapshot() :: #{ra_server_id() => ra_peer_snapshot()}.
 
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
@@ -154,8 +157,7 @@
 
 -type snapshot_meta() :: #{index := ra_index(),
                            term := ra_term(),
-                           cluster := ra_cluster_servers(),
-                           cluster_state => ra_cluster(),  %% TODO replace `cluster`
+                           cluster := ra_cluster_snapshot(),
                            machine_version := ra_machine:version()}.
 
 -record(install_snapshot_rpc,
