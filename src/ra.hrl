@@ -33,9 +33,6 @@
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
-%% Transient ID that uniquely identifies any new non-voter.
--type ra_nvid() :: binary().
-
 %% Identifies a Ra server (node) in a Ra cluster.
 %%
 %% Ra servers need to be registered stable names (names that are reachable
@@ -43,23 +40,23 @@
 -type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
 %% Specifies server configuration for a new cluster member.
-%% Both `ra:add_member` and `ra:start_server` must be called with the same value.
+%% Subset of  ra_server:ra_server_config().
+%% Both `ra:add_member` and `ra:start_server` must be called with the same values.
 -type ra_new_server() :: #{id := ra_server_id(),
 
                            %% If set, server will start as non-voter until later promoted by the
                            %% leader.
-                           non_voter_id => ra_nvid()}.
+                           non_voter => boolean(),
+                           uid => ra_uid()}.
 
 -type ra_peer_status() :: normal |
                           {sending_snapshot, pid()} |
                           suspended |
                           disconnected.
 
--type ra_voter_status() :: {voter, ra_voter_state()} |
-                           {nonvoter, ra_voter_state()}.
-
--type ra_voter_state() :: #{nvid => ra_nvid(),
-                            target => ra_index()}.
+-type ra_voter_status() :: #{non_voter => boolean(),
+                             uid => ra_uid(),
+                             target => ra_index()}.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),

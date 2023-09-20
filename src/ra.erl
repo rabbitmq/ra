@@ -71,7 +71,6 @@
          overview/1,
          %% helpers
          new_uid/1,
-         new_nvid/0,
          %% rebalancing
          transfer_leadership/2,
          %% auxiliary commands
@@ -484,7 +483,7 @@ start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
              initial_members => ServerIds,
              log_init_args => #{uid => UId},
              machine => Machine},
-    start_server(System, maps:merge(Conf0, Conf)).
+    start_server(System, maps:merge(Conf, Conf0)).
 
 %% @doc Starts a ra server in the default system
 %% @param Conf a ra_server_config() configuration map.
@@ -718,14 +717,6 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 new_uid(Source) when is_binary(Source) ->
     Prefix = ra_lib:derive_safe_string(Source, 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
-
-%% @doc generates a random uid using timestamp for the first
-%% 6 characters.
-%% @end
-new_nvid() ->
-    Millis = erlang:system_time(millisecond),
-    Prefix = base64:encode(<<Millis:32/little>>),
-    new_uid(Prefix).
 
 %% @doc Returns a map of overview data of the default Ra system on the current Erlang
 %% node.
@@ -1143,15 +1134,15 @@ key_metrics({Name, N} = ServerId) when N == node() ->
     case whereis(Name) of
         undefined ->
             Counters#{state => noproc,
-                      voter_status => noproc};
+                      non_voter => noproc};
         _ ->
             case ets:lookup(ra_state, Name) of
                 [] ->
                     Counters#{state => unknown,
-                              voter_status => unknown};
-                [{_, State, Voter}] ->
+                              non_voter => unknown};
+                [{_, State, NonVoter}] ->
                     Counters#{state => State,
-                              voter_status => Voter}
+                              non_voter => NonVoter}
             end
     end;
 key_metrics({_, N} = ServerId) ->

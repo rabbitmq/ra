@@ -1039,13 +1039,15 @@ new_nonvoter_knows_its_status(Config) ->
 
     % n2 had no time to catch up
     % in server state
-    {ok, #{cluster := #{N1 := #{voter_status := {voter, _}},
-                        N2 := #{voter_status := {nonvoter, #{target := 2, nvid := T}}}}}, _} = ra:member_overview(N1),
-    {ok, #{cluster := #{N1 := #{voter_status := {voter, _}},
-                        N2 := #{voter_status := {nonvoter, #{nvid := T}}}}}, _} = ra:member_overview(N2),
+    {ok, #{uid := T, non_voter := true}, _} = ra:member_overview(N2),
+    {ok,
+     #{cluster := #{N2 := #{voter_status := #{non_voter := true,
+                                              target := 3,
+                                              uid := T}}}},
+     _} = ra:member_overview(N1),
     % in ets
-    #{servers := #{n1 := #{voter_status := {voter, _}},
-                   n2 := #{voter_status := {nonvoter, _}}}} = ra:overview(?SYS),
+    #{servers := #{n1 := #{non_voter := false},
+                   n2 := #{non_voter := true}}} = ra:overview(?SYS),
     ok.
 
 voter_gets_promoted_consistent_leader(Config) ->
@@ -1074,7 +1076,7 @@ voter_gets_promoted_consistent_leader(Config) ->
     lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
     % in ets
     #{servers := Servers} = ra:overview(?SYS),
-    lists:map(fun({Name, _}) -> #{Name := #{voter_status := {voter, _}}} = Servers end, All),
+    lists:map(fun({Name, _}) -> #{Name := #{non_voter := false}} = Servers end, All),
     ok.
 
 voter_gets_promoted_new_leader(Config) ->
@@ -1099,7 +1101,7 @@ voter_gets_promoted_new_leader(Config) ->
     lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
     % in ets
     #{servers := Servers} = ra:overview(?SYS),
-    lists:map(fun({Name, _}) -> #{Name := #{voter_status := {voter, _}}} = Servers end, All),
+    lists:map(fun({Name, _}) -> #{Name := #{non_voter := false}} = Servers end, All),
     ok.
 
 get_gen_statem_status(Ref) ->
@@ -1175,7 +1177,8 @@ start_and_join({ClusterName, _} = ServerRef, {_, _} = New) ->
     ok.
 
 start_and_join_nonvoter({ClusterName, _} = ServerRef, {_, _} = New) ->
-    Server = #{id => New, non_voter_id => <<"test">>},
+    UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+    Server = #{id => New, non_voter => true, uid => UId},
     {ok, _, _} = ra:add_member(ServerRef, Server),
     ok = ra:start_server(default, ClusterName, Server, add_machine(), [ServerRef]),
     ok.
@@ -1215,10 +1218,7 @@ overviews(Node) ->
     [ra:member_overview(P) || {_, _} = P <- Members].
 
 voters({ok, #{cluster := Peers}, _} = _Overview) ->
-    [Id || {Id, Status} <- maps:to_list(Peers), begin
-                                                    {Voter, _} = maps:get(voter_status, Status),
-                                                    Voter == voter
-                                                end].
+    [Id || {Id, Status} <- maps:to_list(Peers), not maps:get(non_voter, Status, false)].
 
 %% machine impl
 init(_) -> 0.

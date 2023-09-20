@@ -198,5 +198,4 @@ meta(Idx, Term, Cluster) ->
     #{index => Idx,
       term => Term,
       cluster => Cluster,
-      non_voters => maps:from_list([{N, #{}} || N <- Cluster]),
       machine_version => 1}.
