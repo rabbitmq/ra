@@ -43,7 +43,7 @@
 %% Subset of  ra_server:ra_server_config().
 %% Both `ra:add_member` and `ra:start_server` must be called with the same values.
 -type ra_new_server() :: #{id := ra_server_id(),
-                           % Defaults to `voter` is absent.
+                           % Defaults to `voter` if absent.
                            membership => ra_membership(),
                            % Required for `promotable` in the above.
                            uid => ra_uid()}.
