@@ -200,7 +200,9 @@
                               ra_event_formatter => {module(), atom(), [term()]},
                               counter => counters:counters_ref(),
                               membership => ra_membership(),
-                              system_config => ra_system:config()}.
+                              system_config => ra_system:config(),
+                              has_changed => boolean()
+                             }.
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
@@ -1121,17 +1123,17 @@ handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     {follower, State#{log => Log}, Effects};
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
-                  voter_status := #{membership := promotable} = VoterStatus} = State) ->
+                  membership := Membership} = State) when Membership =/= voter ->
     ?DEBUG("~s: follower ignored pre_vote_rpc, non-voter: ~p0",
-           [LogId, VoterStatus]),
+           [LogId, Membership]),
     {follower, State, []};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
-                  voter_status := #{membership := promotable} = VoterStatus} = State) ->
+                  membership := Membership} = State) when Membership =/= voter ->
     ?DEBUG("~s: follower ignored request_vote_rpc, non-voter: ~p0",
-           [LogId, VoterStatus]),
+           [LogId, Membership]),
     {follower, State, []};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 #{current_term := Term, voted_for := VotedFor,
@@ -1231,9 +1233,9 @@ handle_follower(#append_entries_reply{}, State) ->
     {follower, State, []};
 handle_follower(election_timeout,
                 #{cfg := #cfg{log_id = LogId},
-                  voter_status := #{membership := promotable} = VoterStatus} = State) ->
+                  membership := Membership} = State) when Membership =/= voter ->
     ?DEBUG("~s: follower ignored election_timeout, non-voter: ~p0",
-           [LogId, VoterStatus]),
+           [LogId, Membership]),
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
@@ -2900,7 +2902,7 @@ already_member(State) ->
 %%% Voter status helpers
 %%% ====================
 
--spec ensure_promotion_target(ra_voter_status(), ra_index()) ->
+-spec ensure_promotion_target(ra_voter_status(), ra_server_state()) ->
     {ok, ra_voter_status()} | {error, term()}.
 ensure_promotion_target(#{membership := promotable, target := _, uid := _} = Status,
                         _) ->
@@ -2916,8 +2918,8 @@ ensure_promotion_target(Voter, _) ->
 
 %% Get membership of a given Id+UId from a (possibly new) cluster.
 -spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
-                    ra_server_id(), ra_uid(), boolean()) ->
-    boolean().
+                    ra_server_id(), ra_uid(), ra_membership()) ->
+    ra_membership().
 get_membership(_Cluster, _PeerId, _UId, Default) when is_list(_Cluster) ->
     %% Legacy cluster snapshot does not retain voter_status.
     Default;
@@ -2932,15 +2934,15 @@ get_membership(Cluster, PeerId, UId, Default) ->
 %% Get this node's membership from a (possibly new) cluster.
 %% Defaults to last known-locally value.
 -spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
-                    ra_state()) ->
-    boolean().
+                    ra_server_state()) ->
+    ra_membership().
 get_membership(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).
 
 %% Get this node's membership.
 %% Defaults to last known-locally value.
--spec get_membership(ra_state()) -> boolean().
+-spec get_membership(ra_server_state()) -> ra_membership().
 get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) ->
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).

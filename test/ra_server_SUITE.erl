@@ -207,7 +207,7 @@ init_test(_Config) ->
       voted_for := some_server} = ra_server_init(InitConf),
     % snapshot
     SnapshotMeta = #{index => 3, term => 5,
-                     cluster => maps:keys(Cluster),
+                     cluster => dehydrate_cluster(Cluster),
                      machine_version => 1},
     SnapshotData = "hi1+2+3",
     {LogS, _, _} = ra_log_memory:install_snapshot(SnapshotMeta, SnapshotData, Log0),
@@ -217,7 +217,7 @@ init_test(_Config) ->
       machine_state := "hi1+2+3",
       cluster := ClusterOut,
       voted_for := some_server} = ra_server_init(InitConf),
-    ?assertEqual(maps:keys(Cluster), maps:keys(ClusterOut)),
+    ?assertEqual(dehydrate_cluster(Cluster), dehydrate_cluster(ClusterOut)),
     ok.
 
 recover_restores_cluster_changes(_Config) ->
@@ -280,7 +280,7 @@ election_timeout(_Config) ->
         ra_server:handle_follower(Msg, State),
 
     % non-voters ignore election_timeout
-    NVState = State#{voter_status => #{membership => promotable}},
+    NVState = State#{membership => promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
     % pre_vote
@@ -580,7 +580,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
     Log0 = maps:get(log, State0),
     Meta = #{index => 3,
              term => 5,
-             cluster => [],
+             cluster => #{},
              machine_version => 1},
     Data = <<"hi3">>,
     {Log, _, _} = ra_log_memory:install_snapshot(Meta, Data, Log0),
@@ -731,7 +731,7 @@ follower_catchup_condition(_Config) ->
                                   chunk_state = {1, last},
                                   meta = #{index => 99,
                                            term => 99,
-                                           cluster => [],
+                                           cluster => #{},
                                            machine_version => 0},
                                   data = []},
     {follower, State, [_NextEvent]} =
@@ -830,7 +830,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
      [{next_event, info, pipeline_rpcs},
       {next_event, {command, {'$ra_join', _,
         #{id := N2,
-          voter_status := #{membership := voter, uid := <<"uid">>}},
+          voter_status := #{membership := voter,
+                            uid := <<"uid">>}},
         noreply}} = RaJoin}
      ]} = ra_server:handle_leader({N2, Ack}, State0),
 
@@ -852,7 +853,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
     % ra_join translates into cluster update
     {leader, #{cluster := #{N2 := #{next_index := 5,
                                     match_index := 3,
-                                    voter_status := #{membership := voter}}},
+                                    voter_status := #{membership := voter,
+                                                      uid := <<"uid">>}}},
                cluster_change_permitted := false,
                commit_index := 1,
                last_applied := 1,
@@ -863,7 +865,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                            prev_log_term = 5,
                            leader_commit = 1,
                            entries = [{4, 5, {'$ra_cluster_change', _,
-                                              #{N2 := #{voter_status := #{membership := voter}}},
+                                              #{N2 := #{voter_status := #{membership := voter,
+                                                                          uid := <<"uid">>}}},
                                               _}}]}},
       {send_rpc, N2,
        #append_entries_rpc{term = 5, leader_id = N1,
@@ -871,7 +874,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                            prev_log_term = 5,
                            leader_commit = 1,
                            entries = [{4, 5, {'$ra_cluster_change', _,
-                                              #{N2 := #{voter_status := #{membership := voter}}},
+                                              #{N2 := #{voter_status := #{membership := voter,
+                                                                          uid := <<"uid">>}}},
                                               _}}]}}
      ]} = ra_server:handle_leader(RaJoin, State2),
 
@@ -1013,7 +1017,7 @@ follower_request_vote(_Config) ->
                             State),
 
     % non-voters ignore request_vote_rpc
-    NVState = State#{voter_status => #{membership => promotable}},
+    NVState = State#{membership => promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
      ok.
@@ -1132,7 +1136,7 @@ follower_pre_vote(_Config) ->
                               State),
 
     % non-voters ignore pre_vote_rpc
-    NVState = State#{voter_status => #{membership => promotable}},
+    NVState = State#{membership => promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
     ok.
@@ -1372,7 +1376,7 @@ follower_install_snapshot_machine_version(_Config) ->
     %% by install snapshot rpc
     SnapMeta = #{index => 4,
                  term => 5,
-                 cluster => [?N1, ?N2, ?N3],
+                 cluster => #{?N1 => #{}, ?N2 => #{}, ?N3 => #{}},
                  machine_version => MacVer},
     SnapData = <<"hi4_v2">>,
 
@@ -1823,7 +1827,7 @@ pre_vote_election_reverts(_Config) ->
     ISR = #install_snapshot_rpc{term = 5, leader_id = N2,
                                 meta = #{index => 3,
                                          term => 5,
-                                         cluster => [],
+                                         cluster => #{},
                                          machine_version => 0},
                                 chunk_state = {1, last},
                                 data = []},
@@ -1860,7 +1864,7 @@ leader_receives_install_snapshot_rpc(_Config) ->
     ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = ?N5,
                                   meta = #{index => Idx,
                                            term => Term,
-                                           cluster => [],
+                                           cluster => #{},
                                            machine_version => 0},
                                   chunk_state = {1, last},
                                   data = []},
@@ -1891,8 +1895,7 @@ follower_installs_snapshot(_Config) ->
                 fun (_) ->
                         {#{index => Idx,
                            term => Term,
-                           cluster => maps:keys(Config),
-                           cluster_state => Config,
+                           cluster => dehydrate_cluster(Config),
                            machine_version => 0},
                          []}
                 end),
@@ -1919,7 +1922,7 @@ follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
                                   meta = #{index => Idx,
                                            term => LastTerm,
-                                           cluster => maps:keys(Config),
+                                           cluster => dehydrate_cluster(Config),
                                            machine_version => 1},
                                   chunk_state = {1, last},
                                   data = []},
@@ -1981,7 +1984,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                 fun (_) ->
                         {#{index => Idx,
                            term => Term,
-                           cluster => maps:keys(Config),
+                           cluster => dehydrate_cluster(Config),
                            machine_version => 0},
                          []}
                 end),
@@ -2129,13 +2132,13 @@ leader_received_append_entries_reply_and_promotes_voter(_config) ->
                                 last_index = 4, last_term = 5},
 
     % Permanent voter
-    State1 = set_peer_voter_status(State, N3, #{membership => false}),
+    State1 = set_peer_voter_status(State, N3, #{membership => voter}),
     {leader, _,
      [{next_event,info,pipeline_rpcs}]
     } = ra_server:handle_leader({N3, AER}, State1),
 
     % Permanent non-voter
-    State2 = set_peer_voter_status(State, N3, #{membership => promotable}),
+    State2 = set_peer_voter_status(State, N3, #{membership => non_voter}),
     {leader, _,
      [{next_event,info,pipeline_rpcs}]
     } = ra_server:handle_leader({N3, AER}, State2),
@@ -2808,7 +2811,11 @@ snap_meta(Idx, Term) ->
 snap_meta(Idx, Term, Cluster) ->
     #{index => Idx,
       term => Term,
-      cluster => maps:keys(Cluster),
-      cluster_state => Cluster,
+      cluster => dehydrate_cluster(Cluster),
       machine_version => 0}.
+
+dehydrate_cluster(Cluster) ->
+    maps:map(fun(_, V) ->
+                     maps:with([voter_status], V)
+             end, Cluster).
 

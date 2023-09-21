@@ -53,7 +53,7 @@
                           suspended |
                           disconnected.
 
--type ra_membership() :: voter | promotable | unknown.
+-type ra_membership() :: voter | promotable | non_voter | unknown.
 
 -type ra_voter_status() :: #{membership => ra_membership(),
                              uid => ra_uid(),
