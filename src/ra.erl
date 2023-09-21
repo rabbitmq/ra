@@ -1135,15 +1135,15 @@ key_metrics({Name, N} = ServerId) when N == node() ->
     case whereis(Name) of
         undefined ->
             Counters#{state => noproc,
-                      non_voter => unknown};
+                      membership => unknown};
         _ ->
             case ets:lookup(ra_state, Name) of
                 [] ->
                     Counters#{state => unknown,
-                              non_voter => unknown};
-                [{_, State, NonVoter}] ->
+                              membership => unknown};
+                [{_, State, Membership}] ->
                     Counters#{state => State,
-                              non_voter => NonVoter}
+                              membership => Membership}
             end
     end;
 key_metrics({_, N} = ServerId) ->

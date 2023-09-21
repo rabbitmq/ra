@@ -43,10 +43,9 @@
 %% Subset of  ra_server:ra_server_config().
 %% Both `ra:add_member` and `ra:start_server` must be called with the same values.
 -type ra_new_server() :: #{id := ra_server_id(),
-
-                           %% If set, server will start as non-voter until later promoted by the
-                           %% leader.
-                           non_voter => boolean(),
+                           % Defaults to `voter` is absent.
+                           membership => ra_membership(),
+                           % Required for `promotable` in the above.
                            uid => ra_uid()}.
 
 -type ra_peer_status() :: normal |
@@ -54,7 +53,9 @@
                           suspended |
                           disconnected.
 
--type ra_voter_status() :: #{non_voter => boolean(),
+-type ra_membership() :: voter | promotable | unknown.
+
+-type ra_voter_status() :: #{membership => ra_membership(),
                              uid => ra_uid(),
                              target => ra_index()}.
 
@@ -64,7 +65,8 @@
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
-                           %% whether the peer is part of the consensus
+                           %% Whether the peer is part of the consensus.
+                           %% Defaults to "yes" if absent.
                            voter_status => ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer

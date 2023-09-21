@@ -188,7 +188,7 @@ overview(System) when is_atom(System) ->
                                pid => Pid,
                                parent => Parent,
                                state => S,
-                               non_voter => V,
+                               membership => V,
                                cluster_name => ClusterName,
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}

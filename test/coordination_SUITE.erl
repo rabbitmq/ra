@@ -308,8 +308,8 @@ send_local_msg(Config) ->
     {ok, _, Leader} = ra:members(hd(NodeIds)),
     {ok, _, _} = ra:process_command(Leader, banana),
     New = #{id => NonVoter,
-            voter_status => #{non_voter => true, uid => <<"test">>, target => 999},
-            non_voter => true,
+            voter_status => #{membership => promotable, uid => <<"test">>, target => 999},
+            membership => promotable,
             uid => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
@@ -347,8 +347,8 @@ local_log_effect(Config) ->
     {ok, _, Leader} = ra:members(hd(NodeIds)),
     {ok, _, _} = ra:process_command(Leader, banana),
     New = #{id => NonVoter,
-            voter_status => #{non_voter => true, uid => <<"test">>, target => 999},
-            non_voter => true,
+            voter_status => #{membership => promotable, uid => <<"test">>, target => 999},
+            membership => promotable,
             uid => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
@@ -436,24 +436,24 @@ nonvoter_catches_up(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, non_voter => true, uid => <<"test">>},
+    New = #{id => C, membership => promotable, uid => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
-    ?assertMatch(#{Group := #{non_voter := true}},
+    ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := true},
+    ?assertMatch(#{membership := promotable},
                  ra:key_metrics(C)),
-    ?assertMatch({ok, #{non_voter := true}, _},
+    ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
 
     await_condition(
       fun () ->
-          {ok, #{non_voter := NV}, _} = ra:member_overview(C),
-          not NV
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
       end, 200),
-    ?assertMatch(#{Group := #{non_voter := false}},
+    ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := false},
+    ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
@@ -471,26 +471,26 @@ nonvoter_catches_up_after_restart(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, non_voter => true, uid => <<"test">>},
+    New = #{id => C, membership => promotable, uid => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
-    ?assertMatch(#{Group := #{non_voter := true}},
+    ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := true},
+    ?assertMatch(#{membership := promotable},
                  ra:key_metrics(C)),
-    ?assertMatch({ok, #{non_voter := true}, _},
+    ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
     ok = ra:stop_server(?SYS, C),
     ok = ra:restart_server(?SYS, C),
 
     await_condition(
       fun () ->
-          {ok, #{non_voter := NV}, _} = ra:member_overview(C),
-          not NV
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
       end, 200),
-    ?assertMatch(#{Group := #{non_voter := false}},
+    ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := false},
+    ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
@@ -508,26 +508,26 @@ nonvoter_catches_up_after_leader_restart(Config) ->
      || N <- lists:seq(1, 10000)],
     {ok, _, _} = ra:process_command(Leader, banana),
 
-    New = #{id => C, non_voter => true, uid => <<"test">>},
+    New = #{id => C, membership => promotable, uid => <<"test">>},
     {ok, _, _} = ra:add_member(A, New),
     ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
-    ?assertMatch(#{Group := #{non_voter := true}},
+    ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := true},
+    ?assertMatch(#{membership := promotable},
                  ra:key_metrics(C)),
-    ?assertMatch({ok, #{non_voter := true}, _},
+    ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
     ok = ra:stop_server(?SYS, Leader),
     ok = ra:restart_server(?SYS, Leader),
 
     await_condition(
       fun () ->
-          {ok, #{non_voter := NV}, _} = ra:member_overview(C),
-          not NV
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
       end, 200),
-    ?assertMatch(#{Group := #{non_voter := false}},
+    ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
-    ?assertMatch(#{non_voter := false},
+    ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
