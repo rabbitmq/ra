@@ -6,8 +6,6 @@
 %%
 -module(ra_server).
 
--feature(maybe_expr, enable).
-
 -include("ra.hrl").
 -include("ra_server.hrl").
 
@@ -2947,22 +2945,25 @@ get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) -
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).
 
--spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> effects().
+-spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
+    effects().
 maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
-    maybe
+    case Cluster of
         #{PeerId := #{match_index := MI,
-                      voter_status := VoterStatus}} ?= Cluster,
-        #{membership := promotable, target := Target} ?= VoterStatus,
-        true ?= MI >= Target,
-        E = {next_event,
-          {command, {'$ra_join',
-                    #{ts => os:system_time(millisecond)},
-                    #{id => PeerId,
-                      voter_status => VoterStatus#{membership => voter}},
-                    noreply}}},
-        [E | Effects]
-    else
-        _ -> Effects
+                      voter_status := #{membership := promotable,
+                                        target := Target} = OldStatus}} when
+              MI >= Target ->
+            Promote = {next_event,
+                       {command, {'$ra_join',
+                                  #{ts => os:system_time(millisecond)},
+                                  #{id => PeerId,
+                                    voter_status => OldStatus#{
+                                                      membership => voter
+                                                     }},
+                                  noreply}}},
+            [Promote | Effects];
+        _ ->
+            Effects
     end.
 
 -spec required_quorum(ra_cluster()) -> pos_integer().

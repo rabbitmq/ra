@@ -7,8 +7,6 @@
 %% @hidden
 -module(ra_server_proc).
 
--feature(maybe_expr, enable).
-
 -behaviour(gen_statem).
 
 -compile({inline, [handle_raft_state/3]}).
