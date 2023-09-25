@@ -455,7 +455,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 
 %% @doc Starts a new distributed ra cluster.
 %% @param ClusterName the name of the cluster.
-%% @param ServerId the ra_server_id() of the server
+%% @param ServerId the ra_server_id() of the server, or a map with server id and settings.
 %% @param Machine The {@link ra_machine:machine/0} configuration.
 %% @param ServerIds a list of initial (seed) server configurations
 %% @returns
@@ -470,19 +470,21 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% forcefully deleted.
 %% @see start_server/1
 %% @end
--spec start_server(atom(), ra_cluster_name(), ra_server_id(),
+-spec start_server(atom(), ra_cluster_name(), ra_server_id() | ra_new_server(),
                    ra_server:machine_conf(), [ra_server_id()]) ->
     ok | {error, term()}.
-start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds)
+start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds) ->
+    start_server(System, ClusterName, #{id => ServerId}, Machine, ServerIds);
+start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
   when is_atom(System) ->
-    UId = new_uid(ra_lib:to_binary(ClusterName)),
+    UId = maps:get(uid, Conf0,
+                   new_uid(ra_lib:to_binary(ClusterName))),
     Conf = #{cluster_name => ClusterName,
-             id => ServerId,
              uid => UId,
              initial_members => ServerIds,
              log_init_args => #{uid => UId},
              machine => Machine},
-    start_server(System, Conf).
+    start_server(System, maps:merge(Conf0, Conf)).
 
 %% @doc Starts a ra server in the default system
 %% @param Conf a ra_server_config() configuration map.
@@ -558,9 +560,10 @@ delete_cluster(ServerIds, Timeout) ->
 %% affect said cluster's availability characteristics (by increasing quorum node count).
 %%
 %% @param ServerLoc the ra server or servers to try to send the command to
-%% @param ServerId the ra server id of the new server.
+%% @param ServerId the ra server id of the new server, or a map with server id and settings.
 %% @end
--spec add_member(ra_server_id() | [ra_server_id()], ra_server_id()) ->
+-spec add_member(ra_server_id() | [ra_server_id()],
+                 ra_server_id() | ra_new_server()) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
@@ -571,7 +574,8 @@ add_member(ServerLoc, ServerId) ->
 %% @see add_member/2
 %% @end
 -spec add_member(ra_server_id() | [ra_server_id()],
-                 ra_server_id(), timeout()) ->
+                 ra_server_id() | ra_new_server(),
+                 timeout()) ->
     ra_cmd_ret() |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
@@ -579,7 +583,6 @@ add_member(ServerLoc, ServerId, Timeout) ->
     ra_server_proc:command(ServerLoc,
                            {'$ra_join', ServerId, after_log_append},
                            Timeout).
-
 
 %% @doc Removes a server from the cluster's membership configuration.
 %% This function returns after appending a cluster membership change
@@ -715,7 +718,6 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 new_uid(Source) when is_binary(Source) ->
     Prefix = ra_lib:derive_safe_string(Source, 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
-
 
 %% @doc Returns a map of overview data of the default Ra system on the current Erlang
 %% node.
@@ -1132,13 +1134,16 @@ key_metrics({Name, N} = ServerId) when N == node() ->
                end,
     case whereis(Name) of
         undefined ->
-            Counters#{state => noproc};
+            Counters#{state => noproc,
+                      membership => unknown};
         _ ->
             case ets:lookup(ra_state, Name) of
                 [] ->
-                    Counters#{state => unknown};
-                [{_, State}] ->
-                    Counters#{state => State}
+                    Counters#{state => unknown,
+                              membership => unknown};
+                [{_, State, Membership}] ->
+                    Counters#{state => State,
+                              membership => Membership}
             end
     end;
 key_metrics({_, N} = ServerId) ->

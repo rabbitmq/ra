@@ -39,10 +39,25 @@
 %% after node restart). Pids are not stable in this sense.
 -type ra_server_id() :: {Name :: atom(), Node :: node()}.
 
+%% Specifies server configuration for a new cluster member.
+%% Subset of  ra_server:ra_server_config().
+%% Both `ra:add_member` and `ra:start_server` must be called with the same values.
+-type ra_new_server() :: #{id := ra_server_id(),
+                           % Defaults to `voter` if absent.
+                           membership => ra_membership(),
+                           % Required for `promotable` in the above.
+                           uid => ra_uid()}.
+
 -type ra_peer_status() :: normal |
                           {sending_snapshot, pid()} |
                           suspended |
                           disconnected.
+
+-type ra_membership() :: voter | promotable | non_voter | unknown.
+
+-type ra_voter_status() :: #{membership => ra_membership(),
+                             uid => ra_uid(),
+                             target => ra_index()}.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
@@ -50,13 +65,19 @@
                            % the commit index last sent
                            % used for evaluating pipeline status
                            commit_index_sent := non_neg_integer(),
+                           %% Whether the peer is part of the consensus.
+                           %% Defaults to "yes" if absent.
+                           voter_status => ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
                            status := ra_peer_status()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
--type ra_cluster_servers() :: [ra_server_id()].
+%% Dehydrated cluster:
+-type ra_cluster_servers() :: [ra_server_id()].  % Deprecated
+-type ra_peer_snapshot() :: #{voter_status => ra_voter_status()}.
+-type ra_cluster_snapshot() :: #{ra_server_id() => ra_peer_snapshot()}.
 
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
@@ -138,7 +159,7 @@
 
 -type snapshot_meta() :: #{index := ra_index(),
                            term := ra_term(),
-                           cluster := ra_cluster_servers(),
+                           cluster := ra_cluster_snapshot(),
                            machine_version := ra_machine:version()}.
 
 -record(install_snapshot_rpc,

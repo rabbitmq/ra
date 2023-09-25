@@ -637,7 +637,9 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
                        #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
                                 reader = Reader,
                                 snapshot_state = SnapState} = State0) ->
-    ClusterServerIds = maps:keys(Cluster),
+    ClusterServerIds = maps:map(fun (_, V) ->
+                                        maps:with([voter_status], V)
+                                end, Cluster),
     SnapLimit = case ra_snapshot:current(SnapState) of
                     undefined -> SnapInter;
                     {I, _} -> I + SnapInter

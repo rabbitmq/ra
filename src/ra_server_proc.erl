@@ -183,6 +183,7 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
 -spec state_query(server_loc(),
                   all |
                   overview |
+                  voters |
                   members |
                   initial_members |
                   machine, timeout()) ->
@@ -193,6 +194,7 @@ state_query(ServerLoc, Spec, Timeout) ->
 -spec local_state_query(server_loc(),
                         all |
                         overview |
+                        voters |
                         members |
                         initial_members |
                         machine, timeout()) ->
@@ -271,7 +273,7 @@ init(Config) ->
 do_init(#{id := Id,
           cluster_name := ClusterName} = Config0) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
-    true = ets:insert(ra_state, {Key, init}),
+    true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
     Config = #{counter := Counter,
                system_config := SysConf} = maps:merge(config_defaults(Id),
@@ -784,11 +786,19 @@ follower(_, tick_timeout, State0) ->
      set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
-follower(EventType, Msg, State0) ->
+follower(EventType, Msg, #state{conf = #conf{name = Name},
+                                server_state = SS0} = State0) ->
+    Membership0 = ra_server:get_membership(SS0),
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = follower_leader_change(State0, State2),
+            State = #state{server_state = SS} = follower_leader_change(State0, State2),
+            case ra_server:get_membership(SS) of
+                Membership0 ->
+                    ok;
+                Membership ->
+                    true = ets:update_element(ra_state, Name, {3, Membership})
+            end,
             {keep_state, State, Actions};
         {pre_vote, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -1029,7 +1039,8 @@ format_status(Opt, [_PDict, StateName,
 handle_enter(RaftState, OldRaftState,
              #state{conf = #conf{name = Name},
                     server_state = ServerState0} = State) ->
-    true = ets:insert(ra_state, {Name, RaftState}),
+    Membership = ra_server:get_membership(ServerState0),
+    true = ets:insert(ra_state, {Name, RaftState, Membership}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           ServerState0),
     case RaftState == leader orelse OldRaftState == leader of
@@ -1510,6 +1521,18 @@ do_state_query(overview, State) ->
     ra_server:overview(State);
 do_state_query(machine, #{machine_state := MacState}) ->
     MacState;
+do_state_query(voters, #{cluster := Cluster}) ->
+    Vs = maps:fold(fun(K, V, Acc) ->
+                           case maps:get(voter_status, V, undefined) of
+                               undefined -> [K|Acc];
+                               S -> case maps:get(membership, S, undefined) of
+                                        undefined -> [K|Acc];
+                                        voter -> [K|Acc];
+                                        _ -> Acc
+                                    end
+                           end
+              end, [], Cluster),
+    Vs;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
 do_state_query(initial_members, #{log := Log}) ->
@@ -1717,14 +1740,16 @@ handle_tick_metrics(State) ->
     _ = ets:insert(ra_metrics, Metrics),
     State.
 
-can_execute_locally(RaftState, TargetNode, State) ->
+can_execute_locally(RaftState, TargetNode,
+                    #state{server_state = ServerState} = State) ->
+    Membership = ra_server:get_membership(ServerState),
     case RaftState of
-        follower ->
+        follower when Membership == voter ->
             TargetNode == node();
         leader when TargetNode =/= node() ->
             %% We need to evaluate whether to send the message.
             %% Only send if there isn't a local node for the target pid.
-            Members = do_state_query(members, State#state.server_state),
+            Members = do_state_query(voters, State#state.server_state),
             not lists:any(fun ({_, N}) -> N == TargetNode end, Members);
         leader ->
             true;

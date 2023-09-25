@@ -175,14 +175,20 @@ overview(System) when is_atom(System) ->
     #{directory := Tbl,
       directory_rev := _TblRev} = get_names(System),
     Dir = ets:tab2list(Tbl),
-    States = maps:from_list(ets:tab2list(ra_state)),
+    Rows = lists:map(fun({K, S, V}) ->
+                             {K, {S, V}}
+                     end,
+                     ets:tab2list(ra_state)),
+    States = maps:from_list(Rows),
     Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
     lists:foldl(fun ({UId, Pid, Parent, ServerName, ClusterName}, Acc) ->
+                        {S, V} = maps:get(ServerName, States, {undefined, undefined}),
                         Acc#{ServerName =>
                              #{uid => UId,
                                pid => Pid,
                                parent => Parent,
-                               state => maps:get(ServerName, States, undefined),
+                               state => S,
+                               membership => V,
                                cluster_name => ClusterName,
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}

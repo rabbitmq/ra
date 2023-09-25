@@ -55,6 +55,7 @@
          terminate/2,
          log_fold/3,
          log_read/2,
+         get_membership/1,
          recover/1
         ]).
 
@@ -72,6 +73,7 @@
       log := term(),
       voted_for => 'maybe'(ra_server_id()), % persistent
       votes => non_neg_integer(),
+      membership => ra_membership(),
       commit_index := ra_index(),
       last_applied := ra_index(),
       persisted_last_applied => ra_index(),
@@ -195,7 +197,10 @@
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
                               counter => counters:counters_ref(),
-                              system_config => ra_system:config()}.
+                              membership => ra_membership(),
+                              system_config => ra_system:config(),
+                              has_changed => boolean()
+                             }.
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
@@ -328,6 +333,9 @@ init(#{id := Id,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
 
+    NonVoter = get_membership(Cluster0, Id, UId,
+                             maps:get(membership, Config, voter)),
+
     #{cfg => Cfg,
       current_term => CurrentTerm,
       cluster => Cluster0,
@@ -338,6 +346,7 @@ init(#{id := Id,
       cluster_change_permitted => false,
       cluster_index_term => SnapshotIndexTerm,
       voted_for => VotedFor,
+      membership => NonVoter,
       commit_index => CommitIndex,
       %% set this to the first index so that we can apply all entries
       %% up to the commit index during recovery
@@ -400,8 +409,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = put_peer(PeerId, Peer, State0),
-            {State2, Effects0} = evaluate_quorum(State1, []),
-
+            Effects00 = maybe_promote_peer(PeerId, State1, []),
+            {State2, Effects0} = evaluate_quorum(State1, Effects00),
             {State, Effects1} = process_pending_consistent_queries(State2,
                                                                    Effects0),
             Effects = [{next_event, info, pipeline_rpcs} | Effects1],
@@ -782,7 +791,7 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     ?DEBUG("~ts: vote granted for term ~b votes ~b",
           [LogId, Term, NewVotes]),
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    case required_quorum(Nodes) of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
             Noop = {noop, #{ts => erlang:system_time(millisecond)},
@@ -928,7 +937,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    case trunc(maps:size(Nodes) / 2) + 1 of
+    case required_quorum(Nodes) of
         NewVotes ->
             call_for_election(candidate, State);
         _ ->
@@ -1110,8 +1119,20 @@ handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {follower, State#{log => Log}, Effects};
+handle_follower(#pre_vote_rpc{},
+                #{cfg := #cfg{log_id = LogId},
+                  membership := Membership} = State) when Membership =/= voter ->
+    ?DEBUG("~s: follower ignored pre_vote_rpc, non-voter: ~p0",
+           [LogId, Membership]),
+    {follower, State, []};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
+handle_follower(#request_vote_rpc{},
+                #{cfg := #cfg{log_id = LogId},
+                  membership := Membership} = State) when Membership =/= voter ->
+    ?DEBUG("~s: follower ignored request_vote_rpc, non-voter: ~p0",
+           [LogId, Membership]),
+    {follower, State, []};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                 #{current_term := Term, voted_for := VotedFor,
                   cfg := #cfg{log_id = LogId}} = State)
@@ -1208,6 +1229,12 @@ handle_follower(#append_entries_reply{}, State) ->
     %% handle to avoid logging as unhandled
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
+handle_follower(election_timeout,
+                #{cfg := #cfg{log_id = LogId},
+                  membership := Membership} = State) when Membership =/= voter ->
+    ?DEBUG("~s: follower ignored election_timeout, non-voter: ~p0",
+           [LogId, Membership]),
+    {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(try_become_leader, State) ->
@@ -1274,6 +1301,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         commit_index => SnapIndex,
                                         last_applied => SnapIndex,
                                         cluster => make_cluster(Id, ClusterIds),
+                                        membership => get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
@@ -1376,6 +1404,7 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
                     cluster,
                     leader_id,
                     voted_for,
+                    membership,
                     cluster_change_permitted,
                     cluster_index_term,
                     query_index
@@ -2212,10 +2241,21 @@ fetch_term(Idx, #{log := Log0} = State) ->
             {Term, State#{log => Log}}
     end.
 
-make_cluster(Self, Nodes) ->
-    case lists:foldl(fun(N, Acc) ->
-                             Acc#{N => new_peer()}
-                     end, #{}, Nodes) of
+-spec make_cluster(ra_server_id(), ra_cluster_snapshot() | [ra_server_id()]) ->
+    ra_cluster().
+make_cluster(Self, Nodes0) when is_list(Nodes0) ->
+    Nodes = lists:foldl(fun(N, Acc) ->
+                                Acc#{N => new_peer()}
+                        end, #{}, Nodes0),
+    append_self(Self, Nodes);
+make_cluster(Self, Nodes0) when is_map(Nodes0) ->
+    Nodes = maps:map(fun(_, Peer0) ->
+                             new_peer_with(Peer0)
+                     end, Nodes0),
+    append_self(Self, Nodes).
+
+append_self(Self, Nodes) ->
+    case Nodes of
         #{Self := _} = Cluster ->
             % current server is already in cluster - do nothing
             Cluster;
@@ -2225,12 +2265,12 @@ make_cluster(Self, Nodes) ->
     end.
 
 initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
-    PeerIds = peer_ids(State),
     NextIdx = ra_log:next_index(Log),
-    Cluster = lists:foldl(fun(PeerId, Acc) ->
-                                  Acc#{PeerId =>
-                                       new_peer_with(#{next_index => NextIdx})}
-                          end, Cluster0, PeerIds),
+    Cluster = maps:map(fun (_, Peer0) ->
+                               Peer1 = maps:with([voter_status], Peer0),
+                               Peer2 = Peer1#{next_index => NextIdx},
+                               new_peer_with(Peer2)
+                       end, Cluster0),
     State#{cluster => Cluster}.
 
 apply_to(ApplyTo, State, Effs) ->
@@ -2326,6 +2366,7 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
                            [log_id(State0), maps:keys(NewCluster)]),
                     %% we are recovering and should apply the cluster change
                     State0#{cluster => NewCluster,
+                            membership => get_membership(NewCluster, State0),
                             cluster_change_permitted => true,
                             cluster_index_term => {Idx, Term}};
                 _  ->
@@ -2458,16 +2499,42 @@ append_log_leader({CmdTag, _, _, _},
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
     {not_appended, cluster_change_not_permitted, State};
+append_log_leader({'$ra_join', From,
+                   #{id := JoiningNode, voter_status := Voter0},
+                   ReplyMode},
+                  State = #{cluster := OldCluster}) ->
+    case ensure_promotion_target(Voter0, State) of
+        {error, Reason} ->
+            {not_appended, Reason, State};
+        {ok, Voter} ->
+            case OldCluster of
+                #{JoiningNode := #{voter_status := Voter}} ->
+                    already_member(State);
+                #{JoiningNode := Peer} ->
+                    % Update member status.
+                    Cluster = OldCluster#{JoiningNode => Peer#{voter_status => Voter}},
+                    append_cluster_change(Cluster, From, ReplyMode, State);
+                _ ->
+                    % Insert new member.
+                    Cluster = OldCluster#{JoiningNode => new_peer_with(#{voter_status => Voter})},
+                    append_cluster_change(Cluster, From, ReplyMode, State)
+            end
+    end;
+append_log_leader({'$ra_join', From, #{id := JoiningNode} = Config, ReplyMode},
+                  State) ->
+    append_log_leader({'$ra_join', From,
+                       #{id => JoiningNode,
+                         voter_status => maps:with([membership, uid, target],
+                                                   Config)},
+                       ReplyMode}, State);
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
                   State = #{cluster := OldCluster}) ->
+    % Legacy $ra_join, join as voter if no such member in the cluster.
     case OldCluster of
         #{JoiningNode := _} ->
-            % already a member do nothing
-            % TODO: reply? If we don't reply the caller may block until timeout
-            {not_appended, already_member, State};
+            already_member(State);
         _ ->
-            Cluster = OldCluster#{JoiningNode => new_peer()},
-            append_cluster_change(Cluster, From, ReplyMode, State)
+            append_log_leader({'$ra_join', From, #{id => JoiningNode}, ReplyMode}, State)
     end;
 append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
                   State = #{cfg := #cfg{log_id = LogId},
@@ -2509,6 +2576,7 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                         State) ->
     State#{cluster => Cluster,
+           membership => get_membership(Cluster, State),
            cluster_index_term => {Idx, Term}};
 pre_append_log_follower(_, State) ->
     State.
@@ -2587,6 +2655,8 @@ query_indexes(#{cfg := #cfg{id = Id},
                 query_index := QueryIndex}) ->
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
+                  (_K, #{voter_status := #{membership := promotable}}, Acc) ->
+                      Acc;
                   (_K, #{query_index := Idx}, Acc) ->
                       [Idx | Acc]
               end, [QueryIndex], Cluster).
@@ -2596,6 +2666,8 @@ match_indexes(#{cfg := #cfg{id = Id},
                 log := Log}) ->
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
+                      Acc;
+                  (_K, #{voter_status := #{membership := promotable}}, Acc) ->
                       Acc;
                   (_K, #{match_index := Idx}, Acc) ->
                       [Idx | Acc]
@@ -2818,6 +2890,96 @@ meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
     Name;
 meta_name(#{names := #{log_meta := Name}}) ->
     Name.
+
+already_member(State) ->
+    % already a member do nothing
+    % TODO: reply? If we don't reply the caller may block until timeout
+    {not_appended, already_member, State}.
+
+%%% ====================
+%%% Voter status helpers
+%%% ====================
+
+-spec ensure_promotion_target(ra_voter_status(), ra_server_state()) ->
+    {ok, ra_voter_status()} | {error, term()}.
+ensure_promotion_target(#{membership := promotable, target := _, uid := _} = Status,
+                        _) ->
+    {ok, Status};
+ensure_promotion_target(#{membership := promotable, uid := _} = Status,
+                        #{log := Log}) ->
+    Target = ra_log:next_index(Log),
+    {ok, Status#{target => Target}};
+ensure_promotion_target(#{membership := promotable}, _) ->
+    {error, missing_uid};
+ensure_promotion_target(Voter, _) ->
+    {ok, Voter}.
+
+%% Get membership of a given Id+UId from a (possibly new) cluster.
+-spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
+                    ra_server_id(), ra_uid(), ra_membership()) ->
+    ra_membership().
+get_membership(_Cluster, _PeerId, _UId, Default) when is_list(_Cluster) ->
+    %% Legacy cluster snapshot does not retain voter_status.
+    Default;
+get_membership(Cluster, PeerId, UId, Default) ->
+    case maps:get(PeerId, Cluster, undefined) of
+        #{voter_status := #{uid := UId} = VoterStatus} ->
+            maps:get(membership, VoterStatus, Default);
+        _ ->
+            Default
+    end.
+
+%% Get this node's membership from a (possibly new) cluster.
+%% Defaults to last known-locally value.
+-spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
+                    ra_server_state()) ->
+    ra_membership().
+get_membership(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
+    Default = maps:get(membership, State, voter),
+    get_membership(Cluster, Id, UId, Default).
+
+%% Get this node's membership.
+%% Defaults to last known-locally value.
+-spec get_membership(ra_server_state()) -> ra_membership().
+get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) ->
+    Default = maps:get(membership, State, voter),
+    get_membership(Cluster, Id, UId, Default).
+
+-spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
+    effects().
+maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
+    case Cluster of
+        #{PeerId := #{match_index := MI,
+                      voter_status := #{membership := promotable,
+                                        target := Target} = OldStatus}} when
+              MI >= Target ->
+            Promote = {next_event,
+                       {command, {'$ra_join',
+                                  #{ts => os:system_time(millisecond)},
+                                  #{id => PeerId,
+                                    voter_status => OldStatus#{
+                                                      membership => voter
+                                                     }},
+                                  noreply}}},
+            [Promote | Effects];
+        _ ->
+            Effects
+    end.
+
+-spec required_quorum(ra_cluster()) -> pos_integer().
+required_quorum(Cluster) ->
+    Voters = count_voters(Cluster),
+    trunc(Voters / 2) + 1.
+
+count_voters(Cluster) ->
+    maps:fold(
+      fun (_, #{voter_status := #{membership := promotable}}, Count) ->
+              Count;
+          (_, _, Count) ->
+              Count + 1
+      end,
+      0, Cluster).
+
 %%% ===================
 %%% Internal unit tests
 %%% ===================

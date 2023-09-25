@@ -29,6 +29,9 @@ all() ->
 
 all_tests() ->
     [
+     nonvoter_catches_up,
+     nonvoter_catches_up_after_restart,
+     nonvoter_catches_up_after_leader_restart,
      start_stop_restart_delete_on_remote,
      start_cluster,
      start_or_restart_cluster,
@@ -295,13 +298,20 @@ start_cluster_minority(Config) ->
 send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
-    %% spawn a receiver process on one node
+    % add permanent non-voter
     {ok, _, Leader} = ra:members(hd(NodeIds)),
+    {ok, _, _} = ra:process_command(Leader, banana),
+    New = #{id => NonVoter,
+            membership => non_voter,
+            uid => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
     %% select a non-leader node to spawn on
     [{_, N} | _] = lists:delete(Leader, NodeIds),
     test_local_msg(Leader, N, N, send_local_msg, local),
@@ -309,36 +319,55 @@ send_local_msg(Config) ->
     test_local_msg(Leader, N, N, send_local_msg, [local, cast]),
     test_local_msg(Leader, N, N, send_local_msg, [local, cast, ra_event]),
     {_, LeaderNode} = Leader,
+    %% test the same but for a local pid (non-member)
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, local),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, send_local_msg, [local, cast, ra_event]),
-    %% test the same but for a local pid (non-member)
+    %% same for non-voter
+    {_, NonVoterNode} = NonVoter,
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, local),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, ra_event]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast, ra_event]),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
 local_log_effect(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert all were said to be started
     [] = Started -- NodeIds,
-    %% spawn a receiver process on one node
+    % add permanent non-voter
     {ok, _, Leader} = ra:members(hd(NodeIds)),
+    {ok, _, _} = ra:process_command(Leader, banana),
+    New = #{id => NonVoter,
+            membership => non_voter,
+            uid => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, NodeIds),
     %% select a non-leader node to spawn on
     [{_, N} | _] = lists:delete(Leader, NodeIds),
     test_local_msg(Leader, N, N, do_local_log, local),
     test_local_msg(Leader, N, N, do_local_log, [local, ra_event]),
     test_local_msg(Leader, N, N, do_local_log, [local, cast]),
     test_local_msg(Leader, N, N, do_local_log, [local, cast, ra_event]),
+    %% test the same but for a local pid (non-member)
     {_, LeaderNode} = Leader,
     test_local_msg(Leader, node(), LeaderNode, do_local_log, local),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, ra_event]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, node(), LeaderNode, do_local_log, [local, cast, ra_event]),
-    %% test the same but for a local pid (non-member)
+    %% same for non-voter
+    {_, NonVoterNode} = NonVoter,
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, local),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, ra_event]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast]),
+    test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast, ra_event]),
     [ok = slave:stop(S) || {_, S} <- NodeIds],
     ok.
 
@@ -389,6 +418,115 @@ disconnected_node_catches_up(Config) ->
                   ra:member_overview(DownServerId),
               SI /= undefined
       end, 200),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, membership => promotable, uid => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    ?assertMatch(#{Group := #{membership := promotable}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := promotable},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{membership := promotable}, _},
+                 ra:member_overview(C)),
+
+    await_condition(
+      fun () ->
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
+      end, 200),
+    ?assertMatch(#{Group := #{membership := voter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := voter},
+                 ra:key_metrics(C)),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up_after_restart(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, membership => promotable, uid => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    ?assertMatch(#{Group := #{membership := promotable}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := promotable},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{membership := promotable}, _},
+                 ra:member_overview(C)),
+    ok = ra:stop_server(?SYS, C),
+    ok = ra:restart_server(?SYS, C),
+
+    await_condition(
+      fun () ->
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
+      end, 200),
+    ?assertMatch(#{Group := #{membership := voter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := voter},
+                 ra:key_metrics(C)),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ok.
+
+nonvoter_catches_up_after_leader_restart(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
+    {ok, _, Leader} = ra:members(hd(Started)),
+
+    [ok = ra:pipeline_command(Leader, N, no_correlation, normal)
+     || N <- lists:seq(1, 10000)],
+    {ok, _, _} = ra:process_command(Leader, banana),
+
+    New = #{id => C, membership => promotable, uid => <<"test">>},
+    {ok, _, _} = ra:add_member(A, New),
+    ok = ra:start_server(?SYS, ClusterName, New, Machine, [A, B]),
+    ?assertMatch(#{Group := #{membership := promotable}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := promotable},
+                 ra:key_metrics(C)),
+    ?assertMatch({ok, #{membership := promotable}, _},
+                 ra:member_overview(C)),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
+
+    await_condition(
+      fun () ->
+          {ok, #{membership := M}, _} = ra:member_overview(C),
+          M == voter
+      end, 200),
+    ?assertMatch(#{Group := #{membership := voter}},
+                 rpc:call(NodeC, ra_directory, overview, [?SYS])),
+    ?assertMatch(#{membership := voter},
+                 ra:key_metrics(C)),
 
     [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.

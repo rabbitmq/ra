@@ -64,7 +64,10 @@ all_tests() ->
      post_partition_liveness,
      all_metrics_are_integers,
      transfer_leadership,
-     transfer_leadership_two_node
+     transfer_leadership_two_node,
+     new_nonvoter_knows_its_status,
+     voter_gets_promoted_consistent_leader,
+     voter_gets_promoted_new_leader
     ].
 
 groups() ->
@@ -1024,6 +1027,83 @@ transfer_leadership_two_node(Config) ->
     ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
     terminate_cluster(Members).
 
+new_nonvoter_knows_its_status(Config) ->
+    Name = ?config(test_name, Config),
+    [N1, N2] = [{n1, node()}, {n2, node()}],
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), [N1]),
+    _ = issue_op(N1, 1),
+    validate_state_on_node(N1, 1),
+
+    % grow
+    ok = start_and_join_nonvoter(N1, N2),
+
+    % n2 had no time to catch up
+    % in server state
+    {ok, #{uid := T, membership := promotable}, _} = ra:member_overview(N2),
+    {ok,
+     #{cluster := #{N2 := #{voter_status := #{membership := promotable,
+                                              target := 3,
+                                              uid := T}}}},
+     _} = ra:member_overview(N1),
+    % in ets
+    #{servers := #{n1 := #{membership := voter},
+                   n2 := #{membership := promotable}}} = ra:overview(?SYS),
+    ok.
+
+voter_gets_promoted_consistent_leader(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+
+    {ok, _, _}  = ra:start_cluster(default, ?config(test_name, Config), add_machine(), [N1]),
+    _ = issue_op(N1, 1),
+    validate_state_on_node(N1, 1),
+
+    % grow 1
+    ok = start_and_join_nonvoter(N1, N2),
+    _ = issue_op(N2, 1),
+    validate_state_on_node(N2, 2),
+
+    % grow 2
+    ok = start_and_join_nonvoter(N1, N3),
+    _ = issue_op(N3, 1),
+    validate_state_on_node(N3, 3),
+
+    % all are voters after catch-up
+    timer:sleep(100),
+    All = [N1, N2, N3],
+    % in server state
+    lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
+    % in ets
+    #{servers := Servers} = ra:overview(?SYS),
+    lists:map(fun({Name, _}) -> #{Name := #{membership := voter}} = Servers end, All),
+    ok.
+
+voter_gets_promoted_new_leader(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+
+    {ok, [Leader, _Second], []}  = ra:start_cluster(default, ?config(test_name, Config), add_machine(), [N1, N2]),
+    _ = issue_op(N1, 1),
+    validate_state_on_node(N1, 1),
+
+    % grow with leadership change
+    ok = start_and_join_nonvoter(N1, N3),
+    ra:transfer_leadership(Leader, _Second),
+    _ = issue_op(N3, 1),
+    validate_state_on_node(N3, 2),
+
+    % all are voters after catch-up
+    timer:sleep(100),
+    All = [N1, N2, N3],
+    % in server state
+    lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
+    % in ets
+    #{servers := Servers} = ra:overview(?SYS),
+    lists:map(fun({Name, _}) -> #{Name := #{membership := voter}} = Servers end, All),
+    ok.
+
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),
     proplists:get_value(raft_state, lists:last(Items)).
@@ -1096,6 +1176,13 @@ start_and_join({ClusterName, _} = ServerRef, {_, _} = New) ->
     ok = ra:start_server(default, ClusterName, New, add_machine(), [ServerRef]),
     ok.
 
+start_and_join_nonvoter({ClusterName, _} = ServerRef, {_, _} = New) ->
+    UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+    Server = #{id => New, membership => promotable, uid => UId},
+    {ok, _, _} = ra:add_member(ServerRef, Server),
+    ok = ra:start_server(default, ClusterName, Server, add_machine(), [ServerRef]),
+    ok.
+
 start_local_cluster(Num, Name, Machine) ->
     Nodes = [{ra_server:name(Name, integer_to_list(N)), node()}
              || N <- lists:seq(1, Num)],
@@ -1125,6 +1212,13 @@ nth_server_name(Config, N) when is_integer(N) ->
 
 add_machine() ->
     {module, ?MODULE, #{}}.
+
+overviews(Node) ->
+    {ok, Members, _From} = ra:members(Node),
+    [ra:member_overview(P) || {_, _} = P <- Members].
+
+voters({ok, #{cluster := Peers}, _} = _Overview) ->
+    [Id || {Id, Status} <- maps:to_list(Peers), maps:get(membership, Status, voter) == voter].
 
 %% machine impl
 init(_) -> 0.
