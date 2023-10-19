@@ -251,7 +251,7 @@
 
 -callback snapshot_module() -> module().
 
--callback version() -> pos_integer().
+-callback version() -> version().
 
 -callback which_module(version()) -> module().
 
@@ -291,11 +291,17 @@ overview(Mod, State) ->
 %% code
 -spec version(machine()) -> version().
 version({machine, Mod, _}) ->
-    ?OPT_CALL(assert_integer(Mod:version()), ?DEFAULT_VERSION).
+    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION).
 
 -spec is_versioned(machine()) -> boolean().
-is_versioned(Machine) ->
-    version(Machine) /= ?DEFAULT_VERSION.
+is_versioned({machine, Mod, _}) ->
+    try
+        _ = Mod:version(),
+        true
+    catch
+        error:undef ->
+            false
+    end.
 
 -spec which_module(machine(), version()) -> module().
 which_module({machine, Mod, _}, Version) ->
@@ -349,5 +355,5 @@ snapshot_module({machine, Mod, _}) ->
 
 %% internals
 
-assert_integer(I) when is_integer(I) andalso I > 0 ->
+assert_version(I) when is_integer(I) andalso I >= 0 ->
     I.
