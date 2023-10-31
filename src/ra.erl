@@ -284,7 +284,7 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
 %% forcefully deleted.
-%% @see start_or_restart_cluster/3
+%% @see start_or_restart_cluster/4
 %% @end
 -spec start_or_restart_cluster(atom(), ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()], non_neg_integer()) ->
@@ -593,8 +593,8 @@ add_member(ServerLoc, ServerId, Timeout) ->
 %%
 %% @param ServerRef the ra server to send the command to
 %% @param ServerId the ra server id of the server to remove
-%% @see leave_and_terminate/2
-%% @see leave_and_delete_server/2
+%% @see leave_and_terminate/4
+%% @see leave_and_delete_server/4
 %% @see add_member/2
 %% @see remove_member/3
 %% @end
@@ -642,7 +642,7 @@ trigger_election(ServerId, Timeout) ->
 %% or is permanently lost.
 %% @param ServerRef the ra server to send the command to and to remove
 %% @param ServerId the ra server to remove
-%% @see leave_and_terminate/3
+%% @see leave_and_terminate/4
 %% @end
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()], ra_server_id()) ->
@@ -650,11 +650,11 @@ trigger_election(ServerId, Timeout) ->
 leave_and_terminate(System, ServerRef, ServerId) ->
     leave_and_terminate(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
-%% @doc Same as `leave_and_terminate/2' but also accepts a timeout.
+%% @doc Same as `leave_and_terminate/3' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
 %% @param ServerId the ra server to remove
 %% @param Timeout timeout to use
-%% @see leave_and_terminate/2
+%% @see leave_and_terminate/3
 %% @end
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()],
@@ -682,7 +682,7 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
 %% @param System the system identifier
 %% @param ServerRef the ra server to send the command to and to remove
 %% @param ServerId the ra server to force remove
-%% @see leave_and_delete_server/3
+%% @see leave_and_delete_server/4
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id()) ->
@@ -690,11 +690,11 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
 leave_and_delete_server(System, ServerRef, ServerId) ->
     leave_and_delete_server(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
-%% @doc Same as `leave_and_delete_server/2' but also accepts a timeout.
+%% @doc Same as `leave_and_delete_server/3' but also accepts a timeout.
 %% @param ServerRef the ra server to send the command to and to remove
 %% @param ServerId the ra server to force remove
 %% @param Timeout timeout to use
-%% @see leave_and_delete_server/2
+%% @see leave_and_delete_server/3
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
