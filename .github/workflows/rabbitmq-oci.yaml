@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - image_tag_suffix: otp-max-bazel
-            otp_version_id: 26
+            otp_version_id: 26_1
     steps:
       - name: Checkout Ra
         uses: actions/checkout@v3
