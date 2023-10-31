@@ -2907,6 +2907,10 @@ ensure_promotion_target(#{membership := promotable, target := _, uid := _} = Sta
     {ok, Status};
 ensure_promotion_target(#{membership := promotable, uid := _} = Status,
                         #{log := Log}) ->
+    %% The next index in the log is used by for a cluster change command:
+    %% the caller of `ensure_promotion_target/2' also calls
+    %% `append_cluster_change/4'. So even if a peer joins a cluster which isn't
+    %% handling any other commands, this promotion target will be reachable.
     Target = ra_log:next_index(Log),
     {ok, Status#{target => Target}};
 ensure_promotion_target(#{membership := promotable}, _) ->
