@@ -453,26 +453,25 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             end
     end.
 
-%% @doc Starts a new distributed ra cluster.
-%% @param ClusterName the name of the cluster.
-%% @param ServerId the ra_server_id() of the server, or a map with server id and settings.
-%% @param Machine The {@link ra_machine:machine/0} configuration.
-%% @param ServerIds a list of initial (seed) server configurations
-%% @returns
-%% `{ok, Started, NotStarted}'  if a cluster could be successfully
-%% started. A cluster can be successfully started if more than half of the
-%% servers provided could be started. Servers that could not be started need to
-%% be retried periodically using {@link start_server/1}
-%%
-%% `{error, cluster_not_formed}' if a cluster could not be started.
-%%
-%% If a cluster could not be formed any servers that did manage to start are
-%% forcefully deleted.
-%% @see start_server/1
+%% @doc Starts an individual ra server of a cluster.
+%% @param System the system name.
+%% @param ClusterName the name of the cluster the server belongs to.
+%% @param ServerIdOrConf the `ra_server_id()' of the server, or a map with server id and settings.
+%% @param Machine The {@link ra_server:machine_conf()} configuration.
+%% @param ServerIds a list of initial (seed) server configurations for the cluster.
+%% @returns `ok'  if the server could be successfully started or `{error, Reason}' otherwise.
+%% @see start_server/2
 %% @end
--spec start_server(atom(), ra_cluster_name(), ra_server_id() | ra_new_server(),
-                   ra_server:machine_conf(), [ra_server_id()]) ->
-    ok | {error, term()}.
+-spec start_server(System, ClusterName, ServerIdOrConf, Machine, ServerIds) ->
+    Ret when
+      System :: atom(),
+      ClusterName :: ra_cluster_name(),
+      ServerIdOrConf :: ServerId | ServerConf,
+      ServerId :: ra:server_id(),
+      ServerConf :: ra_new_server(),
+      Machine :: ra_server:machine_conf(),
+      ServerIds :: [ra:server_id()],
+      Ret :: ok | {error, Reason :: term()}.
 start_server(System, ClusterName, {_, _} = ServerId, Machine, ServerIds) ->
     start_server(System, ClusterName, #{id => ServerId}, Machine, ServerIds);
 start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
