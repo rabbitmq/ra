@@ -59,7 +59,7 @@
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
-         index = undefined :: maybe(ra_segment_index()),
+         index = undefined :: 'maybe'(ra_segment_index()),
          range :: 'maybe'({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
@@ -367,7 +367,7 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                   Cfg#cfg.filename})
     end.
 
--spec range(state()) -> maybe({ra_index(), ra_index()}).
+-spec range(state()) -> 'maybe'({ra_index(), ra_index()}).
 range(#state{range = Range}) ->
     Range.
 

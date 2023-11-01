@@ -546,7 +546,7 @@ next_index(#?MODULE{last_index = LastIdx}) ->
     LastIdx + 1.
 
 -spec fetch(ra_index(), state()) ->
-    {maybe(log_entry()), state()}.
+    {'maybe'(log_entry()), state()}.
 fetch(Idx, State0) ->
     case fold(Idx, Idx, fun(E, Acc) -> [E | Acc] end, [], State0) of
         {[], State} ->
