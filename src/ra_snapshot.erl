@@ -60,9 +60,9 @@
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
          directory :: file:filename(),
-         pending :: 'maybe'({pid(), ra_idxterm()}),
-         accepting :: 'maybe'(#accept{}),
-         current :: 'maybe'(ra_idxterm())}).
+         pending :: option({pid(), ra_idxterm()}),
+         accepting :: option(#accept{}),
+         current :: option(ra_idxterm())}).
 
 -define(ETSTBL, ra_log_snapshot_state).
 
@@ -197,14 +197,14 @@ init_ets() ->
     _ = ets:new(?ETSTBL, TableFlags),
     ok.
 
--spec current(state()) -> 'maybe'(ra_idxterm()).
+-spec current(state()) -> option(ra_idxterm()).
 current(#?MODULE{current = Current}) -> Current.
 
--spec pending(state()) -> 'maybe'({pid(), ra_idxterm()}).
+-spec pending(state()) -> option({pid(), ra_idxterm()}).
 pending(#?MODULE{pending = Pending}) ->
     Pending.
 
--spec accepting(state()) -> 'maybe'(ra_idxterm()).
+-spec accepting(state()) -> option(ra_idxterm()).
 accepting(#?MODULE{accepting = undefined}) ->
     undefined;
 accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
@@ -213,7 +213,7 @@ accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
 -spec directory(state()) -> file:filename().
 directory(#?MODULE{directory = Dir}) -> Dir.
 
--spec last_index_for(ra_uid()) -> 'maybe'(ra_index()).
+-spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
     case ets:lookup(?ETSTBL, UId) of
         [] -> undefined;
@@ -400,7 +400,7 @@ read_meta(Module, Location) ->
     Module:read_meta(Location).
 
 -spec current_snapshot_dir(state()) ->
-    'maybe'(file:filename()).
+    option(file:filename()).
 current_snapshot_dir(#?MODULE{directory = Dir,
                               current = {Idx, Term}}) ->
     make_snapshot_dir(Dir, Idx, Term);

@@ -85,7 +85,7 @@
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
 %% ra_event types
--type ra_event_reject_detail() :: {not_leader, Leader :: 'maybe'(ra_server_id()),
+-type ra_event_reject_detail() :: {not_leader, Leader :: option(ra_server_id()),
                                    ra_server:command_correlation()}.
 
 -type ra_event_body() ::

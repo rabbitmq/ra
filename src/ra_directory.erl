@@ -63,7 +63,7 @@ deinit(#{directory := Name,
     _ = dets:close(NameRev),
     ok.
 
--spec register_name(ra_system:names() | atom(), ra_uid(), pid(), 'maybe'(pid()), atom(),
+-spec register_name(ra_system:names() | atom(), ra_uid(), pid(), option(pid()), atom(),
                     ra_cluster_name()) -> ok.
 register_name(System, UId, Pid, ParentPid, ServerName, ClusterName)
   when is_atom(System) ->
@@ -135,7 +135,7 @@ where_is_parent(#{directory := Dir}, UId) when is_binary(UId) ->
         [] -> undefined
     end.
 
--spec name_of(atom() | ra_system:names(), ra_uid()) -> 'maybe'(atom()).
+-spec name_of(atom() | ra_system:names(), ra_uid()) -> option(atom()).
 name_of(SystemOrNames, UId) ->
     Tbl = get_name(SystemOrNames),
     case ets:lookup(Tbl, UId) of
@@ -144,7 +144,7 @@ name_of(SystemOrNames, UId) ->
     end.
 
 -spec cluster_name_of(ra_system:names() | atom(), ra_uid()) ->
-    'maybe'(ra_cluster_name()).
+    option(ra_cluster_name()).
 cluster_name_of(SystemOrNames, UId) ->
     Tbl = get_name(SystemOrNames),
     case ets:lookup(Tbl, UId) of
@@ -153,7 +153,7 @@ cluster_name_of(SystemOrNames, UId) ->
     end.
 
 
--spec pid_of(atom() | ra_system:names(), ra_uid()) -> 'maybe'(pid()).
+-spec pid_of(atom() | ra_system:names(), ra_uid()) -> option(pid()).
 pid_of(SystemOrNames, UId) ->
     case ets:lookup(get_name(SystemOrNames), UId) of
         [{_, Pid, _, _, _}] -> Pid;

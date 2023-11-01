@@ -94,8 +94,8 @@
                compress_mem_tables = false :: boolean()
               }).
 
--record(wal, {fd :: 'maybe'(file:io_device()),
-              filename :: 'maybe'(file:filename()),
+-record(wal, {fd :: option(file:io_device()),
+              filename :: option(file:filename()),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
               entry_count = 0 :: non_neg_integer()
@@ -117,7 +117,7 @@
                 % and the last index seen
                 writers = #{} :: #{ra_uid() =>
                                    {in_seq | out_of_seq, ra_index()}},
-                batch :: 'maybe'(#batch{})
+                batch :: option(#batch{})
                }).
 
 -type state() :: #state{}.

@@ -4,7 +4,7 @@
 %%
 %% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
--type 'maybe'(T) :: undefined | T.
+-type option(T) :: undefined | T.
 
 %%
 %% Most of the records here are covered on Figure 2
