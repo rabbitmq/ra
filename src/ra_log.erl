@@ -100,7 +100,7 @@
          % if this is set a snapshot write is in progress for the
          % index specified
          cache = ra_log_cache:init() :: ra_log_cache:state(),
-         last_resend_time :: 'maybe'(integer()),
+         last_resend_time :: option(integer()),
          reader :: ra_log_reader:state(),
          readers = [] :: [pid()]
         }).
@@ -546,7 +546,7 @@ next_index(#?MODULE{last_index = LastIdx}) ->
     LastIdx + 1.
 
 -spec fetch(ra_index(), state()) ->
-    {maybe(log_entry()), state()}.
+    {option(log_entry()), state()}.
 fetch(Idx, State0) ->
     case fold(Idx, Idx, fun(E, Acc) -> [E | Acc] end, [], State0) of
         {[], State} ->
@@ -556,7 +556,7 @@ fetch(Idx, State0) ->
     end.
 
 -spec fetch_term(ra_index(), state()) ->
-    {'maybe'(ra_term()), state()}.
+    {option(ra_term()), state()}.
 fetch_term(Idx, #?MODULE{last_index = LastIdx,
                          first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
@@ -598,7 +598,7 @@ install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
      Effs}.
 
 -spec recover_snapshot(State :: state()) ->
-    'maybe'({ra_snapshot:meta(), term()}).
+    option({ra_snapshot:meta(), term()}).
 recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
     case ra_snapshot:recover(SnapState) of
         {ok, Meta, MacState} ->
@@ -607,7 +607,7 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
             undefined
     end.
 
--spec snapshot_index_term(State :: state()) -> 'maybe'(ra_idxterm()).
+-spec snapshot_index_term(State :: state()) -> option(ra_idxterm()).
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 

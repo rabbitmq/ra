@@ -64,14 +64,14 @@
 
 -type ra_server_state() ::
     #{cfg := #cfg{},
-      leader_id => 'maybe'(ra_server_id()),
+      leader_id => option(ra_server_id()),
       cluster := ra_cluster(),
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term := ra_term(),
       log := term(),
-      voted_for => 'maybe'(ra_server_id()), % persistent
+      voted_for => option(ra_server_id()), % persistent
       votes => non_neg_integer(),
       membership => ra_membership(),
       commit_index := ra_index(),
@@ -87,7 +87,7 @@
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => 'maybe'(non_neg_integer())
+      commit_latency => option(non_neg_integer())
      }.
 
 -type ra_state() :: leader | follower | candidate
@@ -1498,7 +1498,7 @@ uid(#{cfg := #cfg{uid = UId}}) -> UId.
 -spec system_config(ra_server_state()) -> ra_system:config().
 system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
 
--spec leader_id(ra_server_state()) -> 'maybe'(ra_server_id()).
+-spec leader_id(ra_server_state()) -> option(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
 
@@ -1506,7 +1506,7 @@ leader_id(State) ->
 clear_leader_id(State) ->
     State#{leader_id => undefined}.
 
--spec current_term(ra_server_state()) -> 'maybe'(ra_term()).
+-spec current_term(ra_server_state()) -> option(ra_term()).
 current_term(State) ->
     maps:get(current_term, State).
 
