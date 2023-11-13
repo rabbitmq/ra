@@ -1,0 +1,15 @@
+name: Trigger Jepsen Tests
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Trigger RA Jepsen Tests
+      uses: peter-evans/repository-dispatch@v2
+      with:
+        event-type: ra_change
+        repository: rabbitmq/ra-kv-store
+        token: ${{ secrets.CI_GITHUB_TOKEN }}
