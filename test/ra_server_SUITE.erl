@@ -1,6 +1,6 @@
 %% This Source Code Form is subject to the terms of the Mozilla Public
 %%
-%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 %%
 -module(ra_server_SUITE).
 
