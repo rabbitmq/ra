@@ -1006,6 +1006,19 @@ terminate(Reason, StateName,
     end,
     _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
+    ok;
+%% This occurs if there is a crash in the init callback of the ra_machine,
+%% before a state has been built
+terminate(Reason, StateName, #{id := Id} = Config) ->
+    LogId = maps:get(friendly_name, Config,
+                     lists:flatten(io_lib:format("~w", [Id]))),
+    ?DEBUG("~ts: terminating with ~w in state ~w",
+           [LogId, Reason, StateName]),
+    ok;
+%% Unknown reason for termination
+terminate(Reason, StateName, State) ->
+    ?DEBUG("Terminating with ~w in state ~w with state ~w",
+           [Reason, StateName, State]),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
