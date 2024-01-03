@@ -1486,7 +1486,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             LeaderNode = ra_lib:ra_server_id_node(NewLeader),
             ok = aten_register(LeaderNode),
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
-            ok = aten:unregister(OldLeaderNode),
+            _ = aten:unregister(OldLeaderNode),
             ok = record_leader_change(NewLeader, New),
             % leader has either changed or just been set
             ?INFO("~ts: detected a new leader ~w in term ~b",
@@ -1502,7 +1502,12 @@ aten_register(Node) ->
     case node() of
         Node -> ok;
         _ ->
-            aten:register(Node)
+            case aten:register(Node) of
+                ignore ->
+                    ok;
+                Res ->
+                    Res
+            end
     end.
 
 swap_monitor(MRef, L) ->
