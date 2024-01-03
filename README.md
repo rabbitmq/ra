@@ -449,7 +449,7 @@ The modules that form part of the public API are:
 
 ## Copyright and License
 
-(c) 2017-2023 Broadcom. All Rights Reserved. The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+(c) 2017-2024 Broadcom. All Rights Reserved. The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 
 Dual licensed under the Apache License Version 2.0 and
 Mozilla Public License Version 2.0.
