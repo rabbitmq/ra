@@ -50,8 +50,8 @@ erlang_package = use_extension(
 
 erlang_package.hex_package(
     name = "aten",
-    version = "0.5.8",
-    sha256 = "64d40a8cf0ddfea4e13af00b7327f0925147f83612d0627d9506cbffe90c13ef",
+    version = "0.6.0",
+    sha256 = "5f39a164206ae3f211ef5880b1f7819415686436e3229d30b6a058564fbaa168",
 )
 
 erlang_package.hex_package(
