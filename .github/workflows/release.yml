@@ -44,7 +44,7 @@ jobs:
           https://github.com/${{ github.repository }}/archive/${{ github.ref }}.tar.gz
     - name: CREATE RELEASE
       id: create-release
-      uses: ncipollo/release-action@v1.12.0
+      uses: ncipollo/release-action@v1.13.0
       with:
         token: ${{ secrets.REPO_SCOPED_TOKEN }}
         allowUpdates: true
