@@ -46,7 +46,6 @@ jobs:
       id: create-release
       uses: ncipollo/release-action@v1.13.0
       with:
-        token: ${{ secrets.REPO_SCOPED_TOKEN }}
         allowUpdates: true
         artifactErrorsFailBuild: true
         updateOnlyUnreleased: true
