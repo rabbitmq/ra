@@ -980,10 +980,8 @@ terminate(Reason, StateName,
     Parent = ra_directory:where_is_parent(Names, UId),
     case Reason of
         {shutdown, delete} ->
-            catch ra_leaderboard:clear(ClusterName),
             catch ra_directory:unregister_name(Names, UId),
             catch ra_log_meta:delete_sync(MetaName, UId),
-            catch ets:delete(ra_state, UId),
             catch ra_counters:delete(Id),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
@@ -1004,6 +1002,7 @@ terminate(Reason, StateName,
 
         _ -> ok
     end,
+    catch ra_leaderboard:clear(ClusterName),
     _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
     ok;
@@ -1339,6 +1338,9 @@ handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
+    {State, Actions};
+handle_effect(_, update_leaderboard, _EvtType, State, Actions) ->
+    ok = record_leader_change(leader_id(State), State),
     {State, Actions};
 handle_effect(_, {monitor, _ProcOrNode, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->

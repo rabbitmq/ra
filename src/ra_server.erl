@@ -503,19 +503,19 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     {leader, State, Effects};
 handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId} = Cfg} = State00) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, 1),
-    case append_log_leader(Cmd, State00) of
-        {not_appended, Reason, State} ->
+    case append_log_leader(Cmd, State00, []) of
+        {not_appended, Reason, State, Effects0} ->
             ?WARN("~ts command ~W NOT appended to log. Reason ~w",
                   [LogId, Cmd, 10, Reason]),
             Effects = case Cmd of
                           {_, #{from := From}, _, _} ->
-                              [{reply, From, {error, Reason}}];
+                              [{reply, From, {error, Reason}} | Effects0];
                           _ ->
-                              []
+                              Effects0
                       end,
             {leader, State, Effects};
-        {ok, Idx, Term, State0} ->
-            {State, _, Effects0} = make_pipelined_rpc_effects(State0, []),
+        {ok, Idx, Term, State0, Effects00} ->
+            {State, _, Effects0} = make_pipelined_rpc_effects(State0, Effects00),
             % check if a reply is required.
             % TODO: refactor - can this be made a bit nicer/more explicit?
             Effects = case Cmd of
@@ -531,8 +531,8 @@ handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
     %% TODO: refactor to use wal batch API?
     Num = length(Cmds),
     {State0, Effects0} =
-        lists:foldl(fun(C, {S0, E}) ->
-                            {ok, I, T, S} = append_log_leader(C, S0),
+        lists:foldl(fun(C, {S0, E0}) ->
+                            {ok, I, T, S, E} = append_log_leader(C, S0, E0),
                             case C of
                                 {_, #{from := From}, _, after_log_append} ->
                                     {S, [{reply, From,
@@ -1023,18 +1023,27 @@ handle_follower(#append_entries_rpc{term = Term,
                 _ ->
                     State1 = lists:foldl(fun pre_append_log_follower/2,
                                          State0, Entries),
+                    %% if the cluster has changed we need to update
+                    %% the leaderboard
+                    Effects1 = case maps:get(cluster, State0) =/=
+                                    maps:get(cluster, State1) of
+                                   true ->
+                                       [update_leaderboard | Effects0];
+                                   false ->
+                                       Effects0
+                               end,
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
-                                                               Effects0),
+                                                               Effects1),
                                 {NextState, State,
                                  [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             {await_condition,
                              State1#{log => Log1,
                                      condition => fun wal_down_condition/2},
-                             Effects0};
+                             Effects1};
                         {error, _} = Err ->
                             exit(Err)
                     end
@@ -1248,8 +1257,9 @@ handle_follower(force_member_change,
     Cluster = #{Id => new_peer()},
     ?WARN("~ts: Forcing cluster change. New cluster ~w",
           [LogId, Cluster]),
-    {ok, _, _, State} = append_cluster_change(Cluster, undefined, no_reply, State0),
-    call_for_election(pre_vote, State, [{reply, ok}]);
+    {ok, _, _, State, Effects} =
+        append_cluster_change(Cluster, undefined, no_reply, State0, []),
+    call_for_election(pre_vote, State, [{reply, ok} | Effects]);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, []}.
@@ -1638,6 +1648,8 @@ filter_follower_effects(Effects) ->
                     ({aux, _} = C, Acc) ->
                         [C | Acc];
                     (garbage_collection = C, Acc) ->
+                        [C | Acc];
+                    (update_leaderboard = C, Acc) ->
                         [C | Acc];
                     ({delete_snapshot, _} = C, Acc) ->
                         [C | Acc];
@@ -2495,65 +2507,67 @@ add_reply(_, _, _, % From, Reply, Mode
     {Effects, Notifys}.
 
 append_log_leader({CmdTag, _, _, _},
-                  State = #{cluster_change_permitted := false})
+                  #{cluster_change_permitted := false} = State,
+                  Effects)
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
-    {not_appended, cluster_change_not_permitted, State};
-append_log_leader({'$ra_join', From,
-                   #{id := JoiningNode, voter_status := Voter0},
-                   ReplyMode},
-                  State = #{cluster := OldCluster}) ->
+    {not_appended, cluster_change_not_permitted, State, Effects};
+append_log_leader({'$ra_join', From, #{id := JoiningNode,
+                                       voter_status := Voter0}, ReplyMode},
+                  #{cluster := OldCluster} = State, Effects) ->
     case ensure_promotion_target(Voter0, State) of
         {error, Reason} ->
             {not_appended, Reason, State};
         {ok, Voter} ->
             case OldCluster of
                 #{JoiningNode := #{voter_status := Voter}} ->
-                    already_member(State);
+                    already_member(State, Effects);
                 #{JoiningNode := Peer} ->
                     % Update member status.
                     Cluster = OldCluster#{JoiningNode => Peer#{voter_status => Voter}},
-                    append_cluster_change(Cluster, From, ReplyMode, State);
+                    append_cluster_change(Cluster, From, ReplyMode, State, Effects);
                 _ ->
                     % Insert new member.
                     Cluster = OldCluster#{JoiningNode => new_peer_with(#{voter_status => Voter})},
-                    append_cluster_change(Cluster, From, ReplyMode, State)
+                    append_cluster_change(Cluster, From, ReplyMode, State, Effects)
             end
     end;
 append_log_leader({'$ra_join', From, #{id := JoiningNode} = Config, ReplyMode},
-                  State) ->
+                  State, Effects) ->
     append_log_leader({'$ra_join', From,
                        #{id => JoiningNode,
                          voter_status => maps:with([membership, uid, target],
                                                    Config)},
-                       ReplyMode}, State);
+                       ReplyMode}, State, Effects);
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-                  State = #{cluster := OldCluster}) ->
+                  #{cluster := OldCluster} = State,
+                  Effects) ->
     % Legacy $ra_join, join as voter if no such member in the cluster.
     case OldCluster of
         #{JoiningNode := _} ->
-            already_member(State);
+            already_member(State, Effects);
         _ ->
-            append_log_leader({'$ra_join', From, #{id => JoiningNode}, ReplyMode}, State)
+            append_log_leader({'$ra_join', From, #{id => JoiningNode}, ReplyMode},
+                              State, Effects)
     end;
 append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
-                  State = #{cfg := #cfg{log_id = LogId},
-                            cluster := OldCluster}) ->
+                  #{cfg := #cfg{log_id = LogId},
+                    cluster := OldCluster} = State, Effects) ->
     case OldCluster of
         #{LeavingServer := _} ->
             Cluster = maps:remove(LeavingServer, OldCluster),
-            append_cluster_change(Cluster, From, ReplyMode, State);
+            append_cluster_change(Cluster, From, ReplyMode, State, Effects);
         _ ->
             ?DEBUG("~ts: member ~w requested to leave but was not a member. "
                    "Members: ~w",
                    [LogId, LeavingServer, maps:keys(OldCluster)]),
             % not a member - do nothing
-            {not_appended, not_member, State}
+            {not_appended, not_member, State, Effects}
     end;
-append_log_leader(Cmd, State = #{log := Log0, current_term := Term}) ->
+append_log_leader(Cmd, State = #{log := Log0, current_term := Term}, Effects) ->
     NextIdx = ra_log:next_index(Log0),
     Log = ra_log:append({NextIdx, Term, Cmd}, Log0),
-    {ok, NextIdx, Term, State#{log => Log}}.
+    {ok, NextIdx, Term, State#{log => Log}, Effects}.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
                         State = #{cluster_index_term := {Idx, CITTerm}})
@@ -2582,10 +2596,11 @@ pre_append_log_follower(_, State) ->
     State.
 
 append_cluster_change(Cluster, From, ReplyMode,
-                      State = #{log := Log0,
-                                cluster := PrevCluster,
-                                cluster_index_term := {PrevCITIdx, PrevCITTerm},
-                                current_term := Term}) ->
+                      #{log := Log0,
+                        cluster := PrevCluster,
+                        cluster_index_term := {PrevCITIdx, PrevCITTerm},
+                        current_term := Term} = State,
+                      Effects0) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
@@ -2594,12 +2609,14 @@ append_cluster_change(Cluster, From, ReplyMode,
     % TODO: is it safe to do change the cluster config with an async write?
     % what happens if the write fails?
     Log = ra_log:append({NextIdx, Term, Command}, Log0),
+    Effects = [update_leaderboard | Effects0],
     {ok, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,
             cluster_change_permitted => false,
             cluster_index_term => IdxTerm,
-            previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}}}.
+            previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}},
+     Effects}.
 
 mismatch_append_entries_reply(Term, CommitIndex, State0) ->
     {CITerm, State} = fetch_term(CommitIndex, State0),
@@ -2891,10 +2908,10 @@ meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
 meta_name(#{names := #{log_meta := Name}}) ->
     Name.
 
-already_member(State) ->
+already_member(State, Effects) ->
     % already a member do nothing
     % TODO: reply? If we don't reply the caller may block until timeout
-    {not_appended, already_member, State}.
+    {not_appended, already_member, State, Effects}.
 
 %%% ====================
 %%% Voter status helpers
@@ -2909,7 +2926,7 @@ ensure_promotion_target(#{membership := promotable, uid := _} = Status,
                         #{log := Log}) ->
     %% The next index in the log is used by for a cluster change command:
     %% the caller of `ensure_promotion_target/2' also calls
-    %% `append_cluster_change/4'. So even if a peer joins a cluster which isn't
+    %% `append_cluster_change/5'. So even if a peer joins a cluster which isn't
     %% handling any other commands, this promotion target will be reachable.
     Target = ra_log:next_index(Log),
     {ok, Status#{target => Target}};

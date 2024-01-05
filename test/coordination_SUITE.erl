@@ -41,6 +41,7 @@ all_tests() ->
      delete_three_server_cluster_parallel,
      start_cluster_majority,
      start_cluster_minority,
+     grow_cluster,
      send_local_msg,
      local_log_effect,
      leaderboard,
@@ -293,6 +294,68 @@ start_cluster_minority(Config) ->
     % assert none is started
     [{error, _} = ra_server_proc:ping(N, 50) || N <- NodeIds],
     [ok = slave:stop(S) || {_, S} <- NodeIds0],
+    ok.
+
+grow_cluster(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    [{_, ANode} = A,
+     {_, BNode} = B,
+     {_, CNode} = C] =
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Machine = {module, ?MODULE, #{}},
+    {ok, [A], []} = ra:start_cluster(?SYS, ClusterName, Machine, [A]),
+
+    ok = ra:start_server(?SYS, ClusterName, B, Machine, [A]),
+    {ok, _, _} = ra:add_member(A, B),
+    {ok, _, _} = ra:process_command(A, banana),
+    [A, B] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    [A, B] = rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]),
+
+    ok = ra:start_server(?SYS, ClusterName, C, Machine, [A, B]),
+    {ok, _, _} = ra:add_member(A, C),
+    {ok, _, _} = ra:process_command(A, banana),
+    {ok, _, L1} = ra:members(A),
+    [A, B, C] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    L1 = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
+    %% TODO: handle race conditions
+    await_condition(
+      fun () ->
+              [A, B, C] == rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]) andalso
+              L1 == rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName])
+      end, 20),
+    await_condition(
+      fun () ->
+              [A, B, C] == rpc:call(CNode, ra_leaderboard, lookup_members, [ClusterName]) andalso
+              L1 == rpc:call(CNode, ra_leaderboard, lookup_leader, [ClusterName])
+      end, 20),
+
+    ok = ra:leave_and_delete_server(?SYS, A, A),
+    {ok, _, _} = ra:process_command(B, banana),
+    {ok, _, L2} = ra:members(B),
+
+    %% check members
+    [B, C] = rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]),
+    [B, C] = rpc:call(CNode, ra_leaderboard, lookup_members, [ClusterName]),
+    undefined = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    %% check leader
+    L2 = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
+    L2 = rpc:call(CNode, ra_leaderboard, lookup_leader, [ClusterName]),
+    undefined = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
+
+
+    ok = ra:leave_and_delete_server(?SYS, B, B),
+    {ok, _, _} = ra:process_command(C, banana),
+    %% check members
+    [C] = rpc:call(CNode, ra_leaderboard, lookup_members, [ClusterName]),
+    undefined = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    undefined = rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]),
+    %% check leader
+    C = rpc:call(CNode, ra_leaderboard, lookup_leader, [ClusterName]),
+    undefined = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
+    undefined = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
+
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
     ok.
 
 send_local_msg(Config) ->

@@ -130,12 +130,12 @@ prepare_server_stop_rpc(System, RaName) ->
             {ok, Parent, SrvSup}
     end.
 
--spec delete_server(atom(), NodeId :: ra_server_id()) ->
+-spec delete_server(atom(), ServerId :: ra_server_id()) ->
     ok | {error, term()} | {badrpc, term()}.
-delete_server(System, NodeId) when is_atom(System) ->
-    Node = ra_lib:ra_server_id_node(NodeId),
-    Name = ra_lib:ra_server_id_to_local_name(NodeId),
-    case stop_server(System, NodeId) of
+delete_server(System, ServerId) when is_atom(System) ->
+    Node = ra_lib:ra_server_id_node(ServerId),
+    Name = ra_lib:ra_server_id_to_local_name(ServerId),
+    case stop_server(System, ServerId) of
         ok ->
             rpc:call(Node, ?MODULE, delete_server_rpc, [System, Name]);
         {error, _} = Err -> Err
@@ -151,6 +151,7 @@ delete_server_rpc(System, RaName) ->
             ?INFO("Deleting server ~w and its data directory.~n",
                   [RaName]),
             %% TODO: better handle and report errors
+            %% UId could be `undefined' here
             UId = ra_directory:uid_of(Names, RaName),
             Pid = ra_directory:where_is(Names, RaName),
             ra_log_meta:delete(Meta, UId),

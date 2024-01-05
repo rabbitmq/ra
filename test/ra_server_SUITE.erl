@@ -876,8 +876,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                            entries = [{4, 5, {'$ra_cluster_change', _,
                                               #{N2 := #{voter_status := #{membership := voter,
                                                                           uid := <<"uid">>}}},
-                                              _}}]}}
-     ]} = ra_server:handle_leader(RaJoin, State2),
+                                              _}}]}} |
+      _]} = ra_server:handle_leader(RaJoin, State2),
 
     Ack2 = #append_entries_reply{term = 5, success = true,
                                      next_index = 5,
