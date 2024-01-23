@@ -1552,7 +1552,7 @@ do_state_query(voters, #{cluster := Cluster}) ->
                                     end
                            end
               end, [], Cluster),
-    Vs;
+    lists:sort(Vs);
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
 do_state_query(initial_members, #{log := Log}) ->
