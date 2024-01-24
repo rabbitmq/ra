@@ -44,8 +44,6 @@ all_tests() ->
      local_query_boom,
      local_query_stale,
      members,
-     voters_promotable,
-     voters_non_voter,
      consistent_query,
      consistent_query_after_restart,
      consistent_query_minority,
@@ -538,29 +536,6 @@ members(Config) ->
                                          ?PROCESS_COMMAND_TIMEOUT),
     {ok, Cluster, Leader} = ra:members(Leader),
     terminate_cluster(Cluster).
-
-voters_promotable(Config) ->
-    Name = ?config(test_name, Config),
-    [A, B] = Cluster = start_local_cluster(2, Name, add_machine()),
-    {ok, _, Leader} = ra:process_command(A, 9),
-    C = {ra_server:name(Name, "3"), node()},
-    ok = ra:start_server(default, Name, C, add_machine(), Cluster),
-    {ok, _, _} = ra:add_member(Leader, #{id => C, uid => <<"4">>, membership => promotable}),
-    {ok, [A, B, C], Leader} = ra:members(Leader),
-    {ok, [A, B], Leader} = ra:voters(Leader),
-    terminate_cluster([C | Cluster]).
-
-voters_non_voter(Config) ->
-    Name = ?config(test_name, Config),
-    [A, B] = Cluster = start_local_cluster(2, Name, add_machine()),
-    {ok, _, Leader} = ra:process_command(A, 9),
-        C = {ra_server:name(Name, "3"), node()},
-    ok = ra:start_server(default, Name, C, add_machine(), Cluster),
-    {ok, _, _} = ra:add_member(Leader, #{id => C, uid => <<"4">>, membership => non_voter}),
-    {ok, [A, B, C], Leader} = ra:members(Leader),
-    {ok, [A, B], Leader} = ra:voters(Leader),
-    terminate_cluster([C | Cluster]).
-
 
 consistent_query(Config) ->
     [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
@@ -1098,7 +1073,7 @@ voter_gets_promoted_consistent_leader(Config) ->
     timer:sleep(100),
     All = [N1, N2, N3],
     % in server state
-    lists:map(fun(O) -> ?assertEqual(All, filter_voters(O)) end, overviews(N1)),
+    lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
     % in ets
     #{servers := Servers} = ra:overview(?SYS),
     lists:map(fun({Name, _}) -> #{Name := #{membership := voter}} = Servers end, All),
@@ -1123,7 +1098,7 @@ voter_gets_promoted_new_leader(Config) ->
     timer:sleep(100),
     All = [N1, N2, N3],
     % in server state
-    lists:map(fun(O) -> ?assertEqual(All, filter_voters(O)) end, overviews(N1)),
+    lists:map(fun(O) -> ?assertEqual(All, voters(O)) end, overviews(N1)),
     % in ets
     #{servers := Servers} = ra:overview(?SYS),
     lists:map(fun({Name, _}) -> #{Name := #{membership := voter}} = Servers end, All),
@@ -1242,7 +1217,7 @@ overviews(Node) ->
     {ok, Members, _From} = ra:members(Node),
     [ra:member_overview(P) || {_, _} = P <- Members].
 
-filter_voters({ok, #{cluster := Peers}, _} = _Overview) ->
+voters({ok, #{cluster := Peers}, _} = _Overview) ->
     [Id || {Id, Status} <- maps:to_list(Peers), maps:get(membership, Status, voter) == voter].
 
 %% machine impl
