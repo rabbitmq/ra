@@ -185,6 +185,7 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
                   overview |
                   voters |
                   members |
+                  members_info |
                   initial_members |
                   machine, timeout()) ->
     ra_leader_call_ret(term()).
@@ -196,6 +197,7 @@ state_query(ServerLoc, Spec, Timeout) ->
                         overview |
                         voters |
                         members |
+                        members_info |
                         initial_members |
                         machine, timeout()) ->
     ra_local_call_ret(term()).
@@ -1555,6 +1557,17 @@ do_state_query(voters, #{cluster := Cluster}) ->
     Vs;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
+do_state_query(members_info,
+               _State = #{cfg := #cfg{id = Id}, cluster := Cluster, leader_id := Id,
+               query_index := QI, commit_index := CI}) ->
+    %% We're leader, update indices.
+    Peer = maps:get(Id, Cluster, #{}),
+    Cluster#{Id => Peer#{next_index => CI+1,
+                         match_index => CI,
+                         query_index => QI,
+                         commit_index_sent => CI}};
+do_state_query(members_info, _State) ->
+    {error, not_a_leader};
 do_state_query(initial_members, #{log := Log}) ->
     case ra_log:read_config(Log) of
         {ok, #{initial_members := InitialMembers}} ->

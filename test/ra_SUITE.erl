@@ -44,6 +44,7 @@ all_tests() ->
      local_query_boom,
      local_query_stale,
      members,
+     members_info,
      consistent_query,
      consistent_query_after_restart,
      consistent_query_minority,
@@ -536,6 +537,35 @@ members(Config) ->
                                          ?PROCESS_COMMAND_TIMEOUT),
     {ok, Cluster, Leader} = ra:members(Leader),
     terminate_cluster(Cluster).
+
+members_info(Config) ->
+    Name = ?config(test_name, Config),
+    [A = {_, Host}, B] = InitNodes = start_local_cluster(2, Name, add_machine()),
+    {ok, _, Leader} = ra:process_command(A, 9),
+
+    CSpec =  #{id => {CName = ra_server:name(Name, "3"), node()},
+               uid => <<"3">>,
+               membership => promotable},
+    C =  {CName, Host},
+    ok = ra:start_server(default, Name, CSpec, add_machine(), InitNodes),
+    {ok, _, _} = ra:add_member(Leader, CSpec),
+    {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
+
+    {ok, #{cluster := Cluster}, _} = ra_server_proc:state_query(Leader, all, 5000),
+    dump(Cluster),
+    Want = #{A => #{status => normal,query_index => 1,
+                    next_index => 5,match_index => 4,
+                    commit_index_sent => 4},
+             B => #{status => normal,query_index => 1,
+                    next_index => 5,match_index => 4,
+                    commit_index_sent => 4},
+             C => #{status => normal, query_index => 1,
+                    next_index => 5, match_index => 4,
+                    commit_index_sent => 4,
+                    voter_status => #{membership => voter,uid => <<"3">>, target => 3}}},
+    {ok, Have, Leader} = ra:members_info(Leader),
+    ?assertEqual(Want, Have),
+    terminate_cluster([A, B, C]).
 
 consistent_query(Config) ->
     [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
