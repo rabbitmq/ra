@@ -23,6 +23,8 @@
          %% queries
          members/1,
          members/2,
+         members_info/1,
+         members_info/2,
          initial_members/1,
          initial_members/2,
          local_query/2,
@@ -1036,6 +1038,45 @@ members({local, ServerId}, Timeout) ->
     ra_server_proc:local_state_query(ServerId, members, Timeout);
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
+
+%% @doc Returns a list of cluster members and their Raft metrics
+%%
+%% Except if `{local, ServerId}' is passed, the query is sent to the specified
+%% server which may redirect it to the leader if it is a follower. It may
+%% timeout if there is currently no leader (i.e. an election is in progress).
+%%
+%% With `{local, ServerId}', the query is always handled by the specified
+%% server. It means the returned list might be out-of-date compared to what the
+%% leader would have returned.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @end
+-spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
+    ra_server_proc:ra_leader_call_ret(ra_cluster()).
+members_info(ServerId) ->
+    members_info(ServerId, ?DEFAULT_TIMEOUT).
+
+%% @doc Returns a list of cluster members and their Raft metrics
+%%
+%% Except if `{local, ServerId}' is passed, the query is sent to the specified
+%% server which may redirect it to the leader if it is a follower. It may
+%% timeout if there is currently no leader (i.e. an election is in progress).
+%%
+%% With `{local, ServerId}', the query is always handled by the specified
+%% server. It means the returned list might be out-of-date compared to what the
+%% leader would have returned.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Timeout the timeout to use
+%% @end
+-spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
+              timeout()) ->
+    ra_server_proc:ra_leader_call_ret(ra_cluster()).
+members_info({local, ServerId}, Timeout) ->
+    ra_server_proc:local_state_query(ServerId, members_info, Timeout);
+members_info(ServerId, Timeout) ->
+    ra_server_proc:state_query(ServerId, members_info, Timeout).
+
 
 %% @doc Returns a list of initial (seed) cluster members.
 %%

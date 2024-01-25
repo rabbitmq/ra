@@ -185,6 +185,7 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
                   overview |
                   voters |
                   members |
+                  members_info |
                   initial_members |
                   machine, timeout()) ->
     ra_leader_call_ret(term()).
@@ -196,6 +197,7 @@ state_query(ServerLoc, Spec, Timeout) ->
                         overview |
                         voters |
                         members |
+                        members_info |
                         initial_members |
                         machine, timeout()) ->
     ra_local_call_ret(term()).
@@ -1555,6 +1557,51 @@ do_state_query(voters, #{cluster := Cluster}) ->
     Vs;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
+do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
+               leader_id := Self, query_index := QI, commit_index := CI,
+               membership := Membership}) ->
+    maps:map(fun(Id, Peer) ->
+                 case {Id, Peer} of
+                     {Self, Peer = #{voter_status := VoterStatus}} ->
+                         %% For completeness sake, preserve `target`
+                         %% of once promoted leader.
+                         #{next_index => CI+1,
+                           match_index => CI,
+                           query_index => QI,
+                           status => normal,
+                           voter_status => VoterStatus#{membership => Membership}};
+                     {Self, _} ->
+                         #{next_index => CI+1,
+                           match_index => CI,
+                           query_index => QI,
+                           status => normal,
+                           voter_status => #{membership => Membership}};
+                     {_, Peer = #{voter_status := _}} ->
+                          Peer;
+                     {_, Peer} ->
+                          %% Initial cluster members have no voter_status.
+                          Peer#{voter_status => #{membership => voter}}
+                 end
+             end, Cluster);
+do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
+               query_index := QI, commit_index := CI,
+               membership := Membership}) ->
+    %% Followers do not have sufficient information,
+    %% bail out and send whatever we have.
+    maps:map(fun(Id, Peer) ->
+                case {Id, Peer} of
+                    {Self, #{voter_status := VS}} ->
+                        #{match_index => CI,
+                          query_index => QI,
+                          voter_status => VS#{membership => Membership}};
+                    {Self, _} ->
+                        #{match_index => CI,
+                          query_index => QI,
+                          voter_status => #{membership => Membership}};
+                    _ ->
+                        #{}
+                end
+             end, Cluster);
 do_state_query(initial_members, #{log := Log}) ->
     case ra_log:read_config(Log) of
         {ok, #{initial_members := InitialMembers}} ->
