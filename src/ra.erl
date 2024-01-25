@@ -1039,7 +1039,7 @@ members({local, ServerId}, Timeout) ->
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
-%% @doc Returns a list of cluster members
+%% @doc Returns a list of cluster members and their Raft metrics
 %%
 %% Except if `{local, ServerId}' is passed, the query is sent to the specified
 %% server which may redirect it to the leader if it is a follower. It may
@@ -1052,11 +1052,11 @@ members(ServerId, Timeout) ->
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
 -spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
-    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+    ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info(ServerId) ->
     members_info(ServerId, ?DEFAULT_TIMEOUT).
 
-%% @doc Returns a list of cluster members
+%% @doc Returns a list of cluster members and their Raft metrics
 %%
 %% Except if `{local, ServerId}' is passed, the query is sent to the specified
 %% server which may redirect it to the leader if it is a follower. It may
@@ -1071,7 +1071,7 @@ members_info(ServerId) ->
 %% @end
 -spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
               timeout()) ->
-    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+    ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info({local, ServerId}, Timeout) ->
     ra_server_proc:local_state_query(ServerId, members_info, Timeout);
 members_info(ServerId, Timeout) ->

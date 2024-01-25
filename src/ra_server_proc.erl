@@ -1505,13 +1505,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
 aten_register(Node) ->
     case node() of
         Node -> ok;
-        _ ->
-            case aten:register(Node) of
-                ignore ->
-                    ok;
-                Res ->
-                    Res
-            end
+        _ -> aten:register(Node)
     end.
 
 swap_monitor(MRef, L) ->
@@ -1557,17 +1551,27 @@ do_state_query(voters, #{cluster := Cluster}) ->
     Vs;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
-do_state_query(members_info,
-               _State = #{cfg := #cfg{id = Id}, cluster := Cluster, leader_id := Id,
-               query_index := QI, commit_index := CI}) ->
-    %% We're leader, update indices.
-    Peer = maps:get(Id, Cluster, #{}),
-    Cluster#{Id => Peer#{next_index => CI+1,
-                         match_index => CI,
-                         query_index => QI,
-                         commit_index_sent => CI}};
-do_state_query(members_info, _State) ->
-    {error, not_a_leader};
+do_state_query(members_info, #{cfg := #cfg{id = Self, uid = UId}, cluster := Cluster,
+                 leader_id := Self, query_index := QI, commit_index := CI,
+                 membership := Membership}) ->
+    Peer = maps:get(Self, Cluster, #{}),
+    Cluster#{Self => Peer#{next_index => CI+1,
+                           match_index => CI,
+                           query_index => QI,
+                           voter_status => #{membership => Membership, uid => UId}}};
+do_state_query(members_info, #{cfg := #cfg{id = Self, uid = UId}, cluster := Cluster,
+                 query_index := QI, commit_index := CI,
+                 membership := Membership}) ->
+    %% Followers do not have sufficient information,
+    %% bail out and send whatever we have.
+    maps:map(fun (Id, _) ->
+                case Id of
+                    Self -> #{match_index => CI,
+                                query_index => QI,
+                                voter_status => #{membership => Membership, uid => UId}};
+                    _ -> #{}
+                end
+             end, Cluster);
 do_state_query(initial_members, #{log := Log}) ->
     case ra_log:read_config(Log) of
         {ok, #{initial_members := InitialMembers}} ->
