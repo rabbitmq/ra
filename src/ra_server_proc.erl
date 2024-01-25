@@ -1551,24 +1551,29 @@ do_state_query(voters, #{cluster := Cluster}) ->
     Vs;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
-do_state_query(members_info, #{cfg := #cfg{id = Self, uid = UId}, cluster := Cluster,
+do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
                  leader_id := Self, query_index := QI, commit_index := CI,
                  membership := Membership}) ->
-    Peer = maps:get(Self, Cluster, #{}),
-    Cluster#{Self => Peer#{next_index => CI+1,
-                           match_index => CI,
-                           query_index => QI,
-                           voter_status => #{membership => Membership, uid => UId}}};
-do_state_query(members_info, #{cfg := #cfg{id = Self, uid = UId}, cluster := Cluster,
+    maps:map(fun(Id, Peer) ->
+                 case Id of
+                     Self -> #{next_index => CI+1,
+                               match_index => CI,
+                               query_index => QI,
+                               status => normal,
+                               membership => Membership};
+                     _ -> extract_peer_membership(Peer)
+                 end
+             end, Cluster);
+do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
                  query_index := QI, commit_index := CI,
                  membership := Membership}) ->
     %% Followers do not have sufficient information,
     %% bail out and send whatever we have.
-    maps:map(fun (Id, _) ->
+    maps:map(fun(Id, _) ->
                 case Id of
                     Self -> #{match_index => CI,
-                                query_index => QI,
-                                voter_status => #{membership => Membership, uid => UId}};
+                              query_index => QI,
+                              membership => Membership};
                     _ -> #{}
                 end
              end, Cluster);
@@ -1582,6 +1587,13 @@ do_state_query(initial_members, #{log := Log}) ->
 do_state_query(Query, _State) ->
     {error, {unknown_query, Query}}.
 
+extract_peer_membership(Peer = #{voter_status := #{membership := Membership}}) ->
+    Peer1 = maps:remove(voter_status, Peer),
+    Peer1#{membership => Membership};
+extract_peer_membership(Peer) ->
+    %% Initial members have no voter_status.
+    Peer#{membership => voter}.
+        
 config_defaults(ServerId) ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
