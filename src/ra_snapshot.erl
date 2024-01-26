@@ -508,17 +508,29 @@ read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
     Location = make_snapshot_dir(Dir, Idx, Term),
     Mod:read_chunk(ReadState, ChunkSizeBytes, Location).
 
+%% Recovers from the latest checkpoint or snapshot, if available.
 -spec recover(state()) ->
     {ok, Meta :: meta(), State :: term()} |
     {error, no_current_snapshot} |
     {error, term()}.
-recover(#?MODULE{current = undefined}) ->
+recover(#?MODULE{current = undefined, checkpoints = []}) ->
     {error, no_current_snapshot};
 recover(#?MODULE{module = Mod,
-                 snapshot_directory = Dir,
-                 current = {Idx, Term}}) ->
-    SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    Mod:recover(SnapDir).
+                 current = Snapshot,
+                 snapshot_directory = SnapDir,
+                 checkpoints = Checkpoints,
+                 checkpoint_directory = CheckpointDir}) ->
+    %% If there are checkpoints and a snapshot, recover from whichever has the
+    %% highest index. Otherwise recover from whichever exists.
+    Dir = case {Snapshot, Checkpoints} of
+              {{SnapIdx, _}, [{CPIdx, CPTerm} | _]} when CPIdx > SnapIdx ->
+                  make_snapshot_dir(CheckpointDir, CPIdx, CPTerm);
+              {{Idx, Term}, _} ->
+                  make_snapshot_dir(SnapDir, Idx, Term);
+              {undefined, [{Idx, Term} | _]} ->
+                  make_snapshot_dir(CheckpointDir, Idx, Term)
+          end,
+    Mod:recover(Dir).
 
 -spec read_meta(Module :: module(), Location :: file:filename()) ->
     {ok, meta()} |
