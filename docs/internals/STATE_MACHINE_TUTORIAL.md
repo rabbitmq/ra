@@ -218,3 +218,11 @@ or similar.
 To (potentially) trigger a snapshot return the `{release_cursor, RaftIndex, MachineState}`
 effect. This is why the raft index is included in the `apply/3` function. Ra will
 only create a snapshot if doing so will result in log segments being deleted.
+
+For machines that must keep log segments on disk for some time, the
+`{checkpoint, RaftIndex, MachineState}` effect can be used. This creates a
+snapshot-like view of the machine state on disk but doesn't trigger log
+truncation. Checkpoints can later be promoted to snapshots and trigger log
+truncation by emitting a `{release_cursor, RaftIndex}` effect. The most
+recent checkpoint with an index smaller than or equal to `RaftIndex` will be
+promoted.
