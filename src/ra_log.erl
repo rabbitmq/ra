@@ -54,6 +54,7 @@
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
 -define(SNAPSHOT_INTERVAL, 4096).
+-define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
@@ -84,6 +85,7 @@
               log_id :: unicode:chardata(),
               directory :: file:filename(),
               snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+              min_checkpoint_interval = ?MIN_CHECKPOINT_INTERVAL :: non_neg_integer(),
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
               wal :: atom(),
@@ -114,6 +116,7 @@
                               system_config => ra_system:config(),
                               log_id => unicode:chardata(),
                               snapshot_interval => non_neg_integer(),
+                              min_checkpoint_interval => non_neg_integer(),
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
@@ -152,6 +155,7 @@ init(#{uid := UId,
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
+    CPInterval = maps:get(checkpoint_interval, Conf, ?CHECKPOINT_INTERVAL),
     SnapshotsDir = filename:join(Dir, "snapshots"),
     CheckpointsDir = filename:join(Dir, "checkpoints"),
     Counter = maps:get(counter, Conf, undefined),
@@ -195,6 +199,7 @@ init(#{uid := UId,
                uid = UId,
                log_id = LogId,
                snapshot_interval = SnapInterval,
+               min_checkpoint_interval = CPInterval,
                wal = Wal,
                segment_writer = SegWriter,
                resend_window_seconds = ResendWindow,
@@ -731,8 +736,7 @@ should_snapshot(snapshot, Idx,
                                 ra_log_reader:segment_refs(Reader)),
     CanFreeSegments orelse Idx > SnapLimit;
 should_snapshot(checkpoint, Idx,
-                #?MODULE{cfg = #cfg{snapshot_interval = CheckpointInter},
-                                    %% ^ TODO: use new cfg var.
+                #?MODULE{cfg = #cfg{min_checkpoint_interval = CheckpointInter},
                          snapshot_state = SnapState}) ->
     CheckpointLimit = case ra_snapshot:latest_checkpoint(SnapState) of
                           undefined -> CheckpointInter;
