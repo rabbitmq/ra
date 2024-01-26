@@ -204,8 +204,15 @@ pick_first_valid(UId, Mod, Dir, [S | Rem]) ->
 
 find_checkpoints(#?MODULE{uid = UId,
                           module = Module,
+                          current = Current,
                           checkpoint_directory = CheckpointDir} = State) ->
     true = ra_lib:is_dir(CheckpointDir),
+    CurrentIdx = case Current of
+                     undefined ->
+                         -1;
+                     {I, _} ->
+                         I
+                 end,
     {ok, CPFiles0} = prim_file:list_dir(CheckpointDir),
     CPFiles = lists:reverse(lists:sort(CPFiles0)),
     Checkpoints =
@@ -216,7 +223,17 @@ find_checkpoints(#?MODULE{uid = UId,
                       ok ->
                           {ok, #{index := Idx, term := Term}} =
                               Module:read_meta(CP),
-                          {true, {Idx, Term}};
+                          case Idx > CurrentIdx of
+                              true ->
+                                  {true, {Idx, Term}};
+                              false ->
+                                  ?INFO("ra_snapshot: ~ts: removing "
+                                        "checkpoint ~s as was older than the "
+                                        "current snapshot.",
+                                        [UId, CP]),
+                                  delete(CheckpointDir, {Idx, Term}),
+                                  false
+                          end;
                       Err ->
                           ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as "
                                 "did not validate. Err: ~w",
