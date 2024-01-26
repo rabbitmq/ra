@@ -63,7 +63,7 @@
                                  ToTerm :: ra_term()}} |
                       {segments, ets:tid(), [segment_ref()]} |
                       {resend_write, ra_index()} |
-                      {snapshot_written, ra_idxterm()} |
+                      {snapshot_written, ra_idxterm(), ra_snapshot:kind()} |
                       {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
@@ -505,7 +505,7 @@ handle_event({segments, Tid, NewSegs},
                         end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
-handle_event({snapshot_written, {SnapIdx, _} = Snap},
+handle_event({snapshot_written, {SnapIdx, _} = Snap, _SnapKind},
              #?MODULE{cfg = Cfg,
                       first_index = FstIdx,
                       snapshot_state = SnapState0} = State0)
@@ -526,7 +526,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap},
     %% be for a past index
     {State#?MODULE{first_index = SnapIdx + 1,
                    snapshot_state = SnapState}, Effects};
-handle_event({snapshot_written, {Idx, Term} = Snap},
+handle_event({snapshot_written, {Idx, Term} = Snap, _SnapKind},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
     %% if the snapshot is stale we just want to delete it
@@ -621,23 +621,26 @@ snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
                             MacVersion :: ra_machine:version(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState,
-                      #?MODULE{snapshot_state = SnapState} = State) ->
-    case ra_snapshot:pending(SnapState) of
-        undefined ->
-            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
-        _ ->
-            % if a snapshot is in progress don't even evaluate
-            {State, []}
-    end.
+update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
+    suggest_snapshot(snapshot, Idx, Cluster, MacVersion, MacState, State).
 
 -spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
                  MacVersion :: ra_machine:version(),
                  MacState :: term(), State :: state()) ->
     {state(), effects()}.
-checkpoint(Idx, Cluster, MacVersion, MacState,
-           #?MODULE{checkpoint_state = CheckpointState} = State) ->
-    todo.
+checkpoint(Idx, Cluster, MacVersion, MacState, State) ->
+    suggest_snapshot(checkpoint, Idx, Cluster, MacVersion, MacState, State).
+
+suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
+                 #?MODULE{snapshot_state = SnapshotState} = State) ->
+    case ra_snapshot:pending(SnapshotState) of
+        undefined ->
+            suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State);
+        _ ->
+            %% Only one snapshot or checkpoint may be written at a time to
+            %% prevent excessive I/O usage.
+            {State, []}
+    end.
 
 -spec flush_cache(state()) -> state().
 flush_cache(#?MODULE{cache = Cache} = State) ->
@@ -647,28 +650,15 @@ flush_cache(#?MODULE{cache = Cache} = State) ->
 needs_cache_flush(#?MODULE{cache = Cache}) ->
     ra_log_cache:needs_flush(Cache).
 
-update_release_cursor0(Idx, Cluster, MacVersion, MacState,
-                       #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
-                                reader = Reader,
-                                snapshot_state = SnapState} = State0) ->
+suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
     ClusterServerIds = maps:map(fun (_, V) ->
                                         maps:with([voter_status], V)
                                 end, Cluster),
-    SnapLimit = case ra_snapshot:current(SnapState) of
-                    undefined -> SnapInter;
-                    {I, _} -> I + SnapInter
-                end,
     Meta = #{index => Idx,
              cluster => ClusterServerIds,
              machine_version => MacVersion},
-    % The release cursor index is the last entry _not_ contributing
-    % to the current state. I.e. the last entry that can be discarded.
-    % Check here if any segments can be release.
-    case lists:any(fun({_, To, _}) -> To =< Idx end,
-                   ra_log_reader:segment_refs(Reader)) of
+    case should_snapshot(SnapKind, Idx, State0) of
         true ->
-            % segments can be cleared up
-            % take a snapshot at the release_cursor
             % TODO: here we use the current cluster configuration in
             % the snapshot,
             % _not_ the configuration at the snapshot point.
@@ -682,22 +672,40 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
             % or a reference for external storage (e.g. ETS table)
             case fetch_term(Idx, State0) of
                 {undefined, _} ->
-                    exit({term_not_found_for_index, Idx});
+                    {State0, []};
                 {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState, State)
-            end;
-        false when Idx > SnapLimit ->
-            %% periodically take snapshots even if segments cannot be cleared
-            %% up
-            case fetch_term(Idx, State0) of
-                {undefined, State} ->
-                    {State, []};
-                {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState, State)
+                    write_snapshot(Meta#{term => Term}, MacState,
+                                   SnapKind, State)
             end;
         false ->
             {State0, []}
     end.
+
+should_snapshot(snapshot, Idx,
+                #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
+                         reader = Reader,
+                         snapshot_state = SnapState}) ->
+    SnapLimit = case ra_snapshot:current(SnapState) of
+                    undefined -> SnapInter;
+                    {I, _} -> I + SnapInter
+                end,
+    % The release cursor index is the last entry _not_ contributing
+    % to the current state. I.e. the last entry that can be discarded.
+    % We should take a snapshot if the new snapshot index would allow us
+    % to discard any segments or if the we've handled enough commands
+    % since the last snapshot.
+    CanFreeSegments = lists:any(fun({_, To, _}) -> To =< Idx end,
+                                ra_log_reader:segment_refs(Reader)),
+    CanFreeSegments orelse Idx > SnapLimit;
+should_snapshot(checkpoint, Idx,
+                #?MODULE{cfg = #cfg{snapshot_interval = CheckpointInter},
+                                    %% ^ TODO: use new cfg var.
+                         snapshot_state = SnapState}) ->
+    CheckpointLimit = case ra_snapshot:latest_checkpoint(SnapState) of
+                          undefined -> CheckpointInter;
+                          {I, _} -> I + CheckpointInter
+                      end,
+    Idx > CheckpointLimit.
 
 -spec append_sync(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
@@ -985,11 +993,16 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot(Meta, MacRef,
+write_snapshot(Meta, MacRef, SnapKind,
                #?MODULE{cfg = Cfg,
                         snapshot_state = SnapState0} = State) ->
-    ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
-    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
+    Counter = case SnapKind of
+                  snapshot -> ?C_RA_LOG_SNAPSHOTS_WRITTEN;
+                  checkpoint -> ?C_RA_LOG_CHECKPOINTS_WRITTEN
+              end,
+    ok = incr_counter(Cfg, Counter, 1),
+    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapKind,
+                                                      SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
 recover_range(UId, Reader, SegWriter) ->

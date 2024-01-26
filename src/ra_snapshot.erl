@@ -28,7 +28,7 @@
          directory/1,
          last_index_for/1,
 
-         begin_snapshot/3,
+         begin_snapshot/4,
          complete_snapshot/2,
 
          begin_accept/2,
@@ -283,12 +283,20 @@ last_index_for(UId) ->
         [{_, Index}] -> Index
     end.
 
--spec begin_snapshot(meta(), ReleaseCursorRef :: term(), state()) ->
+-spec begin_snapshot(meta(), ReleaseCursorRef :: term(), kind(), state()) ->
     {state(), [effect()]}.
-begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
+begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
                #?MODULE{module = Mod,
                         counter = Counter,
-                        snapshot_directory = Dir} = State) ->
+                        snapshot_directory = SnapshotDir,
+                        checkpoint_directory = CheckpointDir} = State) ->
+    {CounterIdx, Dir} =
+        case SnapKind of
+            snapshot ->
+                {?C_RA_LOG_SNAPSHOT_BYTES_WRITTEN, SnapshotDir};
+            checkpoint ->
+                {?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, CheckpointDir}
+        end,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     %% call prepare then write_snapshot
@@ -302,19 +310,18 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                         case Mod:write(SnapDir, Meta, Ref) of
                             ok -> ok;
                             {ok, BytesWritten} ->
-                                counters_add(Counter,
-                                             ?C_RA_LOG_SNAPSHOT_BYTES_WRITTEN,
+                                counters_add(Counter, CounterIdx,
                                              BytesWritten),
                                 ok
                         end,
                         Self ! {ra_log_event,
-                                {snapshot_written, {Idx, Term}}},
+                                {snapshot_written, {Idx, Term}, SnapKind}},
                         ok
                 end),
 
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
-    {State#?MODULE{pending = {Pid, {Idx, Term}}},
+    {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
      [{monitor, process, snapshot_writer, Pid}]}.
 
 -spec complete_snapshot(ra_idxterm(), state()) ->
@@ -405,9 +412,14 @@ handle_down(_Pid, noproc, State) ->
     %% finished
     State;
 handle_down(Pid, _Info,
-            #?MODULE{snapshot_directory = Dir,
-                     pending = {Pid, IdxTerm}} = State) ->
-    %% delete the pending snapshot directory
+            #?MODULE{snapshot_directory = SnapshotDir,
+                     checkpoint_directory = CheckpointDir,
+                     pending = {Pid, IdxTerm, SnapKind}} = State) ->
+    %% delete the pending snapshot/checkpoint directory
+    Dir = case SnapKind of
+              snapshot -> SnapshotDir;
+              checkpoint -> CheckpointDir
+          end,
     ok = delete(Dir, IdxTerm),
     State#?MODULE{pending = undefined}.
 
