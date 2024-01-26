@@ -31,6 +31,7 @@
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
+         checkpoint/5,
          needs_cache_flush/1,
 
          can_write/1,
@@ -624,6 +625,14 @@ update_release_cursor(Idx, Cluster, MacVersion, MacState,
             % if a snapshot is in progress don't even evaluate
             {State, []}
     end.
+
+-spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
+                 MacVersion :: ra_machine:version(),
+                 MacState :: term(), State :: state()) ->
+    {state(), effects()}.
+checkpoint(Idx, Cluster, MacVersion, MacState,
+           #?MODULE{checkpoint_state = CheckpointState} = State) ->
+    todo.
 
 -spec flush_cache(state()) -> state().
 flush_cache(#?MODULE{cache = Cache} = State) ->
