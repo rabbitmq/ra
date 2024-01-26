@@ -41,6 +41,7 @@
          write_file/2,
          lists_chunk/2,
          lists_detect_sort/1,
+         lists_shuffle/1,
          is_dir/1,
          is_file/1,
          ensure_dir/1,
@@ -381,6 +382,12 @@ do_ascending(A, [B | Rem])
     do_ascending(B, Rem);
 do_ascending(_A, _) ->
     unsorted.
+
+%% Reorder a list randomly.
+-spec lists_shuffle(list()) -> list().
+lists_shuffle(List0) ->
+    List1 = [{rand:uniform(), Elem} || Elem <- List0],
+    [Elem || {_, Elem} <- lists:keysort(1, List1)].
 
 is_dir(Dir) ->
     case prim_file:read_file_info(Dir) of

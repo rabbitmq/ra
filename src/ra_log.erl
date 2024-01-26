@@ -505,37 +505,55 @@ handle_event({segments, Tid, NewSegs},
                         end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
-handle_event({snapshot_written, {SnapIdx, _} = Snap, _SnapKind},
+handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = Cfg,
                       first_index = FstIdx,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->
-    % delete any segments outside of first_index
-    {State, Effects0} = delete_segments(SnapIdx, State0),
-    SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-    %% delete old snapshot files
-    %% This is done as an effect
-    %% so that if an old snapshot is still being replicated
-    %% the cleanup can be delayed until it is safe
-    Effects = [{delete_snapshot,
-                ra_snapshot:directory(SnapState),
-                ra_snapshot:current(SnapState0)} | Effects0],
-    %% do not set last written index here as the snapshot may
-    %% be for a past index
-    {State#?MODULE{first_index = SnapIdx + 1,
-                   snapshot_state = SnapState}, Effects};
-handle_event({snapshot_written, {Idx, Term} = Snap, _SnapKind},
+    SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, SnapState0),
+    case SnapKind of
+        snapshot ->
+            put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
+            % delete any segments outside of first_index
+            {State, Effects0} = delete_segments(SnapIdx, State0),
+            %% Delete old snapshot files. This is done as an effect
+            %% so that if an old snapshot is still being replicated
+            %% the cleanup can be delayed until it is safe.
+            DeleteCurrentSnap = {delete_snapshot,
+                                 ra_snapshot:directory(SnapState1, snapshot),
+                                 ra_snapshot:current(SnapState0)},
+            %% Also delete any checkpoints older than this snapshot.
+            {SnapState, Checkpoints} =
+                ra_snapshot:take_older_checkpoints(SnapIdx, SnapState1),
+            CPEffects = [{delete_snapshot,
+                          ra_snapshot:directory(SnapState, checkpoint),
+                          Checkpoint} || Checkpoint <- Checkpoints],
+            Effects = [DeleteCurrentSnap | CPEffects] ++ Effects0,
+            %% do not set last written index here as the snapshot may
+            %% be for a past index
+            {State#?MODULE{first_index = SnapIdx + 1,
+                           snapshot_state = SnapState}, Effects};
+        checkpoint ->
+            put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
+            %% If we already have the maximum allowed number of checkpoints,
+            %% remove some checkpoints to make space.
+            {SnapState, CPs} = ra_snapshot:take_extra_checkpoints(SnapState1),
+            Effects = [{delete_snapshot,
+                        ra_snapshot:directory(SnapState, SnapKind),
+                        CP} || CP <- CPs],
+            {State0#?MODULE{snapshot_state = SnapState}, Effects}
+    end;
+handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
-    %% if the snapshot is stale we just want to delete it
+    %% if the snapshot/checkpoint is stale we just want to delete it
     Current = ra_snapshot:current(SnapState),
     ?INFO("~ts: old snapshot_written received for index ~b in term ~b
-          current snapshot ~w, deleting old snapshot",
-           [LogId, Idx, Term, Current]),
+          current snapshot ~w, deleting old ~s",
+           [LogId, Idx, Term, Current, SnapKind]),
     Effects = [{delete_snapshot,
-                ra_snapshot:directory(SnapState),
+                ra_snapshot:directory(SnapState, SnapKind),
                 Snap}],
     {State0, Effects};
 handle_event({resend_write, Idx}, State) ->

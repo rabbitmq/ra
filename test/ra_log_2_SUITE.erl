@@ -1376,7 +1376,7 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     Sn2 =
         receive
             {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, snapshot}} ->
-                ra_snapshot:complete_snapshot(IdxTerm, Sn1)
+                ra_snapshot:complete_snapshot(IdxTerm, snapshot, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
         end,

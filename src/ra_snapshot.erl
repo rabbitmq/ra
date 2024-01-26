@@ -25,11 +25,11 @@
          current/1,
          pending/1,
          accepting/1,
-         directory/1,
+         directory/2,
          last_index_for/1,
 
          begin_snapshot/4,
-         complete_snapshot/2,
+         complete_snapshot/3,
 
          begin_accept/2,
          accept_chunk/4,
@@ -40,7 +40,10 @@
          handle_down/3,
          current_snapshot_dir/1,
 
-         latest_checkpoint/1
+         latest_checkpoint/1,
+
+         take_older_checkpoints/2,
+         take_extra_checkpoints/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
@@ -81,6 +84,9 @@
          checkpoints = [] :: list(checkpoint())}).
 
 -define(ETSTBL, ra_log_snapshot_state).
+
+%% TODO: Make this constant configurable?
+-define(MAX_CHECKPOINTS, 10).
 
 -opaque state() :: #?MODULE{}.
 
@@ -273,8 +279,9 @@ accepting(#?MODULE{accepting = undefined}) ->
 accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
     Accepting.
 
--spec directory(state()) -> file:filename().
-directory(#?MODULE{snapshot_directory = Dir}) -> Dir.
+-spec directory(state(), kind()) -> file:filename().
+directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
+directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
@@ -324,15 +331,17 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
      [{monitor, process, snapshot_writer, Pid}]}.
 
--spec complete_snapshot(ra_idxterm(), state()) ->
+-spec complete_snapshot(ra_idxterm(), kind(), state()) ->
     state().
-complete_snapshot({Idx, _} = IdxTerm,
-                  #?MODULE{uid = UId,
-                           module = _Mod,
-                           snapshot_directory = _Dir} = State) ->
+complete_snapshot({Idx, _} = IdxTerm, snapshot,
+                  #?MODULE{uid = UId} = State) ->
     true = ets:insert(?ETSTBL, {UId, Idx}),
     State#?MODULE{pending = undefined,
-                  current = IdxTerm}.
+                  current = IdxTerm};
+complete_snapshot(IdxTerm, checkpoint,
+                  #?MODULE{checkpoints = Checkpoints0} = State) ->
+    State#?MODULE{pending = undefined,
+                  checkpoints = [IdxTerm | Checkpoints0]}.
 
 -spec begin_accept(meta(), state()) ->
     {ok, state()}.
@@ -482,6 +491,29 @@ current_snapshot_dir(#?MODULE{snapshot_directory = Dir,
 current_snapshot_dir(_) ->
     undefined.
 
+-spec take_older_checkpoints(ra_index(), state()) ->
+    {state(), [checkpoint()]}.
+take_older_checkpoints(Idx, #?MODULE{checkpoints = Checkpoints0} = State0) ->
+    {Checkpoints, Outdated} = lists:splitwith(fun ({CPIdx, _Term}) ->
+                                                      CPIdx > Idx
+                                              end, Checkpoints0),
+    {State0#?MODULE{checkpoints = Checkpoints}, Outdated}.
+
+-spec take_extra_checkpoints(state()) ->
+    {state(), [checkpoint()]}.
+take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0} = State0) ->
+    Len = erlang:length(Checkpoints0),
+    case Len - ?MAX_CHECKPOINTS of
+        ToDelete when ToDelete > 0 ->
+            %% Take `ToDelete' checkpoints from the list randomly without
+            %% ever taking the first or last checkpoint.
+            IdxsToTake = random_idxs_to_take(?MAX_CHECKPOINTS, ToDelete),
+            {Checkpoints, Extras} = lists_take_idxs(Checkpoints0, IdxsToTake),
+            {State0#?MODULE{checkpoints = Checkpoints}, Extras};
+        _ ->
+            {State0, []}
+    end.
+
 %% Utility
 
 make_snapshot_dir(Dir, Index, Term) ->
@@ -493,3 +525,66 @@ counters_add(undefined, _, _) ->
     ok;
 counters_add(Counter, Ix, Incr) ->
     counters:add(Counter, Ix, Incr).
+
+random_idxs_to_take(Max, N) ->
+    %% Always retain the first and last elements.
+    AllIdxs = lists:seq(2, Max - 1),
+    %% Take a random subset of those indices of length N.
+    lists:sublist(ra_lib:lists_shuffle(AllIdxs), N).
+
+%% Take items from the given list by the given indices without disturbing the
+%% order of the list.
+-spec lists_take_idxs(List, Idxs) -> {List1, Taken} when
+      List :: list(Elem),
+      Elem :: any(),
+      Idxs :: list(pos_integer()),
+      List1 :: list(Elem),
+      Taken :: list(Elem).
+lists_take_idxs(List, Idxs0) ->
+    %% Sort the indices so `lists_take_idxs/5' may run linearly on the two lists
+    Idxs = lists:sort(Idxs0),
+    %% 1-indexing like the `lists' module.
+    lists_take_idxs(List, Idxs, 1, [], []).
+
+lists_take_idxs([Elem | Elems], [Idx | Idxs], Idx, TakeAcc, ElemAcc) ->
+    lists_take_idxs(Elems, Idxs, Idx + 1, [Elem | TakeAcc], ElemAcc);
+lists_take_idxs([Elem | Elems], Idxs, Idx, TakeAcc, ElemAcc) ->
+    lists_take_idxs(Elems, Idxs, Idx + 1, TakeAcc, [Elem | ElemAcc]);
+lists_take_idxs(Elems, _Idxs = [], _Idx, TakeAcc, ElemAcc) ->
+    {lists:reverse(ElemAcc, Elems), lists:reverse(TakeAcc)};
+lists_take_idxs(_Elems = [], _Idxs, _Idx, TakeAcc, ElemAcc) ->
+    {lists:reverse(ElemAcc), lists:reverse(TakeAcc)}.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+random_idxs_to_take_test() ->
+    Idxs = random_idxs_to_take(10, 3),
+    ?assertEqual(3, length(Idxs)),
+    [Min, _, Max] = lists:sort(Idxs),
+    %% The first and last elements are excluded.
+    ?assert(Min > 1),
+    ?assert(Max < 10),
+    ok.
+
+lists_take_idxs_test() ->
+    ?assertEqual(
+      {[1, 3, 5, 7, 8], [2, 4, 6]},
+      lists_take_idxs(lists:seq(1, 8), [2, 4, 6])),
+
+    %% Ordering of `Idxs' doesn't matter.
+    ?assertEqual(
+      {[1, 3, 5, 7, 8], [2, 4, 6]},
+      lists_take_idxs(lists:seq(1, 8), [4, 6, 2])),
+
+    ?assertEqual(
+      {[a, c], [b]},
+      lists_take_idxs([a, b, c], [2])),
+
+    %% `List''s order is preserved even when nothing is taken.
+    ?assertEqual(
+      {[a, b, c], []},
+      lists_take_idxs([a, b, c], [])),
+    ok.
+
+-endif.
