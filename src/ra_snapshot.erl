@@ -38,7 +38,9 @@
          context/2,
 
          handle_down/3,
-         current_snapshot_dir/1
+         current_snapshot_dir/1,
+
+         latest_checkpoint/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
@@ -256,6 +258,10 @@ init_ets() ->
 
 -spec current(state()) -> option(ra_idxterm()).
 current(#?MODULE{current = Current}) -> Current.
+
+-spec latest_checkpoint(state()) -> option(checkpoint()).
+latest_checkpoint(#?MODULE{checkpoints = [Current | _]}) -> Current;
+latest_checkpoint(#?MODULE{checkpoints = _}) -> undefined.
 
 -spec pending(state()) -> option({pid(), ra_idxterm(), kind()}).
 pending(#?MODULE{pending = Pending}) ->
