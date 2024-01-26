@@ -1363,9 +1363,11 @@ meta(Idx, Term, Cluster) ->
 
 create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
+    CPDir = filename:join(?config(priv_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
+    ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
-                           OthDir),
+                           OthDir, CPDir, undefined),
     MacRef = <<"9">>,
     {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
     Sn2 =

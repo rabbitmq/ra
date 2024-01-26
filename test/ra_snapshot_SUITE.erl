@@ -62,9 +62,13 @@ init_per_testcase(TestCase, Config) ->
     ok = ra_snapshot:init_ets(),
     SnapDir = filename:join([?config(priv_dir, Config),
                              TestCase, "snapshots"]),
+    CheckpointDir = filename:join([?config(priv_dir, Config),
+                                   TestCase, "checkpoints"]),
     ok = ra_lib:make_dir(SnapDir),
+    ok = ra_lib:make_dir(CheckpointDir),
     [{uid, ra_lib:to_binary(TestCase)},
-     {snap_dir, SnapDir} | Config].
+     {snap_dir, SnapDir},
+     {checkpoint_dir, CheckpointDir} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -75,7 +79,10 @@ end_per_testcase(_TestCase, _Config) ->
 
 init_empty(Config) ->
     UId = ?config(uid, Config),
-    State = ra_snapshot:init(UId, ?MODULE, ?config(snap_dir, Config), undefined),
+    State = ra_snapshot:init(UId, ?MODULE,
+                             ?config(snap_dir, Config),
+                             ?config(checkpoint_dir, Config),
+                             undefined),
     %% no pending, no current
     undefined = ra_snapshot:current(State),
     undefined = ra_snapshot:pending(State),
@@ -86,13 +93,15 @@ init_empty(Config) ->
 take_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, [node()]),
     MacRef = ?FUNCTION_NAME,
     {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
     undefined = ra_snapshot:current(State1),
-    {Pid, {55, 2}} = ra_snapshot:pending(State1),
+    {Pid, {55, 2}, snapshot} = ra_snapshot:pending(State1),
     receive
         {ra_log_event, {snapshot_written, {55, 2} = IdxTerm}} ->
             State = ra_snapshot:complete_snapshot(IdxTerm, State1),
@@ -108,13 +117,14 @@ take_snapshot(Config) ->
 take_snapshot_crash(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
-    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, undefined),
+    CPDir = ?config(checkpoint_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, CPDir, undefined),
     Meta = meta(55, 2, [node()]),
     MacRef = ?FUNCTION_NAME,
     {State1, [{monitor, process, snapshot_writer, Pid}]} =
          ra_snapshot:begin_snapshot(Meta, MacRef, State0),
     undefined = ra_snapshot:current(State1),
-    {Pid, {55, 2}}  = ra_snapshot:pending(State1),
+    {Pid, {55, 2}, snapshot}  = ra_snapshot:pending(State1),
     receive
         {ra_log_event, _} ->
             %% just pretend the snapshot event didn't happen
@@ -138,7 +148,9 @@ take_snapshot_crash(Config) ->
 init_recover(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, [node()]),
     {State1, [{monitor, process, snapshot_writer, _}]} =
          ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
@@ -152,7 +164,9 @@ init_recover(Config) ->
 
     %% open a new snapshot state to simulate a restart
     Recover = ra_snapshot:init(UId, ra_log_snapshot,
-                               ?config(snap_dir, Config), undefined),
+                               ?config(snap_dir, Config),
+                               ?config(checkpoint_dir, Config),
+                               undefined),
     %% ensure last snapshot is recovered
     %% it also needs to be validated as could have crashed mid write
     undefined = ra_snapshot:pending(Recover),
@@ -166,7 +180,9 @@ init_recover(Config) ->
 init_recover_voter_status(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, #{node() => #{voter_status => test}}),
     {State1, [{monitor, process, snapshot_writer, _}]} =
          ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
@@ -180,7 +196,9 @@ init_recover_voter_status(Config) ->
 
     %% open a new snapshot state to simulate a restart
     Recover = ra_snapshot:init(UId, ra_log_snapshot,
-                               ?config(snap_dir, Config), undefined),
+                               ?config(snap_dir, Config),
+                               ?config(checkpoint_dir, Config),
+                               undefined),
     %% ensure last snapshot is recovered
     %% it also needs to be validated as could have crashed mid write
     undefined = ra_snapshot:pending(Recover),
@@ -194,7 +212,9 @@ init_recover_voter_status(Config) ->
 init_multi(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
     {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
@@ -203,7 +223,7 @@ init_multi(Config) ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, State1),
             {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
                                                      State2),
-            {_, {165, 2}} = ra_snapshot:pending(State3),
+            {_, {165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
             receive
@@ -219,7 +239,9 @@ init_multi(Config) ->
 
     %% open a new snapshot state to simulate a restart
     Recover = ra_snapshot:init(UId, ra_log_snapshot,
-                               ?config(snap_dir, Config), undefined),
+                               ?config(snap_dir, Config),
+                               ?config(checkpoint_dir, Config),
+                               undefined),
     %% ensure last snapshot is recovered
     %% it also needs to be validated as could have crashed mid write
     undefined = ra_snapshot:pending(Recover),
@@ -233,7 +255,8 @@ init_multi(Config) ->
 init_recover_multi_corrupt(Config) ->
     UId = ?config(uid, Config),
     SnapsDir = ?config(snap_dir, Config),
-    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir, undefined),
+    CPDir = ?config(checkpoint_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir, CPDir, undefined),
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
     {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, State0),
@@ -242,7 +265,7 @@ init_recover_multi_corrupt(Config) ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, State1),
             {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
                                                      State2),
-            {_, {165, 2}} = ra_snapshot:pending(State3),
+            {_, {165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
             receive
@@ -262,7 +285,9 @@ init_recover_multi_corrupt(Config) ->
 
     %% open a new snapshot state to simulate a restart
     Recover = ra_snapshot:init(UId, ra_log_snapshot,
-                               ?config(snap_dir, Config), undefined),
+                               ?config(snap_dir, Config),
+                               ?config(checkpoint_dir, Config),
+                               undefined),
     %% ensure last snapshot is recovered
     %% it also needs to be validated as could have crashed mid write
     undefined = ra_snapshot:pending(Recover),
@@ -280,8 +305,10 @@ init_recover_corrupt(Config) ->
     UId = ?config(uid, Config),
     Meta = meta(55, 2, [node()]),
     SnapsDir = ?config(snap_dir, Config),
-    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir, undefined),
-    {State1, _} = ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, State0),
+    CPDir = ?config(checkpoint_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapsDir, CPDir, undefined),
+    {State1, _} = ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot,
+                                             State0),
     _ = receive
                  {ra_log_event, {snapshot_written, IdxTerm}} ->
                      ra_snapshot:complete_snapshot(IdxTerm, State1)
@@ -298,7 +325,9 @@ init_recover_corrupt(Config) ->
     ets:delete_all_objects(ra_log_snapshot_state),
     %% open a new snapshot state to simulate a restart
     Recover = ra_snapshot:init(UId, ra_log_snapshot,
-                               ?config(snap_dir, Config), undefined),
+                               ?config(snap_dir, Config),
+                               ?config(checkpoint_dir, Config),
+                               undefined),
     %% ensure the corrupt snapshot isn't recovered
     undefined = ra_snapshot:pending(Recover),
     undefined = ra_snapshot:current(Recover),
@@ -310,7 +339,9 @@ init_recover_corrupt(Config) ->
 read_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     {State1, _} =
@@ -341,7 +372,9 @@ read_all_chunks(ChunkState, State, Size, Acc) ->
 accept_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, [node()]),
     MetaBin = term_to_binary(Meta),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
@@ -374,7 +407,9 @@ accept_snapshot(Config) ->
 abort_accept(Config) ->
     UId = ?config(uid, Config),
     State0 = ra_snapshot:init(UId, ra_log_snapshot,
-                              ?config(snap_dir, Config), undefined),
+                              ?config(snap_dir, Config),
+                              ?config(checkpoint_dir, Config),
+                              undefined),
     Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     MacBin = term_to_binary(MacRef),
@@ -400,7 +435,8 @@ abort_accept(Config) ->
 accept_receives_snapshot_written_with_lower_index(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
-    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, undefined),
+    CPDir = ?config(checkpoint_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, CPDir, undefined),
     MetaLocal = meta(55, 2, [node()]),
     MetaRemote = meta(165, 2, [node()]),
     MetaRemoteBin = term_to_binary(MetaRemote),
@@ -440,7 +476,8 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
 accept_receives_snapshot_written_with_higher_index(Config) ->
     UId = ?config(uid, Config),
     SnapDir = ?config(snap_dir, Config),
-    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, undefined),
+    CPDir = ?config(checkpoint_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_log_snapshot, SnapDir, CPDir, undefined),
     MetaRemote = meta(55, 2, [node()]),
     MetaLocal = meta(165, 2, [node()]),
     %% begin a local snapshot

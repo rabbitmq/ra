@@ -20,8 +20,7 @@
          read_chunk/3,
          delete/2,
 
-         init/3,
-         init/4,
+         init/5,
          init_ets/0,
          current/1,
          pending/1,
@@ -44,7 +43,18 @@
 
 -type effect() :: {monitor, process, snapshot_writer, pid()}.
 
--export_type([meta/0, file_err/0, effect/0, chunk_flag/0]).
+-type kind() :: snapshot | checkpoint.
+
+-type checkpoint() :: ra_idxterm().
+
+-export_type([
+              meta/0,
+              file_err/0,
+              effect/0,
+              chunk_flag/0,
+              kind/0,
+              checkpoint/0
+             ]).
 
 -record(accept, {%% the next expected chunk
                  next = 1 :: non_neg_integer(),
@@ -55,14 +65,18 @@
         {uid :: ra_uid(),
          counter :: undefined | counters:counters_ref(),
          module :: module(),
-         %% the snapshot directory
          %% typically <data_dir>/snapshots
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
-         directory :: file:filename(),
-         pending :: option({pid(), ra_idxterm()}),
+         snapshot_directory :: file:filename(),
+         %% <data_dir>/checkpoints
+         %% like snapshots, these are also stored in subdirs
+         %% as <data_dir>/checkpoints/Term_Index
+         checkpoint_directory :: file:filename(),
+         pending :: option({pid(), ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
-         current :: option(ra_idxterm())}).
+         current :: option(ra_idxterm()),
+         checkpoints = [] :: list(checkpoint())}).
 
 -define(ETSTBL, ra_log_snapshot_state).
 
@@ -139,19 +153,21 @@
 
 -callback context() -> map().
 
--spec init(ra_uid(), module(), file:filename()) ->
-    state().
-init(UId, Mod, File) ->
-    init(UId, Mod, File, undefined).
-
--spec init(ra_uid(), module(), file:filename(),
+-spec init(ra_uid(), module(), file:filename(), file:filename(),
            undefined | counters:counters_ref()) ->
     state().
-init(UId, Module, SnapshotsDir, Counter) ->
+init(UId, Module, SnapshotsDir, CheckpointDir, Counter) ->
     State = #?MODULE{uid = UId,
                      counter = Counter,
                      module = Module,
-                     directory = SnapshotsDir},
+                     snapshot_directory = SnapshotsDir,
+                     checkpoint_directory = CheckpointDir},
+    State1 = find_snapshots(State),
+    find_checkpoints(State1).
+
+find_snapshots(#?MODULE{uid = UId,
+                        module = Module,
+                        snapshot_directory = SnapshotsDir} = State) ->
     true = ra_lib:is_dir(SnapshotsDir),
     {ok, Snaps0} = prim_file:list_dir(SnapshotsDir),
     Snaps = lists:reverse(lists:sort(Snaps0)),
@@ -186,6 +202,30 @@ pick_first_valid(UId, Mod, Dir, [S | Rem]) ->
             pick_first_valid(UId, Mod, Dir, Rem)
     end.
 
+find_checkpoints(#?MODULE{uid = UId,
+                          module = Module,
+                          checkpoint_directory = CheckpointDir} = State) ->
+    true = ra_lib:is_dir(CheckpointDir),
+    {ok, CPFiles0} = prim_file:list_dir(CheckpointDir),
+    CPFiles = lists:reverse(lists:sort(CPFiles0)),
+    Checkpoints =
+        lists:filtermap(
+          fun(File) ->
+                  CP = filename:join(CheckpointDir, File),
+                  case Module:validate(CP) of
+                      ok ->
+                          {ok, #{index := Idx, term := Term}} =
+                              Module:read_meta(CP),
+                          {true, {Idx, Term}};
+                      Err ->
+                          ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as "
+                                "did not validate. Err: ~w",
+                                [UId, CP, Err]),
+                          ra_lib:recursive_delete(CP),
+                          false
+                  end
+          end, CPFiles),
+    State#?MODULE{checkpoints = Checkpoints}.
 
 -spec init_ets() -> ok.
 init_ets() ->
@@ -200,7 +240,7 @@ init_ets() ->
 -spec current(state()) -> option(ra_idxterm()).
 current(#?MODULE{current = Current}) -> Current.
 
--spec pending(state()) -> option({pid(), ra_idxterm()}).
+-spec pending(state()) -> option({pid(), ra_idxterm(), kind()}).
 pending(#?MODULE{pending = Pending}) ->
     Pending.
 
@@ -211,7 +251,7 @@ accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
     Accepting.
 
 -spec directory(state()) -> file:filename().
-directory(#?MODULE{directory = Dir}) -> Dir.
+directory(#?MODULE{snapshot_directory = Dir}) -> Dir.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
@@ -225,7 +265,7 @@ last_index_for(UId) ->
 begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
                #?MODULE{module = Mod,
                         counter = Counter,
-                        directory = Dir} = State) ->
+                        snapshot_directory = Dir} = State) ->
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     %% call prepare then write_snapshot
@@ -259,7 +299,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef,
 complete_snapshot({Idx, _} = IdxTerm,
                   #?MODULE{uid = UId,
                            module = _Mod,
-                           directory = _Dir} = State) ->
+                           snapshot_directory = _Dir} = State) ->
     true = ets:insert(?ETSTBL, {UId, Idx}),
     State#?MODULE{pending = undefined,
                   current = IdxTerm}.
@@ -268,7 +308,7 @@ complete_snapshot({Idx, _} = IdxTerm,
     {ok, state()}.
 begin_accept(#{index := Idx, term := Term} = Meta,
              #?MODULE{module = Mod,
-                      directory = Dir} = State) ->
+                      snapshot_directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = ra_lib:make_dir(SnapDir),
     {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
@@ -280,7 +320,7 @@ begin_accept(#{index := Idx, term := Term} = Meta,
 accept_chunk(Chunk, Num, last,
              #?MODULE{uid = UId,
                       module = Mod,
-                      directory = Dir,
+                      snapshot_directory = Dir,
                       current = Current,
                       accepting = #accept{next = Num,
                                           idxterm = {Idx, _} = IdxTerm,
@@ -314,7 +354,7 @@ accept_chunk(_Chunk, Num, _ChunkFlag,
 abort_accept(#?MODULE{accepting = undefined} = State) ->
     State;
 abort_accept(#?MODULE{accepting = #accept{idxterm = {Idx, Term}},
-                      directory = Dir} = State) ->
+                      snapshot_directory = Dir} = State) ->
     ok = delete(Dir, {Idx, Term}),
     State#?MODULE{accepting = undefined}.
 
@@ -342,7 +382,7 @@ handle_down(_Pid, noproc, State) ->
     %% finished
     State;
 handle_down(Pid, _Info,
-            #?MODULE{directory = Dir,
+            #?MODULE{snapshot_directory = Dir,
                      pending = {Pid, IdxTerm}} = State) ->
     %% delete the pending snapshot directory
     ok = delete(Dir, IdxTerm),
@@ -359,7 +399,7 @@ delete(Dir, {Idx, Term}) ->
     {ok, Meta :: meta(), ReadState} |
     {error, term()} when ReadState :: term().
 begin_read(#?MODULE{module = Mod,
-                    directory = Dir,
+                    snapshot_directory = Dir,
                     current = {Idx, Term}},
           Context) when is_map(Context) ->
     Location = make_snapshot_dir(Dir, Idx, Term),
@@ -371,7 +411,7 @@ begin_read(#?MODULE{module = Mod,
     {ok, Data :: term(), {next, ReadState} | last}  |
     {error, term()} when ReadState :: term().
 read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
-                                               directory = Dir,
+                                               snapshot_directory = Dir,
                                                current = {Idx, Term}}) ->
     %% TODO: do we need to generate location for every chunk?
     Location = make_snapshot_dir(Dir, Idx, Term),
@@ -384,7 +424,7 @@ read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
 recover(#?MODULE{current = undefined}) ->
     {error, no_current_snapshot};
 recover(#?MODULE{module = Mod,
-                 directory = Dir,
+                 snapshot_directory = Dir,
                  current = {Idx, Term}}) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     Mod:recover(SnapDir).
@@ -401,7 +441,7 @@ read_meta(Module, Location) ->
 
 -spec current_snapshot_dir(state()) ->
     option(file:filename()).
-current_snapshot_dir(#?MODULE{directory = Dir,
+current_snapshot_dir(#?MODULE{snapshot_directory = Dir,
                               current = {Idx, Term}}) ->
     make_snapshot_dir(Dir, Idx, Term);
 current_snapshot_dir(_) ->
