@@ -29,6 +29,7 @@
          last_index_for/1,
 
          begin_snapshot/4,
+         promote_checkpoint/2,
          complete_snapshot/3,
 
          begin_accept/2,
@@ -330,6 +331,52 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     %% emit an effect that monitors the current snapshot attempt
     {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
      [{monitor, process, snapshot_writer, Pid}]}.
+
+-spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
+    {State :: state(), Effects :: [effect()]}.
+promote_checkpoint(PromotionIdx,
+                   #?MODULE{snapshot_directory = SnapDir,
+                            checkpoint_directory = CheckpointDir,
+                            checkpoints = Checkpoints0} = State0) ->
+    %% Find the checkpoint with the highest index smaller than or equal to the
+    %% given `Idx' and rename the checkpoint directory to the snapshot
+    %% directory.
+    case find_promotable_checkpoint(PromotionIdx, Checkpoints0, []) of
+        {Checkpoints, {Idx, Term}} ->
+            Checkpoint = make_snapshot_dir(CheckpointDir, Idx, Term),
+            Snapshot = make_snapshot_dir(SnapDir, Idx, Term),
+            Self = self(),
+            Pid = spawn(fun() ->
+                                ok = file:rename(Checkpoint, Snapshot),
+                                Self ! {ra_log_event,
+                                        {snapshot_written,
+                                         {Idx, Term}, snapshot}}
+                        end),
+            State = State0#?MODULE{pending = {Pid, {Idx, Term}, snapshot},
+                                   checkpoints = Checkpoints},
+            {State, [{monitor, process, snapshot_writer, Pid}]};
+        undefined ->
+            {State0, []}
+    end.
+
+%% Find the first checkpoint smaller than or equal to the promotion index and
+%% remove it from the checkpoint list.
+-spec find_promotable_checkpoint(PromotionIdx, Checkpoints, Acc) -> Result
+    when
+      PromotionIdx :: ra_index(),
+      Checkpoints :: [ra_idxterm()],
+      Acc :: [ra_idxterm()],
+      Result :: option({[ra_idxterm()], ra_idxterm()}).
+find_promotable_checkpoint(Idx, [{CPIdx, _} = CP | Rest], Acc)
+  when CPIdx =< Idx ->
+    %% Checkpoints are sorted by index descending so the first checkpoint
+    %% with an index smaller than or equal to the promotion index is the proper
+    %% checkpoint to promote.
+    {lists:reverse(Rest, Acc), CP};
+find_promotable_checkpoint(Idx, [CP | Rest], Acc) ->
+    find_promotable_checkpoint(Idx, Rest, [CP | Acc]);
+find_promotable_checkpoint(_Idx, [], _Acc) ->
+    undefined.
 
 -spec complete_snapshot(ra_idxterm(), kind(), state()) ->
     state().

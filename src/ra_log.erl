@@ -32,6 +32,7 @@
          snapshot_index_term/1,
          update_release_cursor/5,
          checkpoint/5,
+         promote_checkpoint/2,
          needs_cache_flush/1,
 
          can_write/1,
@@ -658,6 +659,20 @@ suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
             %% Only one snapshot or checkpoint may be written at a time to
             %% prevent excessive I/O usage.
             {State, []}
+    end.
+
+promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
+                                 snapshot_state = SnapState0} = State) ->
+    case ra_snapshot:pending(SnapState0) of
+        {_WriterPid, _IdxTerm, snapshot} ->
+            %% If we're currently writing a snapshot, skip promoting a
+            %% checkpoint.
+            {State, []};
+        _ ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
+            {SnapState, Effects} = ra_snapshot:promote_checkpoint(Idx,
+                                                                  SnapState0),
+            {State#?MODULE{snapshot_state = SnapState}, Effects}
     end.
 
 -spec flush_cache(state()) -> state().

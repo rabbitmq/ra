@@ -46,6 +46,7 @@
          % TODO: hide behind a handle_leader
          make_rpcs/1,
          update_release_cursor/3,
+         promote_checkpoint/2,
          checkpoint/3,
          persist_last_applied/1,
          update_peer/3,
@@ -1644,6 +1645,8 @@ evaluate_commit_index_follower(State, Effects) ->
 filter_follower_effects(Effects) ->
     lists:foldr(fun ({release_cursor, _, _} = C, Acc) ->
                         [C | Acc];
+                    ({release_cursor, _} = C, Acc) ->
+                        [C | Acc];
                     ({checkpoint, _, _} = C, Acc) ->
                         [C | Acc];
                     ({record_leader_msg, _} = C, Acc) ->
@@ -1856,6 +1859,12 @@ checkpoint(Index, MacState,
     MacVersion = index_machine_version(Index, State),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
                                        MacVersion, MacState, Log0),
+    {State#{log => Log}, Effects}.
+
+-spec promote_checkpoint(ra_index(), ra_server_state()) ->
+    {ra_server_state(), effects()}.
+promote_checkpoint(Index, #{log := Log0} = State) ->
+    {Log, Effects} = ra_log:promote_checkpoint(Index, Log0),
     {State#{log => Log}, Effects}.
 
 % Persist last_applied - as there is an inherent race we cannot
