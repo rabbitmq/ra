@@ -254,6 +254,10 @@
          {snapshot_bytes_written, ?C_RA_LOG_SNAPSHOT_BYTES_WRITTEN, counter,
           "Number of snapshot bytes written (not installed)"},
          {open_segments, ?C_RA_LOG_OPEN_SEGMENTS, gauge, "Number of open segments"},
+         {checkpoints_written, ?C_RA_LOG_CHECKPOINTS_WRITTEN, counter,
+          "Total number of checkpoints written"},
+         {checkpoint_bytes_written, ?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, counter,
+          "Number of checkpoint bytes written"},
          {reserved_1, ?C_RA_LOG_RESERVED, counter, "Reserved counter"}
          ]).
 -define(C_RA_LOG_WRITE_OPS, 1).
@@ -268,7 +272,9 @@
 -define(C_RA_LOG_SNAPSHOTS_INSTALLED, 10).
 -define(C_RA_LOG_SNAPSHOT_BYTES_WRITTEN, 11).
 -define(C_RA_LOG_OPEN_SEGMENTS, 12).
--define(C_RA_LOG_RESERVED, 13).
+-define(C_RA_LOG_CHECKPOINTS_WRITTEN, 13).
+-define(C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, 14).
+-define(C_RA_LOG_RESERVED, 15).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).
@@ -290,7 +296,8 @@
 -define(C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, ?C_RA_LOG_RESERVED + 18).
 -define(C_RA_SRV_LOCAL_QUERIES, ?C_RA_LOG_RESERVED + 19).
 -define(C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, ?C_RA_LOG_RESERVED + 20).
--define(C_RA_SRV_RESERVED, ?C_RA_LOG_RESERVED + 21).
+-define(C_RA_SRV_CHECKPOINTS, ?C_RA_LOG_RESERVED + 21).
+-define(C_RA_SRV_RESERVED, ?C_RA_LOG_RESERVED + 22).
 
 
 -define(RA_SRV_COUNTER_FIELDS,
@@ -335,6 +342,8 @@
           "Total number of local queries"},
          {invalid_reply_mode_commands, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, counter,
           "Total number of commands received with an invalid reply-mode"},
+         {checkpoints, ?C_RA_SRV_CHECKPOINTS, counter,
+          "The number of checkpoint effects executed"},
          {reserved_2, ?C_RA_SRV_RESERVED, counter, "Reserved counter"}
          ]).
 
@@ -345,6 +354,7 @@
 -define(C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ?C_RA_SRV_RESERVED + 5).
 -define(C_RA_SVR_METRIC_COMMIT_LATENCY, ?C_RA_SRV_RESERVED + 6).
 -define(C_RA_SVR_METRIC_TERM, ?C_RA_SRV_RESERVED + 7).
+-define(C_RA_SVR_METRIC_CHECKPOINT_INDEX, ?C_RA_SRV_RESERVED + 8).
 
 -define(RA_SRV_METRICS_COUNTER_FIELDS,
         [
@@ -360,7 +370,9 @@
           "The last fully written and fsynced index of the log."},
          {commit_latency, ?C_RA_SVR_METRIC_COMMIT_LATENCY, gauge,
           "Approximate time taken from an entry being written to the log until it is committed."},
-         {term, ?C_RA_SVR_METRIC_TERM, counter, "The current term."}
+         {term, ?C_RA_SVR_METRIC_TERM, counter, "The current term."},
+         {checkpoint_index, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, counter,
+          "The current checkpoint index."}
         ]).
 
 -define(RA_COUNTER_FIELDS,
