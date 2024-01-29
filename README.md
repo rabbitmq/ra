@@ -440,7 +440,7 @@ Ra attempts to follow [Semantic Versioning](https://semver.org/).
 
 The modules that form part of the public API are:
 * `ra`
-* `ra_machine`
+* `ra_machine` (behaviour callbacks only)
 * `ra_system`
 * `ra_counters`
 * `ra_leaderboard`

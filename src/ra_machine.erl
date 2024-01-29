@@ -76,10 +76,12 @@
          query/3,
          module/1,
          init_aux/2,
+         handle_aux/6,
          handle_aux/7,
          snapshot_module/1,
          version/1,
          which_module/2,
+         which_aux_fun/1,
          is_versioned/1
         ]).
 
@@ -209,6 +211,7 @@
 -optional_callbacks([tick/2,
                      state_enter/2,
                      init_aux/1,
+                     handle_aux/5,
                      handle_aux/6,
                      overview/1,
                      snapshot_module/0,
@@ -238,6 +241,20 @@
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
 -callback init_aux(Name :: atom()) -> term().
+
+-callback handle_aux(ra_server:ra_state(),
+                     {call, From :: from()} | cast,
+                     Command :: term(),
+                     AuxState,
+                     State) ->
+    {reply, Reply :: term(), AuxState, State} |
+    {reply, Reply :: term(), AuxState, State,
+     [{monitor, process, aux, pid()}]} |
+    {no_reply, AuxState, State} |
+    {no_reply, AuxState, State,
+     [{monitor, process, aux, pid()}]}
+      when AuxState :: term(),
+           State :: ra_aux:state().
 
 -callback handle_aux(ra_server:ra_state(),
                      {call, From :: from()} | cast,
@@ -335,8 +352,37 @@ init_aux(Mod, Name) ->
       when AuxState :: term(),
            LogState :: ra_log:state().
 handle_aux(Mod, RaftState, Type, Cmd, Aux, Log, MacState) ->
-    ?OPT_CALL(Mod:handle_aux(RaftState, Type, Cmd, Aux, Log, MacState),
-              undefined).
+    Mod:handle_aux(RaftState, Type, Cmd, Aux, Log, MacState).
+
+
+-spec handle_aux(module(),
+                 ra_server:ra_state(),
+                 {call, From :: from()} | cast,
+                 Command :: term(),
+                 AuxState,
+                 State) ->
+    {reply, Reply :: term(), AuxState, State} |
+    {reply, Reply :: term(), AuxState, State,
+     [{monitor, process, aux, pid()}]} |
+    {no_reply, AuxState, State} |
+    {no_reply, AuxState, State,
+     [{monitor, process, aux, pid()}]}
+      when AuxState :: term(),
+           State :: ra_server:state().
+handle_aux(Mod, RaftState, Type, Cmd, Aux, State) ->
+    Mod:handle_aux(RaftState, Type, Cmd, Aux, State).
+
+-spec which_aux_fun(module()) ->
+    undefined | {atom(), arity()}.
+which_aux_fun(Mod) when is_atom(Mod) ->
+    case lists:sort([E || {handle_aux, _Arity} = E
+                          <- erlang:apply(Mod,module_info, [exports])]) of
+        [] ->
+            undefined;
+        [AuxFun | _] ->
+            %% favour {handle_aux, 5} as this is the newer api
+            AuxFun
+    end.
 
 -spec query(module(), fun((state()) -> Result), state()) ->
     Result when Result :: term().

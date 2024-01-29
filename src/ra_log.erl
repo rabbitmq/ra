@@ -127,13 +127,26 @@
                               counter => counters:counters_ref(),
                               initial_access_pattern => sequential | random}.
 
+
+-type overview() ::
+    #{type := ra_log,
+      last_index := ra_index(),
+      first_index := ra_index(),
+      last_written_index_term := ra_idxterm(),
+      num_segments := non_neg_integer(),
+      open_segments => non_neg_integer(),
+      snapshot_index => undefined | ra_index(),
+      cache_size => non_neg_integer(),
+      atom() => term()}.
+
 -export_type([state/0,
               ra_log_init_args/0,
               ra_meta_key/0,
               segment_ref/0,
               event/0,
               event_body/0,
-              effect/0
+              effect/0,
+              overview/0
              ]).
 
 pre_init(#{uid := UId,
@@ -785,7 +798,7 @@ exists({Idx, Term}, Log0) ->
             {false, Log}
     end.
 
--spec overview(state()) -> map().
+-spec overview(state()) -> overview().
 overview(#?MODULE{last_index = LastIndex,
                   first_index = FirstIndex,
                   last_written_index_term = LWIT,
@@ -803,10 +816,10 @@ overview(#?MODULE{last_index = LastIndex,
                             {I, _} -> I
                         end,
       latest_checkpoint_index =>
-      case ra_snapshot:latest_checkpoint(SnapshotState) of
-          undefined -> undefined;
-          {I, _} -> I
-      end,
+          case ra_snapshot:latest_checkpoint(SnapshotState) of
+              undefined -> undefined;
+              {I, _} -> I
+          end,
       cache_size => ra_log_cache:size(Cache)
      }.
 
