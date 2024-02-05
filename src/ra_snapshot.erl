@@ -20,7 +20,7 @@
          read_chunk/3,
          delete/2,
 
-         init/5,
+         init/6,
          init_ets/0,
          current/1,
          pending/1,
@@ -82,12 +82,10 @@
          pending :: option({pid(), ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
          current :: option(ra_idxterm()),
-         checkpoints = [] :: list(checkpoint())}).
+         checkpoints = [] :: list(checkpoint()),
+         max_checkpoints :: pos_integer()}).
 
 -define(ETSTBL, ra_log_snapshot_state).
-
-%% TODO: Make this constant configurable?
--define(MAX_CHECKPOINTS, 10).
 
 -opaque state() :: #?MODULE{}.
 
@@ -170,14 +168,15 @@
 -callback context() -> map().
 
 -spec init(ra_uid(), module(), file:filename(), file:filename(),
-           undefined | counters:counters_ref()) ->
+           undefined | counters:counters_ref(), pos_integer()) ->
     state().
-init(UId, Module, SnapshotsDir, CheckpointDir, Counter) ->
+init(UId, Module, SnapshotsDir, CheckpointDir, Counter, MaxCheckpoints) ->
     State = #?MODULE{uid = UId,
                      counter = Counter,
                      module = Module,
                      snapshot_directory = SnapshotsDir,
-                     checkpoint_directory = CheckpointDir},
+                     checkpoint_directory = CheckpointDir,
+                     max_checkpoints = MaxCheckpoints},
     State1 = find_snapshots(State),
     find_checkpoints(State1).
 
@@ -576,13 +575,14 @@ take_older_checkpoints(Idx, #?MODULE{checkpoints = Checkpoints0} = State0) ->
 
 -spec take_extra_checkpoints(state()) ->
     {state(), [checkpoint()]}.
-take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0} = State0) ->
+take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
+                                max_checkpoints = MaxCheckpoints} = State0) ->
     Len = erlang:length(Checkpoints0),
-    case Len - ?MAX_CHECKPOINTS of
+    case Len - MaxCheckpoints of
         ToDelete when ToDelete > 0 ->
             %% Take `ToDelete' checkpoints from the list randomly without
             %% ever taking the first or last checkpoint.
-            IdxsToTake = random_idxs_to_take(?MAX_CHECKPOINTS, ToDelete),
+            IdxsToTake = random_idxs_to_take(MaxCheckpoints, ToDelete),
             {Checkpoints, Extras} = lists_take_idxs(Checkpoints0, IdxsToTake),
             {State0#?MODULE{checkpoints = Checkpoints}, Extras};
         _ ->

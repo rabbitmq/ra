@@ -11,6 +11,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include("src/ra.hrl").
 
 %%%===================================================================
 %%% Common Test callbacks
@@ -61,7 +62,8 @@ init_per_testcase(TestCase, Config) ->
     ok = ra_lib:make_dir(CheckpointDir),
     [{uid, ra_lib:to_binary(TestCase)},
      {snap_dir, SnapDir},
-     {checkpoint_dir, CheckpointDir} | Config].
+     {checkpoint_dir, CheckpointDir},
+     {max_checkpoints, ?DEFAULT_MAX_CHECKPOINTS} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -338,7 +340,7 @@ init_state(Config) ->
                      ra_log_snapshot,
                      ?config(snap_dir, Config),
                      ?config(checkpoint_dir, Config),
-                     undefined).
+                     undefined, ?config(max_checkpoints, Config)).
 
 meta(Idx, Term, Cluster) ->
     #{index => Idx,

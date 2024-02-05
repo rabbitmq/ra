@@ -136,10 +136,11 @@ pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
+    MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, "snapshots"),
     CheckpointsDir = filename:join(Dir, "checkpoints"),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                         CheckpointsDir, undefined),
+                         CheckpointsDir, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
@@ -155,7 +156,9 @@ init(#{uid := UId,
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
-    CPInterval = maps:get(checkpoint_interval, Conf, ?CHECKPOINT_INTERVAL),
+    CPInterval = maps:get(min_checkpoint_interval, Conf,
+                          ?MIN_CHECKPOINT_INTERVAL),
+    MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, "snapshots"),
     CheckpointsDir = filename:join(Dir, "checkpoints"),
     Counter = maps:get(counter, Conf, undefined),
@@ -167,7 +170,7 @@ init(#{uid := UId,
     % initialise metrics for this server
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                                     CheckpointsDir, Counter),
+                                     CheckpointsDir, Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, -1};
                               Curr -> Curr

@@ -1370,7 +1370,7 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
-                           OthDir, CPDir, undefined),
+                           OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
     MacRef = <<"9">>,
     {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
     Sn2 =

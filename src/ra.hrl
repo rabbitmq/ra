@@ -230,6 +230,8 @@
 
 -define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
 
+-define(DEFAULT_MAX_CHECKPOINTS, 10).
+
 -define(RA_LOG_COUNTER_FIELDS,
         [{write_ops, ?C_RA_LOG_WRITE_OPS, counter,
           "Total number of write ops"},
