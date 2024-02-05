@@ -8,7 +8,7 @@
 
 -include("ra.hrl").
 
--type file_err() :: file:posix() | badarg | terminated | system_limit.
+-type file_err() :: ra_lib:file_err().
 
 %% alias
 -type meta() :: snapshot_meta().
@@ -104,11 +104,18 @@
 %% Saves snapshot from external state to disk.
 %% Runs in a separate process.
 %% External storage should be available to read
+%% `Sync' suggests whether the file should be synchronized with `fsync(1)'.
 -callback write(Location :: file:filename(),
                 Meta :: meta(),
-                Ref :: term()) ->
+                Ref :: term(),
+                Sync :: boolean()) ->
     ok |
     {ok, Bytes :: non_neg_integer()} |
+    {error, file_err() | term()}.
+
+%% Synchronizes the snapshot to disk.
+-callback sync(Location :: file:filename()) ->
+    ok |
     {error, file_err() | term()}.
 
 
@@ -305,6 +312,9 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
             checkpoint ->
                 {?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, CheckpointDir}
         end,
+    %% Snapshots must be fsync'd but checkpoints are OK to not sync.
+    %% Checkpoints are fsync'd before promotion instead.
+    Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     %% call prepare then write_snapshot
@@ -315,7 +325,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     Self = self(),
     Pid = spawn(fun () ->
                         ok = ra_lib:make_dir(SnapDir),
-                        case Mod:write(SnapDir, Meta, Ref) of
+                        case Mod:write(SnapDir, Meta, Ref, Sync) of
                             ok -> ok;
                             {ok, BytesWritten} ->
                                 counters_add(Counter, CounterIdx,
@@ -335,7 +345,8 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
     {State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
-                   #?MODULE{snapshot_directory = SnapDir,
+                   #?MODULE{module = Mod,
+                            snapshot_directory = SnapDir,
                             checkpoint_directory = CheckpointDir,
                             checkpoints = Checkpoints0} = State0) ->
     %% Find the checkpoint with the highest index smaller than or equal to the
@@ -347,6 +358,11 @@ promote_checkpoint(PromotionIdx,
             Snapshot = make_snapshot_dir(SnapDir, Idx, Term),
             Self = self(),
             Pid = spawn(fun() ->
+                                %% Checkpoints are created without calling
+                                %% fsync. Snapshots must be fsync'd though, so
+                                %% sync the checkpoint before promoting it
+                                %% into a snapshot.
+                                ok = Mod:sync(Checkpoint),
                                 ok = file:rename(Checkpoint, Snapshot),
                                 Self ! {ra_log_event,
                                         {snapshot_written,
