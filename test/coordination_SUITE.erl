@@ -197,7 +197,6 @@ delete_two_server_cluster(Config) ->
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     {ok, _} = ra:delete_cluster(ServerIds),
-    % timer:sleep(1000),
     await_condition(
       fun () ->
               lists:all(
@@ -309,8 +308,9 @@ grow_cluster(Config) ->
     ok = ra:start_server(?SYS, ClusterName, B, Machine, [A]),
     {ok, _, _} = ra:add_member(A, B),
     {ok, _, _} = ra:process_command(A, banana),
-    [A, B] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+
     [A, B] = rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]),
+    [A, B] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
 
     ok = ra:start_server(?SYS, ClusterName, C, Machine, [A, B]),
     {ok, _, _} = ra:add_member(A, C),
@@ -339,8 +339,8 @@ grow_cluster(Config) ->
     [B, C] = rpc:call(CNode, ra_leaderboard, lookup_members, [ClusterName]),
     undefined = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
     %% check leader
-    L2 = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
     L2 = rpc:call(CNode, ra_leaderboard, lookup_leader, [ClusterName]),
+    L2 = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
     undefined = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
 
 

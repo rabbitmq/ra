@@ -370,6 +370,7 @@ recover(_, _, State) ->
 %% effects post recovery
 recovered(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
+    ok = record_cluster_change(State),
     {keep_state, State, Actions};
 recovered(internal, next, #state{server_state = ServerState} = State) ->
     true = erlang:garbage_collect(),
@@ -378,7 +379,7 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
 
 leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
-    ok = record_leader_change(id(State0), State0),
+    ok = record_cluster_change(State),
     %% TODO: reset refs?
     {keep_state, State#state{leader_last_seen = undefined,
                              pending_notifys = #{},
@@ -392,17 +393,13 @@ leader(EventType, {local_call, Msg}, State) ->
 leader(EventType, {leader_cast, Msg}, State) ->
     leader(EventType, Msg, State);
 leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
-       #state{conf = Conf,
-              server_state = ServerState0} = State0) ->
+       #state{conf = Conf} = State0) ->
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% normal priority commands are written immediately
             Cmd = make_command(CmdType, EventType, Data, ReplyMode),
-            {leader, ServerState, Effects} =
-                ra_server:handle_leader({command, Cmd}, ServerState0),
-            {State, Actions} =
-                ?HANDLE_EFFECTS(Effects, EventType,
-                                State0#state{server_state = ServerState}),
+            {leader, State1, Effects} = handle_leader({command, Cmd}, State0),
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             {keep_state, State, Actions};
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
@@ -453,17 +450,13 @@ leader(EventType, {aux_command, Cmd}, State0) ->
     {keep_state, State#state{server_state = ServerState}, Actions};
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
-              server_state = ServerState0,
               low_priority_commands = Delayed0} = State0) ->
 
     {Commands, Delayed} = ra_ets_queue:take(Size, Delayed0),
     %% write a batch of delayed commands
-    {leader, ServerState, Effects} =
-        ra_server:handle_leader({commands, Commands}, ServerState0),
+    {leader, State1, Effects} = handle_leader({commands, Commands}, State0),
 
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
     case ra_ets_queue:len(Delayed) of
         0 ->
             ok;
@@ -514,16 +507,11 @@ leader(_, tick_timeout, State0) ->
     State = send_applied_notifications(State2, #{}),
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
-leader({timeout, Name}, machine_timeout,
-       #state{server_state = ServerState0,
-              conf = #conf{}} = State0) ->
+leader({timeout, Name}, machine_timeout, State0) ->
     % the machine timer timed out, add a timeout message
     Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
-    {leader, ServerState, Effects} = ra_server:handle_leader({command, Cmd},
-                                                             ServerState0),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
-                                       State0#state{server_state =
-                                                        ServerState}),
+    {leader, State1, Effects} = handle_leader({command, Cmd}, State0),
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
     {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -790,11 +778,11 @@ follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, #state{conf = #conf{name = Name},
                                 server_state = SS0} = State0) ->
-    Membership0 = ra_server:get_membership(SS0),
     case handle_follower(Msg, State0) of
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = #state{server_state = SS} = follower_leader_change(State0, State2),
+            Membership0 = ra_server:get_membership(SS0),
             case ra_server:get_membership(SS) of
                 Membership0 ->
                     ok;
@@ -1077,6 +1065,7 @@ handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
         {NextState, ServerState, Effects}  ->
             State = State0#state{server_state =
                                  ra_server:persist_last_applied(ServerState)},
+            maybe_record_cluster_change(State0, State),
             {NextState, State, Effects};
         OtherErr ->
             ?ERR("handle_leader err ~p", [OtherErr]),
@@ -1103,8 +1092,11 @@ handle_candidate(Msg, State) ->
 handle_pre_vote(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
 
-handle_follower(Msg, State) ->
-    handle_raft_state(?FUNCTION_NAME, Msg, State).
+handle_follower(Msg, State0) ->
+    Ret = handle_raft_state(?FUNCTION_NAME, Msg, State0),
+    {_NextState, State, _Effects} = Ret,
+    maybe_record_cluster_change(State0, State),
+    Ret.
 
 handle_receive_snapshot(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
@@ -1341,9 +1333,6 @@ handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     {State, Actions};
-handle_effect(_, update_leaderboard, _EvtType, State, Actions) ->
-    ok = record_leader_change(leader_id(State), State),
-    {State, Actions};
 handle_effect(_, {monitor, _ProcOrNode, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->
     {State#state{monitors = ra_monitors:add(PidOrNode, machine, Monitors)},
@@ -1491,7 +1480,6 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             ok = aten_register(LeaderNode),
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
             _ = aten:unregister(OldLeaderNode),
-            ok = record_leader_change(NewLeader, New),
             % leader has either changed or just been set
             ?INFO("~ts: detected a new leader ~w in term ~b",
                   [log_id(New), NewLeader, current_term(New)]),
@@ -1555,6 +1543,8 @@ do_state_query(voters, #{cluster := Cluster}) ->
                            end
               end, [], Cluster),
     Vs;
+do_state_query(leader, #{leader_id := Leader}) ->
+    Leader;
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
 do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
@@ -1872,11 +1862,25 @@ handle_process_down(Pid, Info, RaftState,
                                     monitors = Monitors}),
     {keep_state, State, Actions}.
 
-record_leader_change(Leader, #state{conf = #conf{cluster_name = ClusterName},
-                                    server_state = ServerState}) ->
+maybe_record_cluster_change(#state{conf = #conf{cluster_name = ClusterName},
+                                   server_state = ServerStateA},
+                            #state{server_state = ServerStateB}) ->
+    LeaderA = ra_server:leader_id(ServerStateA),
+    LeaderB = ra_server:leader_id(ServerStateB),
+    if (map_get(cluster_index_term, ServerStateA) =/=
+        map_get(cluster_index_term, ServerStateB) orelse
+        LeaderA =/= LeaderB) ->
+            MembersB = do_state_query(members, ServerStateB),
+            ok = ra_leaderboard:record(ClusterName, LeaderB, MembersB);
+        true ->
+            ok
+    end.
+
+record_cluster_change(#state{conf = #conf{cluster_name = ClusterName},
+                             server_state = ServerState}) ->
+    Leader = do_state_query(leader, ServerState),
     Members = do_state_query(members, ServerState),
-    ok = ra_leaderboard:record(ClusterName, Leader, Members),
-    ok.
+    ok = ra_leaderboard:record(ClusterName, Leader, Members).
 
 incr_counter(#conf{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

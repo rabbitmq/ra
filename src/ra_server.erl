@@ -1023,27 +1023,18 @@ handle_follower(#append_entries_rpc{term = Term,
                 _ ->
                     State1 = lists:foldl(fun pre_append_log_follower/2,
                                          State0, Entries),
-                    %% if the cluster has changed we need to update
-                    %% the leaderboard
-                    Effects1 = case maps:get(cluster, State0) =/=
-                                    maps:get(cluster, State1) of
-                                   true ->
-                                       [update_leaderboard | Effects0];
-                                   false ->
-                                       Effects0
-                               end,
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
-                                                               Effects1),
+                                                               Effects0),
                                 {NextState, State,
                                  [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             {await_condition,
                              State1#{log => Log1,
                                      condition => fun wal_down_condition/2},
-                             Effects1};
+                             Effects0};
                         {error, _} = Err ->
                             exit(Err)
                     end
@@ -1648,8 +1639,6 @@ filter_follower_effects(Effects) ->
                     ({aux, _} = C, Acc) ->
                         [C | Acc];
                     (garbage_collection = C, Acc) ->
-                        [C | Acc];
-                    (update_leaderboard = C, Acc) ->
                         [C | Acc];
                     ({delete_snapshot, _} = C, Acc) ->
                         [C | Acc];
@@ -2600,7 +2589,7 @@ append_cluster_change(Cluster, From, ReplyMode,
                         cluster := PrevCluster,
                         cluster_index_term := {PrevCITIdx, PrevCITTerm},
                         current_term := Term} = State,
-                      Effects0) ->
+                      Effects) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
@@ -2609,7 +2598,6 @@ append_cluster_change(Cluster, From, ReplyMode,
     % TODO: is it safe to do change the cluster config with an async write?
     % what happens if the write fails?
     Log = ra_log:append({NextIdx, Term, Command}, Log0),
-    Effects = [update_leaderboard | Effects0],
     {ok, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,
