@@ -524,7 +524,7 @@ incr_batch(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
                                   %% to open one
                                   T = open_mem_table(Cfg, UId),
                                   true = ets:insert_new(OpnMemTbl,
-                                                        {UId, Idx, Idx, T}),
+                                                        {UId, Idx, Idx - 1, T}),
                                   {T, Idx}
                           end,
                       Writer = #batch_writer{tbl_start = TblStart,

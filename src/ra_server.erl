@@ -370,7 +370,7 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
     {#{log := Log0,
-       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State, _} =
+       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
         apply_to(CommitIndex,
                  fun({Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
@@ -384,8 +384,17 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~ts: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
            [LogId, EffMacVerAfter, MacVer, LastApplied, CommitIndex, After - Before]),
+    %% scan from CommitIndex + 1 until NextIndex - 1 to see if there are
+    %% any further cluster changes
+    FromScan = CommitIndex + 1,
+    {ToScan, _} = ra_log:last_index_term(Log0),
+    ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
+    {State, Log1} = ra_log:fold(FromScan, ToScan,
+                                fun cluster_scan_fun/2,
+                                State1, Log0),
+
     %% disable segment read cache by setting random access pattern
-    Log = ra_log:release_resources(1, random, Log0),
+    Log = ra_log:release_resources(1, random, Log1),
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value
@@ -1023,27 +1032,18 @@ handle_follower(#append_entries_rpc{term = Term,
                 _ ->
                     State1 = lists:foldl(fun pre_append_log_follower/2,
                                          State0, Entries),
-                    %% if the cluster has changed we need to update
-                    %% the leaderboard
-                    Effects1 = case maps:get(cluster, State0) =/=
-                                    maps:get(cluster, State1) of
-                                   true ->
-                                       [update_leaderboard | Effects0];
-                                   false ->
-                                       Effects0
-                               end,
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
-                                                               Effects1),
+                                                               Effects0),
                                 {NextState, State,
                                  [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             {await_condition,
                              State1#{log => Log1,
                                      condition => fun wal_down_condition/2},
-                             Effects1};
+                             Effects0};
                         {error, _} = Err ->
                             exit(Err)
                     end
@@ -1648,8 +1648,6 @@ filter_follower_effects(Effects) ->
                     ({aux, _} = C, Acc) ->
                         [C | Acc];
                     (garbage_collection = C, Acc) ->
-                        [C | Acc];
-                    (update_leaderboard = C, Acc) ->
                         [C | Acc];
                     ({delete_snapshot, _} = C, Acc) ->
                         [C | Acc];
@@ -2338,6 +2336,17 @@ append_app_effects([AppEff], Effs) ->
 append_app_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
+cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
+                 State0) ->
+    ?DEBUG("~ts: ~ts: applying ra cluster change to ~w",
+           [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
+    %% we are recovering and should apply the cluster change
+    State0#{cluster => NewCluster,
+            membership => get_membership(NewCluster, State0),
+            cluster_change_permitted => true,
+            cluster_index_term => {Idx, Term}};
+cluster_scan_fun(_Cmd, State) ->
+    State.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
@@ -2600,7 +2609,7 @@ append_cluster_change(Cluster, From, ReplyMode,
                         cluster := PrevCluster,
                         cluster_index_term := {PrevCITIdx, PrevCITTerm},
                         current_term := Term} = State,
-                      Effects0) ->
+                      Effects) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
     Command = {'$ra_cluster_change', From, Cluster, ReplyMode},
@@ -2609,7 +2618,6 @@ append_cluster_change(Cluster, From, ReplyMode,
     % TODO: is it safe to do change the cluster config with an async write?
     % what happens if the write fails?
     Log = ra_log:append({NextIdx, Term, Command}, Log0),
-    Effects = [update_leaderboard | Effects0],
     {ok, NextIdx, Term,
      State#{log => Log,
             cluster => Cluster,

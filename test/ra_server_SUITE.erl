@@ -248,13 +248,15 @@ recover_restores_cluster_changes(_Config) ->
                log := Log0}, _} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            N2, await_consensus}}, State),
+    {LIdx, _} = ra_log:last_index_term(Log0),
     ?assertEqual(2, maps:size(Cluster)),
     % intercept ra_log:init call to simulate persisted log data
     % ok = meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
     meck:expect(ra_log_meta, fetch,
                 fun (_, _, last_applied, 0) ->
-                        element(1, ra_log:last_index_term(Log0));
+                        LIdx - 1;
+                        % element(1, ra_log:last_index_term(Log0));
                     (_, _, _, Def) ->
                         Def
                 end),
