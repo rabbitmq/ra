@@ -180,8 +180,11 @@ take_after_overwrite_and_init(Config) ->
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_take(1, 4, Log2),
     Log4 = write_and_roll_no_deliver(1, 2, 2, Log3),
-    % fake lost segments event
-    Log5 = deliver_written_log_events(Log4, 200),
+    Log5 = deliver_log_events_cond(Log4,
+                                   fun (L) ->
+                                           {1, 2} =:= ra_log:last_written(L)
+                                   end, 100),
+
     % ensure we cannot take stale entries
     {[{1, 2, _}], Log6} = ra_log_take(1, 4, Log5),
     _ = ra_log:close(Log6),
@@ -310,7 +313,8 @@ sparse_read_out_of_range_2(Config) ->
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {10, 2}} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
-                after 500 ->
+                after 5000 ->
+                          flush(),
                           exit(snapshot_written_timeout)
                 end,
     Log4 = deliver_all_log_events(Log3, 100),
@@ -332,8 +336,17 @@ sparse_read(Config) ->
     %% read small batch of the latest entries
     {_, Log3} = ra_log_take(Num - 5, Num, Log2),
     ct:pal("log overview ~p", [ra_log:overview(Log3)]),
-    %% warm up run
-    {_, Log4} = ra_log_take(1, Num, Log3),
+    %% ensure cache is empty as this indicates all enties have at least
+    %% been written to the WAL and thus will be available in mem tables.
+    Log4 = deliver_log_events_cond(Log3,
+                                   fun (L) ->
+                                           case ra_log:overview(L) of
+                                               #{cache_size := 0} ->
+                                                   true;
+                                               _ ->
+                                                   false
+                                           end
+                                   end, 100),
     ra_log:close(Log4),
     NumDiv2 = Num div 2,
     %% create a list of indexes with some consecutive and some gaps
