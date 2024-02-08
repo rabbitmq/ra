@@ -370,7 +370,7 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
     {#{log := Log0,
-       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State, _} =
+       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
         apply_to(CommitIndex,
                  fun({Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
@@ -384,8 +384,17 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~ts: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
            [LogId, EffMacVerAfter, MacVer, LastApplied, CommitIndex, After - Before]),
+    %% scan from CommitIndex + 1 until NextIndex - 1 to see if there are
+    %% any further cluster changes
+    FromScan = CommitIndex + 1,
+    {ToScan, _} = ra_log:last_index_term(Log0),
+    ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
+    {State, Log1} = ra_log:fold(FromScan, ToScan,
+                                fun cluster_scan_fun/2,
+                                State1, Log0),
+
     %% disable segment read cache by setting random access pattern
-    Log = ra_log:release_resources(1, random, Log0),
+    Log = ra_log:release_resources(1, random, Log1),
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value
@@ -2327,6 +2336,17 @@ append_app_effects([AppEff], Effs) ->
 append_app_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
+cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
+                 State0) ->
+    ?DEBUG("~ts: ~ts: applying ra cluster change to ~w",
+           [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
+    %% we are recovering and should apply the cluster change
+    State0#{cluster => NewCluster,
+            membership => get_membership(NewCluster, State0),
+            cluster_change_permitted => true,
+            cluster_index_term => {Idx, Term}};
+cluster_scan_fun(_Cmd, State) ->
+    State.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
