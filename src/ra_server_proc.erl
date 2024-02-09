@@ -1543,8 +1543,8 @@ do_state_query(voters, #{cluster := Cluster}) ->
                            end
               end, [], Cluster),
     Vs;
-do_state_query(leader, #{leader_id := Leader}) ->
-    Leader;
+do_state_query(leader, State) ->
+    maps:get(leader_id, State, undefined);
 do_state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
 do_state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
