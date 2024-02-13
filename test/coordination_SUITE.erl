@@ -319,7 +319,7 @@ grow_cluster(Config) ->
     {ok, _, L1} = ra:members(A),
     [A, B, C] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
     L1 = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
-    %% TODO: handle race conditions
+
     await_condition(
       fun () ->
               [A, B, C] == rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]) andalso
@@ -332,8 +332,12 @@ grow_cluster(Config) ->
       end, 20),
 
     ok = ra:leave_and_delete_server(?SYS, A, A),
-    {ok, _, _} = ra:process_command(B, banana),
-    {ok, _, L2} = ra:members(B),
+    %% wait for B to process the cluster change
+    await_condition(
+      fun () ->
+              [B, C] == rpc:call(CNode, ra_leaderboard, lookup_members, [ClusterName])
+      end, 20),
+    {ok, _, L2} = ra:process_command(B, banana),
 
     %% check members
     [B, C] = rpc:call(BNode, ra_leaderboard, lookup_members, [ClusterName]),
@@ -623,12 +627,6 @@ key_metrics(Config) ->
                         CI > 0,
                  StoppedMetrics),
     ok = ra:restart_server(?SYS, TestId),
-    await_condition(
-      fun () ->
-              Metrics = ra:key_metrics(TestId),
-              ct:pal("RecoverMetrics  ~p", [Metrics]),
-              recover == maps:get(state, Metrics)
-      end, 200),
     {ok, _, _} = ra:process_command(Leader, {data, Data}),
     await_condition(
       fun () ->

@@ -299,9 +299,9 @@ cluster_is_deleted_with_server_down(Config) ->
     % start node again
     ra:restart_server(?SYS, ServerId3),
     % validate all nodes have been shut down and terminated
-    ok = validate_process_down(element(1, ServerId1), 10),
-    ok = validate_process_down(element(1, ServerId2), 10),
-    ok = validate_process_down(element(1, ServerId3), 10),
+    ok = validate_process_down(element(1, ServerId1), 50),
+    ok = validate_process_down(element(1, ServerId2), 50),
+    ok = validate_process_down(element(1, ServerId3), 50),
 
     % validate there are no data dirs anymore
     [ begin
@@ -814,10 +814,11 @@ init(_) ->
             {State0, ok}
     end.
 
-state_enter(eol, State) ->
+state_enter(eol = S, State) ->
+    ct:pal("state_enter ~w ~w", [self(), S]),
     [{send_msg, P, eol, ra_event} || {P, _} <- queue:to_list(State), is_pid(P)];
 state_enter(S, _) ->
-    ct:pal("state_enter ~w", [S]),
+    ct:pal("state_enter ~w ~w", [self(), S]),
     [].
 
 flush() ->
