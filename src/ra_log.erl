@@ -31,6 +31,8 @@
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
+         checkpoint/5,
+         promote_checkpoint/2,
          needs_cache_flush/1,
 
          can_write/1,
@@ -52,6 +54,7 @@
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
 -define(SNAPSHOT_INTERVAL, 4096).
+-define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
@@ -62,7 +65,7 @@
                                  ToTerm :: ra_term()}} |
                       {segments, ets:tid(), [segment_ref()]} |
                       {resend_write, ra_index()} |
-                      {snapshot_written, ra_idxterm()} |
+                      {snapshot_written, ra_idxterm(), ra_snapshot:kind()} |
                       {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
@@ -82,6 +85,7 @@
               log_id :: unicode:chardata(),
               directory :: file:filename(),
               snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+              min_checkpoint_interval = ?MIN_CHECKPOINT_INTERVAL :: non_neg_integer(),
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
               wal :: atom(),
@@ -112,6 +116,7 @@
                               system_config => ra_system:config(),
                               log_id => unicode:chardata(),
                               snapshot_interval => non_neg_integer(),
+                              min_checkpoint_interval => non_neg_integer(),
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
@@ -131,8 +136,11 @@ pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
+    MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, "snapshots"),
-    _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir, undefined),
+    CheckpointsDir = filename:join(Dir, "checkpoints"),
+    _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
+                         CheckpointsDir, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
@@ -148,15 +156,21 @@ init(#{uid := UId,
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
     SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
+    CPInterval = maps:get(min_checkpoint_interval, Conf,
+                          ?MIN_CHECKPOINT_INTERVAL),
+    MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, "snapshots"),
+    CheckpointsDir = filename:join(Dir, "checkpoints"),
     Counter = maps:get(counter, Conf, undefined),
 
     %% ensure directories are there
     ok = ra_lib:make_dir(Dir),
     ok = ra_lib:make_dir(SnapshotsDir),
+    ok = ra_lib:make_dir(CheckpointsDir),
     % initialise metrics for this server
     true = ets:insert(ra_log_metrics, {UId, 0, 0, 0, 0}),
-    SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir, Counter),
+    SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
+                                     CheckpointsDir, Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, -1};
                               Curr -> Curr
@@ -188,6 +202,7 @@ init(#{uid := UId,
                uid = UId,
                log_id = LogId,
                snapshot_interval = SnapInterval,
+               min_checkpoint_interval = CPInterval,
                wal = Wal,
                segment_writer = SegWriter,
                resend_window_seconds = ResendWindow,
@@ -499,37 +514,55 @@ handle_event({segments, Tid, NewSegs},
                         end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
-handle_event({snapshot_written, {SnapIdx, _} = Snap},
+handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = Cfg,
                       first_index = FstIdx,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->
-    % delete any segments outside of first_index
-    {State, Effects0} = delete_segments(SnapIdx, State0),
-    SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-    %% delete old snapshot files
-    %% This is done as an effect
-    %% so that if an old snapshot is still being replicated
-    %% the cleanup can be delayed until it is safe
-    Effects = [{delete_snapshot,
-                ra_snapshot:directory(SnapState),
-                ra_snapshot:current(SnapState0)} | Effects0],
-    %% do not set last written index here as the snapshot may
-    %% be for a past index
-    {State#?MODULE{first_index = SnapIdx + 1,
-                   snapshot_state = SnapState}, Effects};
-handle_event({snapshot_written, {Idx, Term} = Snap},
+    SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, SnapState0),
+    case SnapKind of
+        snapshot ->
+            put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
+            % delete any segments outside of first_index
+            {State, Effects0} = delete_segments(SnapIdx, State0),
+            %% Delete old snapshot files. This is done as an effect
+            %% so that if an old snapshot is still being replicated
+            %% the cleanup can be delayed until it is safe.
+            DeleteCurrentSnap = {delete_snapshot,
+                                 ra_snapshot:directory(SnapState1, snapshot),
+                                 ra_snapshot:current(SnapState0)},
+            %% Also delete any checkpoints older than this snapshot.
+            {SnapState, Checkpoints} =
+                ra_snapshot:take_older_checkpoints(SnapIdx, SnapState1),
+            CPEffects = [{delete_snapshot,
+                          ra_snapshot:directory(SnapState, checkpoint),
+                          Checkpoint} || Checkpoint <- Checkpoints],
+            Effects = [DeleteCurrentSnap | CPEffects] ++ Effects0,
+            %% do not set last written index here as the snapshot may
+            %% be for a past index
+            {State#?MODULE{first_index = SnapIdx + 1,
+                           snapshot_state = SnapState}, Effects};
+        checkpoint ->
+            put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
+            %% If we already have the maximum allowed number of checkpoints,
+            %% remove some checkpoints to make space.
+            {SnapState, CPs} = ra_snapshot:take_extra_checkpoints(SnapState1),
+            Effects = [{delete_snapshot,
+                        ra_snapshot:directory(SnapState, SnapKind),
+                        CP} || CP <- CPs],
+            {State0#?MODULE{snapshot_state = SnapState}, Effects}
+    end;
+handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
-    %% if the snapshot is stale we just want to delete it
+    %% if the snapshot/checkpoint is stale we just want to delete it
     Current = ra_snapshot:current(SnapState),
     ?INFO("~ts: old snapshot_written received for index ~b in term ~b
-          current snapshot ~w, deleting old snapshot",
-           [LogId, Idx, Term, Current]),
+          current snapshot ~w, deleting old ~s",
+           [LogId, Idx, Term, Current, SnapKind]),
     Effects = [{delete_snapshot,
-                ra_snapshot:directory(SnapState),
+                ra_snapshot:directory(SnapState, SnapKind),
                 Snap}],
     {State0, Effects};
 handle_event({resend_write, Idx}, State) ->
@@ -615,14 +648,39 @@ snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
                             MacVersion :: ra_machine:version(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState,
-                      #?MODULE{snapshot_state = SnapState} = State) ->
-    case ra_snapshot:pending(SnapState) of
+update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
+    suggest_snapshot(snapshot, Idx, Cluster, MacVersion, MacState, State).
+
+-spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
+                 MacVersion :: ra_machine:version(),
+                 MacState :: term(), State :: state()) ->
+    {state(), effects()}.
+checkpoint(Idx, Cluster, MacVersion, MacState, State) ->
+    suggest_snapshot(checkpoint, Idx, Cluster, MacVersion, MacState, State).
+
+suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
+                 #?MODULE{snapshot_state = SnapshotState} = State) ->
+    case ra_snapshot:pending(SnapshotState) of
         undefined ->
-            update_release_cursor0(Idx, Cluster, MacVersion, MacState, State);
+            suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State);
         _ ->
-            % if a snapshot is in progress don't even evaluate
+            %% Only one snapshot or checkpoint may be written at a time to
+            %% prevent excessive I/O usage.
             {State, []}
+    end.
+
+promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
+                                 snapshot_state = SnapState0} = State) ->
+    case ra_snapshot:pending(SnapState0) of
+        {_WriterPid, _IdxTerm, snapshot} ->
+            %% If we're currently writing a snapshot, skip promoting a
+            %% checkpoint.
+            {State, []};
+        _ ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
+            {SnapState, Effects} = ra_snapshot:promote_checkpoint(Idx,
+                                                                  SnapState0),
+            {State#?MODULE{snapshot_state = SnapState}, Effects}
     end.
 
 -spec flush_cache(state()) -> state().
@@ -633,28 +691,15 @@ flush_cache(#?MODULE{cache = Cache} = State) ->
 needs_cache_flush(#?MODULE{cache = Cache}) ->
     ra_log_cache:needs_flush(Cache).
 
-update_release_cursor0(Idx, Cluster, MacVersion, MacState,
-                       #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
-                                reader = Reader,
-                                snapshot_state = SnapState} = State0) ->
+suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
     ClusterServerIds = maps:map(fun (_, V) ->
                                         maps:with([voter_status], V)
                                 end, Cluster),
-    SnapLimit = case ra_snapshot:current(SnapState) of
-                    undefined -> SnapInter;
-                    {I, _} -> I + SnapInter
-                end,
     Meta = #{index => Idx,
              cluster => ClusterServerIds,
              machine_version => MacVersion},
-    % The release cursor index is the last entry _not_ contributing
-    % to the current state. I.e. the last entry that can be discarded.
-    % Check here if any segments can be release.
-    case lists:any(fun({_, To, _}) -> To =< Idx end,
-                   ra_log_reader:segment_refs(Reader)) of
+    case should_snapshot(SnapKind, Idx, State0) of
         true ->
-            % segments can be cleared up
-            % take a snapshot at the release_cursor
             % TODO: here we use the current cluster configuration in
             % the snapshot,
             % _not_ the configuration at the snapshot point.
@@ -668,22 +713,39 @@ update_release_cursor0(Idx, Cluster, MacVersion, MacState,
             % or a reference for external storage (e.g. ETS table)
             case fetch_term(Idx, State0) of
                 {undefined, _} ->
-                    exit({term_not_found_for_index, Idx});
+                    {State0, []};
                 {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState, State)
-            end;
-        false when Idx > SnapLimit ->
-            %% periodically take snapshots even if segments cannot be cleared
-            %% up
-            case fetch_term(Idx, State0) of
-                {undefined, State} ->
-                    {State, []};
-                {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState, State)
+                    write_snapshot(Meta#{term => Term}, MacState,
+                                   SnapKind, State)
             end;
         false ->
             {State0, []}
     end.
+
+should_snapshot(snapshot, Idx,
+                #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
+                         reader = Reader,
+                         snapshot_state = SnapState}) ->
+    SnapLimit = case ra_snapshot:current(SnapState) of
+                    undefined -> SnapInter;
+                    {I, _} -> I + SnapInter
+                end,
+    % The release cursor index is the last entry _not_ contributing
+    % to the current state. I.e. the last entry that can be discarded.
+    % We should take a snapshot if the new snapshot index would allow us
+    % to discard any segments or if the we've handled enough commands
+    % since the last snapshot.
+    CanFreeSegments = lists:any(fun({_, To, _}) -> To =< Idx end,
+                                ra_log_reader:segment_refs(Reader)),
+    CanFreeSegments orelse Idx > SnapLimit;
+should_snapshot(checkpoint, Idx,
+                #?MODULE{cfg = #cfg{min_checkpoint_interval = CheckpointInter},
+                         snapshot_state = SnapState}) ->
+    CheckpointLimit = case ra_snapshot:latest_checkpoint(SnapState) of
+                          undefined -> CheckpointInter;
+                          {I, _} -> I + CheckpointInter
+                      end,
+    Idx > CheckpointLimit.
 
 -spec append_sync(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
@@ -734,6 +796,11 @@ overview(#?MODULE{last_index = LastIndex,
                             undefined -> undefined;
                             {I, _} -> I
                         end,
+      latest_checkpoint_index =>
+      case ra_snapshot:latest_checkpoint(SnapshotState) of
+          undefined -> undefined;
+          {I, _} -> I
+      end,
       cache_size => ra_log_cache:size(Cache)
      }.
 
@@ -971,11 +1038,16 @@ write_entries([{FstIdx, _, _} | Rest] = Entries, State0) ->
             Error
     end.
 
-write_snapshot(Meta, MacRef,
+write_snapshot(Meta, MacRef, SnapKind,
                #?MODULE{cfg = Cfg,
                         snapshot_state = SnapState0} = State) ->
-    ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
-    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapState0),
+    Counter = case SnapKind of
+                  snapshot -> ?C_RA_LOG_SNAPSHOTS_WRITTEN;
+                  checkpoint -> ?C_RA_LOG_CHECKPOINTS_WRITTEN
+              end,
+    ok = incr_counter(Cfg, Counter, 1),
+    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapKind,
+                                                      SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
 recover_range(UId, Reader, SegWriter) ->

@@ -135,6 +135,8 @@
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
     {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
+    {release_cursor, ra_index()} |
+    {checkpoint, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.
 
@@ -144,8 +146,13 @@
 %% forcing a GC run.
 %%
 %% Although both leaders and followers will process the same commands, effects
-%% are typically only applied on the leader. The only exception to this is
-%% the `release_cursor' and `garbage_collect' effects. The former is realised on all
+%% are typically only applied on the leader. The only exceptions to this are:
+%% <ul>
+%% <li>`release_cursor'</li>
+%% <li>`checkpoint'</li>
+%% <li>`garbage_collect'</li>
+%% </ul>
+%% The former two are realised on all
 %% nodes as it is a part of the Ra implementation log truncation mechanism.
 %% The `garbage_collect' effects that is used to explicitly triggering a GC run
 %% in the Ra servers' process.

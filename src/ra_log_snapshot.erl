@@ -11,7 +11,8 @@
 
 -export([
          prepare/2,
-         write/3,
+         write/4,
+         sync/1,
          begin_accept/2,
          accept_chunk/2,
          complete_accept/2,
@@ -42,9 +43,9 @@ prepare(_Index, State) -> State.
 %% Snapshot Data (binary)
 %% @end
 
--spec write(file:filename(), meta(), term()) ->
+-spec write(file:filename(), meta(), term(), Sync :: boolean()) ->
     ok | {error, file_err()}.
-write(Dir, Meta, MacState) ->
+write(Dir, Meta, MacState, Sync) ->
     %% no compression on meta data to make sure reading it is as fast
     %% as possible
     MetaBin = term_to_binary(Meta),
@@ -55,7 +56,13 @@ write(Dir, Meta, MacState) ->
     ra_lib:write_file(File, [<<?MAGIC,
                                ?VERSION:8/unsigned,
                                Checksum:32/integer>>,
-                             Data]).
+                             Data], Sync).
+
+-spec sync(file:filename()) ->
+    ok | {error, file_err()}.
+sync(Dir) ->
+    File = filename(Dir),
+    ra_lib:sync_file(File).
 
 begin_accept(SnapDir, Meta) ->
     File = filename(SnapDir),

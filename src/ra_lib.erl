@@ -39,8 +39,11 @@
          retry/2,
          retry/3,
          write_file/2,
+         write_file/3,
+         sync_file/1,
          lists_chunk/2,
          lists_detect_sort/1,
+         lists_shuffle/1,
          is_dir/1,
          is_file/1,
          ensure_dir/1,
@@ -48,6 +51,10 @@
          maps_foreach/2,
          maps_merge_with/3
         ]).
+
+-type file_err() :: file:posix() | badarg | terminated | system_limit.
+
+-export_type([file_err/0]).
 
 -include_lib("kernel/include/file.hrl").
 
@@ -313,24 +320,50 @@ retry(Func, Attempt, Sleep) ->
             retry(Func, Attempt - 1)
     end.
 
-
+-spec write_file(file:name_all(), iodata()) ->
+    ok | file_err().
 write_file(Name, IOData) ->
+    write_file(Name, IOData, true).
+
+-spec write_file(file:name_all(), iodata(), Sync :: boolean()) ->
+    ok | file_err().
+write_file(Name, IOData, Sync) ->
     case file:open(Name, [binary, write, raw]) of
         {ok, Fd} ->
             case file:write(Fd, IOData) of
                 ok ->
-                    case file:sync(Fd) of
-                        ok ->
-                            file:close(Fd);
-                        Err ->
-                            _ = file:close(Fd),
-                            Err
+                    case Sync of
+                        true ->
+                            sync_and_close_fd(Fd);
+                        false ->
+                            ok
                     end;
                 Err ->
                     _ = file:close(Fd),
                     Err
             end;
         Err ->
+            Err
+    end.
+
+-spec sync_file(file:name_all()) ->
+    ok | file_err().
+sync_file(Name) ->
+    case file:open(Name, [binary, write, raw]) of
+        {ok, Fd} ->
+            sync_and_close_fd(Fd);
+        Err ->
+            Err
+    end.
+
+-spec sync_and_close_fd(file:fd()) ->
+    ok | file_err().
+sync_and_close_fd(Fd) ->
+    case file:sync(Fd) of
+        ok ->
+            file:close(Fd);
+        Err ->
+            _ = file:close(Fd),
             Err
     end.
 
@@ -381,6 +414,12 @@ do_ascending(A, [B | Rem])
     do_ascending(B, Rem);
 do_ascending(_A, _) ->
     unsorted.
+
+%% Reorder a list randomly.
+-spec lists_shuffle(list()) -> list().
+lists_shuffle(List0) ->
+    List1 = [{rand:uniform(), Elem} || Elem <- List0],
+    [Elem || {_, Elem} <- lists:keysort(1, List1)].
 
 is_dir(Dir) ->
     case prim_file:read_file_info(Dir) of

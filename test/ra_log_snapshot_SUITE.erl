@@ -73,7 +73,7 @@ roundtrip(Config) ->
     Dir = ?config(dir, Config),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = my_state,
-    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef, true),
     Context = #{can_accept_full_file => true},
     ?assertEqual({SnapshotMeta, SnapshotRef}, read(Dir, Context)),
     ok.
@@ -82,7 +82,7 @@ roundtrip_compat(Config) ->
     Dir = ?config(dir, Config),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = my_state,
-    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef, true),
     ?assertEqual({SnapshotMeta, SnapshotRef}, read(Dir)),
     ok.
 
@@ -107,7 +107,7 @@ test_accept(Config, Name, DataSize, FullFile, ChunkSize) ->
     ct:pal("test_accept ~w ~b ~w ~b", [Name, DataSize, FullFile, ChunkSize]),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = crypto:strong_rand_bytes(DataSize),
-    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef, true),
     Context = #{can_accept_full_file => FullFile},
     {ok, Meta, St} =  ra_log_snapshot:begin_read(Dir, Context),
     %% how to ensure
@@ -180,7 +180,7 @@ read_meta_data(Config) ->
     Dir = ?config(dir, Config),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotRef = my_state,
-    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef),
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotRef, true),
     {ok, SnapshotMeta} = ra_log_snapshot:read_meta(Dir),
     ok.
 
@@ -188,7 +188,7 @@ recover_same_as_read(Config) ->
     Dir = ?config(dir, Config),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}, {banana, node@savanna}]),
     SnapshotData = my_state,
-    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData),
+    ok = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData, true),
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
     ok.
 

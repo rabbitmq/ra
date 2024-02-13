@@ -311,7 +311,8 @@ sparse_read_out_of_range_2(Config) ->
     {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
                                              <<"snap@10">>, Log1),
     {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {10, 2}} = Evt} ->
+                    {ra_log_event, {snapshot_written, {10, 2},
+                                    snapshot} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 5000 ->
                           flush(),
@@ -397,7 +398,8 @@ written_event_after_snapshot(Config) ->
     {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
                                              <<"one+two">>, Log1b),
     {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {2, 1}} = Evt} ->
+                    {ra_log_event, {snapshot_written, {2, 1},
+                                    snapshot} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 500 ->
                           exit(snapshot_written_timeout)
@@ -412,7 +414,7 @@ written_event_after_snapshot(Config) ->
                                              <<"one+two+three+four">>,
                                              Log6b),
     _ = receive
-            {ra_log_event, {snapshot_written, {4, 1}} = E} ->
+            {ra_log_event, {snapshot_written, {4, 1}, snapshot} = E} ->
                 ra_log:handle_event(E, Log7)
         after 500 ->
                   exit(snapshot_written_timeout)
@@ -699,7 +701,8 @@ snapshot_written_after_installation(Config) ->
     {Log2, _} = ra_log:update_release_cursor(5, #{}, 1,
                                              <<"one-five">>, Log1),
     DelayedSnapWritten = receive
-                             {ra_log_event, {snapshot_written, {5, 1}} = Evt} ->
+                             {ra_log_event, {snapshot_written, {5, 1},
+                                             snapshot} = Evt} ->
                                  Evt
                          after 1000 ->
                                    flush(),
@@ -1363,15 +1366,17 @@ meta(Idx, Term, Cluster) ->
 
 create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
+    CPDir = filename:join(?config(priv_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
+    ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
-                           OthDir),
+                           OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
     MacRef = <<"9">>,
-    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, Sn0),
+    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm}} ->
-                ra_snapshot:complete_snapshot(IdxTerm, Sn1)
+            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, snapshot}} ->
+                ra_snapshot:complete_snapshot(IdxTerm, snapshot, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
         end,

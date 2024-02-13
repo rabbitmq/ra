@@ -1329,6 +1329,19 @@ handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
                                                              ServerState0),
     State1 = State0#state{server_state = ServerState},
     handle_effects(RaftState, Effects, EvtType, State1, Actions0);
+handle_effect(RaftState, {release_cursor, Index}, EvtType,
+              #state{server_state = ServerState0} = State0, Actions0) ->
+    incr_counter(State0#state.conf, ?C_RA_SRV_RELEASE_CURSORS, 1),
+    {ServerState, Effects} = ra_server:promote_checkpoint(Index, ServerState0),
+    State1 = State0#state{server_state = ServerState},
+    handle_effects(RaftState, Effects, EvtType, State1, Actions0);
+handle_effect(RaftState, {checkpoint, Index, MacState}, EvtType,
+              #state{server_state = ServerState0} = State0, Actions0) ->
+    incr_counter(State0#state.conf, ?C_RA_SRV_CHECKPOINTS, 1),
+    {ServerState, Effects} = ra_server:checkpoint(Index, MacState,
+                                                  ServerState0),
+    State1 = State0#state{server_state = ServerState},
+    handle_effects(RaftState, Effects, EvtType, State1, Actions0);
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),

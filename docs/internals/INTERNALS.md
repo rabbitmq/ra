@@ -188,6 +188,27 @@ It is not guaranteed that a snapshot will be taken. A decision to take
 a snapshot or to delay it is taken using a number of internal Ra state factors.
 The goal is to minimise disk I/O activity when possible.
 
+### Checkpointing
+
+Checkpoints are nearly the same concept as snapshots. Snapshotting truncates
+the log up to the snapshot's index, which might be undesirable for machines
+which read from the log with the `{log, Indexes, Fun}` effect mentioned above.
+
+The `{checkpoint, RaftIndex, MachineState}` effect can be used as a hint to
+trigger a checkpoint. Like snapshotting, this effect is evaluated on all nodes
+and when a checkpoint is taken, the machine state is saved to disk and can be
+used for recovery when the machine restarts. A checkpoint being written does
+not trigger any log truncation though.
+
+The `{release_cursor, RaftIndex}` effect can then be used to promote any
+existing checkpoint older than or equal to `RaftIndex` into a proper snapshot,
+and any log entries older than the checkpoint's index are then truncated.
+
+These two effects are intended for machines that use the `{log, Indexes, Fun}`
+effect and can substantially improve machine recovery time compared to
+snapshotting alone, especially when the machine needs to keep old log entries
+around for a long time.
+
 ## State Machine Versioning
 
 It is eventually necessary to make changes to the state machine
