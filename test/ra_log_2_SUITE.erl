@@ -392,7 +392,7 @@ sparse_read(Config) ->
     ok.
 
 written_event_after_snapshot(Config) ->
-    Log0 = ra_log_init(Config, #{snapshot_interval => 1}),
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
     {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
@@ -429,7 +429,7 @@ updated_segment_can_be_read(Config) ->
     ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(Config,
                        #{counter => ra_counters:fetch(?FUNCTION_NAME),
-                         snapshot_interval => 1}),
+                         min_snapshot_interval => 1}),
     %% append a few entries
     Log2 = append_and_roll(1, 5, 1, Log0),
     % Log2 = deliver_all_log_events(Log1, 200),
@@ -695,7 +695,7 @@ detect_lost_written_range(Config) ->
 
 
 snapshot_written_after_installation(Config) ->
-    Log0 = ra_log_init(Config, #{snapshot_interval => 2}),
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
     {Log2, _} = ra_log:update_release_cursor(5, #{}, 1,
@@ -734,7 +734,7 @@ snapshot_written_after_installation(Config) ->
     %% assert there is no pending snapshot
     ?assertEqual(undefined, ra_snapshot:pending(ra_log:snapshot_state(Log5))),
 
-    _ = ra_log:close(ra_log_init(Config, #{snapshot_interval => 2})),
+    _ = ra_log:close(ra_log_init(Config, #{min_snapshot_interval => 2})),
 
     ok.
 
@@ -931,7 +931,7 @@ update_release_cursor(Config) ->
 
 update_release_cursor_with_machine_version(Config) ->
     % ra_log should initiate shapshot if segments can be released
-    Log0 = ra_log_init(Config, #{snapshot_interval => 64}),
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 64}),
     % beyond 128 limit - should create two segments
     Log1 = append_and_roll(1, 150, 2, Log0),
     timer:sleep(300),

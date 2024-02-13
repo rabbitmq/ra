@@ -723,7 +723,7 @@ recover_from_checkpoint(Config) ->
                      machine => {module, ?MODULE, #{}},
                      log_init_args => #{uid => UId,
                                         min_checkpoint_interval => 3,
-                                        snapshot_interval => 5}}
+                                        min_snapshot_interval => 5}}
                end || {Name, _Node} = NodeId <- ServerIds],
     {ok, Started, []} = ra:start_cluster(?SYS, Configs),
     {ok, _, Leader} = ra:members(hd(Started)),
