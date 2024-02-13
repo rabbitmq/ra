@@ -53,7 +53,7 @@
 -include("ra.hrl").
 
 -define(DEFAULT_RESEND_WINDOW_SEC, 20).
--define(SNAPSHOT_INTERVAL, 4096).
+-define(MIN_SNAPSHOT_INTERVAL, 4096).
 -define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 
@@ -84,7 +84,7 @@
 -record(cfg, {uid :: ra_uid(),
               log_id :: unicode:chardata(),
               directory :: file:filename(),
-              snapshot_interval = ?SNAPSHOT_INTERVAL :: non_neg_integer(),
+              min_snapshot_interval = ?MIN_SNAPSHOT_INTERVAL :: non_neg_integer(),
               min_checkpoint_interval = ?MIN_CHECKPOINT_INTERVAL :: non_neg_integer(),
               snapshot_module :: module(),
               resend_window_seconds = ?DEFAULT_RESEND_WINDOW_SEC :: integer(),
@@ -115,7 +115,11 @@
 -type ra_log_init_args() :: #{uid := ra_uid(),
                               system_config => ra_system:config(),
                               log_id => unicode:chardata(),
+                              %% Deprecated in favor of `min_snapshot_interval'
+                              %% but this value is used as a fallback if
+                              %% `min_snapshot_interval' is not provided.
                               snapshot_interval => non_neg_integer(),
+                              min_snapshot_interval => non_neg_integer(),
                               min_checkpoint_interval => non_neg_integer(),
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
@@ -155,7 +159,9 @@ init(#{uid := UId,
     %% this has to be patched by ra_server
     LogId = maps:get(log_id, Conf, UId),
     ResendWindow = maps:get(resend_window, Conf, ?DEFAULT_RESEND_WINDOW_SEC),
-    SnapInterval = maps:get(snapshot_interval, Conf, ?SNAPSHOT_INTERVAL),
+    SnapInterval = maps:get(min_snapshot_interval, Conf,
+                            maps:get(snapshot_interval, Conf,
+                                     ?MIN_SNAPSHOT_INTERVAL)),
     CPInterval = maps:get(min_checkpoint_interval, Conf,
                           ?MIN_CHECKPOINT_INTERVAL),
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
@@ -201,7 +207,7 @@ init(#{uid := UId,
     Cfg = #cfg{directory = Dir,
                uid = UId,
                log_id = LogId,
-               snapshot_interval = SnapInterval,
+               min_snapshot_interval = SnapInterval,
                min_checkpoint_interval = CPInterval,
                wal = Wal,
                segment_writer = SegWriter,
@@ -723,7 +729,7 @@ suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
     end.
 
 should_snapshot(snapshot, Idx,
-                #?MODULE{cfg = #cfg{snapshot_interval = SnapInter},
+                #?MODULE{cfg = #cfg{min_snapshot_interval = SnapInter},
                          reader = Reader,
                          snapshot_state = SnapState}) ->
     SnapLimit = case ra_snapshot:current(SnapState) of
