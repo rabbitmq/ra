@@ -629,7 +629,8 @@ consistent_query_minority(Config) ->
 consistent_query_leader_change(Config) ->
     %% this test reproduces a scenario that could cause a stale
     %% read to be returned from `ra:consistent_query/2`
-    [A, B, C, D, E] = Cluster = start_local_cluster(5, ?config(test_name, Config),
+    ClusterName = ?config(test_name, Config),
+    [A, B, C, D, E] = Cluster = start_local_cluster(5, ClusterName,
                                                     add_machine()),
     ok = ra:transfer_leadership(A, A),
     {ok, _, A} = ra:process_command(A, 9, ?PROCESS_COMMAND_TIMEOUT),
@@ -640,9 +641,22 @@ consistent_query_leader_change(Config) ->
     %% restart B
     ok = ra:stop_server(B),
     ok = ra:restart_server(B),
+    %% Wait for B to recover and catch up.
+    {ok, #{log := #{last_written_index_term := CurrentIdxTerm}}, _} =
+      ra:member_overview(A),
+    await_condition(
+      fun() ->
+              {ok, #{log := #{last_written_index_term := IdxTermB}}, _} =
+                ra:member_overview(B),
+              IdxTermB =:= CurrentIdxTerm
+      end, 20),
     %% B's query_index is now 0
     %% Make B leader
     ok = ra:transfer_leadership(A, B),
+    await_condition(
+      fun() ->
+              ra_leaderboard:lookup_leader(ClusterName) =:= B
+      end, 20),
     %% restart E
     ok = ra:restart_server(E),
     {ok, 9, B} = ra:consistent_query(B, fun(S) -> S end),
@@ -1310,3 +1324,13 @@ search_paths() ->
     Ld = code:lib_dir(),
     lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
                  code:get_path()).
+
+await_condition(_Fun, 0) ->
+    exit(condition_did_not_materialise);
+await_condition(Fun, Attempts) ->
+    case catch Fun() of
+        true -> ok;
+        _ ->
+            timer:sleep(100),
+            await_condition(Fun, Attempts - 1)
+    end.
