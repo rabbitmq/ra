@@ -796,6 +796,11 @@ overview(#?MODULE{last_index = LastIndex,
                             undefined -> undefined;
                             {I, _} -> I
                         end,
+      latest_checkpoint_index =>
+      case ra_snapshot:latest_checkpoint(SnapshotState) of
+          undefined -> undefined;
+          {I, _} -> I
+      end,
       cache_size => ra_log_cache:size(Cache)
      }.
 
