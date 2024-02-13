@@ -5,6 +5,7 @@
 %% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 %%
 -module(ra_props_SUITE).
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include("src/ra.hrl").

@@ -6,6 +6,7 @@
 %%
 -module(ra_log_meta_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
