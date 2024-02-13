@@ -1144,6 +1144,7 @@ maps_with_values(Keys, Map) ->
 %%%% TESTS
 
 -ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 
 pick_range_test() ->
     Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
