@@ -52,7 +52,7 @@ log_fetch(Idx, #{log := Log0} = State)
          {{Idx, Term, {'$usr', Meta, Cmd, _ReplyMode}}, Log} ->
              {{Term, Meta, Cmd}, State#{log => Log}};
          {_, Log} ->
-             %% we only allow usr commands to be read
+             %% we only allow user commands to be read
              {undefined, State#{log => Log}}
      end.
 

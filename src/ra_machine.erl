@@ -248,11 +248,9 @@
                      AuxState,
                      State) ->
     {reply, Reply :: term(), AuxState, State} |
-    {reply, Reply :: term(), AuxState, State,
-     [{monitor, process, aux, pid()}]} |
+    {reply, Reply :: term(), AuxState, State, effects()} |
     {no_reply, AuxState, State} |
-    {no_reply, AuxState, State,
-     [{monitor, process, aux, pid()}]}
+    {no_reply, AuxState, State, effects()}
       when AuxState :: term(),
            State :: ra_aux:state().
 

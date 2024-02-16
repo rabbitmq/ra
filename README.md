@@ -298,8 +298,8 @@ See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 for how to write more sophisticated state machines by implementing
 the `ra_machine` behaviour.
 
-A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store) is available
-in a separate repository.
+A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store)
+is available in a separate repository.
 
 
 ## Documentation
