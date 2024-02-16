@@ -17,46 +17,46 @@
 
 -include("ra.hrl").
 
--opaque state() :: ra_server:state().
+-opaque internal_state() :: ra_server:state().
 
--export_type([state/0]).
+-export_type([internal_state/0]).
 
--spec machine_state(ra_aux:state()) -> term().
+-spec machine_state(ra_aux:internal_state()) -> term().
 machine_state(State) ->
     maps:get(?FUNCTION_NAME, State).
 
--spec leader_id(ra_aux:state()) -> undefined | ra_server_id().
+-spec leader_id(ra_aux:internal_state()) -> undefined | ra_server_id().
 leader_id(State) ->
     maps:get(?FUNCTION_NAME, State).
 
--spec members_info(ra_aux:state()) -> ra_cluster().
+-spec members_info(ra_aux:internal_state()) -> ra_cluster().
 members_info(State) ->
     ra_server:state_query(?FUNCTION_NAME, State).
 
--spec overview(ra_aux:state()) -> map().
+-spec overview(ra_aux:internal_state()) -> map().
 overview(State) ->
     ra_server:state_query(?FUNCTION_NAME, State).
 
--spec log_last_index_term(ra_aux:state()) -> ra_idxterm().
+-spec log_last_index_term(ra_aux:internal_state()) -> ra_idxterm().
 log_last_index_term(#{log := Log}) ->
-     ra_log:last_index_term(Log).
+    ra_log:last_index_term(Log).
 
--spec log_fetch(ra_index(), ra_aux:state()) ->
+-spec log_fetch(ra_index(), ra_aux:internal_state()) ->
     {undefined |
      {ra_term(),
       CmdMetadata :: ra_server:command_meta(),
-      Command :: term()}, ra_aux:state()}.
+      Command :: term()}, ra_aux:internal_state()}.
 log_fetch(Idx, #{log := Log0} = State)
   when is_integer(Idx) ->
-     case ra_log:fetch(Idx, Log0) of
-         {{Idx, Term, {'$usr', Meta, Cmd, _ReplyMode}}, Log} ->
-             {{Term, Meta, Cmd}, State#{log => Log}};
-         {_, Log} ->
-             %% we only allow user commands to be read
-             {undefined, State#{log => Log}}
-     end.
+    case ra_log:fetch(Idx, Log0) of
+        {{Idx, Term, {'$usr', Meta, Cmd, _ReplyMode}}, Log} ->
+            {{Term, Meta, Cmd}, State#{log => Log}};
+        {_, Log} ->
+            %% we only allow user commands to be read
+            {undefined, State#{log => Log}}
+    end.
 
--spec log_stats(ra_aux:state()) -> ra_log:overview().
+-spec log_stats(ra_aux:internal_state()) -> ra_log:overview().
 log_stats(#{log := Log}) ->
     ra_log:overview(Log).
 

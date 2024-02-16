@@ -317,13 +317,13 @@ Apart from the mandatory callbacks Ra supports some optional callbacks
                          {call, From :: from()} | cast,
                          Command :: term(),
                          AuxState,
-                         State) ->
-        {reply, Reply :: term(), AuxState, State} |
-        {reply, Reply :: term(), AuxState, State, effects()} |
-        {no_reply, AuxState, State} |
-        {no_reply, AuxState, State, effects()}
+                         IntState) ->
+        {reply, Reply :: term(), AuxState, IntState} |
+        {reply, Reply :: term(), AuxState, IntState, effects()} |
+        {no_reply, AuxState, IntState} |
+        {no_reply, AuxState, IntState, effects()}
           when AuxState :: term(),
-               State :: ra_aux:state().
+               IntState :: ra_aux:internal_state().
    ```
 
     These two callbacks allow each server to maintain a local state machine

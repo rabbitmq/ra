@@ -137,6 +137,7 @@
       open_segments => non_neg_integer(),
       snapshot_index => undefined | ra_index(),
       cache_size => non_neg_integer(),
+      latest_checkpoint_index => undefined | ra_index(),
       atom() => term()}.
 
 -export_type([state/0,

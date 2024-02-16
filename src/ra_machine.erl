@@ -240,19 +240,19 @@
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
--callback init_aux(Name :: atom()) -> term().
+-callback init_aux(Name :: atom()) -> AuxState :: term().
 
 -callback handle_aux(ra_server:ra_state(),
                      {call, From :: from()} | cast,
                      Command :: term(),
                      AuxState,
-                     State) ->
-    {reply, Reply :: term(), AuxState, State} |
-    {reply, Reply :: term(), AuxState, State, effects()} |
-    {no_reply, AuxState, State} |
-    {no_reply, AuxState, State, effects()}
+                     IntState) ->
+    {reply, Reply :: term(), AuxState, IntState} |
+    {reply, Reply :: term(), AuxState, IntState, effects()} |
+    {no_reply, AuxState, IntState} |
+    {no_reply, AuxState, IntState, effects()}
       when AuxState :: term(),
-           State :: ra_aux:state().
+           IntState :: ra_aux:internal_state().
 
 -callback handle_aux(ra_server:ra_state(),
                      {call, From :: from()} | cast,

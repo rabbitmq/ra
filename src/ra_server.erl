@@ -1484,10 +1484,16 @@ is_fully_replicated(#{commit_index := CI} = State) ->
             MinMI >= CI andalso MinCI >= CI
     end.
 
-handle_aux(RaftState, _Type, _Cmd,
+handle_aux(RaftState, Type, _Cmd,
            #{cfg := #cfg{effective_handle_aux_fun = undefined}} = State0) ->
     %% todo reply with error if Type is a call?
-    {RaftState, State0, []};
+    Effects = case Type of
+                  cast ->
+                      [];
+                  _From ->
+                      [{reply, {error, aux_handler_not_implemented}}]
+              end,
+    {RaftState, State0, Effects};
 handle_aux(RaftState, Type, Cmd,
            #{cfg := #cfg{effective_machine_module = MacMod,
                          effective_handle_aux_fun = {handle_aux, 5}},
@@ -2266,17 +2272,16 @@ state_query(overview, State) ->
 state_query(machine, #{machine_state := MacState}) ->
     MacState;
 state_query(voters, #{cluster := Cluster}) ->
-    Vs = maps:fold(fun(K, V, Acc) ->
-                           case maps:get(voter_status, V, undefined) of
-                               undefined -> [K|Acc];
-                               S -> case maps:get(membership, S, undefined) of
-                                        undefined -> [K|Acc];
-                                        voter -> [K|Acc];
-                                        _ -> Acc
-                                    end
-                           end
-              end, [], Cluster),
-    Vs;
+    maps:fold(fun(K, V, Acc) ->
+                      case maps:get(voter_status, V, undefined) of
+                          undefined -> [K|Acc];
+                          S -> case maps:get(membership, S, undefined) of
+                                   undefined -> [K|Acc];
+                                   voter -> [K|Acc];
+                                   _ -> Acc
+                               end
+                      end
+              end, [], Cluster);
 state_query(leader, State) ->
     maps:get(leader_id, State, undefined);
 state_query(members, #{cluster := Cluster}) ->

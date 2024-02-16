@@ -46,6 +46,7 @@ all_tests() ->
      log_effect,
      aux_eval,
      aux_tick,
+     aux_handler_not_impl,
      aux_command,
      aux_command_v2,
      aux_command_v1_and_v2,
@@ -589,6 +590,29 @@ log_effect(Config) ->
               flush(),
               exit(data_timeout)
     end,
+    ok.
+
+aux_handler_not_impl(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    {error, aux_handler_not_implemented} = ra:aux_command(Leader, emit),
     ok.
 
 aux_command(Config) ->
