@@ -20,6 +20,7 @@
          machine_versions :: [{ra_index(), ra_machine:version()}, ...],
          effective_machine_version :: ra_machine:version(),
          effective_machine_module :: module(),
+         effective_handle_aux_fun :: undefined | {handle_aux, 5 | 6},
          max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer(),
          max_append_entries_rpc_batch_size = ?AER_CHUNK_SIZE :: non_neg_integer(),
          counter :: undefined | counters:counters_ref(),

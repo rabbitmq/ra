@@ -46,7 +46,10 @@ all_tests() ->
      log_effect,
      aux_eval,
      aux_tick,
+     aux_handler_not_impl,
      aux_command,
+     aux_command_v2,
+     aux_command_v1_and_v2,
      aux_monitor_effect,
      aux_and_machine_monitor_same_process,
      aux_and_machine_monitor_same_node,
@@ -589,6 +592,29 @@ log_effect(Config) ->
     end,
     ok.
 
+aux_handler_not_impl(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    {error, aux_handler_not_implemented} = ra:aux_command(Leader, emit),
+    ok.
+
 aux_command(Config) ->
     ClusterName = ?config(cluster_name, Config),
     ServerId1 = ?config(server_id, Config),
@@ -622,6 +648,104 @@ aux_command(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
+    ok = ra:cast_aux_command(Leader, banana),
+    {leader, banana} = ra:aux_command(Leader, emit),
+    [ServerId2, ServerId3] = Cluster -- [Leader],
+    {follower, undefined} = ra:aux_command(ServerId2, emit),
+    ok = ra:cast_aux_command(ServerId2, apple),
+    {follower, apple} = ra:aux_command(ServerId2, emit),
+    {follower, undefined} = ra:aux_command(ServerId3, emit),
+    ok = ra:cast_aux_command(ServerId3, orange),
+    {follower, orange} = ra:aux_command(ServerId3, emit),
+    ra:delete_cluster(Cluster),
+    ok.
+
+aux_command_v2(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (RaftState, {call, _From}, emit, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, {RaftState, AuxState}, AuxState, Opaque};
+                    (_RaftState, cast, eval, AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, AuxState, Opaque};
+                    (_RaftState, cast, NewState, _AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, NewState, Opaque}
+
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    ok = ra:cast_aux_command(Leader, banana),
+    {leader, banana} = ra:aux_command(Leader, emit),
+    [ServerId2, ServerId3] = Cluster -- [Leader],
+    {follower, undefined} = ra:aux_command(ServerId2, emit),
+    ok = ra:cast_aux_command(ServerId2, apple),
+    {follower, apple} = ra:aux_command(ServerId2, emit),
+    {follower, undefined} = ra:aux_command(ServerId3, emit),
+    ok = ra:cast_aux_command(ServerId3, orange),
+    {follower, orange} = ra:aux_command(ServerId3, emit),
+    ra:delete_cluster(Cluster),
+    ok.
+
+aux_command_v1_and_v2(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun (_, {monitor_me, Pid}, State) ->
+                        {[Pid | State], ok, [{monitor, process, Pid}]};
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, _, _, _AuxState, _Log, _MacState) ->
+                        exit(wrong_callback)
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (RaftState, {call, _From}, emit, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, {RaftState, AuxState}, AuxState, Opaque};
+                    (_RaftState, cast, eval, AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, AuxState, Opaque};
+                    (_RaftState, cast, NewState, _AuxState, Opaque0) ->
+                        {Idx, _} = ra_aux:log_last_index_term(Opaque0),
+                        {{_Term, _Meta, apple}, Opaque} = ra_aux:log_fetch(Idx, Opaque0),
+                        %% replaces aux state
+                        {no_reply, NewState, Opaque}
+
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    {ok, _, Leader} = ra:members(ServerId1),
+    {ok, _, _} = ra:process_command(Leader, apple),
     ok = ra:cast_aux_command(Leader, banana),
     {leader, banana} = ra:aux_command(Leader, emit),
     [ServerId2, ServerId3] = Cluster -- [Leader],

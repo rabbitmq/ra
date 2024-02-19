@@ -298,8 +298,8 @@ See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 for how to write more sophisticated state machines by implementing
 the `ra_machine` behaviour.
 
-A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store) is available
-in a separate repository.
+A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store)
+is available in a separate repository.
 
 
 ## Documentation
@@ -427,20 +427,23 @@ in a separate repository.
 
 ## Logging
 
-Ra will use default OTP `logger` by default, unless `logger_module` configuration key is used to override.
+Ra will use default OTP `logger` by default, unless `logger_module`
+configuration key is used to override.
 
 To change log level to `debug` for all applications, use
 
 ``` erl
 logger:set_primary_config(level, debug).
 ```
+
 ## Ra versioning
 
 Ra attempts to follow [Semantic Versioning](https://semver.org/).
 
 The modules that form part of the public API are:
 * `ra`
-* `ra_machine`
+* `ra_machine` (behaviour callbacks only)
+* `ra_aux`
 * `ra_system`
 * `ra_counters`
 * `ra_leaderboard`
@@ -449,7 +452,8 @@ The modules that form part of the public API are:
 
 ## Copyright and License
 
-(c) 2017-2024 Broadcom. All Rights Reserved. The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+(c) 2017-2024 Broadcom. All Rights Reserved. The term "Broadcom" refers to
+Broadcom Inc. and/or its subsidiaries.
 
 Dual licensed under the Apache License Version 2.0 and
 Mozilla Public License Version 2.0.

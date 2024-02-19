@@ -863,6 +863,7 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
 
     {error, wal_checksum_validation_failure} = ra_log_wal:start_link(Conf),
     empty_mailbox(),
+    meck:unload(),
     ok.
 
 empty_mailbox() ->

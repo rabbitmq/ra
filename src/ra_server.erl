@@ -58,7 +58,8 @@
          log_fold/3,
          log_read/2,
          get_membership/1,
-         recover/1
+         recover/1,
+         state_query/2
         ]).
 
 -type ra_await_condition_fun() ::
@@ -91,6 +92,8 @@
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => option(non_neg_integer())
      }.
+
+-type state() :: ra_server_state().
 
 -type ra_state() :: leader | follower | candidate
                     | pre_vote | await_condition | delete_and_terminate
@@ -215,7 +218,8 @@
 
 -type config() :: ra_server_config().
 
--export_type([config/0,
+-export_type([state/0,
+              config/0,
               ra_server_state/0,
               ra_state/0,
               ra_server_config/0,
@@ -327,6 +331,7 @@ init(#{id := Id,
                machine_versions = [{SnapshotIdx, MacVer}],
                effective_machine_version = MacVer,
                effective_machine_module = MacMod,
+               effective_handle_aux_fun = ra_machine:which_aux_fun(MacMod),
                max_pipeline_count = MaxPipelineCount,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
@@ -1301,7 +1306,9 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           Cfg0#cfg{effective_machine_version = SnapMacVer,
                                    machine_versions = [{SnapIndex, SnapMacVer}
                                                        | MachineVersions],
-                                   effective_machine_module = EffMacMod};
+                                   effective_machine_module = EffMacMod,
+                                   effective_handle_aux_fun =
+                                       ra_machine:which_aux_fun(EffMacMod)};
                       false ->
                           Cfg0
                   end,
@@ -1477,11 +1484,43 @@ is_fully_replicated(#{commit_index := CI} = State) ->
             MinMI >= CI andalso MinCI >= CI
     end.
 
-handle_aux(RaftState, Type, Cmd, #{cfg := #cfg{effective_machine_module = MacMod},
-                                   aux_state := Aux0, log := Log0,
-                                   machine_state := MacState0} = State0) ->
+handle_aux(RaftState, Type, _Cmd,
+           #{cfg := #cfg{effective_handle_aux_fun = undefined}} = State0) ->
+    %% todo reply with error if Type is a call?
+    Effects = case Type of
+                  cast ->
+                      [];
+                  _From ->
+                      [{reply, {error, aux_handler_not_implemented}}]
+              end,
+    {RaftState, State0, Effects};
+handle_aux(RaftState, Type, Cmd,
+           #{cfg := #cfg{effective_machine_module = MacMod,
+                         effective_handle_aux_fun = {handle_aux, 5}},
+             aux_state := Aux0} = State0) ->
+    %% NEW API
     case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
-                               Log0, MacState0) of
+                               State0) of
+        {reply, Reply, Aux, State} ->
+            {RaftState, State#{aux_state => Aux},
+             [{reply, Reply}]};
+        {reply, Reply, Aux, State, Effects} ->
+            {RaftState, State#{aux_state => Aux},
+             [{reply, Reply} | Effects]};
+        {no_reply, Aux, State} ->
+            {RaftState, State#{aux_state => Aux}, []};
+        {no_reply, Aux, State, Effects} ->
+            {RaftState, State#{aux_state => Aux}, Effects}
+    end;
+handle_aux(RaftState, Type, Cmd,
+           #{cfg := #cfg{effective_machine_module = MacMod,
+                         effective_handle_aux_fun = {handle_aux, 6}},
+             aux_state := Aux0,
+             machine_state := MacState,
+             log := Log0} = State0) ->
+    %% OLD API
+    case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
+                               Log0, MacState) of
         {reply, Reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux},
              [{reply, Reply}]};
@@ -2226,6 +2265,82 @@ update_term(_, State) ->
 last_idx_term(#{log := Log}) ->
     ra_log:last_index_term(Log).
 
+
+state_query(all, State) -> State;
+state_query(overview, State) ->
+    overview(State);
+state_query(machine, #{machine_state := MacState}) ->
+    MacState;
+state_query(voters, #{cluster := Cluster}) ->
+    maps:fold(fun(K, V, Acc) ->
+                      case maps:get(voter_status, V, undefined) of
+                          undefined -> [K|Acc];
+                          S -> case maps:get(membership, S, undefined) of
+                                   undefined -> [K|Acc];
+                                   voter -> [K|Acc];
+                                   _ -> Acc
+                               end
+                      end
+              end, [], Cluster);
+state_query(leader, State) ->
+    maps:get(leader_id, State, undefined);
+state_query(members, #{cluster := Cluster}) ->
+    maps:keys(Cluster);
+state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
+                            leader_id := Self, query_index := QI, commit_index := CI,
+                            membership := Membership}) ->
+    maps:map(fun(Id, Peer) ->
+                     case {Id, Peer} of
+                         {Self, Peer = #{voter_status := VoterStatus}} ->
+                             %% For completeness sake, preserve `target`
+                             %% of once promoted leader.
+                             #{next_index => CI+1,
+                               match_index => CI,
+                               query_index => QI,
+                               status => normal,
+                               voter_status => VoterStatus#{membership => Membership}};
+                         {Self, _} ->
+                             #{next_index => CI+1,
+                               match_index => CI,
+                               query_index => QI,
+                               status => normal,
+                               voter_status => #{membership => Membership}};
+                         {_, Peer = #{voter_status := _}} ->
+                             Peer;
+                         {_, Peer} ->
+                             %% Initial cluster members have no voter_status.
+                             Peer#{voter_status => #{membership => voter}}
+                     end
+             end, Cluster);
+state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
+                            query_index := QI, commit_index := CI,
+                            membership := Membership}) ->
+    %% Followers do not have sufficient information,
+    %% bail out and send whatever we have.
+    maps:map(fun(Id, Peer) ->
+                     case {Id, Peer} of
+                         {Self, #{voter_status := VS}} ->
+                             #{match_index => CI,
+                               query_index => QI,
+                               voter_status => VS#{membership => Membership}};
+                         {Self, _} ->
+                             #{match_index => CI,
+                               query_index => QI,
+                               voter_status => #{membership => Membership}};
+                         _ ->
+                             #{}
+                     end
+             end, Cluster);
+state_query(initial_members, #{log := Log}) ->
+    case ra_log:read_config(Log) of
+        {ok, #{initial_members := InitialMembers}} ->
+            InitialMembers;
+        _ ->
+            error
+    end;
+state_query(Query, _State) ->
+    {error, {unknown_query, Query}}.
+
 %% § 5.4.1 Raft determines which of two logs is more up-to-date by comparing
 %% the index and term of the last entries in the logs. If the logs have last
 %% entries with different terms, then the log with the later term is more
@@ -2448,7 +2563,10 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
             Cfg = Cfg0#cfg{effective_machine_version = NextMacVer,
                            %% record this machine version "term"
                            machine_versions = [{Idx, NextMacVer} | MacVersions],
-                           effective_machine_module = Module},
+                           effective_machine_module = Module,
+                           effective_handle_aux_fun =
+                               ra_machine:which_aux_fun(Module)
+                           },
             State = State0#{cfg => Cfg,
                             cluster_change_permitted => ClusterChangePerm},
             Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
