@@ -396,12 +396,18 @@ which_module(0) -> my_machine_v0.
 
 ```
 
-This would ensure that any entries added to the log are applied against the active machine version
-at the time they were added, leading to a deterministic outcome.
+This would ensure that any entries added to the log are applied against the
+active machine version at the time they were added, leading to a deterministic
+outcome.
 
 For smaller (but still breaking) changes that can be handled in the original
-module it is also possible to switch based on the `machine_version` key included in the meta
-data passed to `apply/3`.
+module it is also possible to switch based on the `machine_version` key
+included in the meta data passed to `apply/3`.
+
+NB: when using the latter approach combined with state upgrades the `init/1`
+callback needs to return the v0 version of the state to ensure the state upgrade
+code works as expected. It is recommended that if large change to the state
+record needs to be made to use the multiple modules approach.
 
 ### Runtime Behaviour
 
