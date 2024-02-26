@@ -78,6 +78,7 @@ erlang_package.git_package(
 
 use_repo(
     erlang_package,
+    "erlang_packages",
     "aten",
     "gen_batch_server",
     "inet_tcp_proxy_dist",
@@ -95,6 +96,7 @@ erlang_package.hex_package(
     name = "eunit_formatters",
     version = "0.5.0",
     build_file = "@rabbitmq_ra//bzl:BUILD.eunit_formatters",
+    testonly = True,
 )
 
 use_repo(

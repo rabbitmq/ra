@@ -1,4 +1,6 @@
 load("@rules_erlang//:erlang_app.bzl", "DEFAULT_ERLC_OPTS", "erlang_app")
+load("@rules_erlang//:erlc_opts_file.bzl", "erlc_opts_file")
+load("@rules_erlang//:erlang_app_sources_analysis.bzl", "erlang_app_sources_analysis")
 
 erlang_app(
     testonly = True,
@@ -7,4 +9,48 @@ erlang_app(
     erlc_opts = DEFAULT_ERLC_OPTS + [
         "-Dnamespaced_dicts",
     ],
+)
+
+erlc_opts_file(
+    name = "erlc_opts_file",
+    values = DEFAULT_ERLC_OPTS + [
+        "-Dnamespaced_dicts",
+    ],
+    out = "erlc_opts",
+)
+
+# do we need to feed deps dir headers into analyze?
+
+# erl_analyze(
+#     name = "analyze",
+#     hdrs = glob([
+#         "include/**/*.hrl",
+#         "src/**/*.hrl",
+#     ]),
+#     srcs = glob([
+#         "src/**/*.erl",
+#     ]),
+#     # dest = "src",
+#     erlc_opts = ":erlc_opts",
+# )
+
+# filegroup(
+#     name = "srcs",
+#     srcs = glob([
+#         "include/**/*.hrl",
+#         "src/**/*.hrl",
+#         "src/**/*.erl",
+#         "priv/**/*",
+#         # "rebar.config",
+#     ]) + [":analyze"],
+# )
+
+# separate rule to parse rebar.config and produce an ErlcOptsInfo
+# if you want
+
+erlang_app_sources_analysis(
+    name = "srcs",
+    app_name = "eunit_formatters",
+    erlc_opts_file = ":erlc_opts_file",
+    visibility = ["//visibility:public"],
 )

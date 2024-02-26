@@ -1,6 +1,9 @@
-load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
 load("@rules_erlang//:xref.bzl", "xref")
 load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
+load("@rules_erlang//:erlc_opts_file.bzl", "erlc_opts_file")
+load("@rules_erlang//:erlang_app_sources.bzl", "erlang_app_sources")
+load("@rules_erlang//:compile_many.bzl", "compile_many")
+load("@rules_erlang//private:extract_app.bzl", "extract_app")
 load("@rules_erlang//:eunit2.bzl", "eunit")
 load(":ra.bzl", "ra_suites")
 
@@ -20,19 +23,19 @@ RUNTIME_DEPS = [
     "@seshat//:erlang_app",
 ]
 
-erlang_app(
-    app_name = NAME,
-    extra_apps = EXTRA_APPS,
-    runtime_deps = RUNTIME_DEPS,
-    deps = DEPS,
-)
+# erlang_app(
+#     app_name = NAME,
+#     extra_apps = EXTRA_APPS,
+#     runtime_deps = RUNTIME_DEPS,
+#     deps = DEPS,
+# )
 
-test_erlang_app(
-    app_name = NAME,
-    extra_apps = EXTRA_APPS,
-    runtime_deps = RUNTIME_DEPS,
-    deps = DEPS,
-)
+# test_erlang_app(
+#     app_name = NAME,
+#     extra_apps = EXTRA_APPS,
+#     runtime_deps = RUNTIME_DEPS,
+#     deps = DEPS,
+# )
 
 xref()
 
@@ -93,3 +96,100 @@ eunit(
 )
 
 ra_suites()
+
+compile_many(
+    name = "deps",
+    apps = [
+        "@eunit_formatters//:srcs",
+    ],
+)
+
+erlc_opts_file(
+    name = "erlc_opts_file",
+    values = select({
+        "@rules_erlang//:debug_build": [
+            "+debug_info",
+            "+recv_opt_info",
+            "+warn_export_vars",
+            "+warn_shadow_vars",
+            "+warn_obsolete_guard",
+        ],
+        "//conditions:default": [
+            "+debug_info",
+            "+recv_opt_info",
+            "+warn_export_vars",
+            "+warn_shadow_vars",
+            "+warn_obsolete_guard",
+            "+deterministic",
+        ],
+    }),
+    out = "erlc_opts_file_",
+)
+
+erlc_opts_file(
+    name = "test_erlc_opts_file",
+    values = select({
+        "@rules_erlang//:debug_build": [
+            "+debug_info",
+            "-DTEST=1",
+        ],
+        "//conditions:default": [
+            "+debug_info",
+            "-DTEST=1",
+            "+deterministic",
+        ],
+    }),
+    out = "test_erlc_opts_file_",
+)
+
+erlang_app_sources(
+    name = "%s_srcs" % NAME,
+    app_name = NAME,
+    app_src = ":app_src",
+    erlc_opts_file = ":erlc_opts_file",
+    visibility = ["//visibility:public"],
+)
+
+erlang_app_sources(
+    name = "test_%s_srcs" % NAME,
+    app_name = NAME,
+    app_src = ":app_src",
+    erlc_opts_file = ":test_erlc_opts_file",
+    visibility = ["//visibility:public"],
+)
+
+compile_many(
+    name = "apps",
+    apps = [
+        ":%s_srcs" % NAME,
+    ],
+    erl_libs = [
+        "@erlang_packages//:deps",
+    ],
+)
+
+compile_many(
+    name = "test_apps",
+    apps = [
+        ":test_%s_srcs" % NAME,
+    ],
+    testonly = True,
+    erl_libs = [
+        "@erlang_packages//:deps",
+    ],
+)
+
+extract_app(
+    name = "erlang_app",
+    erl_libs = ":apps",
+    app_name = NAME,
+    visibility = ["//visibility:public"],
+)
+
+extract_app(
+    name = "test_erlang_app",
+    erl_libs = ":test_apps",
+    app_name = NAME,
+    beam_dest = "test",
+    testonly = True,
+)
