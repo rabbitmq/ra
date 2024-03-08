@@ -39,6 +39,7 @@ all_tests() ->
      deleted_cluster_emits_eol_effect,
      machine_state_enter_effects,
      meta_data,
+     meta_data_2,
      append_effect,
      append_effect_with_notify,
      append_effect_follower,
@@ -388,7 +389,8 @@ meta_data(Config) ->
     meck:expect(Mod, init, fun (_) -> the_state end),
     meck:expect(Mod, apply, fun (#{index := Idx,
                                    term := Term,
-                                   system_time := Ts}, _, State) ->
+                                   system_time := Ts,
+                                   reply_mode := await_consensus}, _, State) ->
                                     {State, {metadata, Idx, Term, Ts}}
                             end),
     ClusterName = ?config(cluster_name, Config),
@@ -402,6 +404,34 @@ meta_data(Config) ->
     ?assert(Idx > 0),
     ?assert(Term > 0),
     ok.
+
+meta_data_2(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (#{index := Idx,
+                                   term := Term,
+                                   system_time := Ts,
+                                   reply_mode := {notify, 42, Pid}}, _, State)
+                                  when Pid == Self ->
+                                    {State, {metadata, Idx, Term, Ts}}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    T = erlang:system_time(millisecond),
+    timer:sleep(1),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    ok = ra:pipeline_command(ServerId, any_command, 42, normal),
+    receive
+        {ra_event, _, {applied, [{42, {metadata, _, _, Ts}}]}}
+          when Ts > T ->
+            ok
+    after 5000 ->
+              flush(),
+              ct:fail("applied not received")
+    end.
+
 
 append_effect(Config) ->
     Mod = ?config(modname, Config),
