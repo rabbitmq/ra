@@ -196,7 +196,8 @@
                                index := ra_index(),
                                term := ra_term(),
                                machine_version => version(),
-                               from => from()}.
+                               from => from(),
+                               reply_mode => ra_server:command_reply_mode()}.
 %% extensible command meta data map
 
 

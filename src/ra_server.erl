@@ -2492,29 +2492,29 @@ apply_with(_Cmd,
       when MacVer < Effective ->
     %% we cannot apply any further entries
     {Mod, LastAppliedIdx, State, MacSt, Effects, Notifys, LastTs};
-apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyType}},
+apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyMode}},
            {Module, _LastAppliedIdx,
             State = #{cfg := #cfg{effective_machine_version = MacVer}},
             MacSt, Effects0, Notifys0, LastTs}) ->
     %% augment the meta data structure
-    Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+    Meta = augment_command_meta(Idx, Term, MacVer, ReplyMode, CmdMeta),
     Ts = maps:get(ts, CmdMeta, LastTs),
     case ra_machine:apply(Module, Meta, Cmd, MacSt) of
         {NextMacSt, Reply, AppEffs} ->
-            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyMode,
                                            append_app_effects(AppEffs, Effects0),
                                            Notifys0),
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts};
         {NextMacSt, Reply} ->
-            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyType,
+            {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyMode,
                                            Effects0, Notifys0),
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts}
     end;
-apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyType}},
+apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyMode}},
            {Mod, _, State0, MacSt, Effects0, Notifys0, LastTs}) ->
-    {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyType,
+    {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyMode,
                                    Effects0, Notifys0),
     State = case State0 of
                 #{cluster_index_term := {CI, CT}}
@@ -2569,7 +2569,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                            },
             State = State0#{cfg => Cfg,
                             cluster_change_permitted => ClusterChangePerm},
-            Meta = augment_command_meta(Idx, Term, MacVer, CmdMeta),
+            Meta = augment_command_meta(Idx, Term, MacVer, undefined, CmdMeta),
             ?DEBUG("~ts: applying new machine version ~b current ~b",
                    [LogId, NextMacVer, OldMacVer]),
             apply_with({Idx, Term,
@@ -2610,6 +2610,11 @@ apply_with({Idx, _, _} = Cmd, Acc) ->
     ?WARN("~ts: apply_with: unhandled command: ~W",
           [log_id(element(2, Acc)), Cmd, 10]),
     setelement(2, Acc, Idx).
+
+augment_command_meta(Idx, Term, MacVer, undefined, CmdMeta) ->
+    augment_command_meta(Idx, Term, MacVer, CmdMeta);
+augment_command_meta(Idx, Term, MacVer, ReplyMode, CmdMeta) ->
+    augment_command_meta(Idx, Term, MacVer, CmdMeta#{reply_mode => ReplyMode}).
 
 augment_command_meta(Idx, Term, MacVer, CmdMeta) ->
     maps:fold(fun (ts, V, Acc) ->
