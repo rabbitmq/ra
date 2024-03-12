@@ -357,6 +357,7 @@
 -define(C_RA_SVR_METRIC_COMMIT_LATENCY, ?C_RA_SRV_RESERVED + 6).
 -define(C_RA_SVR_METRIC_TERM, ?C_RA_SRV_RESERVED + 7).
 -define(C_RA_SVR_METRIC_CHECKPOINT_INDEX, ?C_RA_SRV_RESERVED + 8).
+-define(C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, ?C_RA_SRV_RESERVED + 9).
 
 -define(RA_SRV_METRICS_COUNTER_FIELDS,
         [
@@ -374,7 +375,9 @@
           "Approximate time taken from an entry being written to the log until it is committed."},
          {term, ?C_RA_SVR_METRIC_TERM, counter, "The current term."},
          {checkpoint_index, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, counter,
-          "The current checkpoint index."}
+          "The current checkpoint index."},
+         {effective_machine_version, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION,
+          gauge, "The current effective version number of the machine."}
         ]).
 
 -define(RA_COUNTER_FIELDS,
