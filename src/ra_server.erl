@@ -339,6 +339,7 @@ init(#{id := Id,
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, MacVer),
 
     NonVoter = get_membership(Cluster0, Id, UId,
                              maps:get(membership, Config, voter)),
@@ -1302,6 +1303,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% we also need to update the current effective machine configuration
             Cfg = case SnapMacVer > CurEffMacVer of
                       true ->
+                          put_counter(Cfg0, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, SnapMacVer),
                           EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
                           Cfg0#cfg{effective_machine_version = SnapMacVer,
                                    machine_versions = [{SnapIndex, SnapMacVer}
@@ -2553,6 +2555,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                                 true;
                             _ -> ClusterChangePerm0
                         end,
+    put_counter(Cfg0, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, NextMacVer),
     %% can we understand the next machine version
     IsOk = MacVer >= NextMacVer,
     case NextMacVer > OldMacVer of
