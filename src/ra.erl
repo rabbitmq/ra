@@ -43,6 +43,7 @@
          start_or_restart_cluster/5,
          delete_cluster/1,
          delete_cluster/2,
+         delete_cluster/3,
          % server management
          % deprecated
          start_server/1,
@@ -540,13 +541,53 @@ delete_cluster(ServerIds) ->
 -spec delete_cluster(ServerIds :: [ra_server_id()], timeout()) ->
     {ok, Leader :: ra_server_id()} | {error, term()}.
 delete_cluster(ServerIds, Timeout) ->
+    WaitForServersExit = application:get_env(
+                           ra, wait_for_servers_exit_in_delete_cluster,
+                           false),
+    delete_cluster(ServerIds, WaitForServersExit, Timeout).
+
+%% @doc Same as `delete_cluster/1' but also accepts a flag to indicate if the
+%% function should wait for servers exit and a timeout.
+%% @see delete_cluster/1
+%% @end
+-spec delete_cluster(ServerIds :: [ra_server_id()], boolean(), timeout()) ->
+    {ok, Leader :: ra_server_id()} | {error, term()}.
+delete_cluster(ServerIds, WaitForServersExit, Timeout) ->
+    %% If requested, we monitor the Ra server processes to know when they exit.
+    %% That's because they can only terminate once the command below is
+    %% applied. However, the caller may want this function to return when the
+    %% Ra server processes and their related supervision trees are really
+    %% stopped.
+    MRefs = case WaitForServersExit of
+                true ->
+                    [erlang:monitor(process, ServerId)
+                     || ServerId <- ServerIds];
+                false ->
+                    []
+            end,
     DeleteCmd = {'$ra_cluster', delete, await_consensus},
     case ra_server_proc:command(ServerIds, DeleteCmd, Timeout) of
         {ok, _, Leader} ->
+            %% Now we wait for the Ra server processes to exit.
+            lists:foreach(
+              fun(MRef) ->
+                      receive
+                          {'DOWN', MRef, _, _, _} -> ok
+                      after Timeout ->
+                                ok
+                      end
+              end,
+              MRefs),
             {ok, Leader};
         {timeout, _} ->
+            lists:foreach(
+              fun(MRef) -> erlang:demonitor(MRef, [flush]) end,
+              MRefs),
             {error, timeout};
         Err ->
+            lists:foreach(
+              fun(MRef) -> erlang:demonitor(MRef, [flush]) end,
+              MRefs),
             Err
     end.
 
