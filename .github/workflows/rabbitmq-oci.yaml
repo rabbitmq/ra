@@ -87,7 +87,7 @@ jobs:
         working-directory: rabbitmq-server
         run: |
           cat << EOF >> user.bazelrc
-          build --override_module rabbitmq_ra=${{ github.workspace }}/ra
+          build --override_repository=rules_erlang~~erlang_package~ra=${{ github.workspace }}/ra
           EOF
 
       - name: Configure otp for the OCI image
