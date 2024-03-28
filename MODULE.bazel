@@ -1,5 +1,5 @@
 module(
-    name = "rabbitmq_ra",
+    name = "ra",
     version = "2.9.1",
 )
 
