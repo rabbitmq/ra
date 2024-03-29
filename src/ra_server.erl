@@ -2827,6 +2827,8 @@ query_indexes(#{cfg := #cfg{id = Id},
                 query_index := QueryIndex}) ->
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
+                  (_K, #{voter_status := #{membership := non_voter}}, Acc) ->
+                      Acc;
                   (_K, #{voter_status := #{membership := promotable}}, Acc) ->
                       Acc;
                   (_K, #{query_index := Idx}, Acc) ->
@@ -2838,6 +2840,8 @@ match_indexes(#{cfg := #cfg{id = Id},
                 log := Log}) ->
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
+                      Acc;
+                  (_K, #{voter_status := #{membership := non_voter}}, Acc) ->
                       Acc;
                   (_K, #{voter_status := #{membership := promotable}}, Acc) ->
                       Acc;
@@ -3149,7 +3153,9 @@ required_quorum(Cluster) ->
 
 count_voters(Cluster) ->
     maps:fold(
-      fun (_, #{voter_status := #{membership := promotable}}, Count) ->
+      fun (_, #{voter_status := #{membership := non_voter}}, Count) ->
+              Count;
+          (_, #{voter_status := #{membership := promotable}}, Count) ->
               Count;
           (_, _, Count) ->
               Count + 1
