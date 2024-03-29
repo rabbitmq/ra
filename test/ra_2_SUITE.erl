@@ -713,7 +713,7 @@ force_start_follower_as_single_member_nonvoter(Config) ->
     {ok, [_], ServerId3} = ra:members(ServerId3),
     ok = enqueue(ServerId3, msg2),
 
-    %% add a member
+    %% add a promotable member
     ServerId4 = ?config(server_id4, Config),
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, [ServerId3]),
