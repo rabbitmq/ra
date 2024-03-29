@@ -86,6 +86,7 @@ init_per_testcase(TestCase, Config) ->
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
+    ServerName5 = list_to_atom(atom_to_list(TestCase) ++ "5"),
     [{test_case, TestCase},
      {modname, TestCase},
      {cluster_name, TestCase},
@@ -96,7 +97,9 @@ init_per_testcase(TestCase, Config) ->
      {uid3, atom_to_binary(ServerName3, utf8)},
      {server_id3, {ServerName3, node()}},
      {uid4, atom_to_binary(ServerName4, utf8)},
-     {server_id4, {ServerName4, node()}}
+     {server_id4, {ServerName4, node()}},
+     {uid5, atom_to_binary(ServerName5, utf8)},
+     {server_id5, {ServerName5, node()}}
      | Config].
 
 enqueue(Server, Msg) ->
@@ -714,14 +717,27 @@ force_start_follower_as_single_member_nonvoter(Config) ->
     ServerId4 = ?config(server_id4, Config),
     UId4 = ?config(uid4, Config),
     Conf4 = conf(ClusterName, UId4, ServerId4, PrivDir, [ServerId3]),
-    {ok, _, _} = ra:add_member(ServerId3, #{id => ServerId4, membership => promotable, uid => <<"test">>}),
+    {ok, _, _} = ra:add_member(ServerId3, #{id => ServerId4, membership => promotable, uid => <<"test4">>}),
     %% the membership has changed but member not running yet
     %% it is nonvoter and does not affect quorum size
     {ok, _, _} = ra:process_command(ServerId3, {enq, banana}),
     %% start new member
-    ok = ra:start_server(?SYS, Conf4#{membership => promotable, uid => <<"test">>}),
+    ok = ra:start_server(?SYS, Conf4#{membership => promotable, uid => <<"test4">>}),
     {ok, _, ServerId3} = ra:members(ServerId4),
     ok = enqueue(ServerId3, msg3),
+
+    %% add a non-voter member
+    ServerId5 = ?config(server_id5, Config),
+    UId5 = ?config(uid5, Config),
+    Conf5 = conf(ClusterName, UId5, ServerId5, PrivDir, [ServerId3]),
+    {ok, _, _} = ra:add_member(ServerId3, #{id => ServerId5, membership => non_voter, uid => <<"test5">>}),
+    %% the membership has changed but member not running yet
+    %% it is nonvoter and does not affect quorum size
+    {ok, _, _} = ra:process_command(ServerId3, {enq, banana}),
+    %% start new member
+    ok = ra:start_server(?SYS, Conf5#{membership => non_voter, uid => <<"test5">>}),
+    {ok, _, ServerId3} = ra:members(ServerId5),
+    ok = enqueue(ServerId3, msg4),
 
     ok.
 
