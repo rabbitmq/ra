@@ -221,7 +221,7 @@ append(State, Index, Term, Data)
 -spec sync(state()) -> {ok, state()} | {error, term()}.
 sync(#state{cfg = #cfg{fd = Fd},
             pending_index = []} = State) ->
-    case file:sync(Fd) of
+    case ra_file:sync(Fd) of
         ok ->
             {ok, State};
         {error, _} = Err ->
@@ -363,8 +363,7 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                           Cfg#cfg.filename})
             end;
         _ ->
-            exit({ra_log_segment_unexpected_eof, Idx,
-                  Cfg#cfg.filename})
+            exit({missing_key, Idx, Cfg#cfg.filename})
     end.
 
 -spec range(state()) -> option({ra_index(), ra_index()}).
@@ -450,9 +449,12 @@ dump_index(File) ->
     end.
 
 dump(File) ->
+    dump(File, fun (B) -> B end).
+
+dump(File, Fun) ->
     {ok, S0} = open(File, #{mode => read}),
     {Idx, Last} = range(S0),
-    L = fold(S0, Idx, Last, fun erlang:binary_to_term/1,
+    L = fold(S0, Idx, Last, Fun,
              fun (E, A) -> [E | A] end, []),
     close(S0),
     lists:reverse(L).
@@ -525,7 +527,7 @@ write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
     {ok, 0} = file:position(Fd, 0),
     ok = file:write(Fd, Header),
-    ok = file:sync(Fd).
+    ok = ra_file:sync(Fd).
 
 read_header(Fd) ->
     case file:pread(Fd, 0, ?HEADER_SIZE) of

@@ -384,14 +384,25 @@ recovered(internal, next, #state{server_state = ServerState} = State) ->
     _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     next_state(follower, State, set_tick_timer(State, [])).
 
-leader(enter, OldState, State0) ->
+leader(enter, OldState, #state{low_priority_commands = Delayed0} = State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
 
+    Delayed = case OldState of
+                  await_condition ->
+                      %% if we're returning from await_condition we may still
+                      %% have valid delayed commands to schedule
+                      schedule_command_flush(Delayed0),
+                      Delayed0;
+                  _ ->
+                      %% for any other state it is best to just reset the
+                      %% delayed commands
+                      ra_ets_queue:reset(Delayed0)
+              end,
+
     ok = record_cluster_change(State),
-    %% TODO: reset refs?
     {keep_state, State#state{leader_last_seen = undefined,
                              pending_notifys = #{},
-                             low_priority_commands = ra_ets_queue:reset(State#state.low_priority_commands),
+                             low_priority_commands = Delayed,
                              election_timeout_set = false}, Actions};
 leader(EventType, {leader_call, Msg}, State) ->
     %  no need to redirect
@@ -406,9 +417,14 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
         ok ->
             %% normal priority commands are written immediately
             Cmd = make_command(CmdType, EventType, Data, ReplyMode),
-            {leader, State1, Effects} = handle_leader({command, Cmd}, State0),
+            {NextState, State1, Effects} = handle_leader({command, Cmd}, State0),
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {keep_state, State, Actions};
+            case NextState of
+                leader ->
+                    {keep_state, State, Actions};
+                _ ->
+                    next_state(NextState, State, Actions)
+            end;
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
             case EventType of
@@ -438,7 +454,8 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
                 _ ->
                     ok
             end,
-            State = State0#state{low_priority_commands = ra_ets_queue:in(Cmd, Delayed)},
+            State = State0#state{low_priority_commands =
+                                     ra_ets_queue:in(Cmd, Delayed)},
             {keep_state, State, []};
         Error ->
             ok = incr_counter(Conf, ?C_RA_SRV_INVALID_REPLY_MODE_COMMANDS, 1),
@@ -462,16 +479,17 @@ leader(EventType, flush_commands,
 
     {Commands, Delayed} = ra_ets_queue:take(Size, Delayed0),
     %% write a batch of delayed commands
-    {leader, State1, Effects} = handle_leader({commands, Commands}, State0),
+    {NextState, State1, Effects} = handle_leader({commands, Commands}, State0),
+    State2 = State1#state{low_priority_commands = Delayed},
+    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State2),
 
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-    case ra_ets_queue:len(Delayed) of
-        0 ->
-            ok;
+    case NextState of
+        leader ->
+            schedule_command_flush(Delayed),
+            {keep_state, State#state{low_priority_commands = Delayed}, Actions};
         _ ->
-            ok = gen_statem:cast(self(), flush_commands)
-    end,
-    {keep_state, State#state{low_priority_commands = Delayed}, Actions};
+            next_state(NextState, State, Actions)
+    end;
 leader({call, From}, {local_query, QueryFun},
        #state{conf = Conf,
               server_state = ServerState} = State) ->
@@ -506,10 +524,11 @@ leader(info, {update_peer, PeerId, Update}, State0) ->
     {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
-    ServerState = State1#state.server_state,
-    Effects = ra_server:tick(ServerState),
+    ServerState0 = State1#state.server_state,
+    Effects = ra_server:tick(ServerState0),
+    ServerState = ra_server:log_tick(ServerState0),
     {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
-                                        cast, State1),
+                                        cast, State1#state{server_state = ServerState}),
     %% try sending any pending applied notifications again
     State = send_applied_notifications(State2, #{}),
     {keep_state, handle_tick_metrics(State),
@@ -543,6 +562,12 @@ leader(EventType, Msg, State0) ->
                 false ->
                     next_state(terminating_leader, State, Actions)
             end;
+        {await_condition, State1, Effects1} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
+            ?DEBUG_IF(is_command(Msg), "~ts: postponing ~0P",
+                      [log_id(State0), Msg, 10]),
+            next_state(await_condition, State,
+                       [{postpone, is_command(Msg)} | Actions]);
         {NextState, State1, Effects1} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects1, EventType, State1),
             next_state(NextState, State, Actions)
@@ -774,8 +799,10 @@ follower(info, {node_event, Node, up}, State) ->
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-follower(_, tick_timeout, State0) ->
-    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
+follower(_, tick_timeout, #state{server_state = ServerState0} = State0) ->
+    ServerState = ra_server:log_tick(ServerState0),
+    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast,
+                                       State0#state{server_state = ServerState}),
     {keep_state, handle_tick_metrics(State),
      set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
@@ -887,6 +914,13 @@ terminating_follower(EvtType, Msg, State0) ->
             {keep_state, State, Actions}
     end.
 
+await_condition(enter, OldState, #state{conf = Conf,
+                                       server_state = ServerState} = State0) ->
+    {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
+    Timeout = maps:get(condition_timeout, ServerState,
+                       Conf#conf.await_condition_timeout),
+    Actions = [{state_timeout, Timeout, await_condition_timeout} | Actions0],
+    {keep_state, State, Actions};
 await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 await_condition(EventType, {local_call, Msg}, State) ->
@@ -930,11 +964,6 @@ await_condition(info, {node_event, Node, down}, State) ->
 await_condition(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-await_condition(enter, OldState, #state{conf = Conf} = State0) ->
-    {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
-    Actions = [{state_timeout, Conf#conf.await_condition_timeout,
-                await_condition_timeout} | Actions0],
-    {keep_state, State, Actions};
 await_condition(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
     {keep_state, State, set_tick_timer(State, Actions)};
@@ -952,8 +981,19 @@ await_condition(EventType, Msg, State0) ->
             next_state(leader, State, Actions);
         {await_condition, State1, Effects} ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            {keep_state, State, Actions}
+            %% postpone commands such that they are retried when the
+            %% await_condition state is exited. Should help with client
+            %% liveness
+            ?DEBUG_IF(is_command(Msg), "~ts: await_condition postponing ~0P",
+                      [log_id(State0), Msg, 10]),
+            {keep_state, State, [{postpone, is_command(Msg)} | Actions]}
     end.
+
+is_command(Msg) when is_tuple(Msg) ->
+    element(1, Msg) == command;
+is_command(_) ->
+    false.
+
 
 handle_event(_EventType, EventContent, StateName, State) ->
     ?WARN("~ts: handle_event unknown ~P", [log_id(State), EventContent, 10]),
@@ -970,9 +1010,9 @@ terminate(Reason, StateName,
     UId = uid(State),
     Id = id(State),
     _ = ra_server:terminate(ServerState, Reason),
-    Parent = ra_directory:where_is_parent(Names, UId),
     case Reason of
         {shutdown, delete} ->
+            Parent = ra_directory:where_is_parent(Names, UId),
             catch ra_directory:unregister_name(Names, UId),
             catch ra_log_meta:delete_sync(MetaName, UId),
             catch ra_counters:delete(Id),
@@ -1867,3 +1907,11 @@ make_command(Type, {call, From}, Data, Mode) ->
 make_command(Type, _, Data, Mode) ->
     Ts = erlang:system_time(millisecond),
     {Type, #{ts => Ts}, Data, Mode}.
+
+schedule_command_flush(Delayed) ->
+    case ra_ets_queue:len(Delayed) of
+        0 ->
+            ok;
+        _ ->
+            ok = gen_statem:cast(self(), flush_commands)
+    end.

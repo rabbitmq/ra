@@ -12,6 +12,7 @@
 -export([
          ]).
 
+-include_lib("src/ra.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -48,7 +49,12 @@ all_tests() ->
      bench,
      disconnected_node_catches_up,
      key_metrics,
-     recover_from_checkpoint
+     recover_from_checkpoint,
+     segment_writer_or_wal_crash_follower,
+     segment_writer_or_wal_crash_leader,
+     server_recovery_strategy,
+     stopped_wal_causes_leader_change_registered,
+     stopped_wal_causes_leader_change_mfa
     ].
 
 groups() ->
@@ -94,87 +100,88 @@ start_stop_restart_delete_on_remote(Config) ->
     PrivDir = ?config(data_dir, Config),
     S1 = start_follower(s1, PrivDir),
     % ensure application is started
-    NodeId = {c1, S1},
-    Conf = conf(NodeId, [NodeId]),
+    ServerId = {c1, S1},
+    Conf = conf(ServerId, [ServerId]),
     ok = ra:start_server(?SYS, Conf),
-    ok = ra:trigger_election(NodeId),
+    ok = ra:trigger_election(ServerId),
     % idempotency
     {error, {already_started, _}} = ra:start_server(?SYS, Conf),
-    ok = ra:stop_server(?SYS, NodeId),
-    ok = ra:restart_server(?SYS, NodeId),
+    ok = ra:stop_server(?SYS, ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
     % idempotency
-    {error, {already_started, _}} = ra:restart_server(?SYS, NodeId),
-    ok = ra:stop_server(?SYS, NodeId),
+    {error, {already_started, _}} = ra:restart_server(?SYS, ServerId),
+    ok = ra:stop_server(?SYS, ServerId),
     % idempotency
-    ok = ra:stop_server(?SYS, NodeId),
-    ok = ra:force_delete_server(?SYS, NodeId),
+    ok = ra:stop_server(?SYS, ServerId),
+    ok = ra:force_delete_server(?SYS, ServerId),
     % idempotency
-    ok = ra:force_delete_server(?SYS, NodeId),
+    ok = ra:force_delete_server(?SYS, ServerId),
+    stop_nodes([ServerId]),
     slave:stop(S1),
     ok.
 
 start_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3,s4,s5]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3,s4,s5]],
     Machine = {module, ?MODULE, #{}},
-    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     % assert all were said to be started
-    [] = Started -- NodeIds,
+    [] = Started -- ServerIds,
     ra:members(hd(Started)),
     % assert all nodes are actually started
-    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
+    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 start_or_restart_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
     %% this should start
     {ok, Started, []} = ra:start_or_restart_cluster(?SYS, ClusterName, Machine,
-                                                    NodeIds),
+                                                    ServerIds),
     % assert all were said to be started
-    [] = Started -- NodeIds,
+    [] = Started -- ServerIds,
     % assert all nodes are actually started
-    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
+    PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     %% this should restart
     {ok, Started2, []} = ra:start_or_restart_cluster(?SYS, ClusterName, Machine,
-                                                     NodeIds),
-    [] = Started2 -- NodeIds,
+                                                     ServerIds),
+    [] = Started2 -- ServerIds,
     timer:sleep(1000),
-    PingResults2 = [{pong, _} = ra_server_proc:ping(N, 500) || N <- NodeIds],
+    PingResults2 = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults2)),
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 delete_one_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
-    [{_, Node}] = NodeIds,
+    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    [{_, Node}] = ServerIds,
     UId = rpc:call(Node, ra_directory, uid_of, [ClusterName]),
     false = undefined =:= UId,
-    {ok, _} = ra:delete_cluster(NodeIds),
+    {ok, _} = ra:delete_cluster(ServerIds),
     timer:sleep(250),
     S1DataDir = rpc:call(Node, ra_env, data_dir, []),
     Wc = filename:join([S1DataDir, "*"]),
     [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
-    {error, _} = ra_server_proc:ping(hd(NodeIds), 50),
+    {error, _} = ra_server_proc:ping(hd(ServerIds), 50),
     % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    [ok = slave:stop(S) || {_, S} <- ServerIds],
     % restart node
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -188,7 +195,7 @@ delete_one_server_cluster(Config) ->
     undefined = rpc:call(Node, ra_log_meta, fetch, [ra_log_meta, UId, current_term]),
     ct:pal("Files  ~p", [Files]),
     [] = Files,
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 delete_two_server_cluster(Config) ->
@@ -205,7 +212,7 @@ delete_two_server_cluster(Config) ->
                         undefined == erpc:call(Node, erlang, whereis, [Name])
                 end, ServerIds)
       end, 100),
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -229,7 +236,7 @@ delete_three_server_cluster(Config) ->
                         undefined == erpc:call(Node, erlang, whereis, [Name])
                 end, ServerIds)
       end, 100),
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 delete_three_server_cluster_parallel(Config) ->
@@ -254,7 +261,7 @@ delete_three_server_cluster_parallel(Config) ->
          true = rpc:call(S, ?MODULE, check_sup, [])
      end || {_, S} <- ServerIds],
     % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 check_sup() ->
@@ -263,10 +270,10 @@ check_sup() ->
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
+    ServerIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
     % s3 isn't available
     S3 = make_node_name(s3),
-    NodeIds = NodeIds0 ++ [{ClusterName, S3}],
+    NodeIds = ServerIds0 ++ [{ClusterName, S3}],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, NotStarted} =
         ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
@@ -277,23 +284,23 @@ start_cluster_majority(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- Started],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    [ok = slave:stop(S) || {_, S} <- NodeIds0],
+    stop_nodes(ServerIds0),
     ok.
 
 start_cluster_minority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    ServerIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
     % s3 isn't available
     S2 = make_node_name(s2),
     S3 = make_node_name(s3),
-    NodeIds = NodeIds0 ++ [{ClusterName, S2}, {ClusterName, S3}],
+    NodeIds = ServerIds0 ++ [{ClusterName, S2}, {ClusterName, S3}],
     Machine = {module, ?MODULE, #{}},
     {error, cluster_not_formed} =
         ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert none is started
     [{error, _} = ra_server_proc:ping(N, 50) || N <- NodeIds],
-    [ok = slave:stop(S) || {_, S} <- NodeIds0],
+    stop_nodes(ServerIds0),
     ok.
 
 grow_cluster(Config) ->
@@ -360,13 +367,14 @@ grow_cluster(Config) ->
     undefined = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
     undefined = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)}
+                                    || N <- [s1,s2,s3]],
     NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
@@ -398,13 +406,14 @@ send_local_msg(Config) ->
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, ra_event]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast, ra_event]),
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 local_log_effect(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)}
+                                    || N <- [s1,s2,s3]],
     NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
@@ -436,7 +445,7 @@ local_log_effect(Config) ->
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, ra_event]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast, ra_event]),
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 disconnected_node_catches_up(Config) ->
@@ -487,7 +496,7 @@ disconnected_node_catches_up(Config) ->
               SI /= undefined
       end, 200),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 nonvoter_catches_up(Config) ->
@@ -522,7 +531,7 @@ nonvoter_catches_up(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 nonvoter_catches_up_after_restart(Config) ->
@@ -559,7 +568,7 @@ nonvoter_catches_up_after_restart(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 nonvoter_catches_up_after_leader_restart(Config) ->
@@ -596,7 +605,7 @@ nonvoter_catches_up_after_leader_restart(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 key_metrics(Config) ->
@@ -647,18 +656,18 @@ key_metrics(Config) ->
      end
      || S <- Started],
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
     ok.
 
 
 leaderboard(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    NodeIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
     Machine = {module, ?MODULE, #{}},
-    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     % assert all were said to be started
-    [] = Started -- NodeIds,
+    [] = Started -- ServerIds,
     %% synchronously get leader
     {ok, _, Leader} = ra:members(hd(Started)),
 
@@ -670,7 +679,7 @@ leaderboard(Config) ->
                              L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
                              ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
                              Leader == L
-                         end || {_, N} <- NodeIds])
+                         end || {_, N} <- ServerIds])
       end, 100),
 
     NextLeader = hd(lists:delete(Leader, Started)),
@@ -684,10 +693,10 @@ leaderboard(Config) ->
                              L = rpc:call(N, ra_leaderboard, lookup_leader, [ClusterName]),
                              ct:pal("~w has ~w as leader expected ~w", [N, L, Leader]),
                              NewLeader == L
-                         end || {_, N} <- NodeIds])
+                         end || {_, N} <- ServerIds])
       end, 100),
 
-    [ok = slave:stop(S) || {_, S} <- NodeIds],
+    stop_nodes(ServerIds),
     ok.
 
 bench(Config) ->
@@ -700,9 +709,8 @@ bench(Config) ->
                         degree => 3,
                         data_size => 256 * 1000,
                         nodes => Nodes}),
-    [begin
-         ok = slave:stop(N)
-     end || N <- Nodes],
+
+    stop_nodes(Nodes),
     %% clean up
     ra_lib:recursive_delete(PrivDir),
     ok.
@@ -782,7 +790,336 @@ recover_from_checkpoint(Config) ->
                 Follower2Idx =:= 8
       end, 20),
 
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_nodes(ServerIds),
+    ok.
+
+segment_writer_or_wal_crash_follower(Config) ->
+    %% this test crashes the segment writer for a follower node whilst the
+    %% ra cluster is active and receiving and replicating commands.
+    %% it tests the segment writer and wal is able to recover without the
+    %% follower crashing.
+    %% Finally we stop and restart the follower to make sure it can recover
+    %% correactly and that the log data contains no missing entries
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerNames = [s1, s2, s3],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- ServerNames],
+    Configs = [begin
+                   UId = atom_to_binary(Name, utf8),
+                   #{cluster_name => ClusterName,
+                     id => NodeId,
+                     uid => UId,
+                     initial_members => ServerIds,
+                     machine => {module, ?MODULE, #{}},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 5}}
+               end || {Name, _Node} = NodeId <- ServerIds],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+
+
+    {ok, _, Leader} = ra:members(hd(Started)),
+    [{FollowerName, FollowerNode} = Follower, _] = lists:delete(Leader, Started),
+
+    Data = crypto:strong_rand_bytes(2_000),
+    WriterFun = fun Recur() ->
+                          {ok, _, _} = ra:process_command(Leader, {?FUNCTION_NAME, Data}),
+                          receive
+                              stop ->
+                                  ok
+                          after 1 ->
+                                    Recur()
+                          end
+                end,
+    FollowerPid = ct_rpc:call(FollowerNode, erlang, whereis, [FollowerName]),
+    ?assert(is_pid(FollowerPid)),
+
+    AwaitReplicated = fun () ->
+                              LastIdxs =
+                              [begin
+                                   {ok, #{current_term := T,
+                                          log := #{last_index := L}}, _} =
+                                   ra:member_overview(S),
+                                   {T, L}
+                               end || {_, _N} = S <- ServerIds],
+                              1 == length(lists:usort(LastIdxs))
+                      end,
+    [begin
+         ct:pal("running iteration ~b", [I]),
+
+         WriterPid = spawn(WriterFun),
+         timer:sleep(rand:uniform(500) + 5_000),
+
+         case I rem 2 == 0 of
+             true ->
+                 ct:pal("killing segment writer"),
+                 _ = ct_rpc:call(FollowerNode, ra_log_wal, force_rollover, [ra_log_wal]),
+                 timer:sleep(10),
+                 Pid = ct_rpc:call(FollowerNode, erlang, whereis, [ra_log_segment_writer]),
+                 true = ct_rpc:call(FollowerNode, erlang, exit, [Pid, kill]);
+             false ->
+                 ct:pal("killing wal"),
+                 Pid = ct_rpc:call(FollowerNode, erlang, whereis, [ra_log_wal]),
+                 true = ct_rpc:call(FollowerNode, erlang, exit, [Pid, kill])
+         end,
+
+
+         timer:sleep(1000),
+         WriterPid ! stop,
+         await_condition(fun () -> not is_process_alive(WriterPid) end, 1000),
+
+         %% assert stuff
+         await_condition(AwaitReplicated, 100),
+         ?assertMatch({ok, #{log := #{cache_size := 0}}, _},
+                      ra:member_overview(Follower)),
+         %% follower hasn't crashed
+         ?assertEqual(FollowerPid, ct_rpc:call(FollowerNode, erlang, whereis,
+                                               [FollowerName]))
+     end || I <- lists:seq(1, 10)],
+
+    %% stop and restart the follower
+    ok = ra:stop_server(Follower),
+    ok = ra:restart_server(Follower),
+
+    await_condition(AwaitReplicated, 100),
+
+    _ = ct_rpc:call(FollowerNode, ra_log_wal, force_rollover, [ra_log_wal]),
+
+    ok = ra:stop_server(Follower),
+    ok = ra:restart_server(Follower),
+
+    await_condition(AwaitReplicated, 100),
+
+    stop_nodes(ServerIds),
+    ok.
+
+segment_writer_or_wal_crash_leader(Config) ->
+    %% this test crashes the segment writer for a follower node whilst the
+    %% ra cluster is active and receiving and replicating commands.
+    %% it tests the segment writer and wal is able to recover without the
+    %% follower crashing.
+    %% Finally we stop and restart the follower to make sure it can recover
+    %% correactly and that the log data contains no missing entries
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerNames = [s1, s2, s3],
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- ServerNames],
+    Configs = [begin
+                   UId = atom_to_binary(Name, utf8),
+                   #{cluster_name => ClusterName,
+                     id => NodeId,
+                     uid => UId,
+                     initial_members => ServerIds,
+                     machine => {module, ?MODULE, #{}},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 5}}
+               end || {Name, _Node} = NodeId <- ServerIds],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+
+
+    {ok, _, Leader} = ra:members(hd(Started)),
+    % [{FollowerName, FollowerNode} = Follower, _] = lists:delete(Leader, Started),
+    {LeaderName, LeaderNode} = Leader,
+
+    Data = crypto:strong_rand_bytes(2_000),
+    WriterFun = fun Recur(Leader_) ->
+                        NextLeader =
+                          case ra:process_command(Leader_, {?FUNCTION_NAME, Data}, 1000) of
+                              {timeout, _} ->
+                                  timer:sleep(1000),
+                                  Leader_;
+                              {ok, _, L} ->
+                                  L
+                          end,
+                          receive
+                              stop ->
+                                  ok
+                          after 1 ->
+                                    Recur(NextLeader)
+                          end
+                end,
+    LeaderPid = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
+    ?assert(is_pid(LeaderPid)),
+
+    AwaitReplicated = fun () ->
+                              LastIdxs =
+                              [begin
+                                   {ok, #{current_term := T,
+                                          log := #{last_index := L}}, _} =
+                                   ra:member_overview(S),
+                                   {T, L}
+                               end || {_, _N} = S <- ServerIds],
+                              1 == length(lists:usort(LastIdxs))
+                      end,
+    [begin
+         ct:pal("running iteration ~b", [I]),
+
+         WriterPid = spawn_link(fun () -> WriterFun(Leader) end),
+         timer:sleep(rand:uniform(500) + 5_000),
+
+         case I rem 2 == 0 of
+             true ->
+                 ct:pal("killing segment writer"),
+                 _ = ct_rpc:call(LeaderNode, ra_log_wal, force_rollover, [ra_log_wal]),
+                 timer:sleep(10),
+                 Pid = ct_rpc:call(LeaderNode, erlang, whereis, [ra_log_segment_writer]),
+                 true = ct_rpc:call(LeaderNode, erlang, exit, [Pid, kill]);
+             false ->
+                 ct:pal("killing wal"),
+                 Pid = ct_rpc:call(LeaderNode, erlang, whereis, [ra_log_wal]),
+                 true = ct_rpc:call(LeaderNode, erlang, exit, [Pid, kill])
+         end,
+
+
+         timer:sleep(1000),
+         WriterPid ! stop,
+         await_condition(fun () -> not is_process_alive(WriterPid) end, 1000),
+
+         %% assert stuff
+         await_condition(AwaitReplicated, 100),
+         ?assertMatch({ok, #{log := #{cache_size := 0}}, _},
+                      ra:member_overview(Leader)),
+         %% follower hasn't crashed
+         ?assertEqual(LeaderPid, ct_rpc:call(LeaderNode, erlang, whereis,
+                                               [LeaderName]))
+     end || I <- lists:seq(1, 10)],
+
+    %% stop and restart the follower
+    ok = ra:stop_server(Leader),
+    ok = ra:restart_server(Leader),
+
+    await_condition(AwaitReplicated, 100),
+
+    _ = ct_rpc:call(LeaderNode, ra_log_wal, force_rollover, [ra_log_wal]),
+
+    ok = ra:stop_server(Leader),
+    ok = ra:restart_server(Leader),
+
+    await_condition(AwaitReplicated, 100),
+
+    stop_nodes(ServerIds),
+    ok.
+
+server_recovery_strategy(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerNames = [s1, s2, s3],
+    SysCfg = #{server_recovery_strategy => registered},
+    ServerIds = [{ClusterName, start_follower(N, PrivDir, SysCfg)}
+                 || N <- ServerNames],
+    Configs = [begin
+                   UId = atom_to_binary(Name, utf8),
+                   #{cluster_name => ClusterName,
+                     id => NodeId,
+                     uid => UId,
+                     initial_members => ServerIds,
+                     machine => {module, ?MODULE, #{}},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 5}}
+               end || {Name, _Node} = NodeId <- ServerIds],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+
+    {ok, _, {LeaderName, LeaderNode}} = ra:members(hd(Started)),
+
+    LeaderPid = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
+    %% killing this process will take the system down
+    RaLogEtsPid  = ct_rpc:call(LeaderNode, erlang, whereis, [ra_log_ets]),
+    true = ct_rpc:call(LeaderNode, erlang, exit, [RaLogEtsPid, kill]),
+
+    await_condition(
+      fun () ->
+              Pid = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
+              Pid =/= undefined andalso Pid =/= LeaderPid
+      end, 100),
+
+    timer:sleep(100),
+
+    stop_nodes(ServerIds),
+    ok.
+
+stopped_wal_causes_leader_change_registered(Config) ->
+    stopped_wal_causes_leader_change(Config, registered).
+
+stopped_wal_causes_leader_change_mfa(Config) ->
+    stopped_wal_causes_leader_change(Config, {?MODULE, server_recover_function, []}).
+
+stopped_wal_causes_leader_change(Config, RecoverStrat) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    ServerNames = [s1, s2, s3],
+    SysCfg = #{server_recovery_strategy => RecoverStrat},
+    ServerIds = [{ClusterName, start_follower(N, PrivDir, SysCfg)}
+                 || N <- ServerNames],
+    Configs = [begin
+                   UId = atom_to_binary(Name, utf8),
+                   #{cluster_name => ClusterName,
+                     id => NodeId,
+                     uid => UId,
+                     initial_members => ServerIds,
+                     machine => {module, ?MODULE, #{}},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 5}}
+               end || {Name, _Node} = NodeId <- ServerIds],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+
+
+    {ok, _, Leader} = ra:members(hd(Started)),
+    [Follower, _] = lists:delete(Leader, Started),
+    {LeaderName, LeaderNode} = Leader,
+
+    Data = crypto:strong_rand_bytes(2_000),
+    WriterFun = fun Recur(Leader_) ->
+                        NextLeader =
+                          case ra:process_command(Leader_, {?FUNCTION_NAME, Data}, 1000) of
+                              {timeout, _} ->
+                                  timer:sleep(1000),
+                                  Leader_;
+                              {error, _} ->
+                                  timer:sleep(1000),
+                                  Leader_;
+                              {ok, _, L} ->
+                                  L
+                          end,
+                          receive
+                              stop ->
+                                  ok
+                          after 1 ->
+                                    Recur(NextLeader)
+                          end
+                end,
+    LeaderPid = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
+    ?assert(is_pid(LeaderPid)),
+
+    AwaitReplicated = fun () ->
+                              LastIdxs =
+                              [begin
+                                   {ok, #{current_term := T,
+                                          log := #{last_index := L}}, _} =
+                                   ra:member_overview(S),
+                                   {T, L}
+                               end || {_, _N} = S <- ServerIds],
+                              1 == length(lists:usort(LastIdxs))
+                      end,
+
+    _WriterPid = spawn_link(fun () -> WriterFun(Leader) end),
+    timer:sleep(2000),
+
+    %% kill the wal until the system crashes and the current member is terminated
+    %% and another leader is elected
+    #{term := Term} = ra:key_metrics(Follower),
+    await_condition(fun () ->
+                            WalPid = ct_rpc:call(LeaderNode, erlang, whereis,
+                                                 [ra_log_wal]),
+                            true = ct_rpc:call(LeaderNode, erlang, exit,
+                                               [WalPid, kill]),
+                            #{term := T} = ra:key_metrics(Follower),
+                            T > Term andalso
+                            (begin
+                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),%                      [ra_log_wal]),
+                                 is_pid(P) andalso P =/= LeaderPid
+                             end)
+                    end, 200),
+    await_condition(AwaitReplicated, 100),
+    stop_nodes(ServerIds),
     ok.
 
 %% Utility
@@ -855,17 +1192,32 @@ search_paths() ->
                  code:get_path()).
 
 start_follower(N, PrivDir) ->
+    start_follower(N, PrivDir, #{}).
+
+start_follower(N, PrivDir, SysCfg) ->
     Dir0 = filename:join(PrivDir, N),
     Dir = "'\"" ++ Dir0 ++ "\"'",
     Host = get_current_host(),
-    Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir], " "),
-    ct:pal("starting secondary node with ~ts on host ~ts for node ~ts", [Pa, Host, node()]),
+    Pa = string:join(["-pa" | search_paths()] ++ ["-ra data_dir", Dir], " "),
+    ct:pal("starting child node with ~ts on host ~ts for node ~ts",
+           [Pa, Host, node()]),
     {ok, S} = slave:start_link(Host, N, Pa),
-    ok = ct_rpc:call(S, ?MODULE, node_setup, [PrivDir]),
-    ok = erpc:call(S, ra, start, []),
-    ok = ct_rpc:call(S, logger, set_primary_config,
-                     [level, all]),
+    ct:pal("started child node ~s", [S]),
+    ok = ct_rpc:call(S, ?MODULE, node_setup, [Dir0]),
+    % ok = ct_rpc:call(S, logger, set_primary_config,
+    %                  [level, all]),
+    _ = ct_cover:add_nodes([S]),
+    {ok, _} = ct_rpc:call(S, ?MODULE, ra_start, [[], SysCfg]),
     S.
+
+ra_start(Params, SysCfg) when is_map(SysCfg) ->
+    _ = application:stop(ra),
+    _ = application:load(ra),
+    [ok = application:set_env(ra, Param, Value)
+     || {Param, Value} <- Params],
+    {ok, _} = application:ensure_all_started(ra),
+    Cfg = maps:merge(SysCfg, ra_system:default_config()),
+    ra_system:start(Cfg).
 
 flush() ->
     receive
@@ -901,15 +1253,19 @@ apply(#{index := Idx}, checkpoint, State) ->
     {State, ok, [{checkpoint, Idx, CheckpointState}]};
 apply(#{index := Idx}, promote_checkpoint, State) ->
     {State, ok, [{release_cursor, Idx}]};
+apply(#{index := _Idx}, {segment_writer_or_wal_crash_leader, _}, State) ->
+    {State, ok, []};
+apply(#{index := _Idx}, {segment_writer_or_wal_crash_follower, _}, State) ->
+    {State, ok, []};
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
 
 node_setup(DataDir) ->
     ok = ra_lib:make_dir(DataDir),
-    NodeDir = filename:join(DataDir, atom_to_list(node())),
-    ok = ra_lib:make_dir(NodeDir),
-    LogFile = filename:join(NodeDir, "ra.log"),
-    SaslFile = filename:join(NodeDir, "ra_sasl.log"),
+    % NodeDir = filename:join(DataDir, atom_to_list(node())),
+    % ok = ra_lib:make_dir(DataDir),
+    LogFile = filename:join(DataDir, "ra.log"),
+    SaslFile = filename:join(DataDir, "ra_sasl.log"),
     logger:set_primary_config(level, debug),
     Config = #{config => #{file => LogFile}},
     logger:add_handler(ra_handler, logger_std_h, Config),
@@ -921,11 +1277,35 @@ node_setup(DataDir) ->
     ok.
 
 await_condition(_Fun, 0) ->
-    exit(condition_did_not_materialise);
+    ct:fail(condition_did_not_materialise);
 await_condition(Fun, Attempts) ->
     case catch Fun() of
         true -> ok;
-        _ ->
+        _Reason ->
+            % ct:pal("await_condition retry with ~p", [Reason]),
             timer:sleep(100),
             await_condition(Fun, Attempts - 1)
     end.
+
+server_recover_function(System) ->
+    Regd = ra_directory:list_registered(System),
+    ?INFO("~s: ra system '~ts' num servers ~b",
+          [?MODULE, System, length(Regd)]),
+    [begin
+         case ra:restart_server(System, {N, node()}) of
+             ok ->
+                 ok;
+             Err ->
+                 ?WARN("~s: ra:restart_server/2 failed with ~p",
+                       [?MODULE, Err]),
+                 ok
+         end
+     end || {N, _Uid} <- Regd],
+    ok.
+
+stop_nodes([{_, _} | _ ] = ServerIds) ->
+    stop_nodes([S || {_, S} <- ServerIds]);
+stop_nodes(Nodes) ->
+    _ = ct_cover:remove_nodes(Nodes),
+    [ok = slave:stop(S) || S <- Nodes],
+    ok.

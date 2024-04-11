@@ -27,6 +27,7 @@
          handle_aux/4,
          handle_state_enter/2,
          tick/1,
+         log_tick/1,
          overview/1,
          metrics/1,
          is_new/1,
@@ -83,9 +84,11 @@
       stop_after => ra_index(),
       machine_state := term(),
       aux_state => term(),
-      condition => ra_await_condition_fun(),
-      condition_timeout_changes => #{transition_to := ra_state(),
-                                     effects := [effect()]},
+      condition => #{predicate_fun := ra_await_condition_fun(),
+                     transition_to => ra_state(),
+                     timeout => #{duration => integer(),
+                                  transition_to => ra_state(),
+                                  effects => [effect()]}},
       pre_vote_token => reference(),
       query_index := non_neg_integer(),
       queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
@@ -518,51 +521,76 @@ handle_leader({PeerId, #append_entries_reply{success = false,
     State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
     {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
-handle_leader({command, Cmd}, #{cfg := #cfg{log_id = LogId} = Cfg} = State00) ->
+handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
+                                            log_id = LogId} = Cfg,
+                                cluster := Cluster} = State00) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, 1),
     case append_log_leader(Cmd, State00, []) of
+        {not_appended, wal_down, State0, Effects0} ->
+            %% TODO: pick peer with highest match_index and on condition timeout
+            %% may not be worth the effort as this almost _never_ happens
+            CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
+                           [] -> [];
+                           [{PeerId, _} | _] ->
+                               [{next_event, cast, {transfer_leadership, PeerId}}]
+                       end,
+            State = State0#{condition =>
+                            #{predicate_fun => fun wal_down_condition/2,
+                              transition_to => leader,
+                              %% TODO: make duration configurable?
+                              timeout => #{duration => 5000,
+                                           effects => CondEffs,
+                                           transition_to => leader}}},
+
+            {await_condition, State, Effects0};
         {not_appended, Reason, State, Effects0} ->
             ?WARN("~ts command ~W NOT appended to log. Reason ~w",
                   [LogId, Cmd, 10, Reason]),
-            Effects = case Cmd of
-                          {_, #{from := From}, _, _} ->
-                              [{reply, From, {error, Reason}} | Effects0];
-                          _ ->
-                              Effects0
-                      end,
+            Effects = append_error_reply(Cmd, Reason, Effects0),
             {leader, State, Effects};
         {ok, Idx, Term, State0, Effects00} ->
             {State, _, Effects0} = make_pipelined_rpc_effects(State0, Effects00),
             % check if a reply is required.
-            % TODO: refactor - can this be made a bit nicer/more explicit?
-            Effects = case Cmd of
-                          {_, #{from := From}, _, after_log_append} ->
-                              [{reply, From,
-                                {wrap_reply, {Idx, Term}}} | Effects0];
-                          _ ->
-                              Effects0
-                      end,
+            Effects = after_log_append_reply(Cmd, Idx, Term, Effects0),
             {leader, State, Effects}
     end;
-handle_leader({commands, Cmds}, #{cfg := Cfg} =  State00) ->
+handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
+                                              log_id = LogId} = Cfg,
+                                  cluster := Cluster} =  State00) ->
     %% TODO: refactor to use wal batch API?
     Num = length(Cmds),
-    {State0, Effects0} =
-        lists:foldl(fun(C, {S0, E0}) ->
-                            {ok, I, T, S, E} = append_log_leader(C, S0, E0),
-                            case C of
-                                {_, #{from := From}, _, after_log_append} ->
-                                    {S, [{reply, From,
-                                          {wrap_reply, {I, T}}} | E]};
-                                _ ->
-                                    {S, E}
+    case catch  lists:foldl(fun(C, {S0, E0}) ->
+                            case append_log_leader(C, S0, E0) of
+                                {ok, I, T, S, E} ->
+                                    {S, after_log_append_reply(C, I, T, E)};
+                                {not_appended, wal_down, _S, _E} = Result ->
+                                    throw(Result)
                             end
-                    end, {State00, []}, Cmds),
-    ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
-    ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-    {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
+                    end, {State00, []}, Cmds) of
+        {State0, Effects0} ->
+            ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
+            ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
+            {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
+            {leader, State, Effects};
+        {not_appended, wal_down, State0, Effects} ->
+            ?WARN("~ts ~b commands NOT appended to log. Reason: wal_down",
+                  [LogId, length(Cmds)]),
+            CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
+                           [] -> [];
+                           [{PeerId, _} | _] ->
+                               [{next_event, cast, {transfer_leadership, PeerId}}]
+                       end,
 
-    {leader, State, Effects};
+            State = State0#{condition =>
+                            #{predicate_fun => fun wal_down_condition/2,
+                              transition_to => leader,
+                              %% TODO: make duration configurable?
+                              timeout => #{duration => 5000,
+                                           effects => CondEffs,
+                                           transition_to => leader}}},
+
+            {await_condition, State, Effects}
+    end;
 handle_leader({ra_log_event, {written, _} = Evt},
               #{log := Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
@@ -782,9 +810,10 @@ handle_leader({transfer_leadership, ServerId},
     %% TODO find a timeout
     gen_statem:cast(ServerId, try_become_leader),
     {await_condition,
-     State#{condition => fun transfer_leadership_condition/2,
-            condition_timeout_changes => #{effects => [],
-                                           transition_to => leader}},
+     State#{condition =>
+            #{predicate_fun => fun transfer_leadership_condition/2,
+              timeout => #{effects => [],
+                           transition_to => leader}}},
      [{reply, ok}]};
 handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
@@ -1048,9 +1077,25 @@ handle_follower(#append_entries_rpc{term = Term,
                                 {NextState, State,
                                  [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
+                            %% at this point we know the wal process exited
+                            %% but we dont know exactly which in flight messages
+                            %% made it to the wal before it crashed.
+                            %% we can check which entries actually made it to the
+                            %% wal / mem_tables and revert the last_index and last written
+                            %% index that should avoid the need to resend entries
+                            %% after writing a gap into the log
+                            %% Note that the wal writes and syncs to disk _before_
+                            %% updating the ETS tables so this is perfectly ok
+                            %% TODO: check this doesn't affect state machine
+                            %% application as applied index could be higher
+                            %% than written (if consensus has already been acheived from
+                            %% other members)
+                            Log = ra_log:reset_to_last_known_written(Log1),
                             {await_condition,
-                             State1#{log => Log1,
-                                     condition => fun wal_down_condition/2},
+                             State1#{log => Log,
+                                     condition =>
+                                     #{predicate_fun => fun wal_down_condition/2}
+                                    },
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -1065,10 +1110,11 @@ handle_follower(#append_entries_rpc{term = Term,
                    Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{condition => follower_catchup_cond_fun(missing),
-                    % repeat reply effect on condition timeout
-                    condition_timeout_changes => #{effects => Effects,
-                                                   transition_to => follower}},
+             State#{condition =>
+                    #{predicate_fun => follower_catchup_cond_fun(missing),
+                      % repeat reply effect on condition timeout
+                      timeout => #{effects => Effects,
+                                   transition_to => follower}}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
             %% NB: this is the commit index before update
@@ -1091,10 +1137,11 @@ handle_follower(#append_entries_rpc{term = Term,
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
              State#{log => Log0,
-                    condition => follower_catchup_cond_fun(term_mismatch),
-                    % repeat reply effect on condition timeout
-                    condition_timeout_changes => #{effects => Effects,
-                                                   transition_to => follower}},
+                    condition =>
+                    #{predicate_fun => follower_catchup_cond_fun(term_mismatch),
+                      % repeat reply effect on condition timeout
+                      timeout => #{effects => Effects,
+                                   transition_to => follower}}},
              Effects}
     end;
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
@@ -1139,7 +1186,7 @@ handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored pre_vote_rpc, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored pre_vote_rpc, non-voter: ~p0",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
@@ -1147,7 +1194,7 @@ handle_follower(#pre_vote_rpc{} = PreVote, State) ->
 handle_follower(#request_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored request_vote_rpc, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored request_vote_rpc, non-voter: ~p0",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
@@ -1155,7 +1202,7 @@ handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
                   cfg := #cfg{log_id = LogId}} = State)
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
-    ?DEBUG("~w: follower request_vote_rpc for ~w already voted for ~w in ~b",
+    ?DEBUG("~ts: follower request_vote_rpc for ~w already voted for ~w in ~b",
            [LogId, Cand, VotedFor, Term]),
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {follower, State, [{reply, Reply}]};
@@ -1249,7 +1296,7 @@ handle_follower(#append_entries_reply{}, State) ->
 handle_follower(election_timeout,
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored election_timeout, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored election_timeout, non-voter: ~p0",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(election_timeout, State) ->
@@ -1363,11 +1410,20 @@ handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
-handle_await_condition(await_condition_timeout,
-                       #{condition_timeout_changes := #{effects := Effects,
-                                                        transition_to := TransitionTo}} = State) ->
-    {TransitionTo, State#{condition_timeout_changes => #{effects => [],
-                                                         transition_to => TransitionTo}}, Effects};
+handle_await_condition(await_condition_timeout = Msg,
+                       #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
+    case Pred(Msg, State0) of
+        {true, State1} ->
+            CondTransitionTo = maps:get(transition_to, Cond, follower),
+            State = maps:remove(condition, State1),
+            {CondTransitionTo, State, []};
+        {false, State1} ->
+            Timeout = maps:get(timeout, Cond, #{}),
+            Effects = maps:get(effects, Timeout, []),
+            TransitionTo = maps:get(transition_to, Timeout, follower),
+            State = maps:remove(condition, State1),
+            {TransitionTo, State, Effects}
+    end;
 handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -1375,11 +1431,14 @@ handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
 handle_await_condition({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {await_condition, State#{log => Log}, Effs};
-handle_await_condition(Msg, #{condition := Cond} = State0) ->
-    case Cond(Msg, State0) of
-        {true, State} ->
-            {follower, State, [{next_event, Msg}]};
+handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
+    case Pred(Msg, State0) of
+        {true, State1} ->
+            TransitionTo = maps:get(transition_to, Cond, follower),
+            State = maps:remove(condition, State1),
+            {TransitionTo, State, [{next_event, Msg}]};
         {false, State} ->
+            %% do not log unhandled messages as they are often expected
             % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
@@ -1402,6 +1461,14 @@ tick(#{cfg := #cfg{effective_machine_module = MacMod},
        machine_state := MacState}) ->
     Now = erlang:system_time(millisecond),
     ra_machine:tick(MacMod, Now, MacState).
+
+-spec log_tick(ra_server_state()) -> ra_server_state().
+log_tick(#{cfg := #cfg{},
+           log := Log0} = State) ->
+    Now = erlang:system_time(millisecond),
+    Log = ra_log:tick(Now, Log0),
+    State#{log => Log}.
+
 
 -spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
     {ra_server_state() | eol, effects()}.
@@ -2720,10 +2787,14 @@ append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
             % not a member - do nothing
             {not_appended, not_member, State, Effects}
     end;
-append_log_leader(Cmd, State = #{log := Log0, current_term := Term}, Effects) ->
+append_log_leader(Cmd, #{log := Log0, current_term := Term} = State, Effects) ->
     NextIdx = ra_log:next_index(Log0),
-    Log = ra_log:append({NextIdx, Term, Cmd}, Log0),
-    {ok, NextIdx, Term, State#{log => Log}, Effects}.
+    try ra_log:append({NextIdx, Term, Cmd}, Log0) of
+        Log ->
+            {ok, NextIdx, Term, State#{log => Log}, Effects}
+    catch error:wal_down ->
+              {not_appended, wal_down, State, Effects}
+    end.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
                         State = #{cluster_index_term := {Idx, CITTerm}})
@@ -2764,14 +2835,18 @@ append_cluster_change(Cluster, From, ReplyMode,
     IdxTerm = {NextIdx, Term},
     % TODO: is it safe to do change the cluster config with an async write?
     % what happens if the write fails?
-    Log = ra_log:append({NextIdx, Term, Command}, Log0),
-    {ok, NextIdx, Term,
-     State#{log => Log,
-            cluster => Cluster,
-            cluster_change_permitted => false,
-            cluster_index_term => IdxTerm,
-            previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}},
-     Effects}.
+    try ra_log:append({NextIdx, Term, Command}, Log0) of
+        Log ->
+            {ok, NextIdx, Term,
+             State#{log => Log,
+                    cluster => Cluster,
+                    cluster_change_permitted => false,
+                    cluster_index_term => IdxTerm,
+                    previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}},
+             Effects}
+    catch error:wal_down ->
+              {not_appended, wal_down, State, Effects}
+    end.
 
 mismatch_append_entries_reply(Term, CommitIndex, State0) ->
     {CITerm, State} = fetch_term(CommitIndex, State0),
@@ -3155,6 +3230,23 @@ count_voters(Cluster) ->
               Count + 1
       end,
       0, Cluster).
+
+append_error_reply(Cmd, Reason, Effects0) ->
+    case Cmd of
+        {_, #{from := From}, _, _} ->
+            [{reply, From, {error, Reason}} | Effects0];
+        _ ->
+            Effects0
+    end.
+
+after_log_append_reply(Cmd, Idx, Term, Effects0) ->
+    case Cmd of
+        {_, #{from := From}, _, after_log_append} ->
+            [{reply, From,
+              {wrap_reply, {Idx, Term}}} | Effects0];
+        _ ->
+            Effects0
+    end.
 
 %%% ===================
 %%% Internal unit tests

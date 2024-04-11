@@ -64,22 +64,3 @@ lookup(ClusterName) ->
         error:badarg ->
             undefined
     end.
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-lookup_leader_test() ->
-    ClusterName = <<"mah-cluster">>,
-    ?assertEqual(undefined, lookup_leader(ClusterName)),
-    init(),
-    ?assertEqual(undefined, lookup_leader(ClusterName)),
-    Me = {me, node()},
-    record(ClusterName, Me, [Me]),
-    ?assertEqual(Me, lookup_leader(ClusterName)),
-    ?assertEqual([Me], lookup_members(ClusterName)),
-    You = {you, node()},
-    record(ClusterName, You, [Me, You]),
-    ?assertEqual(You, lookup_leader(ClusterName)),
-    ?assertEqual([Me, You], lookup_members(ClusterName)),
-
-    ok.
--endif.

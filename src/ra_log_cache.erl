@@ -17,7 +17,8 @@
          flush/1,
          needs_flush/1,
          size/1,
-         range/1
+         range/1,
+         dump_keys/1
          ]).
 
 %% holds static or rarely changing fields
@@ -168,6 +169,10 @@ size(#?MODULE{tbl = Tid, cache = Cache}) ->
     undefined | {ra:index(), ra:index()}.
 range(#?MODULE{range = Range}) ->
     Range.
+
+dump_keys(#?MODULE{tbl = Tid, cache = Cache}) ->
+    EtsKeys = [K || {K, _, _} <- ets:tab2list(Tid)],
+    {maps:keys(Cache), EtsKeys}.
 
 %% INTERNAL
 

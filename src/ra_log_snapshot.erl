@@ -103,7 +103,7 @@ complete_accept(Chunk, St0) ->
                          Crc
                  end,
     ok = file:pwrite(Fd, 5, <<CrcToWrite:32/integer>>),
-    ok = file:sync(Fd),
+    ok = ra_file:sync(Fd),
     ok = file:close(Fd),
     CalculatedCrc = CrcToWrite,
     ok.

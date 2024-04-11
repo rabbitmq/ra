@@ -123,9 +123,9 @@ basic_log_writes(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
     {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
     % previous log value is still there
     {12, 1, "value"} = mem_tbl_read(UId, 12),
@@ -141,9 +141,9 @@ basic_log_writes_compress_mem_table(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf#{compress_mem_tables => true}),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
     {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
     % previous log value is still there
     {12, 1, "value"} = mem_tbl_read(UId, 12),
@@ -158,12 +158,12 @@ same_uid_different_process(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
     {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
     Self = self(),
     _ = spawn(fun() ->
                       Wid = {UId, self()},
-                      ok = ra_log_wal:write(Wid, ra_log_wal, 13, 1, "value2"),
+                      {ok, _} = ra_log_wal:write(Wid, ra_log_wal, 13, 1, "value2"),
                       {13, 1, "value2"} = await_written(Wid, {13, 13, 1}),
                       Self ! go
               end),
@@ -217,7 +217,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
                                                garbage_collect => true,
                                                max_batch_size => BatchSize}),
     Data = crypto:strong_rand_bytes(DataSize),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
     Writes = lists:seq(1, NumWrites),
@@ -229,7 +229,7 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
     {Taken, _} =
         timer:tc(
           fun () ->
-                  [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1,
+                  [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1,
                                          {data, Data}) || Idx <- Writes],
                   receive
                       {ra_log_event, {written, {_, NumWrites, 1}}} ->
@@ -271,7 +271,7 @@ write_many_by_many(Config) ->
     {_UId, _} = WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false}),
     Data = crypto:strong_rand_bytes(1024),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 0, 1, Data),
     timer:sleep(5),
     % start_profile(Config, [ra_log_wal, ra_file_handle, ets, file, lists, os]),
     Writes = lists:seq(1, NumWrites),
@@ -285,7 +285,7 @@ write_many_by_many(Config) ->
     [spawn_link(fun () ->
                         WId = {term_to_binary(I), self()},
                         put(wid, WId),
-                        [ok = ra_log_wal:write(WId, ra_log_wal, Idx, 1,
+                        [{ok, _} = ra_log_wal:write(WId, ra_log_wal, Idx, 1,
                                                {data, Data}) || Idx <- Writes],
                         receive
                             {ra_log_event, {written, {_, NumWrites, 1}}} ->
@@ -334,12 +334,12 @@ overwrite(Config) ->
     WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = data,
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
     await_written(WriterId, {1, 3, 1}),
     % write next index then immediately overwrite
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 2, 2, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 2, 2, Data),
     % ensure we await the correct range that should not have a wonky start
     await_written(WriterId, {2, 2, 2}),
     proc_lib:stop(Pid),
@@ -353,12 +353,12 @@ truncate_write(Config) ->
     {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
     await_written(WriterId, {1, 3, 1}),
     % then write 7 as may happen after snapshot installation
-    ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 7, 1, Data),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
+    {ok, _} = ra_log_wal:truncate_write(WriterId, ra_log_wal, 7, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
     await_written(WriterId, {7, 8, 1}),
     [{UId, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
     [_] = ets:lookup(Tid, 7),
@@ -377,11 +377,11 @@ out_of_seq_writes(Config) ->
     {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = crypto:strong_rand_bytes(1024),
     % write 1-3
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
     await_written(WriterId, {1, 3, 1}),
     % then write 5
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
     % ensure an out of sync notification is received
     receive
         {ra_log_event, {resend_write, 4}} -> ok
@@ -389,25 +389,25 @@ out_of_seq_writes(Config) ->
               throw(reset_write_timeout)
     end,
     % try writing 6
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
 
     % then write 4 and 5
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
     await_written(WriterId, {4, 4, 1}),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
     await_written(WriterId, {5, 5, 1}),
 
     % perform another out of sync write
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 7, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 7, 1, Data),
     receive
         {ra_log_event, {resend_write, 6}} -> ok
     after 500 ->
               throw(written_timeout)
     end,
     % force a roll over
-    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ok= ra_log_wal:force_roll_over(ra_log_wal),
     % try writing another
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
     % ensure a written event is _NOT_ received
     % when a roll-over happens after out of sync write
     receive
@@ -416,7 +416,7 @@ out_of_seq_writes(Config) ->
     after 500 -> ok
     end,
     % write the missing one
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
     await_written(WriterId, {6, 6, 1}),
     proc_lib:stop(Pid),
     ok.
@@ -434,7 +434,7 @@ roll_over(Config) ->
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
-         ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+         {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
     receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
@@ -474,7 +474,7 @@ roll_over_with_data_larger_than_max_size(Config) ->
     % write entries each larger than the WAL max size to trigger roll over
     Data = crypto:strong_rand_bytes(64 * 1024),
     [begin
-         ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+         {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
     receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
@@ -514,7 +514,7 @@ roll_over_entry_limit(Config) ->
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     [begin
-         ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+         {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      end || Idx <- lists:seq(1, NumWrites)],
     % wait for writes
     receive {ra_log_event, {written, {_, NumWrites, 1}}} -> ok
@@ -554,9 +554,9 @@ recover_truncated_write(Config) ->
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     {ok, _Pid} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 3)],
-    ok = ra_log_wal:truncate_write(WriterId, ra_log_wal, 9, 1, Data),
+    {ok, _} = ra_log_wal:truncate_write(WriterId, ra_log_wal, 9, 1, Data),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf),
@@ -586,7 +586,7 @@ recover_after_roll_over(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
@@ -610,11 +610,11 @@ recover(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
     _ = await_written(WriterId, {101, 200, 2}),
     empty_mailbox(),
@@ -657,8 +657,8 @@ recover_overwrite_in_same_batch(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 1, 1, <<"data1">>),
-    ok = ra_log_wal:write(WriterId, ra_log_wal, 1, 2, <<"data2">>),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 1, <<"data1">>),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 2, <<"data2">>),
     _ = await_written(WriterId, {1, 1, 2}),
     ra_log_wal:force_roll_over(ra_log_wal),
     empty_mailbox(),
@@ -694,11 +694,11 @@ recover_with_small_chunks(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
     _ = await_written(WriterId, {101, 200, 2}),
     proc_lib:stop(ra_log_wal),
@@ -755,7 +755,7 @@ recover_with_partial_last_entry(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     empty_mailbox(),
@@ -785,7 +785,7 @@ recover_with_last_entry_corruption(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     empty_mailbox(),
@@ -815,7 +815,7 @@ recover_with_last_entry_corruption_pre_allocate(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     empty_mailbox(),
@@ -847,7 +847,7 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [ok = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, {1, 100, 1}),
     empty_mailbox(),

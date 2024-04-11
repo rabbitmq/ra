@@ -66,6 +66,3 @@ init([]) ->
     {Intensity, Period} = application:get_env(ra, ra_systems_sup_intensity, {1, 5}),
     SupFlags = #{strategy => one_for_one, intensity => Intensity, period => Period},
     {ok, {SupFlags, []}}.
-
-
-
