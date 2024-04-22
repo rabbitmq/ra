@@ -63,8 +63,6 @@ jobs:
             build:buildbuddy --disk_cache=
 
             build:buildbuddy --remote_download_toplevel
-
-            build --@io_bazel_rules_docker//transitions:enable=false
           EOF
 
       - name: Check OTP/Elixir versions used in RBE
