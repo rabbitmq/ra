@@ -629,15 +629,15 @@ add_member_without_quorum(Config) ->
     {ok, _, _} = ra:add_member(Leader, ServerId4),
     ServerId5 = ?config(server_id5, Config),
     %% the previous cluster change could not be applied, so cluster changes are not permitted
-    {error, cluster_change_not_permitted} = ra:add_member(Leader, ServerId5),
-    {error, cluster_change_not_permitted} = ra:remove_member(Leader, ServerId1),
+    {error, cluster_change_not_permitted} = ra:add_member(InitialCluster, ServerId5),
+    {error, cluster_change_not_permitted} = ra:remove_member(InitialCluster, ServerId1),
     %% start one follower
     timer:sleep(1000),
     ok = ra:restart_server(?SYS, hd(Followers)),
     timer:sleep(1000),
     ok = enqueue(Leader, msg1),
-    {error, already_member} = ra:add_member(Leader, ServerId4),
-    {error, not_member} = ra:remove_member(Leader, ServerId5),
+    {error, already_member} = ra:add_member(InitialCluster, ServerId4),
+    {error, not_member} = ra:remove_member(InitialCluster, ServerId5),
     %%
     % timer:sleep(5000),
     ok.

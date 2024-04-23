@@ -246,8 +246,15 @@ statem_call(ServerId, Msg, Timeout) ->
 
 multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
     case statem_call(ServerId, Msg, Timeout) of
-        {Tag, _} = E
-          when Tag == error orelse Tag == timeout ->
+        {Tag, Info} = E
+          when Tag == timeout orelse
+               (Tag == error andalso
+                (Info == noproc orelse
+                 Info == nodedown orelse
+                 Info == shutdown orelse
+                 Info == system_not_started)) ->
+            %% these are the retryable errors, any others we consider
+            %% genuine errors that a retry will not fix
             case ServerIds of
                 [] ->
                     {error, {no_more_servers_to_try, [E | Errs]}};
