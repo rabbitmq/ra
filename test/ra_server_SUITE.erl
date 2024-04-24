@@ -23,6 +23,7 @@ all() ->
      append_entries_reply_success_promotes_nonvoter,
      append_entries_reply_success,
      append_entries_reply_no_success,
+     append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
      follower_pre_vote,
      pre_vote_receives_pre_vote,
@@ -972,6 +973,21 @@ append_entries_reply_no_success(_Config) ->
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}},
         {send_rpc, N2, _}
       ]} = ra_server:handle_leader(Msg, State),
+    ok.
+
+append_entries_reply_no_success_from_unknown_peer(_Config) ->
+    N1 = ?N1, N2 = ?N2,
+    Cluster = #{N1 => new_peer()},
+    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
+                             last_applied => 1,
+                             cluster => Cluster,
+                             machine_state => <<"hi1">>},
+    % n2 is an unknown peer
+    Msg = {N2, #append_entries_reply{term = 5, success = false, next_index = 2,
+                                     last_index = 1, last_term = 1}},
+    % The reply from n2 is ignored
+    {leader, State, []} = ra_server:handle_leader(Msg, State),
+
     ok.
 
 follower_request_vote(_Config) ->

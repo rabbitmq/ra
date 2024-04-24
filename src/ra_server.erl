@@ -462,6 +462,13 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
                     [LogId, PeerId, Term, CurTerm]),
             {follower, update_term(Term, State0#{leader_id => undefined}), []}
     end;
+handle_leader({PeerId, #append_entries_reply{success = false}},
+              State0 = #{cfg := #cfg{log_id = LogId},
+                         cluster := Nodes})
+  when not is_map_key(PeerId, Nodes) ->
+    ?WARN("~ts: saw append_entries_reply from unknown peer ~w",
+          [LogId, PeerId]),
+    {leader, State0, []};
 handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = NextIdx,
                                              last_index = LastIdx,
