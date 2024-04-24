@@ -12,11 +12,11 @@
 -define(HANDLE_EAGAIN(Op),
     case Op of
         {error, eagain} ->
-            ?INFO("EAGAIN during file operation, retrying once in 10ms...", []),
+            ?DEBUG("EAGAIN during file operation, retrying once in 10ms...", []),
             timer:sleep(10),
             case Op of
                 {error, eagain} = Err ->
-                    ?INFO("EAGAIN again during file operation", []),
+                    ?DEBUG("EAGAIN again during file operation", []),
                     Err;
                 Res ->
                     Res
