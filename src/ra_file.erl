@@ -26,8 +26,6 @@
     end).
 
 -export([
-         % open/1,
-         % write/2,
          sync/1
         ]).
 
