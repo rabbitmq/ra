@@ -33,7 +33,7 @@ jobs:
       - name: Patch Ra version
         working-directory: deps/ra
         run: |
-          sed -i"_orig" "/vsn,/ s/2\\.[0-9]\\.[0-9]/${{ github.event.pull_request.head.sha || github.sha }}/" src/ra.app.src
+          sed -r -i"_orig" '/vsn,/ s/".*"/"${{ github.event.pull_request.head.sha || github.sha }}"/' src/ra.app.src
           if git diff --exit-code; then
             exit 1
           fi
