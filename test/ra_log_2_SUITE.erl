@@ -607,7 +607,7 @@ resend_write_after_tick(Config) ->
     ct:pal("ra_log_init"),
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
-    ct:pal("appending"),
+    %% ct:pal("appending"),
     meck:expect(ra_log_wal, write, fun (_, _, _, _, _) ->
                                            {ok, WalPid}
                                    end),
@@ -615,8 +615,8 @@ resend_write_after_tick(Config) ->
     %% this append should be lost
     meck:unload(ra_log_wal),
     %% restart wal to get a new wal pid so that the ra_log detects on tick
-    %% that the walhas changed
-    ct:pal("restart wal"),
+    %% that the wal process has changed
+    %% ct:pal("restart wal"),
     restart_wal(),
 
     Ms = erlang:system_time(millisecond) + 5001,

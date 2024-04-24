@@ -800,8 +800,8 @@ wal_down_condition_leader(_Config) ->
     meck:expect(ra_log, can_write, fun (_L) -> false end),
     meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
 
-    %% when the wal is down the leader should transition to awai_condition,
-    %% on timeout it should attempt a leader change effect should be emitted
+    %% when the wal is down the leader should transition to await_condition,
+    %% on timeout a leader change effect should be emitted
     %% such that it can concede leadership in the interest of Ra cluster
     %% progress
     {await_condition,
@@ -814,13 +814,13 @@ wal_down_condition_leader(_Config) ->
                         transition_to := leader}}} = State1, _}
         = ra_server:handle_leader({command, Cmd}, State0),
 
-    % if there condition times out, return to leader and begin transfer leadership
+    % if awaiting for the condition times out, return to the leader and begin transferring leadership
     % process
     {leader, #{} = State2, [{next_event, cast,
                              {transfer_leadership, _}}]}
         = ra_server:handle_await_condition(await_condition_timeout, State1),
 
-    %% but not if condition no longer manifests
+    %% but not if the condition no longer manifests
     meck:expect(ra_log, append, fun (_Es, L) -> L end),
     meck:expect(ra_log, can_write, fun (_L) -> true end),
     {leader, #{} = State2, []}

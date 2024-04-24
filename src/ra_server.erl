@@ -573,7 +573,7 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
             {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
             {leader, State, Effects};
         {not_appended, wal_down, State0, Effects} ->
-            ?WARN("~ts ~b commands NOT appended to log. Reason: wal_down",
+            ?WARN("~ts ~b commands NOT appended to Raft log. Reason: wal_down",
                   [LogId, length(Cmds)]),
             CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
                            [] -> [];

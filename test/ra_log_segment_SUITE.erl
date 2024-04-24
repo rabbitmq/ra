@@ -78,7 +78,7 @@ corrupted_segment(Config) ->
     ok = open_write_close(1, 2, Data, Fn),
     %% truncate file a bit to simulate lost bytes
     truncate(Fn, {eof, -2}),
-    % ct:pal("DUMP PRE ~p", [ra_log_segment:dump_index(Fn)]),
+    %% ct:pal("DUMP PRE ~p", [ra_log_segment:dump_index(Fn)]),
     %% check that the current state throws a missing key
     {ok, SegR0} = ra_log_segment:open(Fn, #{mode => read}),
     ?assertExit({missing_key, 2},
@@ -92,8 +92,8 @@ corrupted_segment(Config) ->
     % write_trunc_until_full(Fn),
 
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    ct:pal("Range ~p", [ra_log_segment:segref(SegR)]),
-    ct:pal("SegR ~p", [SegR]),
+    %% ct:pal("Range ~p", [ra_log_segment:segref(SegR)]),
+    %% ct:pal("SegR ~p", [SegR]),
     [{1, 2, Data}] =
           ra_log_segment:fold(SegR, 1, 1,
                               fun ra_lib:id/1,

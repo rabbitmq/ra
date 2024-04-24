@@ -816,7 +816,6 @@ segment_writer_or_wal_crash_follower(Config) ->
                end || {Name, _Node} = NodeId <- ServerIds],
     {ok, Started, []} = ra:start_cluster(?SYS, Configs),
 
-
     {ok, _, Leader} = ra:members(hd(Started)),
     [{FollowerName, FollowerNode} = Follower, _] = lists:delete(Leader, Started),
 
@@ -893,12 +892,12 @@ segment_writer_or_wal_crash_follower(Config) ->
     ok.
 
 segment_writer_or_wal_crash_leader(Config) ->
-    %% this test crashes the segment writer for a follower node whilst the
+    %% This test crashes the segment writer for a follower node whilst the
     %% ra cluster is active and receiving and replicating commands.
-    %% it tests the segment writer and wal is able to recover without the
+    %% It tests the segment writer and wal are able to recover without the
     %% follower crashing.
     %% Finally we stop and restart the follower to make sure it can recover
-    %% correactly and that the log data contains no missing entries
+    %% correctly and that the log data does not miss any entries
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     ServerNames = [s1, s2, s3],
