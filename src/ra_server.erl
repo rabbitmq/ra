@@ -59,6 +59,7 @@
          log_fold/3,
          log_read/2,
          get_membership/1,
+         get_condition_timeout/2,
          recover/1,
          state_query/2
         ]).
@@ -3186,6 +3187,14 @@ get_membership(Cluster, PeerId, UId, Default) ->
         _ ->
             Default
     end.
+
+-spec get_condition_timeout(ra_server_state(), Default :: term()) ->
+    term() | integer().
+get_condition_timeout(#{condition := #{timeout := #{duration := D}}}, _Def) ->
+    D;
+get_condition_timeout(_, Def) ->
+    Def.
+
 
 %% Get this node's membership from a (possibly new) cluster.
 %% Defaults to last known-locally value.

@@ -917,8 +917,8 @@ terminating_follower(EvtType, Msg, State0) ->
 await_condition(enter, OldState, #state{conf = Conf,
                                        server_state = ServerState} = State0) ->
     {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
-    Timeout = maps:get(condition_timeout, ServerState,
-                       Conf#conf.await_condition_timeout),
+    Timeout = ra_server:get_condition_timeout(ServerState,
+                                              Conf#conf.await_condition_timeout),
     Actions = [{state_timeout, Timeout, await_condition_timeout} | Actions0],
     {keep_state, State, Actions};
 await_condition({call, From}, {leader_call, Msg}, State) ->

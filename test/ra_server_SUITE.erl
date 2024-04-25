@@ -815,6 +815,8 @@ wal_down_condition_leader(_Config) ->
                         transition_to := leader}}} = State1, _}
         = ra_server:handle_leader({command, Cmd}, State0),
 
+    ?assertEqual(5000, ra_server:get_condition_timeout(State1, 9999)),
+
     % if awaiting for the condition times out, return to the leader and begin transferring leadership
     % process
     {leader, #{} = State2, [{next_event, cast,
