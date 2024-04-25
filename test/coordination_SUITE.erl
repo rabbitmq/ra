@@ -314,6 +314,7 @@ grow_cluster(Config) ->
     {ok, [A], []} = ra:start_cluster(?SYS, ClusterName, Machine, [A]),
 
     ok = ra:start_server(?SYS, ClusterName, B, Machine, [A]),
+    _ = ra:members(A),
     {ok, _, _} = ra:add_member(A, B),
     {ok, _, _} = ra:process_command(A, banana),
 

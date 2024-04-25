@@ -651,13 +651,18 @@ recover_overwrite_in_same_batch(Config) ->
     % open wal and write a few entreis
     % close wal + delete mem_tables
     % re-open wal and validate mem_tables are re-created
+    ets:delete_all_objects(ra_log_open_mem_tables),
+    ets:delete_all_objects(ra_log_closed_mem_tables),
     Conf0 = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     Conf = Conf0#{segment_writer => spawn(fun () -> ok end)},
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, _Wal} = ra_log_wal:start_link(Conf),
+    %% it is not possible to guarantee these two writes will definitely
+    %% be processed in the same batch
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 1, <<"data1">>),
+    timer:sleep(1),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 2, <<"data2">>),
     _ = await_written(WriterId, {1, 1, 2}),
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -676,6 +681,7 @@ recover_overwrite_in_same_batch(Config) ->
 
     % check that both mem_tables notifications are received by the segment writer
     flush(),
+
 
     meck:unload(),
     proc_lib:stop(Pid),
@@ -878,6 +884,10 @@ await_written({UId, _} = Id, {From, To, Term} = Written) ->
     receive
         {ra_log_event, {written, Written}} ->
             mem_tbl_read(UId, To);
+        {ra_log_event, {written, {From, To, _}}} ->
+            %% indexes are the same but term is different,
+            %% lets wait for the original
+            await_written(Id, Written);
         {ra_log_event, {written, {From, T, _}}} ->
             await_written(Id, {T+1, To, Term})
     after 5000 ->
