@@ -1264,7 +1264,7 @@ handle_follower(election_timeout, State) ->
 handle_follower(try_become_leader,
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored try_become_leader, non-voter: ~p",
+    ?DEBUG("~s: follower ignored try_become_leader, replicate membership state: ~p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(try_become_leader, State) ->
@@ -1275,7 +1275,7 @@ handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
 handle_follower(force_member_change,
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored force_member_change, non-voter: ~p",
+    ?DEBUG("~s: follower ignored force_member_change, replicate membership state: ~p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(force_member_change,
@@ -1383,7 +1383,7 @@ handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
 handle_await_condition(election_timeout,
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: await_condition ignored election_timeout, non-voter: ~p",
+    ?DEBUG("~s: await_condition ignored election_timeout, replicate membership state: ~p",
            [LogId, Membership]),
     {await_condition, State, []};
 handle_await_condition(election_timeout, State) ->
