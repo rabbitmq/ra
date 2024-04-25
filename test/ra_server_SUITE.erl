@@ -285,6 +285,7 @@ election_timeout(_Config) ->
     % non-voters ignore election_timeout
     NVState = State#{membership => promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
+    {await_condition, NVState, []} = ra_server:handle_await_condition(Msg, NVState),
 
     % pre_vote
     {pre_vote, #{current_term := 5, votes := 0,
