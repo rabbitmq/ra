@@ -148,20 +148,21 @@
 -type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
 
--spec write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
-    ok | {error, wal_down}.
+-spec write(writer_id(), atom() | pid(), ra_index(), ra_term(), term()) ->
+    {ok, pid()} | {error, wal_down}.
 write(From, Wal, Idx, Term, Cmd) ->
     named_cast(Wal, {append, From, Idx, Term, Cmd}).
 
 -spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
-    ok | {error, wal_down}.
+    {ok, pid()} | {error, wal_down}.
 truncate_write(From, Wal, Idx, Term, Cmd) ->
    named_cast(Wal, {truncate, From, Idx, Term, Cmd}).
 
 -spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
-    ok | {error, wal_down}.
+    {ok, pid()} | {error, wal_down}.
 write_batch(Wal, WalCommands) when is_pid(Wal) ->
-    gen_batch_server:cast_batch(Wal, WalCommands);
+    gen_batch_server:cast_batch(Wal, WalCommands),
+    {ok, Wal};
 write_batch(Wal, WalCommands) when is_atom(Wal) ->
     case whereis(Wal) of
         undefined ->
@@ -171,7 +172,8 @@ write_batch(Wal, WalCommands) when is_atom(Wal) ->
     end.
 
 named_cast(To, Msg) when is_pid(To) ->
-    gen_batch_server:cast(To, Msg);
+    gen_batch_server:cast(To, Msg),
+    {ok, To};
 named_cast(Wal, Msg) ->
     case whereis(Wal) of
         undefined ->
@@ -294,7 +296,8 @@ handle_batch(Ops, #state{conf = #conf{explicit_gc = Gc}} = State0) ->
               end,
     {ok, Actions, complete_batch(State)}.
 
-terminate(_Reason, State) ->
+terminate(Reason, State) ->
+    ?DEBUG("wal: terminating with ~W", [Reason, 20]),
     _ = cleanup(State),
     ok.
 
@@ -319,7 +322,9 @@ format_status(#state{conf = #conf{write_strategy = Strat,
 %% Internal
 
 handle_op({cast, WalCmd}, State) ->
-    handle_msg(WalCmd, State).
+    handle_msg(WalCmd, State);
+handle_op({info,{'EXIT', _, Reason}}, _State) ->
+    throw({stop, Reason}).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
                        open_mem_tbls_tid = OpenTbl,
@@ -388,7 +393,7 @@ extract_file_num([F | _]) ->
 cleanup(#state{wal = #wal{fd = undefined}}) ->
     ok;
 cleanup(#state{wal = #wal{fd = Fd}}) ->
-    _ = file:sync(Fd),
+    _ = ra_file:sync(Fd),
     ok.
 
 serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
@@ -636,7 +641,7 @@ make_tmp(File) ->
     Tmp = filename:rootname(File) ++ ".tmp",
     {ok, Fd} = file:open(Tmp, [write, binary, raw]),
     ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
-    ok = file:sync(Fd),
+    ok = ra_file:sync(Fd),
     ok = file:close(Fd),
     Tmp.
 

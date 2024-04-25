@@ -210,7 +210,7 @@ sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes0, Entries0) ->
               sparse_read(State, Indexes0, Entries0)
     end.
 
--spec fetch_term(ra_index(), state()) -> {ra_index(), state()}.
+-spec fetch_term(ra_index(), state()) -> {option(ra_index()), state()}.
 fetch_term(Idx, #?STATE{cfg = #cfg{uid = UId,
                                    open_mem_tbls = OpenTbl,
                                    closed_mem_tbls = ClosedTbl} = Cfg} = State0) ->

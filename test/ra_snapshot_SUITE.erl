@@ -27,8 +27,7 @@ all() ->
 
 
 all_tests() ->
-    [
-     init_empty,
+    [init_empty,
      init_multi,
      take_snapshot,
      take_snapshot_crash,

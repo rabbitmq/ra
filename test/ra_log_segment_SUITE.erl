@@ -71,24 +71,56 @@ open_close_persists_max_count(Config) ->
     ok.
 
 corrupted_segment(Config) ->
-    % tests items are bing persisted and index can be recovered
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = make_data(1024),
+    % Data = make_data(1024),
+    Data = <<"banana">>,
     ok = open_write_close(1, 2, Data, Fn),
     %% truncate file a bit to simulate lost bytes
-    {ok, Fd} = file:open(Fn, [read, write, raw, binary]),
-    {ok, Pos} = file:position(Fd, eof),
-    {ok, _} = file:position(Fd, Pos -2),
-    ok = file:truncate(Fd),
-    ok = file:close(Fd),
+    truncate(Fn, {eof, -2}),
+    %% ct:pal("DUMP PRE ~p", [ra_log_segment:dump_index(Fn)]),
+    %% check that the current state throws a missing key
+    {ok, SegR0} = ra_log_segment:open(Fn, #{mode => read}),
+    ?assertExit({missing_key, 2},
+                read_sparse(SegR0, [1, 2])),
+
+    %% rewrite items as would happen if error was encountered
+    ok = open_write_close(1, 2, Data, Fn),
+
+    % ct:pal("DUMP ~p", [ra_log_segment:dump(Fn)]),
+    % {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
+    % write_trunc_until_full(Fn),
 
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
+    %% ct:pal("Range ~p", [ra_log_segment:segref(SegR)]),
+    %% ct:pal("SegR ~p", [SegR]),
+    [{1, 2, Data}] =
+          ra_log_segment:fold(SegR, 1, 1,
+                              fun ra_lib:id/1,
+                              fun (E, A) -> [E | A] end,
+                              []),
     %% for now we are just going to exit when reaching this point
     %% in the future we can find a strategy for handling this case
-    ?assertExit({missing_key, 2},
-                read_sparse(SegR, [1, 2])),
     ok.
+
+truncate(Fn, Pos) ->
+    {ok, Fd} = file:open(Fn, [read, write, raw, binary]),
+    {ok, _Pos} = file:position(Fd, Pos),
+    ok = file:truncate(Fd),
+    ok = file:close(Fd),
+    ok.
+
+write_trunc_until_full(Fn) ->
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    case ra_log_segment:append(Seg0, 1, 2, <<"banana">>) of
+        {ok, Seg1} ->
+            ok = ra_log_segment:close(Seg1),
+            truncate(Fn, {eof, -2}),
+            write_trunc_until_full(Fn);
+        {error, full} ->
+            ok = ra_log_segment:close(Seg0),
+            ok
+    end.
 
 
 large_segment(Config) ->

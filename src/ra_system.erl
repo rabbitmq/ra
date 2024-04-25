@@ -54,7 +54,10 @@
                     server_min_bin_vheap_size => non_neg_integer(),
                     compress_mem_tables => boolean(),
                     low_priority_commands_flush_size => non_neg_integer(),
-                    low_priority_commands_in_memory_size => non_neg_integer()
+                    low_priority_commands_in_memory_size => non_neg_integer(),
+                    server_recovery_strategy => undefined |
+                                               registered |
+                                               {module(), atom(), list()}
                    }.
 
 -export_type([

@@ -66,7 +66,9 @@ all() ->
      follower_aer_4,
      follower_aer_5,
      follower_catchup_condition,
-     wal_down_condition,
+     wal_down_condition_follower,
+     wal_down_condition_leader,
+     wal_down_condition_leader_commands,
      update_release_cursor,
 
      follower_heartbeat,
@@ -737,11 +739,12 @@ follower_catchup_condition(_Config) ->
                                            cluster => #{},
                                            machine_version => 0},
                                   data = []},
-    {follower, State, [_NextEvent]} =
+    {follower, _, [_NextEvent]} =
         ra_server:handle_await_condition(ISRpc, State),
 
-    {await_condition, State, []} =
-        ra_server:handle_await_condition({ra_log_event, {written, {99, 99, 99}}}, State),
+    {await_condition, _, []} =
+        ra_server:handle_await_condition({ra_log_event, {written, {99, 99, 99}}},
+                                         State),
 
     Msg = #request_vote_rpc{candidate_id = ?N2, term = 6, last_log_index = 3,
                             last_log_term = 5},
@@ -756,7 +759,7 @@ follower_catchup_condition(_Config) ->
     ok.
 
 
-wal_down_condition(_Config) ->
+wal_down_condition_follower(_Config) ->
     N1 = ?N1,
     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
     EmptyAE = #append_entries_rpc{term = 5,
@@ -768,19 +771,85 @@ wal_down_condition(_Config) ->
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, write, fun (_Es, _L) -> {error, wal_down} end),
     meck:expect(ra_log, can_write, fun (_L) -> false end),
+    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
 
     % ra log fails
-    {await_condition, State = #{condition := _}, [{record_leader_msg, _}]}
-    = ra_server:handle_follower(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State0),
+    {await_condition, State1 = #{condition := _}, [{record_leader_msg, _}]}
+    = ra_server:handle_follower(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]},
+                                State0),
 
     % stay in await condition as ra_log_wal is not available
-    {await_condition, State = #{condition := _}, []}
-    = ra_server:handle_await_condition(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State),
+    {await_condition, State2 = #{condition := _}, []}
+    = ra_server:handle_await_condition(
+        EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State1),
 
     meck:expect(ra_log, can_write, fun (_L) -> true end),
     % exit condition
-    {follower, _State, [_]}
-    = ra_server:handle_await_condition(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State),
+    {follower, State, [_]}
+        = ra_server:handle_await_condition(
+            EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State2),
+    ?assertNot(maps:is_key(condition, State)),
+    ok.
+
+wal_down_condition_leader(_Config) ->
+    %% the leader should enter a short await condition then if that times out
+    %% trigger a leader change. Only if running in clustered mode ofc.
+    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    Cmd = {'$usr', meta(), <<"hi4">>, after_log_append},
+    % meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
+    meck:expect(ra_log, can_write, fun (_L) -> false end),
+    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
+
+    %% when the wal is down the leader should transition to await_condition,
+    %% on timeout a leader change effect should be emitted
+    %% such that it can concede leadership in the interest of Ra cluster
+    %% progress
+    {await_condition,
+     #{condition := #{predicate_fun := _,
+                      transition_to := leader,
+                      timeout :=
+                      #{duration := 5000,
+                        effects := [{next_event, cast,
+                                     {transfer_leadership, _}}],
+                        transition_to := leader}}} = State1, _}
+        = ra_server:handle_leader({command, Cmd}, State0),
+
+    % if awaiting for the condition times out, return to the leader and begin transferring leadership
+    % process
+    {leader, #{} = State2, [{next_event, cast,
+                             {transfer_leadership, _}}]}
+        = ra_server:handle_await_condition(await_condition_timeout, State1),
+
+    %% but not if the condition no longer manifests
+    meck:expect(ra_log, append, fun (_Es, L) -> L end),
+    meck:expect(ra_log, can_write, fun (_L) -> true end),
+    {leader, #{} = State2, []}
+        = ra_server:handle_await_condition(await_condition_timeout, State1),
+    ok.
+
+wal_down_condition_leader_commands(_Config) ->
+    %% the leader should enter a short await condition then if that times out
+    %% trigger a leader change. Only if running in clustered mode ofc.
+    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    Cmd = {'$usr', meta(), <<"hi4">>, after_log_append},
+    % meck:new(ra_log, [passthrough]),
+    meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
+    meck:expect(ra_log, can_write, fun (_L) -> false end),
+    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
+
+    %% when the wal is down the leader should transition to awai_condition,
+    %% on timeout it should attempt a leader change effect should be emitted
+    %% such that it can concede leadership in the interest of Ra cluster
+    %% progress
+    {await_condition,
+     #{condition := #{predicate_fun := _,
+                      transition_to := leader,
+                      timeout := #{duration := 5000,
+                                   effects := [{next_event, cast,
+                                                {transfer_leadership, _}}],
+                                   transition_to := leader}}} = _State1, _}
+        = ra_server:handle_leader({commands, [Cmd]}, State0),
     ok.
 
 update_release_cursor(_Config) ->
@@ -1176,7 +1245,9 @@ pre_vote_receives_pre_vote(_Config) ->
     ok.
 
 await_condition_receives_pre_vote(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    State0 = (base_state(3, ?FUNCTION_NAME)),
+    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
+
     Term = 5,
     Token = make_ref(),
     Msg = #pre_vote_rpc{candidate_id = ?N2, term = Term, last_log_index = 3,
@@ -2587,7 +2658,8 @@ enable_cluster_change(State0) ->
         ra_server:handle_leader(AEReply, State).
 
 await_condition_heartbeat_dropped(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    State0 = (base_state(3, ?FUNCTION_NAME)),
+    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
     #{current_term := Term,
       query_index := QueryIndex,
       cfg := #cfg{id = Id}} = State,
@@ -2606,7 +2678,8 @@ await_condition_heartbeat_dropped(_Config) ->
                                          State).
 
 await_condition_heartbeat_reply_dropped(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{condition => fun(_,S) -> {false, S} end},
+    State0 = (base_state(3, ?FUNCTION_NAME)),
+    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
     #{current_term := Term,
       query_index := QueryIndex} = State,
 

@@ -29,6 +29,15 @@ PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}
 
+COVER_EXCLUDE_MODS = ra_server_meck_original \
+					 ra_server_proc_meck_original \
+					 ra_log_wal_meck_original \
+					 ra_log_segment_writer_meck_original \
+					 ra_log_meck_original \
+					 ra_snapshot_meck_original \
+					 ra_machine_meck_original \
+					 ra_log_meta_meck_original
+
 all::
 
 escript-zip::

@@ -359,7 +359,7 @@ sync_file(Name) ->
 -spec sync_and_close_fd(file:fd()) ->
     ok | file_err().
 sync_and_close_fd(Fd) ->
-    case file:sync(Fd) of
+    case ra_file:sync(Fd) of
         ok ->
             file:close(Fd);
         Err ->

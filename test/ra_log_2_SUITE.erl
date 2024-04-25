@@ -19,6 +19,7 @@ all() ->
 all_tests() ->
     [
      resend_write,
+     resend_write_after_tick,
      handle_overwrite,
      receive_segment,
      read_one,
@@ -564,7 +565,8 @@ resend_write(Config) ->
     % simulate lost messages requiring the ra server to resend in flight
     % writes
     meck:new(ra_log_wal, [passthrough]),
-    meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) -> ok;
+    meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) ->
+                                           {ok, self()};
                                        (A, B, C, D, E) ->
                                            meck:passthrough([A, B, C, D, E])
                                    end),
@@ -596,6 +598,34 @@ resend_write(Config) ->
     {[_, _, _, _, _], _} = ra_log_take(9, 14, Log6),
     ra_log:close(Log6),
 
+    ok.
+
+resend_write_after_tick(Config) ->
+    meck:new(ra_log_wal, [passthrough]),
+    WalPid = whereis(ra_log_wal),
+    timer:sleep(100),
+    ct:pal("ra_log_init"),
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% ct:pal("appending"),
+    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) ->
+                                           {ok, WalPid}
+                                   end),
+    Log1 = ra_log:append({1, 2, banana}, Log0),
+    %% this append should be lost
+    meck:unload(ra_log_wal),
+    %% restart wal to get a new wal pid so that the ra_log detects on tick
+    %% that the wal process has changed
+    %% ct:pal("restart wal"),
+    restart_wal(),
+
+    Ms = erlang:system_time(millisecond) + 5001,
+    Log2 = ra_log:tick(Ms, Log1),
+    Log = assert_log_events(Log2, fun (L) ->
+                                          {1, 2} == ra_log:last_written(L)
+                                  end),
+    ct:pal("overvew ~p", [ra_log:overview(Log)]),
+    ra_log:close(Log),
     ok.
 
 wal_crash_recover(Config) ->
@@ -638,7 +668,7 @@ wal_down_append_throws(Config) ->
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
     ?assert(not ra_log:can_write(Log0)),
-    ?assertExit(wal_down, ra_log:append({1,1,hi}, Log0)),
+    ?assertError(wal_down, ra_log:append({1,1,hi}, Log0)),
     ok.
 
 wal_down_write_returns_error_wal_down(Config) ->
@@ -660,17 +690,14 @@ detect_lost_written_range(Config) ->
                                    end),
     % WAL rolls over and WAL file is deleted
     % simulate wal outage
-    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) -> ok end),
+    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) -> {ok, self()} end),
 
     % append some messages that will be lost
     Log3 = append_n(10, 15, 2, Log2),
 
     % restart WAL to ensure lose the transient state keeping track of
     % each writer's last written index
-    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
-                     <- supervisor:which_children(ra_log_sup)],
-    ok = supervisor:terminate_child(SupPid, ra_log_wal),
-    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    restart_wal(),
 
     % WAL recovers
     meck:unload(ra_log_wal),
@@ -1397,3 +1424,10 @@ ra_log_init(Config, Cfg0) ->
 ra_log_take(From, To, Log0) ->
     {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),
     {lists:reverse(Acc), Log}.
+
+restart_wal() ->
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+    ok = supervisor:terminate_child(SupPid, ra_log_wal),
+    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    ok.
