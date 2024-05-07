@@ -1261,23 +1261,11 @@ handle_follower(election_timeout,
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
-handle_follower(try_become_leader,
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored try_become_leader, replicate membership state: ~p",
-           [LogId, Membership]),
-    {follower, State, []};
 handle_follower(try_become_leader, State) ->
     call_for_election(pre_vote, State);
 handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {follower, State#{log => Log}, Effs};
-handle_follower(force_member_change,
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: follower ignored force_member_change, replicate membership state: ~p",
-           [LogId, Membership]),
-    {follower, State, []};
 handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               log_id = LogId}} = State0) ->
