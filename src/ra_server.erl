@@ -1416,6 +1416,12 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, Msg}]};
 handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(await_condition, PreVote, State);
+handle_await_condition(election_timeout,
+                #{cfg := #cfg{log_id = LogId},
+                  membership := Membership} = State) when Membership =/= voter ->
+    ?DEBUG("~s: await_condition ignored election_timeout, replicate membership state: ~p",
+           [LogId, Membership]),
+    {await_condition, State, []};
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout = Msg,
