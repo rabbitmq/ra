@@ -36,7 +36,7 @@
                     wal_max_size_bytes => non_neg_integer(),
                     wal_compute_checksums => boolean(),
                     wal_max_batch_size => non_neg_integer(),
-                    wal_max_entries => non_neg_integer(),
+                    wal_max_entries => undefined | non_neg_integer(),
                     wal_write_strategy => default | o_sync | sync_after_notify,
                     wal_sync_method => datasync | sync | none,
                     wal_hibernate_after => non_neg_integer(),
