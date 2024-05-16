@@ -60,6 +60,7 @@ deinit(System) when is_atom(System) ->
 deinit(#{directory := Name,
          directory_rev := NameRev}) ->
     _ = ets:delete(Name),
+    ok = dets:sync(NameRev),
     _ = dets:close(NameRev),
     ok.
 
@@ -76,12 +77,14 @@ register_name(#{directory := Directory,
                                   ClusterName}),
     case uid_of(System, ServerName) of
         undefined ->
-            ok = dets:insert(DirRev, {ServerName, UId});
+            ok = dets:insert(DirRev, {ServerName, UId}),
+            ok = dets:sync(DirRev);
         UId ->
             %% no need to insert into dets table if already there
             ok;
         OtherUId ->
             ok = dets:insert(DirRev, {ServerName, UId}),
+            ok = dets:sync(DirRev),
             ?WARN("ra server with name ~ts UId ~s replaces prior UId ~s",
                   [ServerName, UId, OtherUId]),
             ok
@@ -96,6 +99,7 @@ unregister_name(#{directory := Directory,
         [{_, _, _, ServerName, _}] ->
             _ = ets:take(Directory, UId),
             ok = dets:delete(DirRev, ServerName),
+            ok = dets:sync(DirRev),
             UId;
         [] ->
             UId
