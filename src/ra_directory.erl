@@ -97,7 +97,6 @@ unregister_name(#{directory := Directory,
                   directory_rev := DirRev}, UId) ->
     case ets:take(Directory, UId) of
         [{_, _, _, ServerName, _}] ->
-            _ = ets:take(Directory, UId),
             ok = dets:delete(DirRev, ServerName),
             ok = dets:sync(DirRev),
             UId;
