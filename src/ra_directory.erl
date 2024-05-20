@@ -60,6 +60,7 @@ deinit(System) when is_atom(System) ->
 deinit(#{directory := Name,
          directory_rev := NameRev}) ->
     _ = ets:delete(Name),
+    ok = dets:sync(NameRev),
     _ = dets:close(NameRev),
     ok.
 
@@ -94,7 +95,6 @@ unregister_name(#{directory := Directory,
                   directory_rev := DirRev}, UId) ->
     case ets:take(Directory, UId) of
         [{_, _, _, ServerName, _}] ->
-            _ = ets:take(Directory, UId),
             ok = dets:delete(DirRev, ServerName),
             UId;
         [] ->
