@@ -77,14 +77,12 @@ register_name(#{directory := Directory,
                                   ClusterName}),
     case uid_of(System, ServerName) of
         undefined ->
-            ok = dets:insert(DirRev, {ServerName, UId}),
-            ok = dets:sync(DirRev);
+            ok = dets:insert(DirRev, {ServerName, UId});
         UId ->
             %% no need to insert into dets table if already there
             ok;
         OtherUId ->
             ok = dets:insert(DirRev, {ServerName, UId}),
-            ok = dets:sync(DirRev),
             ?WARN("ra server with name ~ts UId ~s replaces prior UId ~s",
                   [ServerName, UId, OtherUId]),
             ok
@@ -98,7 +96,6 @@ unregister_name(#{directory := Directory,
     case ets:take(Directory, UId) of
         [{_, _, _, ServerName, _}] ->
             ok = dets:delete(DirRev, ServerName),
-            ok = dets:sync(DirRev),
             UId;
         [] ->
             UId
