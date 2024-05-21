@@ -919,22 +919,19 @@ handle_candidate(#pre_vote_rpc{term = Term} = Msg,
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
-handle_candidate(#pre_vote_rpc{term = Term, last_log_index = PeerLastIdx} = Msg,
+handle_candidate(#pre_vote_rpc{term = Term, last_log_index = PeerLastIdx} = PreVote,
                  #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                   cfg := #cfg{log_id = LogId}} = State)
   when Term =:= CurTerm ->
-    {LastIdx, _} = last_idx_term(State0),
+    %% This clause is necessary to prevent the liveness issue reported in https://github.com/rabbitmq/ra/issues/439
+    {LastIdx, _} = last_idx_term(State),
     case PeerLastIdx > LastIdx of
         true ->
-            %% To prevent the liveness issue reported in https://github.com/rabbitmq/ra/issues/439,
-            %% if a candidate member receives a `#pre_vote_rpc{}` with a higher last index,
-            %% it should transition to the follower state.
             ?INFO("~ts: candidate pre_vote_rpc with higher last index received ~b -> ~b",
                   [LogId, LastIdx, PeerLastIdx]),
-            State = update_term_and_voted_for(Term, undefined, State0),
-            {follower, State, [{next_event, Msg}]};
+            process_pre_vote(candidate, PreVote, State);
         false ->
-            {candidate, State0, []}
+            {candidate, State, []}
     end;
 handle_candidate(#pre_vote_rpc{}, State) ->
     %% just ignore pre_votes that aren't of a higher term

@@ -1943,8 +1943,9 @@ candidate_receives_pre_vote(_Config) ->
     {follower, #{current_term := 6}, _}
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{term = 6}, State),
 
-    % candidate abdicates for higher index
-    {follower, #{}, _}
+    % candidate replies `#pre_vote_result{vote_granted=true}` for higher index
+    {candidate, #{},
+     [{reply, #pre_vote_result{token = Token, vote_granted = true}}]}
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 4}, State),
 
     ok.
