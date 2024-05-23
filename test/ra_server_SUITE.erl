@@ -1936,17 +1936,19 @@ candidate_receives_pre_vote(_Config) ->
                                token = Token,
                                machine_version = 0,
                                last_log_index = 3, last_log_term = 5},
-    {candidate, #{}, []}
+    % candidate replies `#pre_vote_result{vote_granted=true}` for not lower index
+    {candidate, #{},
+     [{reply, #pre_vote_result{token = Token, vote_granted = true}}]}
         = ra_server:handle_candidate(PreVoteRpc, State),
+
+    % candidate replies `#pre_vote_result{vote_granted=false}` for lower index
+    {candidate, #{},
+     [{reply, #pre_vote_result{token = Token, vote_granted = false}}]}
+        = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 2}, State),
 
     % candidate abdicates for higher term
     {follower, #{current_term := 6}, _}
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{term = 6}, State),
-
-    % candidate replies `#pre_vote_result{vote_granted=true}` for higher index
-    {candidate, #{},
-     [{reply, #pre_vote_result{token = Token, vote_granted = true}}]}
-        = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 4}, State),
 
     ok.
 

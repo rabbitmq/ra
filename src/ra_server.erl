@@ -919,23 +919,10 @@ handle_candidate(#pre_vote_rpc{term = Term} = Msg,
 handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
-handle_candidate(#pre_vote_rpc{term = Term, last_log_index = PeerLastIdx} = PreVote,
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State)
-  when Term =:= CurTerm ->
-    %% This clause is necessary to prevent the liveness issue reported in https://github.com/rabbitmq/ra/issues/439
-    {LastIdx, _} = last_idx_term(State),
-    case PeerLastIdx > LastIdx of
-        true ->
-            ?INFO("~ts: candidate pre_vote_rpc with higher last index received ~b -> ~b",
-                  [LogId, LastIdx, PeerLastIdx]),
-            process_pre_vote(candidate, PreVote, State);
-        false ->
-            {candidate, State, []}
-    end;
-handle_candidate(#pre_vote_rpc{}, State) ->
-    %% just ignore pre_votes that aren't of a higher term
-    {candidate, State, []};
+handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
+    %% unlink request_vote_rpc, candidate cannot simply reject pre_vote_rpc that does not have a higher term
+    %% (see https://github.com/rabbitmq/ra/issues/439 for the detail)
+    process_pre_vote(candidate, PreVote, State);
 handle_candidate(#request_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {candidate, State, []};
