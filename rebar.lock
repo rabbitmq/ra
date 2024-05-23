@@ -1,5 +1,10 @@
 {"1.2.0",
 [{<<"aten">>,{pkg,<<"aten">>,<<"0.6.0">>},0},
+ {<<"eqwalizer_support">>,
+  {git_subdir,"https://github.com/whatsapp/eqwalizer.git",
+              {ref,"9362404c088b3b9234ac1cabfde0d917a4c013e7"},
+              "eqwalizer_support"},
+  0},
  {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.8.8">>},0},
  {<<"seshat">>,{pkg,<<"seshat">>,<<"0.6.0">>},0}]}.
 [
