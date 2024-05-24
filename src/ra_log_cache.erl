@@ -42,8 +42,7 @@ init() ->
 -spec reset(state()) -> state().
 reset(#?MODULE{range = undefined} = State) ->
     State;
-reset(#?MODULE{tbl = Tid,
-               cache = _Cache} = State) ->
+reset(#?MODULE{tbl = Tid} = State) ->
     true = ets:delete_all_objects(Tid),
     State#?MODULE{cache = #{},
                   range = undefined}.
@@ -133,6 +132,9 @@ trim(To, #?MODULE{tbl = Tid,
     NewRange = {To + 1, RangeTo},
     State#?MODULE{range = NewRange,
                   cache = cache_without(From, To, Cache, Tid)};
+trim(To, #?MODULE{range = {From, _RangeTo}} = State)
+  when To < From ->
+    State;
 trim(_To, State) ->
     reset(State).
 

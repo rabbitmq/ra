@@ -52,6 +52,7 @@ all_tests() ->
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
+     writes_lower_than_snapshot_index_are_dropped,
      updated_segment_can_be_read,
      open_segments_limit,
      external_reader,
@@ -424,6 +425,62 @@ written_event_after_snapshot(Config) ->
     %% this will no longer be false as the snapshot deletion is an effect
     %% and not done by the log itself
     % false = filelib:is_file(Snap1),
+    ok.
+
+writes_lower_than_snapshot_index_are_dropped(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
+    Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
+    Log1b = deliver_all_log_events(ra_log:append({2, 1, <<"two">>}, Log1), 500),
+    true = erlang:suspend_process(whereis(ra_log_wal)),
+    Log2 = write_n(3, 500, 1, Log1b),
+    {Log3, _} = ra_log:update_release_cursor(100, #{}, 1,
+                                             <<"100">>, Log2),
+    Log4 = deliver_all_log_events(Log3, 500),
+
+    Overview = ra_log:overview(Log4),
+    ?assertMatch(#{last_index := 499,
+                   first_index := 101,
+                   cache_range := {101, 499},
+                   last_written_index_term := {100, 1}}, Overview),
+
+    true = erlang:resume_process(whereis(ra_log_wal)),
+
+    %% no written notifications for anything lower than the snapshot should
+    %% be received
+    Log5 = receive
+               {ra_log_event, {written, {From, _To, _Term}} = E}
+                 when From == 101 ->
+                   {Log4b, Effs} = ra_log:handle_event(E, Log4),
+                   Log4c = lists:foldl(
+                             fun ({next_event, {ra_log_event, Evt}}, Acc0) ->
+                                     {Acc, _} = ra_log:handle_event(Evt, Acc0),
+                                     Acc;
+                                 (_, Acc) ->
+                                     Acc
+                             end, Log4b, Effs),
+                   deliver_all_log_events(Log4c, 200);
+               {ra_log_event, E} ->
+                   ct:fail("unexpected log event ~p", [E])
+           after 500 ->
+                     flush(),
+                     ct:fail("expected log event not received")
+           end,
+    OverviewAfter = ra_log:overview(Log5),
+    ?assertMatch(#{last_index := 499,
+                   first_index := 101,
+                   snapshot_index := 100,
+                   cache_size := 0,
+                   cache_range := undefined,
+                   last_written_index_term := {499, 1}}, OverviewAfter),
+    erlang:monitor(process, whereis(ra_log_segment_writer)),
+    exit(whereis(ra_log_wal), kill),
+    receive
+        {'DOWN', _, _, _, _} = D ->
+            ct:fail("DOWN received ~p", [D])
+    after 500 ->
+              ok
+    end,
+    flush(),
     ok.
 
 updated_segment_can_be_read(Config) ->

@@ -91,7 +91,8 @@
                names :: ra_system:names(),
                explicit_gc = false :: boolean(),
                pre_allocate = false :: boolean(),
-               compress_mem_tables = false :: boolean()
+               compress_mem_tables = false :: boolean(),
+               ra_log_snapshot_state_tid :: ets:tid()
               }).
 
 -record(wal, {fd :: option(file:io_device()),
@@ -280,7 +281,8 @@ init(#{dir := Dir} = Conf0) ->
                  names = Names,
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
-                 compress_mem_tables = CompressMemTables},
+                 compress_mem_tables = CompressMemTables,
+                 ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
     try recover_wal(Dir, Conf) of
         Result ->
             {ok, Result}
@@ -418,7 +420,7 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
              {Next + 1, Cache#{UId => BinId}}}
     end.
 
-write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
+write_data({UId, _} = Id, Idx, Term, Data0, Trunc, SnapIdx,
            #state{conf = #conf{compute_checksums = ComputeChecksum},
                   wal = #wal{writer_name_cache = Cache0,
                              entry_count = Count} = Wal} = State00) ->
@@ -427,7 +429,7 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
     case should_roll_wal(State00) of
         true ->
             State = roll_over(State00),
-            write_data(Id, Idx, Term, Data0, Trunc, State);
+            write_data(Id, Idx, Term, Data0, Trunc, SnapIdx, State);
         false ->
             EntryData = to_binary(Data0),
             EntryDataLen = iolist_size(EntryData),
@@ -448,17 +450,22 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc,
                       <<Checksum:32/integer, EntryDataLen:32/unsigned>> |
                       Entry],
             append_data(State0, Id, Idx, Term, Data0,
-                        DataSize, Record, Trunc)
+                        DataSize, Record, Trunc, SnapIdx)
     end.
 
 
 handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
-           #state{writers = Writers} = State0) ->
+           #state{conf = Conf,
+                  writers = Writers} = State0) ->
+    SnapIdx = snap_idx(Conf, UId),
     case maps:find(UId, Writers) of
+        _ when Idx =< SnapIdx ->
+            %% a snapshot already exists that is higher - just drop the write
+            State0#state{writers = Writers#{UId => {in_seq, SnapIdx}}};
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, false, SnapIdx, State0);
         error ->
-            write_data(Id, Idx, Term, Entry, false, State0);
+            write_data(Id, Idx, Term, Entry, false, SnapIdx, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes
@@ -472,8 +479,9 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
-handle_msg({truncate, Id, Idx, Term, Entry}, State0) ->
-    write_data(Id, Idx, Term, Entry, true, State0);
+handle_msg({truncate, Id, Idx, Term, Entry}, #state{conf = Conf} = State0) ->
+    SnapIdx = snap_idx(Conf, Id),
+    write_data(Id, Idx, Term, Entry, true, SnapIdx, State0);
 handle_msg(rollover, State) ->
     roll_over(State).
 
@@ -481,9 +489,9 @@ append_data(#state{conf = #conf{counter = C} = Cfg,
                    file_size = FileSize,
                    batch = Batch0,
                    writers = Writers} = State,
-            {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate) ->
+            {UId, Pid}, Idx, Term, Entry, DataSize, Data, Truncate, SnapIdx) ->
     Batch = incr_batch(Cfg, Batch0, UId, Pid,
-                       {Idx, Term, Entry}, Data, Truncate),
+                       {Idx, Term, Entry}, Data, Truncate, SnapIdx),
     counters:add(C, ?C_BYTES_WRITTEN, DataSize),
     State#state{file_size = FileSize + DataSize,
                 batch = Batch,
@@ -493,13 +501,13 @@ incr_batch(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
            #batch{writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
-           UId, Pid, {Idx, Term, _} = Record, Data, Truncate) ->
+           UId, Pid, {Idx, Term, _} = Record, Data, Truncate, SnapIdx) ->
     Waiting = case Waiting0 of
                   #{Pid := #batch_writer{tbl_start = TblStart0,
                                          tid = _Tid,
                                          from = From,
                                          inserts = Inserts0} = W} ->
-                      TblStart = table_start(Truncate, Idx, TblStart0),
+                      TblStart = max(SnapIdx, table_start(Truncate, Idx, TblStart0)),
                       Inserts = case Inserts0 of
                                     [] ->
                                         [Record];
@@ -526,14 +534,16 @@ incr_batch(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
                       {Tid, TblStart} =
                           case ets:lookup(OpnMemTbl, UId) of
                               [{_UId, TblStart0, _TblEnd, T}] ->
-                                  {T, table_start(Truncate, Idx, TblStart0)};
+                                  {T, max(SnapIdx,
+                                          table_start(Truncate, Idx, TblStart0))};
                               _ ->
                                   %% there is no table so need
                                   %% to open one
+                                  TS = max(SnapIdx, Idx),
                                   T = open_mem_table(Cfg, UId),
                                   true = ets:insert_new(OpnMemTbl,
-                                                        {UId, Idx, Idx - 1, T}),
-                                  {T, Idx}
+                                                        {UId, TS, Idx - 1, T}),
+                                  {T, TS}
                           end,
                       Writer = #batch_writer{tbl_start = TblStart,
                                              from = Idx,
@@ -553,23 +563,27 @@ update_mem_table(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
                  UId, Idx, Term, Entry, Truncate) ->
     % TODO: if Idx =< First we could truncate the entire table and save
     % some disk space when it later is flushed to disk
+    SnapIdx = snap_idx(Cfg, UId),
     case ets:lookup(OpnMemTbl, UId) of
         [{_UId, From0, _To, Tid}] ->
-            true = ets:insert(Tid, {Idx, Term, Entry}),
-            From = table_start(Truncate, Idx, From0),
-            % update Last idx for current tbl
-            % this is how followers overwrite previously seen entries
-            % TODO: OPTIMISATION
-            % Writers don't need this updated for every entry. As they keep
-            % a local cache of unflushed entries it is sufficient to update
-            % ra_log_open_mem_tables before completing the batch.
-            % Instead the `From` and `To` could be kept in the batch.
-            _ = ets:update_element(OpnMemTbl, UId, [{2, From}, {3, Idx}]);
-        [] ->
+            case Idx > SnapIdx of
+                true ->
+                    true = ets:insert(Tid, {Idx, Term, Entry}),
+                    From = table_start(Truncate, Idx, From0),
+                    % update Last idx for current tbl
+                    % this is how followers overwrite previously seen entries
+                    _ = ets:update_element(OpnMemTbl, UId, [{2, From}, {3, Idx}]);
+                false ->
+                    From = max(SnapIdx, table_start(Truncate, Idx, From0)),
+                    _ = ets:update_element(OpnMemTbl, UId, [{2, From}])
+            end;
+        [] when Idx > SnapIdx ->
             % open new ets table
             Tid = open_mem_table(Cfg, UId),
             true = ets:insert_new(OpnMemTbl, {UId, Idx, Idx, Tid}),
-            true = ets:insert(Tid, {Idx, Term, Entry})
+            true = ets:insert(Tid, {Idx, Term, Entry});
+        _ ->
+            true
     end.
 
 roll_over(#state{conf = #conf{open_mem_tbls_tid = Tbl}} = State0) ->
@@ -1004,3 +1018,11 @@ table_start(false, Idx, TblStart) ->
     min(TblStart, Idx);
 table_start(true, Idx, _TblStart) ->
     Idx.
+
+snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
+    try ets:lookup_element(Tid, ServerUId, 2) of
+        Idx ->
+            Idx
+    catch _:badarg ->
+              -1
+    end.
