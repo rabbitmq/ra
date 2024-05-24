@@ -135,6 +135,7 @@
                       hibernate_after => non_neg_integer(),
                       max_batch_size => non_neg_integer(),
                       garbage_collect => boolean(),
+                      min_heap_size => non_neg_integer(),
                       min_bin_vheap_size => non_neg_integer(),
                       compress_mem_tables => boolean()
                      }.
@@ -242,6 +243,7 @@ init(#{dir := Dir} = Conf0) ->
       write_strategy := WriteStrategy,
       sync_method := SyncMethod,
       garbage_collect := Gc,
+      min_heap_size := MinHeapSize,
       min_bin_vheap_size := MinBinVheapSize,
       compress_mem_tables := CompressMemTables,
       names := #{wal := WalName,
@@ -256,6 +258,7 @@ init(#{dir := Dir} = Conf0) ->
     % writers
     process_flag(message_queue_data, off_heap),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
+    process_flag(min_heap_size, MinHeapSize),
     CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
     % wait for the segment writer to process anything in flight
     ok = ra_log_segment_writer:await(SegWriter),
@@ -971,6 +974,7 @@ merge_conf_defaults(Conf) ->
                  garbage_collect => false,
                  sync_method => datasync,
                  min_bin_vheap_size => ?MIN_BIN_VHEAP_SIZE,
+                 min_heap_size => ?MIN_HEAP_SIZE,
                  compress_mem_tables => false}, Conf).
 
 to_binary(Term) ->
