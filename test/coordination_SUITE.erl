@@ -927,6 +927,9 @@ segment_writer_or_wal_crash_leader(Config) ->
                               {timeout, _} ->
                                   timer:sleep(1000),
                                   Leader_;
+                              {error, _} ->
+                                  timer:sleep(1000),
+                                  Leader_;
                               {ok, _, L} ->
                                   L
                           end,
@@ -944,7 +947,9 @@ segment_writer_or_wal_crash_leader(Config) ->
                               LastIdxs =
                               [begin
                                    {ok, #{current_term := T,
-                                          log := #{last_index := L}}, _} =
+                                          log := #{last_index := L,
+                                                   last_written_index_term := {L, _}}},
+                                    _} =
                                    ra:member_overview(S),
                                    {T, L}
                                end || {_, _N} = S <- ServerIds],
