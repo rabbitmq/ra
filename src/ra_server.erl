@@ -920,7 +920,8 @@ handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
-    %% unlink request_vote_rpc, candidate cannot simply reject pre_vote_rpc that does not have a higher term
+    %% unlike request_vote_rpc, a candidate cannot simply reject 
+    %% a pre_vote_rpc that does not have a higher term
     %% (see https://github.com/rabbitmq/ra/issues/439 for the detail)
     process_pre_vote(candidate, PreVote, State);
 handle_candidate(#request_vote_result{}, State) ->
