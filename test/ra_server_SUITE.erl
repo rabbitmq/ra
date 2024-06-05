@@ -33,6 +33,7 @@ all() ->
      higher_term_detected,
      pre_vote_election,
      pre_vote_election_reverts,
+     candidate_receives_pre_vote,
      leader_receives_pre_vote,
      candidate_election,
      is_new,
@@ -1925,6 +1926,30 @@ pre_vote_election_reverts(_Config) ->
                                 data = []},
     {follower, #{current_term := 5, votes := 0}, [{next_event, ISR}]}
         = ra_server:handle_pre_vote(ISR, State),
+    ok.
+
+candidate_receives_pre_vote(_Config) ->
+    % candidate ignores an pre_vote_rpc with lower term and lower index
+    Token = make_ref(),
+    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1},
+    PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = ?N1,
+                               token = Token,
+                               machine_version = 0,
+                               last_log_index = 3, last_log_term = 5},
+    % candidate replies `#pre_vote_result{vote_granted=true}` for not lower index
+    {candidate, #{},
+     [{reply, #pre_vote_result{token = Token, vote_granted = true}}]}
+        = ra_server:handle_candidate(PreVoteRpc, State),
+
+    % candidate replies `#pre_vote_result{vote_granted=false}` for lower index
+    {candidate, #{},
+     [{reply, #pre_vote_result{token = Token, vote_granted = false}}]}
+        = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 2}, State),
+
+    % candidate abdicates for higher term
+    {follower, #{current_term := 6}, _}
+        = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{term = 6}, State),
+
     ok.
 
 leader_receives_pre_vote(_Config) ->
