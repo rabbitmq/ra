@@ -566,6 +566,8 @@ handle_event({segments, Tid, NewSegs},
 handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = Cfg,
                       first_index = FstIdx,
+                      last_index = LstIdx,
+                      last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->
@@ -587,10 +589,23 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
             CPEffects = [{delete_snapshot,
                           ra_snapshot:directory(SnapState, checkpoint),
                           Checkpoint} || Checkpoint <- Checkpoints],
-            Effects = [DeleteCurrentSnap | CPEffects] ++ Effects0,
-            %% do not set last written index here as the snapshot may
-            %% be for a past index
+            Effects1 = [DeleteCurrentSnap | CPEffects] ++ Effects0,
+
+            {LWIdxTerm, Effects} =
+                case LastWrittenIdx > SnapIdx of
+                    true ->
+                        {LWIdxTerm0, Effects1};
+                    false ->
+                        {Snap,
+                         [{next_event,
+                           {ra_log_event,
+                            {truncate_cache, LastWrittenIdx, SnapIdx}}}
+                          | Effects1]}
+                end,
+
             {State#?MODULE{first_index = SnapIdx + 1,
+                           last_index = max(LstIdx, SnapIdx),
+                           last_written_index_term = LWIdxTerm,
                            snapshot_state = SnapState}, Effects};
         checkpoint ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
@@ -870,6 +885,7 @@ overview(#?MODULE{last_index = LastIndex,
               {I, _} -> I
           end,
       cache_size => ra_log_cache:size(Cache),
+      cache_range => ra_log_cache:range(Cache),
       last_wal_write => LastMs
      }.
 
@@ -1058,7 +1074,8 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 truncate_cache(_FromIdx, ToIdx,
                #?MODULE{cache = Cache} = State,
                Effects) ->
-    {State#?MODULE{cache = ra_log_cache:trim(ToIdx, Cache)}, Effects}.
+    CacheAfter = ra_log_cache:trim(ToIdx, Cache),
+    {State#?MODULE{cache = CacheAfter}, Effects}.
 
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),

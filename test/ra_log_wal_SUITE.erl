@@ -47,7 +47,8 @@ all_tests() ->
      recover_with_last_entry_corruption_pre_allocate,
      checksum_failure_in_middle_of_file_should_fail,
      recover_with_partial_last_entry,
-     sys_get_status
+     sys_get_status,
+     drop_writes_if_snapshot_has_higher_index
     ].
 
 groups() ->
@@ -108,6 +109,7 @@ init_per_testcase(TestCase, Config) ->
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_open_file_metrics, [named_table, public, {write_concurrency, true}]),
     _ = ets:new(ra_io_metrics, [named_table, public, {write_concurrency, true}]),
+    _ = ets:new(ra_log_snapshot_state, [named_table, public, {write_concurrency, true}]),
     [{ra_log_ets, Ets},
      {writer_id, {UId, self()}},
      {test_case, TestCase},
@@ -870,6 +872,27 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
     {error, wal_checksum_validation_failure} = ra_log_wal:start_link(Conf),
     empty_mailbox(),
     meck:unload(),
+    ok.
+
+drop_writes_if_snapshot_has_higher_index(Config) ->
+    ok = logger:set_primary_config(level, all),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
+    {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
+    {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
+
+    ets:insert(ra_log_snapshot_state, {UId, 20}),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 14, 1, "value2"),
+    timer:sleep(500),
+
+    undefined = mem_tbl_read(UId, 14),
+    ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    proc_lib:stop(Pid),
+    [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
+    ?assert(not ets:info(Tid, compressed)),
     ok.
 
 empty_mailbox() ->

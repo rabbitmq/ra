@@ -190,6 +190,9 @@ find_snapshots(#?MODULE{uid = UId,
     case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
         undefined ->
             ok = delete_snapshots(SnapshotsDir, Snaps),
+            %% initialise snapshots table even if no snapshots have been taken
+            %% this ensure these is an entry when the WAL queries it
+            true = ets:insert(?ETSTBL, {UId, -1}),
             State;
         Current0 ->
             Current = filename:join(SnapshotsDir, Current0),
@@ -293,8 +296,10 @@ directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
     case ets:lookup(?ETSTBL, UId) of
-        [] -> undefined;
-        [{_, Index}] -> Index
+        [{_, Index}] when Index >= 0 ->
+            Index;
+        _ ->
+            undefined
     end.
 
 -spec begin_snapshot(meta(), ReleaseCursorRef :: term(), kind(), state()) ->
