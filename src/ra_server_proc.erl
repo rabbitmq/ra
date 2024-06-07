@@ -606,7 +606,7 @@ candidate(_, tick_timeout, State0) ->
     {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
-candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
+candidate(EventType, Msg, State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
             {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
@@ -616,15 +616,11 @@ candidate(EventType, Msg, #state{pending_commands = Pending} = State0) ->
             {State, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             next_state(follower, State, Actions);
         {leader, State1, Effects} ->
-            {State2, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
-            State = State2#state{pending_commands = []},
+            {State, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             %% reset the tick timer to avoid it triggering early after a leader
             %% change
-            Actions = set_tick_timer(State2, Actions0),
-            % inject a bunch of command events to be processed when node
-            % becomes leader
-            NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
-            next_state(leader, State, Actions ++ NextEvents)
+            Actions = set_tick_timer(State, Actions0),
+            next_state(leader, State, Actions)
     end.
 
 pre_vote(enter, OldState, #state{leader_monitor = MRef} = State0) ->
@@ -1090,6 +1086,7 @@ handle_enter(RaftState, OldRaftState,
     Membership = ra_server:get_membership(ServerState0),
     true = ets:insert(ra_state, {Name, RaftState, Membership}),
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
+                                                          OldRaftState,
                                                           ServerState0),
     case RaftState == leader orelse OldRaftState == leader of
         true ->
@@ -1743,6 +1740,11 @@ maybe_set_election_timeout(TimeoutLen, State, Actions) ->
     {State#state{election_timeout_set = true},
      [election_timeout_action(TimeoutLen, State) | Actions]}.
 
+next_state(leader, #state{pending_commands = Pending} = State, Actions) ->
+    NextEvents = [{next_event, {call, F}, Cmd} || {F, Cmd} <- Pending],
+    {next_state, leader, State#state{election_timeout_set = false,
+                                     pending_commands = []},
+     Actions ++ NextEvents};
 next_state(Next, State, Actions) ->
     %% as changing states will always cancel the state timeout we need
     %% to set our own state tracking to false here

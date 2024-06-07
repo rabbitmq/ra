@@ -25,7 +25,7 @@
          handle_receive_snapshot/2,
          handle_await_condition/2,
          handle_aux/4,
-         handle_state_enter/2,
+         handle_state_enter/3,
          tick/1,
          log_tick/1,
          overview/1,
@@ -1486,11 +1486,12 @@ log_tick(#{cfg := #cfg{},
     State#{log => Log}.
 
 
--spec handle_state_enter(ra_state() | eol, ra_server_state()) ->
+-spec handle_state_enter(ra_state() | eol, ra_state(), ra_server_state()) ->
     {ra_server_state() | eol, effects()}.
-handle_state_enter(RaftState, #{cfg := #cfg{effective_machine_module = MacMod},
-                                machine_state := MacState} = State) ->
-    {become(RaftState, State),
+handle_state_enter(RaftState, OldRaftState,
+                   #{cfg := #cfg{effective_machine_module = MacMod},
+                     machine_state := MacState} = State) ->
+    {become(RaftState, OldRaftState, State),
      ra_machine:state_enter(MacMod, RaftState, MacState)}.
 
 
@@ -1499,7 +1500,8 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
            log := Log,
            machine_state := MacState,
            aux_state := Aux,
-           queries_waiting_heartbeats := Queries
+           queries_waiting_heartbeats := Queries,
+           pending_consistent_queries := PendingQueries
           } = State) ->
     NumQueries = queue:len(Queries),
     O0 = maps:with([current_term,
@@ -1519,7 +1521,8 @@ overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
     O#{log => LogOverview,
        aux => Aux,
        machine => MacOverview,
-       num_waiting_queries => NumQueries}.
+       num_waiting_queries => NumQueries,
+       num_pending_queries => length(PendingQueries)}.
 
 cfg_to_map(Cfg) ->
     element(2, lists:foldl(
@@ -1668,15 +1671,24 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
 
 % Internal
 
-become(leader, #{cluster := Cluster, log := Log0} = State) ->
+become(leader, OldRaftState, #{cluster := Cluster,
+                               cluster_change_permitted := CCP0,
+                               log := Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster) + 2, random, Log0),
+    CCP = case OldRaftState of
+              await_condition ->
+                  CCP0;
+              _ ->
+                  false
+          end,
+
     State#{log => Log,
-           cluster_change_permitted => false};
-become(follower, #{log := Log0} = State) ->
+           cluster_change_permitted => CCP};
+become(follower, _, #{log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
     %% time
     State#{log => ra_log:release_resources(1, random, Log0)};
-become(_RaftState, State) ->
+become(_RaftState, _, State) ->
     State.
 
 follower_catchup_cond_fun(OriginalReason) ->
