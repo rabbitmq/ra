@@ -39,6 +39,7 @@ all() ->
      is_new,
      command,
      command_notify,
+     leader_enters_from_await_condition,
      leader_noop_operation_enables_cluster_change,
      leader_noop_increments_machine_version,
      follower_machine_version,
@@ -1796,6 +1797,21 @@ command(_Config) ->
                  {send_rpc, N3, AE}, {send_rpc, N2, AE} |
                  _]} =
         ra_server:handle_leader({command, Cmd}, State),
+    ok.
+
+leader_enters_from_await_condition(_Config) ->
+    State = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => true},
+    %% when re-entering leader state from await_condition the
+    %% cluster change permitted value should be retained
+    ?assertMatch({#{cluster_change_permitted := true}, _},
+                 ra_server:handle_state_enter(leader, await_condition, State)),
+
+    ?assertMatch({#{cluster_change_permitted := false}, _},
+                 ra_server:handle_state_enter(leader, await_condition,
+                                              State#{cluster_change_permitted => false})),
+
+    ?assertMatch({#{cluster_change_permitted := false}, _},
+                 ra_server:handle_state_enter(leader, candidate, State)),
     ok.
 
 command_notify(_Config) ->
