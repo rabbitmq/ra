@@ -1332,7 +1332,7 @@ handle_follower(Msg, State) ->
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               meta = #{index := SnapIndex,
                                                        machine_version := SnapMacVer,
-                                                       term := SnapTerm},
+                                                       term := SnapTerm} = SnapMeta,
                                               chunk_state = {Num, ChunkFlag},
                                               data = Data},
                         #{cfg := #cfg{id = Id,
@@ -1358,10 +1358,10 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                   SnapState, Log0),
             %% if the machine version of the snapshot is higher
             %% we also need to update the current effective machine configuration
+            EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
             Cfg = case SnapMacVer > CurEffMacVer of
                       true ->
                           put_counter(Cfg0, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, SnapMacVer),
-                          EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
                           Cfg0#cfg{effective_machine_version = SnapMacVer,
                                    machine_versions = [{SnapIndex, SnapMacVer}
                                                        | MachineVersions],
@@ -1373,6 +1373,11 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                   end,
 
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
+
+            SnapInstalledEffs = ra_machine:snapshot_installed(EffMacMod,
+                                                              SnapMeta,
+                                                              MacState),
+
             State = update_term(Term,
                                 State0#{cfg => Cfg,
                                         log => Log,
@@ -1383,7 +1388,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         machine_state => MacState}),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
-            {follower, persist_last_applied(State), [{reply, Reply} | Effs]};
+            {follower, persist_last_applied(State), [{reply, Reply} |
+                                                     Effs ++ SnapInstalledEffs]};
         next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
             State = update_term(Term, State0#{log => Log}),

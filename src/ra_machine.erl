@@ -60,17 +60,16 @@
 %% Optional: implements a lookup from version to the module implementing the
 %% machine logic for that version.
 
-
 -module(ra_machine).
 
 -compile({no_auto_import, [apply/3]}).
 
 -include("ra.hrl").
 
-
 -export([init/2,
          apply/4,
          tick/3,
+         snapshot_installed/3,
          state_enter/3,
          overview/2,
          query/3,
@@ -210,6 +209,7 @@
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
+                     snapshot_installed/2,
                      state_enter/2,
                      init_aux/1,
                      handle_aux/5,
@@ -240,6 +240,8 @@
 -callback state_enter(ra_server:ra_state() | eol, state()) -> effects().
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
+
+-callback snapshot_installed(ra_snapshot:meta(), state()) -> effects().
 
 -callback init_aux(Name :: atom()) -> AuxState :: term().
 
@@ -299,6 +301,10 @@ apply(Mod, Metadata, Cmd, State) ->
 -spec tick(module(), milliseconds(), state()) -> effects().
 tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
+
+-spec snapshot_installed(module(), ra_snapshot:meta(), state()) -> effects().
+snapshot_installed(Mod, Meta, State) ->
+    ?OPT_CALL(Mod:snapshot_installed(Meta, State), []).
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->

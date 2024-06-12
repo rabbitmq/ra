@@ -482,8 +482,21 @@ disconnected_node_catches_up(Config) ->
             <<Tag:2/binary, _/binary>> -> binary_to_atom(Tag, utf8)
         end,
 
-    start_follower(DownServerNodeName, PrivDir),
 
+    DownNode = start_follower(DownServerNodeName, PrivDir),
+
+    Self = self(),
+    SPid = erlang:spawn(DownNode,
+                     fun () ->
+                             erlang:register(snapshot_installed_proc, self()),
+                             receive
+                                 {snapshot_installed, _Meta} = Evt ->
+                                     Self ! Evt,
+                                     ok
+                             after 10000 ->
+                                       ok
+                             end
+                     end),
     await_condition(
       fun () ->
               ok == ra:restart_server(?SYS, DownServerId)
@@ -496,6 +509,16 @@ disconnected_node_catches_up(Config) ->
                   ra:member_overview(DownServerId),
               SI /= undefined
       end, 200),
+
+    receive
+        {snapshot_installed, Meta} ->
+            ct:pal("snapshot installed receive ~p", [Meta]),
+            ok
+    after 10000 ->
+              erlang:exit(SPid, kill),
+              ct:fail("snapshot_installed not received"),
+              ok
+    end,
 
     stop_nodes(ServerIds),
     ok.
@@ -1264,6 +1287,14 @@ apply(#{index := _Idx}, {segment_writer_or_wal_crash_follower, _}, State) ->
     {State, ok, []};
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
+
+snapshot_installed(Meta, _State) ->
+    case whereis(snapshot_installed_proc) of
+        undefined ->
+            [];
+        Pid ->
+            [{send_msg, Pid, {snapshot_installed, Meta}}]
+    end.
 
 node_setup(DataDir) ->
     ok = ra_lib:make_dir(DataDir),
