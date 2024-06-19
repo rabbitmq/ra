@@ -107,13 +107,28 @@
 
 %% export some internal types
 -type index() :: ra_index().
+-type idxterm() :: ra_idxterm().
 -type server_id() :: ra_server_id().
 -type cluster_name() :: ra_cluster_name().
 
+-type query_condition() :: {applied, idxterm()}.
+%% A condition that a query will wait for it to become true before it is
+%% evaluated.
+%%
+%% The condition is evaluated on the node that would then execute the query.
+%%
+%% Supported conditions are:
+%% <ul>
+%% <li>`{applied, {Index, Term}}': the query is executed after `Index' is
+%% applied on the node that will execute the query.</li>
+%% </ul>
+
 -export_type([index/0,
+              idxterm/0,
               server_id/0,
               cluster_name/0,
               query_fun/0,
+              query_condition/0,
               from/0]).
 
 %% @doc Starts the ra application.
@@ -928,19 +943,38 @@ pipeline_command(ServerId, Command) ->
 local_query(ServerId, QueryFun) ->
     local_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
-%% @doc Same as `local_query/2' but accepts a custom timeout.
+%% @doc Same as `local_query/2' but accepts a custom timeout or a map of
+%% options.
+%%
+%% The supported options are:
+%% <ul>
+%% <li>`condition': the query will be evaluated only once the specified
+%% condition is true.</li>
+%% <li>`timeout': the maximum time to wait for the query to be evaluated.</li>
+%% </ul>
+%%
 %% @param ServerId the ra server id to send the query to
 %% @param QueryFun the query function to run
-%% @param Timeout the timeout to use
+%% @param TimeoutOrOptions the timeout to use or a map of options
 %% @see local_query/2
 %% @end
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun(),
-                  Timeout :: timeout()) ->
+                  TimeoutOrOptions) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
-    {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-local_query(ServerId, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, local, Timeout).
+    {ok, {ra_idxterm(), Reply :: term()}, not_known}
+      when TimeoutOrOptions :: Timeout | Options,
+           Timeout :: timeout(),
+           Options :: #{condition => query_condition(),
+                        timeout => timeout()}.
+local_query(ServerId, QueryFun, Timeout)
+  when Timeout =:= infinity orelse is_integer(Timeout) ->
+    ra_server_proc:query(ServerId, QueryFun, local, #{}, Timeout);
+local_query(ServerId, QueryFun, Options) when is_map(Options) ->
+    Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
+    Options1 = maps:remove(timeout, Options),
+    ra_server_proc:query(
+      ServerId, QueryFun, local, Options1, Timeout).
 
 
 %% @doc Query the machine state on the current leader node.
@@ -959,19 +993,38 @@ local_query(ServerId, QueryFun, Timeout) ->
 leader_query(ServerId, QueryFun) ->
     leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
-%% @doc Same as `leader_query/2' but accepts a custom timeout.
+%% @doc Same as `leader_query/2' but accepts a custom timeout or a map of
+%% options.
+%%
+%% The supported options are:
+%% <ul>
+%% <li>`condition': the query will be evaluated only once the specified
+%% condition is true.</li>
+%% <li>`timeout': the maximum time to wait for the query to be evaluated.</li>
+%% </ul>
+%%
 %% @param ServerId the ra server id(s) to send the query to
 %% @param QueryFun the query function to run
-%% @param Timeout the timeout to use
+%% @param TimeoutOrOptions the timeout to use or a map of options
 %% @see leader_query/2
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun(),
-                   Timeout :: timeout()) ->
+                   TimeoutOrOptions) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
-    {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-leader_query(ServerId, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, leader, Timeout).
+    {ok, {ra_idxterm(), Reply :: term()}, not_known}
+      when TimeoutOrOptions :: Timeout | Options,
+           Timeout :: timeout(),
+           Options :: #{condition => query_condition(),
+                        timeout => timeout()}.
+leader_query(ServerId, QueryFun, Timeout)
+  when Timeout =:= infinity orelse is_integer(Timeout) ->
+    ra_server_proc:query(ServerId, QueryFun, leader, #{}, Timeout);
+leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
+    Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
+    Options1 = maps:remove(timeout, Options),
+    ra_server_proc:query(
+      ServerId, QueryFun, leader, Options1, Timeout).
 
 %% @doc Query the state machine with a consistency guarantee.
 %% This allows the caller to query the state machine on the leader node with
@@ -999,7 +1052,7 @@ consistent_query(ServerId, QueryFun) ->
                        Timeout :: timeout()) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
 consistent_query(ServerId, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, consistent, Timeout).
+    ra_server_proc:query(ServerId, QueryFun, consistent, #{}, Timeout).
 
 %% @doc Returns a list of cluster members
 %%
