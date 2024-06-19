@@ -57,6 +57,11 @@
 
 -export([send_rpc/3]).
 
+-ifdef(TEST).
+-export([leader_call/3,
+         local_call/3]).
+-endif.
+
 -define(DEFAULT_BROADCAST_TIME, 100).
 -define(DEFAULT_ELECTION_MULT, 5).
 -define(TICK_INTERVAL_MS, 1000).
@@ -1300,8 +1305,8 @@ handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
     % reply directly
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect(_, {reply, Reply}, EvtType, _, _) ->
-    exit({undefined_reply, Reply, EvtType});
+handle_effect(_, {reply, _Reply}, _EvtType, State, Actions) ->
+    {State, Actions};
 handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,

@@ -2384,11 +2384,11 @@ candidate_heartbeat_reply(_Config) ->
 
     HeartbeatReply = #heartbeat_reply{term = Term, query_index = 2},
     %% Same term is ignored
-    {candidate, State, []}
+    {candidate, State, [{reply, {error, {unsupported_call, _}}}]}
         = ra_server:handle_candidate({{no_peer, node()}, HeartbeatReply}, State),
 
     %% Lower term is ignored
-    {candidate, State, []}
+    {candidate, State, [{reply, {error, {unsupported_call, _}}}]}
         = ra_server:handle_candidate({{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = Term - 1}}, State),
 
     %% Higher term updates term and changes to follower
@@ -2439,11 +2439,11 @@ pre_vote_heartbeat_reply(_Config) ->
                                       query_index = 2},
 
     %% Heartbeat reply with same term is ignored
-    {pre_vote, State, []}
+    {pre_vote, State, [{reply, {error, {unsupported_call, _}}}]}
         = ra_server:handle_pre_vote({{no_peer, node()}, HeartbeatReply}, State),
 
     %% Heartbeat reply with lower term is ignored
-    {pre_vote, State, []}
+    {pre_vote, State, [{reply, {error, {unsupported_call, _}}}]}
         = ra_server:handle_pre_vote(
             {{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = Term - 1}},
             State),
@@ -2748,13 +2748,13 @@ receive_snapshot_heartbeat_dropped(_Config) ->
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
                                leader_id = Id},
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(Heartbeat, State),
     %% Term does not matter
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term + 1},
                                           State),
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term - 1},
                                           State).
 
@@ -2765,13 +2765,13 @@ receive_snapshot_heartbeat_reply_dropped(_config) ->
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(HeartbeatReply, State),
     %% Term does not matter
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term + 1},
                                           State),
-    {receive_snapshot, State, []} =
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
         ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term - 1},
                                           State).
 
