@@ -20,6 +20,11 @@
 %% `ra_server:command_reply_mode()' type:
 -dialyzer({nowarn_function, [process_command_with_unknown_reply_mode/1]}).
 
+%% The following testcases simulate an erroneous or unsupported call that is
+%% outside of the spec.
+-dialyzer({nowarn_function, [unknown_leader_call/1,
+                             unknown_local_call/1]}).
+
 all() ->
     [
      {group, tests}
@@ -68,7 +73,9 @@ all_tests() ->
      transfer_leadership_two_node,
      new_nonvoter_knows_its_status,
      voter_gets_promoted_consistent_leader,
-     voter_gets_promoted_new_leader
+     voter_gets_promoted_new_leader,
+     unknown_leader_call,
+     unknown_local_call
     ].
 
 groups() ->
@@ -1159,6 +1166,46 @@ voter_gets_promoted_new_leader(Config) ->
     #{servers := Servers} = ra:overview(?SYS),
     lists:map(fun({Name, _}) -> #{Name := #{membership := voter}} = Servers end, All),
     ok.
+
+unknown_leader_call(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                {simple, fun erlang:'+'/2, 9}),
+    try
+        %% Query the leader and deduce a follower.
+        {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+        [Follower | _] = Cluster -- [Leader],
+        ct:pal("Leader:   ~0p~nFollower: ~0p", [Leader, Follower]),
+
+        Call = unknown_call,
+        ?assertEqual(
+           {error, {unsupported_call, Call}},
+           ra_server_proc:leader_call(Leader, Call, ?DEFAULT_TIMEOUT)),
+        ?assertEqual(
+           {error, {unsupported_call, Call}},
+           ra_server_proc:leader_call(Follower, Call, ?DEFAULT_TIMEOUT))
+    after
+        terminate_cluster(Cluster)
+    end.
+
+unknown_local_call(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                {simple, fun erlang:'+'/2, 9}),
+    try
+        %% Query the leader and deduce a follower.
+        {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+        [Follower | _] = Cluster -- [Leader],
+        ct:pal("Leader:   ~0p~nFollower: ~0p", [Leader, Follower]),
+
+        Call = unknown_call,
+        ?assertEqual(
+           {error, {unsupported_call, Call}},
+           ra_server_proc:local_call(Leader, Call, ?DEFAULT_TIMEOUT)),
+        ?assertEqual(
+           {error, {unsupported_call, Call}},
+           ra_server_proc:local_call(Follower, Call, ?DEFAULT_TIMEOUT))
+    after
+        terminate_cluster(Cluster)
+    end.
 
 get_gen_statem_status(Ref) ->
     {_, _, _, Items} = sys:get_status(Ref),

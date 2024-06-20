@@ -830,7 +830,7 @@ handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
-    {leader, State, []}.
+    {leader, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
@@ -943,7 +943,7 @@ handle_candidate(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
-    {candidate, State, []}.
+    {candidate, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 -spec handle_pre_vote(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
@@ -1023,7 +1023,7 @@ handle_pre_vote(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
-    {pre_vote, State, []}.
+    {pre_vote, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 
 -spec handle_follower(ra_msg(), ra_server_state()) ->
@@ -1327,7 +1327,7 @@ handle_follower(force_member_change,
     call_for_election(pre_vote, State, [{reply, ok} | Effects]);
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
-    {follower, State, []}.
+    {follower, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               meta = #{index := SnapIndex,
@@ -1416,7 +1416,7 @@ handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
     %% drop all other events??
     %% TODO: work out what else to handle
-    {receive_snapshot, State, []}.
+    {receive_snapshot, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
