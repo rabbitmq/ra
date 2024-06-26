@@ -45,7 +45,7 @@
          command/3,
          cast_command/2,
          cast_command/3,
-         query/4,
+         query/5,
          state_query/3,
          local_state_query/3,
          trigger_election/2,
@@ -73,6 +73,7 @@
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
 -type query_fun() :: ra:query_fun().
+-type query_options() :: #{condition => ra:query_condition()}.
 
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
@@ -113,7 +114,8 @@
               safe_call_ret/1,
               ra_event_reject_detail/0,
               ra_event/0,
-              ra_event_body/0]).
+              ra_event_body/0,
+              query_options/0]).
 
 %% the ra server proc keeps monitors on behalf of different components
 %% the state machine, log and server code. The tag is used to determine
@@ -143,7 +145,10 @@
                 low_priority_commands :: ra_ets_queue:state(),
                 election_timeout_set = false :: boolean(),
                 %% the log index last time gc was forced
-                pending_notifys = #{} :: #{pid() => [term()]}
+                pending_notifys = #{} :: #{pid() => [term()]},
+                pending_queries = [] :: [{ra:query_condition(),
+                                          gen_statem:from(),
+                                          query_fun()}]
                }).
 
 %%%===================================================================
@@ -169,15 +174,17 @@ cast_command(ServerId, Priority, Cmd) ->
     gen_statem:cast(ServerId, {command, Priority, Cmd}).
 
 -spec query(server_loc(), query_fun(),
-            local | consistent | leader, timeout()) ->
+            local | consistent | leader,
+            query_options(),
+            timeout()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
     | ra_server_proc:ra_leader_call_ret(Reply :: term())
     | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-query(ServerLoc, QueryFun, local, Timeout) ->
-    statem_call(ServerLoc, {local_query, QueryFun}, Timeout);
-query(ServerLoc, QueryFun, leader, Timeout) ->
-    leader_call(ServerLoc, {local_query, QueryFun}, Timeout);
-query(ServerLoc, QueryFun, consistent, Timeout) ->
+query(ServerLoc, QueryFun, local, Options, Timeout) ->
+    statem_call(ServerLoc, {local_query, QueryFun, Options}, Timeout);
+query(ServerLoc, QueryFun, leader, Options, Timeout) ->
+    leader_call(ServerLoc, {local_query, QueryFun, Options}, Timeout);
+query(ServerLoc, QueryFun, consistent, _Options, Timeout) ->
     leader_call(ServerLoc, {consistent_query, QueryFun}, Timeout).
 
 -spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
@@ -498,11 +505,10 @@ leader(EventType, flush_commands,
         _ ->
             next_state(NextState, State, Actions)
     end;
-leader({call, From}, {local_query, QueryFun},
-       #state{conf = Conf,
-              server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, id(State), ServerState, Conf),
-    {keep_state, State, [{reply, From, Reply}]};
+leader({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    leader(EventType, {local_query, QueryFun, #{}}, State);
+leader({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(leader, From, QueryFun, Options, State);
 leader({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
@@ -595,10 +601,10 @@ candidate(cast, {command, _Priority,
           State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-candidate({call, From}, {local_query, QueryFun},
-          #state{conf = Conf, server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
-    {keep_state, State, [{reply, From, Reply}]};
+candidate({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    candidate(EventType, {local_query, QueryFun, #{}}, State);
+candidate({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(candidate, From, QueryFun, Options, State);
 candidate({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
@@ -643,10 +649,10 @@ pre_vote(cast, {command, _Priority,
          State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-pre_vote({call, From}, {local_query, QueryFun},
-          #state{conf = Conf, server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, not_known, ServerState, Conf),
-    {keep_state, State, [{reply, From, Reply}]};
+pre_vote({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    pre_vote(EventType, {local_query, QueryFun, #{}}, State);
+pre_vote({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(pre_vote, From, QueryFun, Options, State);
 pre_vote({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
@@ -725,14 +731,10 @@ follower(cast, {command, _Priority,
          State) ->
     _ = reject_command(Pid, Corr, State),
     {keep_state, State, []};
-follower({call, From}, {local_query, QueryFun},
-         #state{conf = Conf, server_state = ServerState} = State) ->
-    Leader = case ra_server:leader_id(ServerState) of
-                 undefined -> not_known;
-                 L -> L
-             end,
-    Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
-    {keep_state, State, [{reply, From, Reply}]};
+follower({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    follower(EventType, {local_query, QueryFun, #{}}, State);
+follower({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(follower, From, QueryFun, Options, State);
 follower({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
@@ -929,10 +931,11 @@ await_condition({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 await_condition(EventType, {local_call, Msg}, State) ->
     await_condition(EventType, Msg, State);
-await_condition({call, From}, {local_query, QueryFun},
-                #state{conf = Conf, server_state = ServerState} = State) ->
-    Reply = perform_local_query(QueryFun, follower, ServerState, Conf),
-    {keep_state, State, [{reply, From, Reply}]};
+await_condition({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    await_condition(EventType, {local_query, QueryFun, #{}}, State);
+await_condition({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(
+      await_condition, From, QueryFun, Options, State);
 await_condition({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
@@ -1111,10 +1114,13 @@ handle_enter(RaftState, OldRaftState,
 handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     case catch ra_server:handle_leader(Msg, ServerState0) of
         {NextState, ServerState, Effects}  ->
-            State = State0#state{server_state =
-                                 ra_server:persist_last_applied(ServerState)},
+            State1 = State0#state{server_state =
+                                  ra_server:persist_last_applied(ServerState)},
+            %% The last applied index made progress. Check if there are
+            %% pending queries that wait for this index.
+            {State, Actions} = perform_pending_queries(leader, State1),
             maybe_record_cluster_change(State0, State),
-            {NextState, State, Effects};
+            {NextState, State, Effects ++ Actions};
         OtherErr ->
             ?ERR("handle_leader err ~p", [OtherErr]),
             exit(OtherErr)
@@ -1122,7 +1128,7 @@ handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
 
 handle_raft_state(RaftState, Msg,
                   #state{server_state = ServerState0,
-                         election_timeout_set = Set} = State) ->
+                         election_timeout_set = Set} = State0) ->
     {NextState, ServerState1, Effects} =
         ra_server:RaftState(Msg, ServerState0),
     ElectionTimeoutSet = case Msg of
@@ -1130,9 +1136,12 @@ handle_raft_state(RaftState, Msg,
                              _ -> Set
                          end,
     ServerState = ra_server:persist_last_applied(ServerState1),
-    {NextState, State#state{server_state = ServerState,
-                            election_timeout_set = ElectionTimeoutSet},
-     Effects}.
+    State1 = State0#state{server_state = ServerState,
+                          election_timeout_set = ElectionTimeoutSet},
+    %% The last applied index made progress. Check if there are pending
+    %% queries that wait for this index.
+    {State, Actions} = perform_pending_queries(RaftState, State1),
+    {NextState, State, Effects ++ Actions}.
 
 handle_candidate(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
@@ -1151,6 +1160,104 @@ handle_receive_snapshot(Msg, State) ->
 
 handle_await_condition(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
+
+perform_or_delay_local_query(
+  RaftState, From, QueryFun, Options,
+  #state{conf = Conf,
+         server_state = ServerState,
+         pending_queries = PendingQueries} = State) ->
+    %% The caller might decide it wants the query to be executed only after a
+    %% specific index has been applied on the local node. It can specify that
+    %% with the `condition' option.
+    %%
+    %% If the condition is unset or set to `undefined', the query is performed
+    %% immediatly. That is the default behavior.
+    %%
+    %% If the condition is set to `{applied, {Index, Term}}', the query is
+    %% added to a list of pending queries. It will be evaluated once that
+    %% index is applied locally.
+    Leader = determine_leader(RaftState, State),
+    case maps:get(condition, Options, undefined) of
+        undefined ->
+            Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
+            {keep_state, State, [{reply, From, Reply}]};
+        Condition ->
+            PendingQuery = {Condition, From, QueryFun},
+            PendingQueries1 = [PendingQuery | PendingQueries],
+            State1 = State#state{pending_queries = PendingQueries1},
+            %% It's possible that the specified index was already applied.
+            %% That's why we evaluate pending queries just after adding the
+            %% query to the list.
+            {State2, Actions} = perform_pending_queries(RaftState, State1),
+            {keep_state, State2, Actions}
+    end.
+
+perform_pending_queries(_RaftState, #state{pending_queries = []} = State) ->
+    {State, []};
+perform_pending_queries(RaftState, State) ->
+    #{last_applied := LastApplied} = do_state_query(overview, State),
+    perform_pending_queries(RaftState, LastApplied, State, []).
+
+perform_pending_queries(RaftState, LastApplied,
+                        #state{conf = Conf,
+                               server_state = ServerState0,
+                               pending_queries = PendingQueries0} = State0,
+                        Actions0) ->
+    Leader = determine_leader(RaftState, State0),
+    {PendingQueries,
+     Actions,
+     ServerState} = lists:foldr(
+                      fun(PendingQuery, Acc) ->
+                              perform_pending_queries1(
+                                PendingQuery, Acc,
+                                #{last_applied => LastApplied,
+                                  leader => Leader,
+                                  conf => Conf})
+                      end, {[], Actions0, ServerState0}, PendingQueries0),
+    State = State0#state{server_state = ServerState,
+                         pending_queries = PendingQueries},
+    {State, Actions}.
+
+perform_pending_queries1(
+  {{applied, {TargetIndex, TargetTerm}}, From, QueryFun} = PendingQuery,
+  {PendingQueries0, Actions0, ServerState0},
+  #{last_applied := LastApplied, leader := Leader, conf := Conf})
+  when TargetIndex =< LastApplied ->
+    {Term, ServerState} = ra_server:fetch_term(TargetIndex, ServerState0),
+    case Term of
+        TargetTerm ->
+            %% The local node reached or passed the target index. We can
+            %% evaluate the query.
+            %%
+            %% Note that some queries may have timed out from the caller's
+            %% point of view. We can't tell that here, so they are still
+            %% evaluated. The reply will be discarded by Erlang because the
+            %% process alias in `From' is inactive after the timeout.
+            Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
+            Actions = [{reply, From, Reply} | Actions0],
+            {PendingQueries0, Actions, ServerState};
+        _ ->
+            PendingQueries = [PendingQuery | PendingQueries0],
+            {PendingQueries, Actions0, ServerState}
+    end;
+perform_pending_queries1(
+  PendingQuery,
+  {PendingQueries0, Actions, ServerState}, _Context) ->
+    PendingQueries = [PendingQuery | PendingQueries0],
+    {PendingQueries, Actions, ServerState}.
+
+determine_leader(RaftState, #state{server_state = ServerState} = State) ->
+    case RaftState of
+        leader ->
+            id(State);
+        follower ->
+            case ra_server:leader_id(ServerState) of
+                undefined -> not_known;
+                L -> L
+            end;
+        _ ->
+            not_known
+    end.
 
 perform_local_query(QueryFun, Leader, ServerState, Conf) ->
     incr_counter(Conf, ?C_RA_SRV_LOCAL_QUERIES, 1),

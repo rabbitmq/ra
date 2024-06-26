@@ -48,6 +48,7 @@ all_tests() ->
      local_query,
      local_query_boom,
      local_query_stale,
+     local_query_with_condition_option,
      members,
      members_info,
      consistent_query,
@@ -487,6 +488,151 @@ local_query_stale(Config) ->
     ct:pal("LeaderV ~p~n NonLeaderV ~p", [LeaderV, NonLeaderV]),
     ?assertNotMatch(LeaderV, NonLeaderV),
     terminate_cluster(Cluster).
+
+local_query_with_condition_option() ->
+    [{timetrap, {minutes, 1}}].
+
+local_query_with_condition_option(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                {simple, fun erlang:'+'/2, 9}),
+    try
+        %% Get the leader and deduce a follower.
+        {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+        [Follower | _] = Cluster -- [Leader],
+        ct:pal(
+          "Leader:   ~0p (~p)~n"
+          "Follower: ~0p (~p)",
+          [Leader, erlang:whereis(element(1, Leader)),
+           Follower, erlang:whereis(element(1, Follower))]),
+
+        %% Get the last applied index.
+        QueryFun = fun(S) -> S end,
+        {ok, {{Idx, Term}, 14}, _} = ra:local_query(Leader, QueryFun),
+        ct:pal("Currently applied index on leader: {~b, ~b}", [Idx, Term]),
+
+        %% Query using the already applied index.
+        IdxTerm = {Idx, Term},
+        ct:pal(
+          "Query on leader with idxterm ~0p; expecting success",
+          [IdxTerm]),
+        ?assertMatch(
+           {ok, {_, 14}, _},
+           ra:local_query(
+             Leader, QueryFun, #{condition => {applied, IdxTerm}})),
+        ct:pal(
+          "Query on follower with idxterm ~0p; expecting success",
+          [IdxTerm]),
+        ?assertMatch(
+           {ok, {_, 14}, _},
+           ra:local_query(
+             Follower, QueryFun, #{condition => {applied, IdxTerm}})),
+
+        %% Query using the next index; this should time out.
+        IdxTerm1 = {Idx + 1, Term},
+        Timeout = 2000,
+        ct:pal(
+          "Query on leader with idxterm ~0p; expecting timeout", [IdxTerm1]),
+        ?assertMatch(
+           {timeout, _},
+           ra:local_query(
+             Leader, QueryFun,
+             #{condition => {applied, IdxTerm1},
+               timeout => Timeout})),
+        ct:pal(
+          "Query on follower with idxterm ~0p; expecting timeout", [IdxTerm1]),
+        ?assertMatch(
+           {timeout, _},
+           ra:local_query(
+             Follower, QueryFun,
+             #{condition => {applied, IdxTerm1},
+               timeout => Timeout})),
+
+        %% Submit a command through the follower.
+        %%
+        %% The following queries will be executed, as well as the previous ones
+        %% which timed out from the caller's point of view. They were still in
+        %% the Ra servers' state. The answer to these queries will go to
+        %% /dev/null because their alias is inactive.
+        ok = ra:pipeline_command(Follower, 3, no_correlation, normal),
+
+        %% Query using the next index; we should get an answer. The command
+        %% might be applied already before we submit the query though.
+        ct:pal(
+          "Query on leader with idxterm ~0p; expecting success",
+          [IdxTerm1]),
+        ?assertMatch(
+           {ok, {_, 17}, _},
+           ra:local_query(
+             Leader, QueryFun, #{condition => {applied, IdxTerm1}})),
+        ct:pal(
+          "Query on follower with idxterm ~0p; expecting success",
+          [IdxTerm1]),
+        ?assertMatch(
+           {ok, {_, 17}, _},
+           ra:local_query(
+             Follower, QueryFun, #{condition => {applied, IdxTerm1}})),
+
+        %% Query using the next next index; this should time out. This ensures
+        %% that that index wasn't already applied, invalidating the rest of the
+        %% test case.
+        IdxTerm2 = {Idx + 2, Term},
+        ct:pal(
+          "Query on leader with idxterm ~0p; expecting timeout",
+          [IdxTerm2]),
+        ?assertMatch(
+           {timeout, _},
+           ra:local_query(
+             Leader, QueryFun,
+             #{condition => {applied, IdxTerm2},
+               timeout => Timeout})),
+        ct:pal(
+          "Query on follower with idxterm ~0p; expecting timeout",
+          [IdxTerm2]),
+        ?assertMatch(
+           {timeout, _},
+           ra:local_query(
+             Follower, QueryFun,
+             #{condition => {applied, IdxTerm2},
+               timeout => Timeout})),
+
+        %% Query using the next next index; we should get an answer. This time,
+        %% we ensure that the query is submitted before the next command.
+        %%
+        %% The following queries will be executed, as well as the previous ones
+        %% which timed out from the caller's point of view. They were still in
+        %% the Ra servers' state. The answer to these queries will go to
+        %% /dev/null because their alias is inactive.
+        Parent = self(),
+        _Pid = spawn_link(
+                 fun() ->
+                         ct:pal(
+                           "Query on leader with idxterm ~0p; "
+                           "expecting success", [IdxTerm2]),
+                         ?assertMatch(
+                            {ok, {_, 19}, _},
+                            ra:local_query(
+                              Leader, QueryFun,
+                              #{condition => {applied, IdxTerm2}})),
+                         ct:pal(
+                           "Query on follower with idxterm ~0p; "
+                           "expecting success", [IdxTerm2]),
+                         ?assertMatch(
+                            {ok, {_, 19}, _},
+                            ra:local_query(
+                              Follower, QueryFun,
+                              #{condition => {applied, IdxTerm2}})),
+                         Parent ! done,
+                         erlang:unlink(Parent)
+                 end),
+
+        %% Submit a command through the follower.
+        ok = ra:pipeline_command(Follower, 2, no_correlation, normal),
+        receive
+            done -> ok
+        end
+    after
+        terminate_cluster(Cluster)
+    end.
 
 consistent_query_stale(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),

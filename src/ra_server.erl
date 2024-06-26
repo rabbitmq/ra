@@ -61,7 +61,8 @@
          get_membership/1,
          get_condition_timeout/2,
          recover/1,
-         state_query/2
+         state_query/2,
+         fetch_term/2
         ]).
 
 -type ra_await_condition_fun() ::
@@ -2537,7 +2538,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
            log := Log0} = State0)
   when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
     From = LastApplied + 1,
-    {LastIdx, _} = ra_log:last_index_term(Log0),
+    {LastIdx, _LastTerm} = ra_log:last_index_term(Log0),
     To = min(LastIdx, ApplyTo),
     FoldState = {MacMod, LastApplied, State0, MacState0,
                  Effects0, Notifys0, undefined},
