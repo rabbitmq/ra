@@ -180,8 +180,14 @@ cast_command(ServerId, Priority, Cmd) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
     | ra_server_proc:ra_leader_call_ret(Reply :: term())
     | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
+query(ServerLoc, QueryFun, local, Options, Timeout)
+  when map_size(Options) =:= 0 ->
+    statem_call(ServerLoc, {local_query, QueryFun}, Timeout);
 query(ServerLoc, QueryFun, local, Options, Timeout) ->
     statem_call(ServerLoc, {local_query, QueryFun, Options}, Timeout);
+query(ServerLoc, QueryFun, leader, Options, Timeout)
+  when map_size(Options) =:= 0 ->
+    leader_call(ServerLoc, {local_query, QueryFun}, Timeout);
 query(ServerLoc, QueryFun, leader, Options, Timeout) ->
     leader_call(ServerLoc, {local_query, QueryFun, Options}, Timeout);
 query(ServerLoc, QueryFun, consistent, _Options, Timeout) ->
