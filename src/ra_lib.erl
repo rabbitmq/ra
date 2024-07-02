@@ -349,7 +349,7 @@ write_file(Name, IOData, Sync) ->
 -spec sync_file(file:name_all()) ->
     ok | file_err().
 sync_file(Name) ->
-    case file:open(Name, [binary, write, raw]) of
+    case file:open(Name, [binary, read, write, raw]) of
         {ok, Fd} ->
             sync_and_close_fd(Fd);
         Err ->
