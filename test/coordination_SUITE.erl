@@ -814,6 +814,16 @@ recover_from_checkpoint(Config) ->
                 Follower2Idx =:= 8
       end, 20),
 
+    %% Restart the servers: the servers should be able to recover from the
+    %% snapshot which was promoted from a checkpoint.
+    [ok = ra:stop_server(?SYS, ServerId) || ServerId <- ServerIds],
+    [ok = ra:restart_server(?SYS, ServerId) || ServerId <- ServerIds],
+    [{ok, {_CurrentIdx, _CheckpointIdx = 8}, _Leader} =
+       ra:local_query(ServerId, fun(State) ->
+                                        maps:get(checkpoint_index, State,
+                                                 undefined)
+                                end) || ServerId <- ServerIds],
+
     stop_nodes(ServerIds),
     ok.
 
