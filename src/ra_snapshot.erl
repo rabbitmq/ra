@@ -347,7 +347,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
      [{monitor, process, snapshot_writer, Pid}]}.
 
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
-    {State :: state(), Effects :: [effect()]}.
+    {boolean(), State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
                    #?MODULE{module = Mod,
                             snapshot_directory = SnapDir,
@@ -374,9 +374,9 @@ promote_checkpoint(PromotionIdx,
                         end),
             State = State0#?MODULE{pending = {Pid, {Idx, Term}, snapshot},
                                    checkpoints = Checkpoints},
-            {State, [{monitor, process, snapshot_writer, Pid}]};
+            {true, State, [{monitor, process, snapshot_writer, Pid}]};
         undefined ->
-            {State0, []}
+            {false, State0, []}
     end.
 
 %% Find the first checkpoint smaller than or equal to the promotion index and

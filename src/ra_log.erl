@@ -741,9 +741,14 @@ promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
             %% checkpoint.
             {State, []};
         _ ->
-            ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1),
-            {SnapState, Effects} = ra_snapshot:promote_checkpoint(Idx,
-                                                                  SnapState0),
+            {WasPromoted, SnapState, Effects} =
+                ra_snapshot:promote_checkpoint(Idx, SnapState0),
+                if WasPromoted ->
+                       ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1);
+                   true ->
+                       ok
+                end,
+
             {State#?MODULE{snapshot_state = SnapState}, Effects}
     end.
 
