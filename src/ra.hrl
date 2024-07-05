@@ -261,6 +261,8 @@
           "Total number of checkpoints written"},
          {checkpoint_bytes_written, ?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, counter,
           "Number of checkpoint bytes written"},
+         {checkpoints_promoted, ?C_RA_LOG_CHECKPOINTS_PROMOTED, counter,
+          "Number of checkpoints promoted to snapshots"},
          {reserved_1, ?C_RA_LOG_RESERVED, counter, "Reserved counter"}
          ]).
 -define(C_RA_LOG_WRITE_OPS, 1).
@@ -277,7 +279,8 @@
 -define(C_RA_LOG_OPEN_SEGMENTS, 12).
 -define(C_RA_LOG_CHECKPOINTS_WRITTEN, 13).
 -define(C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, 14).
--define(C_RA_LOG_RESERVED, 15).
+-define(C_RA_LOG_CHECKPOINTS_PROMOTED, 15).
+-define(C_RA_LOG_RESERVED, 16).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).

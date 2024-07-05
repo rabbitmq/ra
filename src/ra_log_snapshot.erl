@@ -44,7 +44,7 @@ prepare(_Index, State) -> State.
 %% @end
 
 -spec write(file:filename(), meta(), term(), Sync :: boolean()) ->
-    ok | {error, file_err()}.
+    {ok, non_neg_integer()} | {error, file_err()}.
 write(Dir, Meta, MacState, Sync) ->
     %% no compression on meta data to make sure reading it is as fast
     %% as possible
@@ -53,10 +53,16 @@ write(Dir, Meta, MacState, Sync) ->
     Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
-    ra_lib:write_file(File, [<<?MAGIC,
-                               ?VERSION:8/unsigned,
-                               Checksum:32/integer>>,
-                             Data], Sync).
+    Bytes = 9 + iolist_size(Data),
+    case ra_lib:write_file(File, [<<?MAGIC,
+                                    ?VERSION:8/unsigned,
+                                    Checksum:32/integer>>,
+                                  Data], Sync) of
+        ok ->
+            {ok, Bytes};
+        Err ->
+            Err
+    end.
 
 -spec sync(file:filename()) ->
     ok | {error, file_err()}.

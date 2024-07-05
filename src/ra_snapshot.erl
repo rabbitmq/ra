@@ -582,21 +582,48 @@ take_older_checkpoints(Idx, #?MODULE{checkpoints = Checkpoints0} = State0) ->
 
 -spec take_extra_checkpoints(state()) ->
     {state(), [checkpoint()]}.
+take_extra_checkpoints(State0) ->
+    take_extra_checkpoints(State0, []).
+
+
 take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
-                                max_checkpoints = MaxCheckpoints} = State0) ->
+                                max_checkpoints = MaxCheckpoints} = State0,
+                      Checks) ->
     Len = erlang:length(Checkpoints0),
-    case Len - MaxCheckpoints of
-        ToDelete when ToDelete > 0 ->
-            %% Take `ToDelete' checkpoints from the list randomly without
-            %% ever taking the first or last checkpoint.
-            IdxsToTake = random_idxs_to_take(MaxCheckpoints, ToDelete),
-            {Checkpoints, Extras} = lists_take_idxs(Checkpoints0, IdxsToTake),
-            {State0#?MODULE{checkpoints = Checkpoints}, Extras};
-        _ ->
-            {State0, []}
+    case Len > MaxCheckpoints of
+        true ->
+            %% when the number of checkpoints grow we increase the difference
+            %% between checkpoints in order to keep the total count kept on disk
+            %% down but keep some upper limit (~500k) to avoid huge differences
+            Mult = min(8, Len div MaxCheckpoints),
+            case find_checkpoint_to_delete(Mult, lists:reverse(Checkpoints0)) of
+                undefined ->
+                    {State0, Checks};
+                {_, _} = Check ->
+                    Checkpoints = lists:delete(Check, Checkpoints0),
+                    {State0#?MODULE{checkpoints = Checkpoints},
+                    [Check | Checks]}
+            end;
+        false ->
+            {State0, Checks}
     end.
 
 %% Utility
+
+-define(MAX_DIFF, 65_536).
+
+find_checkpoint_to_delete(Mult,
+                          [{FstIdx, _},
+                           {_, _} = Pot,
+                           {ThrdIdx, _} | _] = Checks) ->
+    case ThrdIdx - FstIdx < (?MAX_DIFF * Mult) of
+        true ->
+            Pot;
+        false ->
+            find_checkpoint_to_delete(Mult, tl(Checks))
+    end;
+find_checkpoint_to_delete(_, _) ->
+    undefined.
 
 make_snapshot_dir(Dir, Index, Term) ->
     I = ra_lib:zpad_hex(Index),
@@ -608,65 +635,10 @@ counters_add(undefined, _, _) ->
 counters_add(Counter, Ix, Incr) ->
     counters:add(Counter, Ix, Incr).
 
-random_idxs_to_take(Max, N) ->
-    %% Always retain the first and last elements.
-    AllIdxs = lists:seq(2, Max - 1),
-    %% Take a random subset of those indices of length N.
-    lists:sublist(ra_lib:lists_shuffle(AllIdxs), N).
-
-%% Take items from the given list by the given indices without disturbing the
-%% order of the list.
--spec lists_take_idxs(List, Idxs) -> {List1, Taken} when
-      List :: list(Elem),
-      Elem :: any(),
-      Idxs :: list(pos_integer()),
-      List1 :: list(Elem),
-      Taken :: list(Elem).
-lists_take_idxs(List, Idxs0) ->
-    %% Sort the indices so `lists_take_idxs/5' may run linearly on the two lists
-    Idxs = lists:sort(Idxs0),
-    %% 1-indexing like the `lists' module.
-    lists_take_idxs(List, Idxs, 1, [], []).
-
-lists_take_idxs([Elem | Elems], [Idx | Idxs], Idx, TakeAcc, ElemAcc) ->
-    lists_take_idxs(Elems, Idxs, Idx + 1, [Elem | TakeAcc], ElemAcc);
-lists_take_idxs([Elem | Elems], Idxs, Idx, TakeAcc, ElemAcc) ->
-    lists_take_idxs(Elems, Idxs, Idx + 1, TakeAcc, [Elem | ElemAcc]);
-lists_take_idxs(Elems, _Idxs = [], _Idx, TakeAcc, ElemAcc) ->
-    {lists:reverse(ElemAcc, Elems), lists:reverse(TakeAcc)};
-lists_take_idxs(_Elems = [], _Idxs, _Idx, TakeAcc, ElemAcc) ->
-    {lists:reverse(ElemAcc), lists:reverse(TakeAcc)}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-random_idxs_to_take_test() ->
-    Idxs = random_idxs_to_take(10, 3),
-    ?assertEqual(3, length(Idxs)),
-    [Min, _, Max] = lists:sort(Idxs),
-    %% The first and last elements are excluded.
-    ?assert(Min > 1),
-    ?assert(Max < 10),
-    ok.
 
-lists_take_idxs_test() ->
-    ?assertEqual(
-      {[1, 3, 5, 7, 8], [2, 4, 6]},
-      lists_take_idxs(lists:seq(1, 8), [2, 4, 6])),
-
-    %% Ordering of `Idxs' doesn't matter.
-    ?assertEqual(
-      {[1, 3, 5, 7, 8], [2, 4, 6]},
-      lists_take_idxs(lists:seq(1, 8), [4, 6, 2])),
-
-    ?assertEqual(
-      {[a, c], [b]},
-      lists_take_idxs([a, b, c], [2])),
-
-    %% `List''s order is preserved even when nothing is taken.
-    ?assertEqual(
-      {[a, b, c], []},
-      lists_take_idxs([a, b, c], [])),
-    ok.
 
 -endif.

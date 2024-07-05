@@ -129,7 +129,8 @@
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
                               counter => counters:counters_ref(),
-                              initial_access_pattern => sequential | random}.
+                              initial_access_pattern => sequential | random,
+                              max_checkpoints => non_neg_integer()}.
 
 
 -type overview() ::
@@ -199,6 +200,7 @@ init(#{uid := UId,
                               undefined -> {-1, -1};
                               Curr -> Curr
                           end,
+
     AccessPattern = maps:get(initial_access_pattern, Conf, random),
     Reader0 = ra_log_reader:init(UId, Dir, 0, MaxOpen, AccessPattern, [],
                                  Names, Counter),
@@ -244,6 +246,13 @@ init(#{uid := UId,
     LastIdx = State000#?MODULE.last_index,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
+    case ra_snapshot:latest_checkpoint(SnapshotState) of
+        undefined ->
+            ok;
+        {ChIdx, _ChTerm} ->
+            put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, ChIdx)
+    end,
+
     % recover the last term
     {LastTerm0, State00} = case LastIdx of
                                SnapIdx ->
@@ -743,11 +752,11 @@ promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
         _ ->
             {WasPromoted, SnapState, Effects} =
                 ra_snapshot:promote_checkpoint(Idx, SnapState0),
-                if WasPromoted ->
-                       ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_WRITTEN, 1);
-                   true ->
-                       ok
-                end,
+            if WasPromoted ->
+                   ok = incr_counter(Cfg, ?C_RA_LOG_CHECKPOINTS_PROMOTED, 1);
+               true ->
+                   ok
+            end,
 
             {State#?MODULE{snapshot_state = SnapState}, Effects}
     end.
