@@ -321,12 +321,12 @@ retry(Func, Attempt, Sleep) ->
     end.
 
 -spec write_file(file:name_all(), iodata()) ->
-    ok | file_err().
+    ok | {error, file_err()}.
 write_file(Name, IOData) ->
     write_file(Name, IOData, true).
 
 -spec write_file(file:name_all(), iodata(), Sync :: boolean()) ->
-    ok | file_err().
+    ok | {error, file_err()}.
 write_file(Name, IOData, Sync) ->
     case file:open(Name, [binary, write, raw]) of
         {ok, Fd} ->
@@ -347,7 +347,7 @@ write_file(Name, IOData, Sync) ->
     end.
 
 -spec sync_file(file:name_all()) ->
-    ok | file_err().
+    ok | {error, file_err()}.
 sync_file(Name) ->
     case file:open(Name, [binary, read, write, raw]) of
         {ok, Fd} ->
@@ -357,7 +357,7 @@ sync_file(Name) ->
     end.
 
 -spec sync_and_close_fd(file:fd()) ->
-    ok | file_err().
+    ok | {error, file_err()}.
 sync_and_close_fd(Fd) ->
     case ra_file:sync(Fd) of
         ok ->

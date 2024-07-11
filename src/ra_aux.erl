@@ -8,6 +8,7 @@
 -export([
          machine_state/1,
          leader_id/1,
+         last_applied/1,
          members_info/1,
          overview/1,
          log_last_index_term/1,
@@ -27,6 +28,10 @@ machine_state(State) ->
 
 -spec leader_id(ra_aux:internal_state()) -> undefined | ra_server_id().
 leader_id(State) ->
+    maps:get(?FUNCTION_NAME, State).
+
+-spec last_applied(ra_aux:internal_state()) -> ra_index().
+last_applied(State) ->
     maps:get(?FUNCTION_NAME, State).
 
 -spec members_info(ra_aux:internal_state()) -> ra_cluster().

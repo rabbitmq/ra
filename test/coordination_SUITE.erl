@@ -787,6 +787,26 @@ recover_from_checkpoint(Config) ->
               LeaderIdx =:= 8 andalso Follower1Idx =:= 8 andalso
                 Follower2Idx =:= 8
       end, 20),
+    CounterKeys = [
+                   checkpoint_bytes_written,
+                   checkpoint_index,
+                   checkpoints,
+                   checkpoints_written,
+                   checkpoints_promoted
+                  ],
+    [begin
+         ?assertMatch(
+            #{
+              checkpoint_bytes_written := B,
+              checkpoint_index := 8,
+              checkpoints := 1,
+              checkpoints_written := 1,
+              checkpoints_promoted := 0
+             } when B > 0,
+                    ct_rpc:call(N, ra_counters, counters,
+                                [ServerId, CounterKeys]))
+     end || {_, N} = ServerId <- ServerIds],
+
 
     %% Restart the servers
     [ok = ra:stop_server(?SYS, ServerId) || ServerId <- ServerIds],
@@ -814,6 +834,18 @@ recover_from_checkpoint(Config) ->
                 Follower2Idx =:= 8
       end, 20),
 
+    [begin
+         ?assertMatch(
+            #{
+              checkpoint_bytes_written := B,
+              checkpoint_index := 8,
+              checkpoints := 1,
+              checkpoints_written := 1,
+              checkpoints_promoted := 1
+             } when B > 0,
+                    ct_rpc:call(N, ra_counters, counters,
+                                [ServerId, CounterKeys]))
+     end || {_, N} = ServerId <- ServerIds],
     %% Restart the servers: the servers should be able to recover from the
     %% snapshot which was promoted from a checkpoint.
     [ok = ra:stop_server(?SYS, ServerId) || ServerId <- ServerIds],

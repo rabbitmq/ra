@@ -1489,6 +1489,7 @@ follower_install_snapshot_machine_version(_Config) ->
                              effective_machine_module = MacMod1,
                              effective_machine_version = 1},
                  last_applied := 4,
+                 cluster_index_term := {4, 5},
                  machine_state := SnapData, %% old machine state
                  commit_index := 4},
      _} = ra_server:handle_receive_snapshot(ISR, State0),

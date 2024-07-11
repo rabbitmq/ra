@@ -1704,12 +1704,19 @@ do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
 config_defaults(ServerId) ->
+    Counter = case ra_counters:fetch(ServerId) of
+                  undefined ->
+                      ra_counters:new(ServerId,
+                                      {persistent_term, ?FIELDSPEC_KEY});
+                  C ->
+                      C
+              end,
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
       install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => ra_counters:new(ServerId, {persistent_term, ?FIELDSPEC_KEY}),
+      counter => Counter,
       system_config => ra_system:default_config()
      }.
 

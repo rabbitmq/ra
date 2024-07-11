@@ -157,9 +157,13 @@ server_is_force_deleted(Config) ->
     % force roll over
     ok = force_roll_over(),
     Pid = ra_directory:where_is(?SYS, UId),
+    {Name, _} = ServerId,
+    ?assertEqual(ServerId, ra_leaderboard:lookup_leader(Name)),
     ok = ra:force_delete_server(?SYS, ServerId),
 
     validate_ets_table_deletes([UId], [Pid], [ServerId]),
+    ?assertEqual(undefined, ra_leaderboard:lookup_leader(Name)),
+    ct:pal("ra_leaderboard overview ~p", [ra_leaderboard:overview()]),
     % start a node with the same nodeid but different uid
     % simulating the case where a queue got deleted then re-declared shortly
     % afterwards
