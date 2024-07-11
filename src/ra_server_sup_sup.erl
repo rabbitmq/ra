@@ -166,6 +166,7 @@ delete_server_rpc(System, RaName) ->
             catch ets:delete(ra_state, RaName),
             catch ets:delete(ra_open_file_metrics, Pid),
             catch ra_counters:delete({RaName, node()}),
+            catch ra_leaderboard:clear(RaName),
             ok
     end.
 
