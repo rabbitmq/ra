@@ -79,7 +79,8 @@ jobs:
       matrix:
         platform:
           - linux/amd64
-          - linux/arm64
+          # ARM64 are currently slow
+          # - linux/arm64
     steps:
       - name: Prepare
         run: |
@@ -132,7 +133,7 @@ jobs:
           context: packaging/docker-image
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/rabbitmq/rabbitmq:buildcache-${{ env.PLATFORM_PAIR }}
+          cache-from: type=gha
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       - name: Export digest
         run: |
