@@ -1,6 +1,6 @@
 module(
     name = "rabbitmq_ra",
-    version = "2.13.0",
+    version = "2.13.1",
 )
 
 bazel_dep(
