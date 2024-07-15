@@ -41,6 +41,7 @@ all_tests() ->
      % snapshot_recovery,
      snapshot_installation,
      snapshot_written_after_installation,
+     oldcheckpoints_deleted_after_snapshot_install,
      append_after_snapshot_installation,
      written_event_after_snapshot_installation,
      update_release_cursor,
@@ -817,6 +818,55 @@ snapshot_written_after_installation(Config) ->
 
     %% assert there is no pending snapshot
     ?assertEqual(undefined, ra_snapshot:pending(ra_log:snapshot_state(Log5))),
+
+    _ = ra_log:close(ra_log_init(Config, #{min_snapshot_interval => 2})),
+
+    ok.
+
+oldcheckpoints_deleted_after_snapshot_install(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 2,
+                                 min_checkpoint_interval => 2}),
+    %% log 1 .. 9, should create a single segment
+    Log1 = write_and_roll(1, 10, 1, Log0),
+    {Log2, _} = ra_log:checkpoint(5, #{}, 1, <<"one-five">>, Log1),
+    DelayedSnapWritten = receive
+                             {ra_log_event, {snapshot_written, {5, 1},
+                                             checkpoint} = Evt} ->
+                                 Evt
+                         after 1000 ->
+                                   flush(),
+                                   exit(snapshot_written_timeout)
+                         end,
+    {Log3, Efx4} = ra_log:handle_event(DelayedSnapWritten, Log2),
+
+    Meta = meta(15, 2, [?N1]),
+    Context = #{},
+    Chunk = create_snapshot_chunk(Config, Meta, Context),
+    SnapState0 = ra_log:snapshot_state(Log3),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {Log4, Effs4} = ra_log:install_snapshot({15, 2}, SnapState, Log3),
+    ?assert(lists:any(fun (E) -> element(1, E) == delete_snapshot end, Effs4)),
+    %% write some more to create another segment
+    Log5 = write_and_roll(16, 20, 2, Log4),
+    {19, _} = ra_log:last_index_term(Log5),
+    {19, _} = ra_log:last_written(Log5),
+
+    [begin
+         case E of
+             {delete_snapshot, Dir, S} ->
+                 ra_snapshot:delete(Dir, S);
+             _ ->
+                 ok
+         end
+     end || E <- Efx4],
+
+    SnapStateAfter1 = ra_log:snapshot_state(Log5),
+    {false, SnapsStateAfter, _} =
+        ra_snapshot:promote_checkpoint(19, SnapStateAfter1),
+    %% assert there is no pending snapshot as checkpoint promotion should
+    %% not have promoted anything
+    ?assertEqual(undefined, ra_snapshot:pending(SnapsStateAfter)),
 
     _ = ra_log:close(ra_log_init(Config, #{min_snapshot_interval => 2})),
 

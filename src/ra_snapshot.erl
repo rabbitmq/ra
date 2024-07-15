@@ -349,8 +349,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
     {boolean(), State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
-                   #?MODULE{uid = UId,
-                            module = Mod,
+                   #?MODULE{module = Mod,
                             snapshot_directory = SnapDir,
                             checkpoint_directory = CheckpointDir,
                             checkpoints = Checkpoints0} = State0) ->
@@ -369,7 +368,6 @@ promote_checkpoint(PromotionIdx,
                                 %% into a snapshot.
                                 ok = Mod:sync(Checkpoint),
                                 ok = prim_file:rename(Checkpoint, Snapshot),
-                                true = ets:insert(?ETSTBL, {UId, Idx}),
                                 Self ! {ra_log_event,
                                         {snapshot_written,
                                          {Idx, Term}, snapshot}}
