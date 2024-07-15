@@ -686,14 +686,19 @@ set_snapshot_state(SnapState, State) ->
 
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
     {state(), effects()}.
-install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
+install_snapshot({SnapIdx, _} = IdxTerm, SnapState0,
                  #?MODULE{cfg = Cfg,
-                         cache = Cache} = State0) ->
+                          cache = Cache} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
     ok = put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, SnapIdx),
     {State, Effs} = delete_segments(SnapIdx, State0),
+    {SnapState, Checkpoints} =
+        ra_snapshot:take_older_checkpoints(SnapIdx, SnapState0),
+    CPEffects = [{delete_snapshot,
+                  ra_snapshot:directory(SnapState, checkpoint),
+                  Checkpoint} || Checkpoint <- Checkpoints],
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
                    last_index = SnapIdx,
@@ -701,7 +706,7 @@ install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
                    %% cache can be reset
                    cache = ra_log_cache:reset(Cache),
                    last_written_index_term = IdxTerm},
-     Effs}.
+     Effs ++ CPEffects}.
 
 -spec recover_snapshot(State :: state()) ->
     option({ra_snapshot:meta(), term()}).
