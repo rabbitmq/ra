@@ -106,7 +106,9 @@ handle_batch(Commands, #?MODULE{ref = Ref,
 
 terminate(_, #?MODULE{ref = Ref,
                       table_name = TblName}) ->
-    ?DEBUG("ra: meta data store is terminating", []),
+    {_, Len} = process_info(self(), message_queue_len),
+    ?DEBUG("ra: meta data store is terminating with ~b unprocessed messages",
+           [Len]),
     ok = dets:sync(TblName),
     _ = dets:close(Ref),
     ok.

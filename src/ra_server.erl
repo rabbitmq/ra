@@ -2145,8 +2145,10 @@ terminate(#{log := Log,
     ?NOTICE("~ts: terminating with reason 'delete'", [LogId]),
     catch ra_log:delete_everything(Log),
     ok;
-terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
-    ?DEBUG("~ts: terminating with reason '~w'", [LogId, Reason]),
+terminate(#{cfg := #cfg{log_id = LogId},
+            last_applied := LA} = State, Reason) ->
+    ?DEBUG("~ts: terminating with reason '~w', last applied index ~b",
+           [LogId, Reason, LA]),
     #{log := Log} = persist_last_applied(State),
     catch ra_log:close(Log),
     ok.
