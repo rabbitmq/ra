@@ -1022,11 +1022,17 @@ terminate(Reason, StateName,
         ra_server:system_config(ServerState),
     UId = uid(State),
     Id = id(State),
-    _ = ra_server:terminate(ServerState, Reason),
     case Reason of
         {shutdown, delete} ->
             Parent = ra_directory:where_is_parent(Names, UId),
+            %% we need to unregister _before_ the log closes
+            %% in the ra_server:terminate/2 function
+            %% as we want the directory to be deleted
+            %% after the server is removed from the ra directory.
+            %% This is so that the segment writer can avoid
+            %% crashing if it detects a missing key
             catch ra_directory:unregister_name(Names, UId),
+            _ = ra_server:terminate(ServerState, Reason),
             catch ra_log_meta:delete_sync(MetaName, UId),
             catch ra_counters:delete(Id),
             Self = self(),
@@ -1044,9 +1050,9 @@ terminate(Reason, StateName,
                               end
                       end),
             ok;
-
-
-        _ -> ok
+        _ ->
+            _ = ra_server:terminate(ServerState, Reason),
+            ok
     end,
     catch ra_leaderboard:clear(ClusterName),
     _ = ets:delete(ra_metrics, MetricsKey),

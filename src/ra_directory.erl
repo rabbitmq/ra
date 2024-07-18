@@ -19,7 +19,8 @@
          pid_of/2,
          uid_of/2,
          overview/1,
-         list_registered/1
+         list_registered/1,
+         is_registered_uid/2
          ]).
 
 -export_type([
@@ -198,6 +199,13 @@ overview(System) when is_atom(System) ->
 list_registered(System) when is_atom(System) ->
     Tbl = get_reverse(System),
     dets:select(Tbl, [{'_', [], ['$_']}]).
+
+-spec is_registered_uid(atom(), ra_uid()) -> boolean().
+is_registered_uid(System, UId)
+  when is_atom(System) andalso
+       is_binary(UId) ->
+    Tbl = get_reverse(System),
+    [] =/= dets:select(Tbl, [{{'_', UId}, [], ['$_']}]).
 
 get_name(#{directory := Tbl}) ->
     Tbl;

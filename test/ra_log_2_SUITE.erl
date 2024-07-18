@@ -67,31 +67,38 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
-    {ok, _} = ra:start([{data_dir, ?config(priv_dir, Config)},
-                        {segment_max_entries, 128}]),
     Config.
 
 end_per_suite(Config) ->
-    application:stop(ra),
     Config.
 
 init_per_group(G, Config) ->
-    [{access_pattern, G} | Config].
+    DataDir = filename:join(?config(priv_dir, Config), G),
+    [{access_pattern, G},
+     {work_dir, DataDir}
+     | Config].
 
 end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    ok = start_ra(Config),
     ra_env:configure_logger(logger),
-    PrivDir = ?config(priv_dir, Config),
+    DataDir = ?config(work_dir, Config),
     UId = <<(atom_to_binary(TestCase, utf8))/binary,
             (atom_to_binary(?config(access_pattern, Config)))/binary>>,
-    ra:start(),
     ok = ra_directory:register_name(default, UId, self(), undefined,
                                     TestCase, TestCase),
-    [{uid, UId}, {test_case, TestCase}, {wal_dir, PrivDir} | Config].
+    ServerConf = #{log_init_args => #{uid => UId}},
+
+    ok = ra_lib:make_dir(filename:join([DataDir, node(), UId])),
+    ok = ra_lib:write_file(filename:join([DataDir, node(), UId, "config"]),
+                           list_to_binary(io_lib:format("~p.", [ServerConf]))),
+
+    [{uid, UId}, {test_case, TestCase}, {wal_dir, DataDir} | Config].
 
 end_per_testcase(_, _Config) ->
+    application:stop(ra),
     ok.
 
 -define(N1, {n1, node()}).
@@ -429,13 +436,13 @@ written_event_after_snapshot(Config) ->
     ok.
 
 writes_lower_than_snapshot_index_are_dropped(Config) ->
+    logger:set_primary_config(level, debug),
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = deliver_all_log_events(ra_log:append({2, 1, <<"two">>}, Log1), 500),
     true = erlang:suspend_process(whereis(ra_log_wal)),
     Log2 = write_n(3, 500, 1, Log1b),
-    {Log3, _} = ra_log:update_release_cursor(100, #{}, 1,
-                                             <<"100">>, Log2),
+    {Log3, _} = ra_log:update_release_cursor(100, #{}, 1, <<"100">>, Log2),
     Log4 = deliver_all_log_events(Log3, 500),
 
     Overview = ra_log:overview(Log4),
@@ -473,8 +480,10 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
                    cache_size := 0,
                    cache_range := undefined,
                    last_written_index_term := {499, 1}}, OverviewAfter),
+    %% restart the app to test recovery with a "gappy" wal
+    application:stop(ra),
+    start_ra(Config),
     erlang:monitor(process, whereis(ra_log_segment_writer)),
-    exit(whereis(ra_log_wal), kill),
     receive
         {'DOWN', _, _, _, _} = D ->
             ct:fail("DOWN received ~p", [D])
@@ -589,7 +598,7 @@ recovery(Config) ->
     Log4 = assert_log_events(Log3, Pred, 2000),
     ra_log:close(Log4),
     application:stop(ra),
-    ra:start(),
+    start_ra(Config),
 
     Log5 = ra_log_init(Config),
     {20, 3} = ra_log:last_index_term(Log5),
@@ -610,7 +619,7 @@ recover_bigly(Config) ->
     Log2 = assert_log_events(Log1, Pred, 2000),
     ra_log:close(Log2),
     application:stop(ra),
-    ra:start(),
+    start_ra(Config),
     Log = ra_log_init(Config),
     {9999, 1} = ra_log:last_written(Log),
     {9999, 1} = ra_log:last_index_term(Log),
@@ -1150,7 +1159,7 @@ transient_writer_is_handled(Config) ->
     Self = self(),
     UId2 = <<(?config(uid, Config))/binary, "sub_proc">>,
     _Pid = spawn(fun () ->
-                         ra_directory:register_name(default, <<"sub_proc">>,
+                         ra_directory:register_name(default, UId2,
                                                     self(), undefined,
                                                     sub_proc, sub_proc),
                          Log0 = ra_log_init(Config, #{uid => UId2}),
@@ -1158,13 +1167,15 @@ transient_writer_is_handled(Config) ->
                          % ignore events
                          Log2 = deliver_all_log_events(Log1, 500),
                          ra_log:close(Log2),
-                         Self ! done
+                         Self ! done,
+                         ok
                  end),
     receive done -> ok
     after 2000 -> exit(timeout)
     end,
-    ra:start(),
+    UId2 = ra_directory:unregister_name(default, UId2),
     _ = ra_log_init(Config),
+    ct:pal("~p", [ra_directory:list_registered(default)]),
     ok.
 
 open_segments_limit(Config) ->
@@ -1499,8 +1510,8 @@ meta(Idx, Term, Cluster) ->
       machine_version => 1}.
 
 create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
-    OthDir = filename:join(?config(priv_dir, Config), "snapshot_installation"),
-    CPDir = filename:join(?config(priv_dir, Config), "checkpoints"),
+    OthDir = filename:join(?config(work_dir, Config), "snapshot_installation"),
+    CPDir = filename:join(?config(work_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
@@ -1537,4 +1548,9 @@ restart_wal() ->
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
     {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    ok.
+
+start_ra(Config) ->
+    {ok, _} = ra:start([{data_dir, ?config(work_dir, Config)},
+                        {segment_max_entries, 128}]),
     ok.
