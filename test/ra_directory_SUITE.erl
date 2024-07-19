@@ -72,6 +72,7 @@ basics(_Config) ->
     % registrations should always succeed - no negative test
     Self = ra_directory:where_is(?SYS, UId),
     UId = ra_directory:uid_of(?SYS, test1),
+    ?assert(ra_directory:is_registered_uid(?SYS, UId)),
     % ensure it can be read from another process
     _ = spawn_link(
           fun () ->
@@ -86,6 +87,7 @@ basics(_Config) ->
     undefined = ra_directory:name_of(?SYS, UId),
     undefined = ra_directory:cluster_name_of(?SYS, UId),
     undefined = ra_directory:uid_of(?SYS, test1),
+    ?assertNot(ra_directory:is_registered_uid(?SYS, UId)),
     ok.
 
 persistence(_Config) ->

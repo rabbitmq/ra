@@ -977,11 +977,12 @@ snapshot_installation_with_call_crash(Config) ->
     {ok, _, _} = ra:process_command(Leader, deq),
 
     meck:new(ra_server, [passthrough]),
-    meck:expect(ra_server, handle_follower, fun (#install_snapshot_rpc{}, _) ->
-                                          exit(timeout);
-                                      (A, B) ->
-                                          meck:passthrough([A, B])
-                                  end),
+    meck:expect(ra_server, handle_follower,
+                fun (#install_snapshot_rpc{}, _) ->
+                        exit(timeout);
+                    (A, B) ->
+                        meck:passthrough([A, B])
+                end),
     %% start the down node again, catchup should involve sending a snapshot
     ok = ra:restart_server(?SYS, Down),
 
@@ -994,7 +995,7 @@ snapshot_installation_with_call_crash(Config) ->
                       {ok, {N2Idx, _}, _} = ra:local_query(N2, fun ra_lib:id/1),
                       {ok, {N3Idx, _}, _} = ra:local_query(N3, fun ra_lib:id/1),
                       (N1Idx == N2Idx) and (N1Idx == N3Idx)
-              end, 20)),
+              end, 200)),
     ok.
 
 

@@ -29,6 +29,7 @@ all_tests() ->
      accept_mem_tables_rollover,
      accept_mem_tables_for_down_server,
      accept_mem_tables_with_corrupt_segment,
+     accept_mem_tables_with_gap,
      accept_mem_tables_with_delete_server,
      truncate_segments,
      truncate_segments_with_pending_update,
@@ -521,6 +522,37 @@ accept_mem_tables_with_corrupt_segment(Config) ->
     ok = gen_server:stop(TblWriterPid),
     ok.
 
+accept_mem_tables_with_gap(Config) ->
+    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    application:start(sasl),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    % fake up a mem segment with a gap due to snapshot index
+    Tid = make_mem_table(UId, [{1, 42, a}, {3, 42, c}, {4, 42, d}]),
+    MemTables = [{UId, 1, 4, Tid}],
+    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
+    WalFile = filename:join(Dir, "00001.wal"),
+    ok = file:write_file(WalFile, <<"waldata">>),
+    %% however the server is being deleted and is at the stage where it's
+    %% diretory still exists but it has been unregistered
+    UId = ra_directory:unregister_name(default, UId),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
+    receive
+        {ra_log_event, {segments, Tid, [{1, 3, _Fn}]}} ->
+            ct:fail("unexpected segments received")
+    after 200 ->
+              ok
+    end,
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
 accept_mem_tables_with_delete_server(Config) ->
     ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
     Dir = ?config(wal_dir, Config),
@@ -573,6 +605,7 @@ accept_mem_tables_with_delete_server(Config) ->
                       end, 5, 100),
     ok = gen_server:stop(TblWriterPid),
     ok.
+
 %%% Internal
 
 fake_mem_table(UId, Dir, Entries) ->

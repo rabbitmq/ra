@@ -886,13 +886,34 @@ drop_writes_if_snapshot_has_higher_index(Config) ->
 
     ets:insert(ra_log_snapshot_state, {UId, 20}),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 14, 1, "value2"),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 21, 1, "value2"),
+    ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 22, 1, "value2"),
+    ets:insert(ra_log_snapshot_state, {UId, 21}),
+    {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 23, 1, "value2"),
     timer:sleep(500),
+    Self = self(),
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    meck:expect(ra_log_segment_writer, accept_mem_tables,
+                fun(_, M, _) -> Self ! M, ok end),
 
     undefined = mem_tbl_read(UId, 14),
     ra_lib:dump(ets:tab2list(ra_log_open_mem_tables)),
+    true = ets:delete(ra_log_snapshot_state, UId),
     proc_lib:stop(Pid),
     [{_, _, _, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
     ?assert(not ets:info(Tid, compressed)),
+    flush(),
+    {ok, _Pid} = ra_log_wal:start_link(Conf),
+    receive
+        [{UId, _, _, Tbl} = MT] ->
+            ct:pal("MT ~p Tbl: ~p", [MT, ets:tab2list(Tbl)])
+    after 5000 ->
+              flush(),
+              ct:fail("bah")
+    end,
+    meck:unload(),
     ok.
 
 empty_mailbox() ->
@@ -962,6 +983,7 @@ tbl_lookup([{_, _First, Last, Tid} | Tail], Idx) when Last >= Idx ->
     end;
 tbl_lookup([_ | Tail], Idx) ->
     tbl_lookup(Tail, Idx).
+
 flush() ->
     receive Msg ->
                 ct:pal("flush: ~p", [Msg]),

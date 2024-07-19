@@ -22,6 +22,7 @@
 
 -record(state, {}).
 
+-define(ETSTBL, ra_log_snapshot_state).
 %%%===================================================================
 %%% API functions
 %%%===================================================================
@@ -40,7 +41,16 @@ init([System]) ->
     Regd = ra_directory:list_registered(System),
     ?INFO("ra system '~ts' running pre init for ~b registered servers",
           [System, length(Regd)]),
-    _ = [catch(pre_init(System, Name)) || {Name, _U} <- Regd],
+    _ = [begin
+             try pre_init(System, Name, UId) of
+                 ok -> ok
+             catch _:Err ->
+                       ?ERROR("pre_init failed in system ~s for UId ~ts with name ~ts"
+                              " This error may need manual intervention",
+                              [System, UId, Name]),
+                       throw({stop, {error, Err}})
+             end
+         end|| {Name, UId} <- Regd],
     {ok, #state{} , hibernate}.
 
 handle_call(_Request, _From, State) ->
@@ -63,8 +73,20 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-pre_init(System, Name) ->
-    {ok, #{log_init_args := Log}} = ra_server_sup_sup:recover_config(System, Name),
-    _ = ra_log:pre_init(Log),
-    ok.
+pre_init(System, Name, UId) ->
+    case ets:lookup(?ETSTBL, UId) of
+        [{_, _}] ->
+            %% already initialised
+            ok;
+        [] ->
+            case ra_system:fetch(System) of
+                undefined ->
+                    {error, system_not_started};
+                SysCfg ->
+                    {ok, #{log_init_args := Log}} =
+                        ra_server_sup_sup:recover_config(System, Name),
+                    ok = ra_log:pre_init(Log#{system_config => SysCfg}),
+                    ok
+            end
+    end.
 
