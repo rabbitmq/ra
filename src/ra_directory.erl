@@ -99,6 +99,7 @@ unregister_name(#{directory := Directory,
             ok = dets:delete(DirRev, ServerName),
             UId;
         [] ->
+            _ = dets:select_delete(DirRev, [{{'_', UId}, [], [true]}]),
             UId
     end.
 

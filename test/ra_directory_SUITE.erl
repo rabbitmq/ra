@@ -65,7 +65,7 @@ end_per_testcase(_TestCase, _Config) ->
 
 basics(_Config) ->
     ok = ra_directory:init(?SYS),
-    UId = <<"test1">>,
+    UId = atom_to_binary(?FUNCTION_NAME),
     Self = self(),
     ok = ra_directory:register_name(?SYS, UId, Self, undefined,
                                     test1, <<"test_cluster_name">>),
@@ -92,11 +92,18 @@ basics(_Config) ->
 
 persistence(_Config) ->
     ok = ra_directory:init(?SYS),
-    UId = <<"test1">>,
+    UId = atom_to_binary(?FUNCTION_NAME),
+    UId2 = <<UId/binary, "2">>,
     Self = self(),
+    Pid = spawn(fun () -> ok end),
     ok = ra_directory:register_name(?SYS, UId, Self, undefined, test1, <<"name">>),
+    ok = ra_directory:register_name(?SYS, UId2, Pid, undefined, test2, <<"name">>),
     UId = ra_directory:uid_of(?SYS, test1),
     ok = ra_directory:deinit(?SYS),
     ok = ra_directory:init(?SYS),
     UId = ra_directory:uid_of(?SYS, test1),
+    UId = ra_directory:unregister_name(?SYS, UId),
+    Regd = ra_directory:list_registered(?SYS),
+    ?assert(lists:member({test2, UId2}, Regd)),
+    ?assertNot(lists:member({test1, UId}, Regd)),
     ok.
