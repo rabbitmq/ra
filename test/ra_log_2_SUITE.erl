@@ -31,7 +31,8 @@ all_tests() ->
      last_index_reset,
      last_index_reset_before_written,
      recovery,
-     recover_bigly,
+     recover_many,
+     recovery_with_missing_directory,
      wal_crash_recover,
      wal_down_read_availability,
      wal_down_append_throws,
@@ -74,6 +75,11 @@ end_per_suite(Config) ->
 
 init_per_group(G, Config) ->
     DataDir = filename:join(?config(priv_dir, Config), G),
+    ra_env:configure_logger(logger),
+    LogFile = filename:join(DataDir, "ra.log"),
+    logger:set_primary_config(level, debug),
+    logger:add_handler(ra_handler, logger_std_h,
+                       #{config => #{file => LogFile}}),
     [{access_pattern, G},
      {work_dir, DataDir}
      | Config].
@@ -83,7 +89,6 @@ end_per_group(_, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ok = start_ra(Config),
-    ra_env:configure_logger(logger),
     DataDir = ?config(work_dir, Config),
     UId = <<(atom_to_binary(TestCase, utf8))/binary,
             (atom_to_binary(?config(access_pattern, Config)))/binary>>,
@@ -609,7 +614,7 @@ recovery(Config) ->
 
     ok.
 
-recover_bigly(Config) ->
+recover_many(Config) ->
     Log0 = ra_log_init(Config),
     Log1 = write_n(1, 10000, 1, Log0),
     Pred = fun (L) ->
@@ -626,6 +631,27 @@ recover_bigly(Config) ->
     ra_log:close(Log),
     ok.
 
+recovery_with_missing_directory(Config) ->
+    %% checking that the ra system can be restarted even if a directory
+    %% has been deleted with a ra_directory entry still in place.
+    logger:set_primary_config(level, debug),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_init(Config),
+    ra_log:close(Log0),
+
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+    ok = ra_lib:recursive_delete(ServerDataDir),
+    ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    application:stop(ra),
+    start_ra(Config),
+
+    Log5 = ra_log_init(Config),
+    ra_log:close(Log5),
+    ok = ra_lib:recursive_delete(ServerDataDir),
+    ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    ok.
 
 resend_write(Config) ->
     % logger:set_primary_config(level, debug),

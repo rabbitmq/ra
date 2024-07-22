@@ -42,7 +42,7 @@ init([System]) ->
     ?INFO("ra system '~ts' running pre init for ~b registered servers",
           [System, length(Regd)]),
     _ = [begin
-             try pre_init(System, Name, UId) of
+             try pre_init(System, UId) of
                  ok -> ok
              catch _:Err ->
                        ?ERROR("pre_init failed in system ~s for UId ~ts with name ~ts"
@@ -73,7 +73,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-pre_init(System, Name, UId) ->
+pre_init(System, UId) ->
     case ets:lookup(?ETSTBL, UId) of
         [{_, _}] ->
             %% already initialised
@@ -83,10 +83,25 @@ pre_init(System, Name, UId) ->
                 undefined ->
                     {error, system_not_started};
                 SysCfg ->
-                    {ok, #{log_init_args := Log}} =
-                        ra_server_sup_sup:recover_config(System, Name),
-                    ok = ra_log:pre_init(Log#{system_config => SysCfg}),
-                    ok
+                    %% check if the server dir exists, if not
+                    %% then just log and return instead of failing.
+                    Dir = ra_env:server_data_dir(System, UId),
+                    case ra_lib:is_dir(Dir) of
+                        true ->
+                            case ra_log:read_config(Dir) of
+                                {ok, #{log_init_args := Log}} ->
+                                    ok = ra_log:pre_init(Log#{system_config => SysCfg}),
+                                    ok;
+                                {error, Err} ->
+                                    ?ERROR("pre_init failed to read config file for UId '~ts', Err ~p",
+                                           [UId, Err]),
+                                    exit({pre_init_failed, Err})
+                            end;
+                        false ->
+                            ?INFO("pre_init UId '~ts' is registered but no data directory was found",
+                                  [UId]),
+                            ok
+                    end
             end
     end.
 
