@@ -46,9 +46,9 @@ init([System]) ->
                  ok -> ok
              catch _:Err ->
                        ?ERROR("pre_init failed in system ~s for UId ~ts with name ~ts"
-                              " This error may need manual intervention",
-                              [System, UId, Name]),
-                       throw({stop, {error, Err}})
+                              " This error may need manual intervention, Error ~p",
+                              [System, UId, Name, Err]),
+                       ok
              end
          end|| {Name, UId} <- Regd],
     {ok, #state{} , hibernate}.
@@ -95,11 +95,13 @@ pre_init(System, UId) ->
                                 {error, Err} ->
                                     ?ERROR("pre_init failed to read config file for UId '~ts', Err ~p",
                                            [UId, Err]),
-                                    exit({pre_init_failed, Err})
+                                    ok
                             end;
                         false ->
-                            ?INFO("pre_init UId '~ts' is registered but no data directory was found",
+                            ?INFO("pre_init UId '~ts' is registered but no data
+                                  directory was found, removing from ra directory",
                                   [UId]),
+                            _ = catch ra_directory:unregister_name(System, UId),
                             ok
                     end
             end

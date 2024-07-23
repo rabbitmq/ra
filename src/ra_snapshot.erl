@@ -224,43 +224,47 @@ find_checkpoints(#?MODULE{uid = UId,
                           module = Module,
                           current = Current,
                           checkpoint_directory = CheckpointDir} = State) ->
-    true = ra_lib:is_dir(CheckpointDir),
-    CurrentIdx = case Current of
-                     undefined ->
-                         -1;
-                     {I, _} ->
-                         I
-                 end,
-    {ok, CPFiles0} = prim_file:list_dir(CheckpointDir),
-    CPFiles = lists:reverse(lists:sort(CPFiles0)),
-    Checkpoints =
-        lists:filtermap(
-          fun(File) ->
-                  CP = filename:join(CheckpointDir, File),
-                  case Module:validate(CP) of
-                      ok ->
-                          {ok, #{index := Idx, term := Term}} =
+    case ra_lib:is_dir(CheckpointDir) of
+        false ->
+            State;
+        true ->
+            CurrentIdx = case Current of
+                             undefined ->
+                                 -1;
+                             {I, _} ->
+                                 I
+                         end,
+            {ok, CPFiles0} = prim_file:list_dir(CheckpointDir),
+            CPFiles = lists:reverse(lists:sort(CPFiles0)),
+            Checkpoints =
+            lists:filtermap(
+              fun(File) ->
+                      CP = filename:join(CheckpointDir, File),
+                      case Module:validate(CP) of
+                          ok ->
+                              {ok, #{index := Idx, term := Term}} =
                               Module:read_meta(CP),
-                          case Idx > CurrentIdx of
-                              true ->
-                                  {true, {Idx, Term}};
-                              false ->
-                                  ?INFO("ra_snapshot: ~ts: removing "
-                                        "checkpoint ~s as was older than the "
-                                        "current snapshot.",
-                                        [UId, CP]),
-                                  delete(CheckpointDir, {Idx, Term}),
-                                  false
-                          end;
-                      Err ->
-                          ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as "
-                                "did not validate. Err: ~w",
-                                [UId, CP, Err]),
-                          ra_lib:recursive_delete(CP),
-                          false
-                  end
-          end, CPFiles),
-    State#?MODULE{checkpoints = Checkpoints}.
+                              case Idx > CurrentIdx of
+                                  true ->
+                                      {true, {Idx, Term}};
+                                  false ->
+                                      ?INFO("ra_snapshot: ~ts: removing "
+                                            "checkpoint ~s as was older than the "
+                                            "current snapshot.",
+                                            [UId, CP]),
+                                      delete(CheckpointDir, {Idx, Term}),
+                                      false
+                              end;
+                          Err ->
+                              ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as "
+                                    "did not validate. Err: ~w",
+                                    [UId, CP, Err]),
+                              ra_lib:recursive_delete(CP),
+                              false
+                      end
+              end, CPFiles),
+            State#?MODULE{checkpoints = Checkpoints}
+    end.
 
 -spec init_ets() -> ok.
 init_ets() ->

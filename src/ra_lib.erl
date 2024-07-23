@@ -529,7 +529,7 @@ merge_with_1(none, Result, _, _) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-lists_chink_test() ->
+lists_chunk_test() ->
     ?assertError(invalid_size, lists_chunk(0, [a])),
     ?assertMatch([], lists_chunk(2, [])),
     ?assertMatch([[a]], lists_chunk(2, [a])),
