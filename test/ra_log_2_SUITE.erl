@@ -33,6 +33,8 @@ all_tests() ->
      recovery,
      recover_many,
      recovery_with_missing_directory,
+     recovery_with_missing_checkpoints_directory,
+     recovery_with_missing_config_file,
      wal_crash_recover,
      wal_down_read_availability,
      wal_down_append_throws,
@@ -642,6 +644,55 @@ recovery_with_missing_directory(Config) ->
     ServerDataDir = ra_env:server_data_dir(default, UId),
     ok = ra_lib:recursive_delete(ServerDataDir),
     ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    ?assert(ra_directory:is_registered_uid(default, UId)),
+    application:stop(ra),
+    start_ra(Config),
+    ?assertNot(ra_directory:is_registered_uid(default, UId)),
+
+    Log5 = ra_log_init(Config),
+    ra_log:close(Log5),
+    ok = ra_lib:recursive_delete(ServerDataDir),
+    ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    ok.
+
+recovery_with_missing_checkpoints_directory(Config) ->
+    %% checking that the ra system can be restarted even if the checkpoints
+    %% directory is missing, it will be created the next time the
+    %% log is initialised
+    logger:set_primary_config(level, debug),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_init(Config),
+    ra_log:close(Log0),
+
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+    CheckpointsDir = filename:join(ServerDataDir, "checkpoints"),
+    ok = ra_lib:recursive_delete(CheckpointsDir),
+    ?assertNot(filelib:is_dir(CheckpointsDir)),
+
+    application:stop(ra),
+    start_ra(Config),
+
+    Log5 = ra_log_init(Config),
+    ra_log:close(Log5),
+    ok = ra_lib:recursive_delete(ServerDataDir),
+    ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    ok.
+
+recovery_with_missing_config_file(Config) ->
+    %% checking that the ra system can be restarted even when the config
+    %% file is missing
+    logger:set_primary_config(level, debug),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_init(Config),
+    ra_log:close(Log0),
+
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+    ConfigFile = filename:join(ServerDataDir, "config"),
+    file:delete(ConfigFile),
+    ?assertNot(filelib:is_file(ConfigFile)),
 
     application:stop(ra),
     start_ra(Config),

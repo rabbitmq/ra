@@ -902,7 +902,8 @@ segment_writer_or_wal_crash_follower(Config) ->
                               LastIdxs =
                               [begin
                                    {ok, #{current_term := T,
-                                          log := #{last_index := L}}, _} =
+                                          log := #{last_index := L,
+                                                   cache_size := 0}}, _} =
                                    ra:member_overview(S),
                                    {T, L}
                                end || {_, _N} = S <- ServerIds],
@@ -934,8 +935,6 @@ segment_writer_or_wal_crash_follower(Config) ->
 
          %% assert stuff
          await_condition(AwaitReplicated, 100),
-         ?assertMatch({ok, #{log := #{cache_size := 0}}, _},
-                      ra:member_overview(Follower)),
          %% follower hasn't crashed
          ?assertEqual(FollowerPid, ct_rpc:call(FollowerNode, erlang, whereis,
                                                [FollowerName]))
