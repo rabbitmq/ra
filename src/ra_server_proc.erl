@@ -1188,9 +1188,9 @@ perform_or_delay_local_query(
     %% If the condition is set to `{applied, {Index, Term}}', the query is
     %% added to a list of pending queries. It will be evaluated once that
     %% index is applied locally.
-    Leader = determine_leader(RaftState, State),
     case maps:get(condition, Options, undefined) of
         undefined ->
+            Leader = determine_leader(RaftState, State),
             Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
             {keep_state, State, [{reply, From, Reply}]};
         Condition ->
