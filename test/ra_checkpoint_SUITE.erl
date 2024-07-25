@@ -261,28 +261,38 @@ init_recover_corrupt(Config) ->
     State0 = init_state(Config),
 
     %% Take a checkpoint.
-    Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
-    {State1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, checkpoint, State0),
+    Meta1 = meta(55, 2, [node()]),
+    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, checkpoint, State0),
+    State2 = receive
+                 {ra_log_event, {snapshot_written, {55, 2} = IdxTerm1, checkpoint}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
+             after 1000 ->
+                     error(snapshot_event_timeout)
+             end,
+
+    %% Take another checkpoint.
+    Meta2 = meta(165, 2, [node()]),
+    {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME, checkpoint, State2),
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, checkpoint}} ->
-            _ = ra_snapshot:complete_snapshot(IdxTerm, checkpoint, State1),
+        {ra_log_event, {snapshot_written, {165, 2} = IdxTerm2, checkpoint}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3),
             ok
     after 1000 ->
             error(snapshot_event_timeout)
     end,
 
-    %% Delete the file but leave the directory intact.
+    %% Corrupt the latest checkpoint by deleting the snapshot.dat file but
+    %% leaving the checkpoint directory intact.
     CorruptDir = filename:join(?config(checkpoint_dir, Config),
-                               ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55)),
+                               ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(165)),
     ok = file:delete(filename:join(CorruptDir, "snapshot.dat")),
 
     Recover = init_state(Config),
     %% The checkpoint isn't recovered and the directory is cleaned up.
     undefined = ra_snapshot:pending(Recover),
     undefined = ra_snapshot:current(Recover),
-    undefined = ra_snapshot:latest_checkpoint(Recover),
-    {error, no_current_snapshot} = ra_snapshot:recover(Recover),
+    {55, 2} = ra_snapshot:latest_checkpoint(Recover),
+    {ok, Meta1, ?FUNCTION_NAME} = ra_snapshot:recover(Recover),
     false = filelib:is_dir(CorruptDir),
 
     ok.
