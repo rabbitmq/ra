@@ -1207,7 +1207,7 @@ perform_or_delay_local_query(
 perform_pending_queries(_RaftState, #state{pending_queries = []} = State) ->
     {State, []};
 perform_pending_queries(RaftState, State) ->
-    #{last_applied := LastApplied} = do_state_query(overview, State),
+    LastApplied = do_state_query(last_applied, State),
     perform_pending_queries(RaftState, LastApplied, State, []).
 
 perform_pending_queries(RaftState, LastApplied,

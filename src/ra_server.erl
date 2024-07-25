@@ -2445,6 +2445,8 @@ state_query(initial_members, #{log := Log}) ->
         _ ->
             error
     end;
+state_query(last_applied, State) ->
+    maps:get(last_applied, State, undefined);
 state_query(Query, _State) ->
     {error, {unknown_query, Query}}.
 
