@@ -81,7 +81,8 @@
          register_external_log_reader/1,
          member_overview/1,
          member_overview/2,
-         key_metrics/1
+         key_metrics/1,
+         key_metrics/2
         ]).
 
 %% xref should pick these up
@@ -1212,7 +1213,20 @@ member_overview(ServerId, Timeout) ->
 %%
 %% @param ServerId the Ra server to obtain key metrics for
 %% @end
-key_metrics({Name, N} = ServerId) when N == node() ->
+key_metrics(ServerId) ->
+    key_metrics(ServerId, ?DEFAULT_TIMEOUT).
+
+%% @doc Returns a map of key metrics about a Ra member
+%%
+%% The keys and values may vary depending on what state
+%% the member is in. This function will never call into the
+%% Ra process itself so is likely to return swiftly even
+%% when the Ra process is busy (such as when it is recovering)
+%%
+%% @param ServerId the Ra server to obtain key metrics for
+%% @param Timeout The time to wait for the server to reply
+%% @end
+key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
     Fields = [last_applied,
               commit_index,
               snapshot_index,
@@ -1239,8 +1253,8 @@ key_metrics({Name, N} = ServerId) when N == node() ->
                               membership => Membership}
             end
     end;
-key_metrics({_, N} = ServerId) ->
-    erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId]).
+key_metrics({_, N} = ServerId, Timeout) ->
+    erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
 
 
 %% internal
