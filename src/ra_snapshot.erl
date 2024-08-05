@@ -220,9 +220,7 @@ pick_first_valid(UId, Mod, Dir, [S | Rem]) ->
             pick_first_valid(UId, Mod, Dir, Rem)
     end.
 
-find_checkpoints(#?MODULE{uid = UId,
-                          module = Module,
-                          current = Current,
+find_checkpoints(#?MODULE{current = Current,
                           checkpoint_directory = CheckpointDir} = State) ->
     case ra_lib:is_dir(CheckpointDir) of
         false ->
@@ -235,36 +233,86 @@ find_checkpoints(#?MODULE{uid = UId,
                                  I
                          end,
             {ok, CPFiles0} = prim_file:list_dir(CheckpointDir),
+            %% Reverse-sort the files so that the most recent checkpoints
+            %% come first.
             CPFiles = lists:reverse(lists:sort(CPFiles0)),
-            Checkpoints =
-            lists:filtermap(
-              fun(File) ->
-                      CP = filename:join(CheckpointDir, File),
-                      case Module:validate(CP) of
-                          ok ->
-                              {ok, #{index := Idx, term := Term}} =
-                              Module:read_meta(CP),
-                              case Idx > CurrentIdx of
-                                  true ->
-                                      {true, {Idx, Term}};
-                                  false ->
-                                      ?INFO("ra_snapshot: ~ts: removing "
-                                            "checkpoint ~s as was older than the "
-                                            "current snapshot.",
-                                            [UId, CP]),
-                                      delete(CheckpointDir, {Idx, Term}),
-                                      false
-                              end;
-                          Err ->
-                              ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as "
-                                    "did not validate. Err: ~w",
-                                    [UId, CP, Err]),
-                              ra_lib:recursive_delete(CP),
-                              false
-                      end
-              end, CPFiles),
-            State#?MODULE{checkpoints = Checkpoints}
+            find_checkpoints(CPFiles, State, CurrentIdx, [])
     end.
+
+find_checkpoints([], State, _CurrentIdx, Checkpoints) ->
+    %% Reverse so that the most recent checkpoints come first.
+    State#?MODULE{checkpoints = lists:reverse(Checkpoints)};
+find_checkpoints(
+  [File | Files],
+  #?MODULE{uid = UId,
+           module = Module,
+           checkpoint_directory = CheckpointDir} = State,
+  CurrentIdx, []) ->
+    %% When we haven't yet found a valid checkpoint (`Checkpoints =:= []`),
+    %% fully validate the file with the `ra_snapshot:validate/1` callback to
+    %% ensure that we can recover from the latest checkpoint.
+    CP = filename:join(CheckpointDir, File),
+    case Module:validate(CP) of
+        ok ->
+            {ok, #{index := Idx, term := Term}} = Module:read_meta(CP),
+            case Idx > CurrentIdx of
+                true ->
+                    find_checkpoints(Files, State, CurrentIdx, [{Idx, Term}]);
+                false ->
+                    %% If the first valid checkpoint is older than the snapshot
+                    %% index then all checkpoints in `Files` are older as well.
+                    %% Delete all checkpoints and bail.
+                    delete_stale_checkpoints(
+                      UId, CheckpointDir, [File | Files]),
+                    State
+            end;
+        Err ->
+            ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as it did not "
+                  "validate. Err: ~w",
+                  [UId, CP, Err]),
+            _ = ra_lib:recursive_delete(CP),
+            find_checkpoints(Files, State, CurrentIdx, [])
+    end;
+find_checkpoints(
+  [File | Files],
+  #?MODULE{uid = UId,
+           module = Module,
+           checkpoint_directory = CheckpointDir} = State,
+  CurrentIdx, Checkpoints) ->
+    %% If a valid checkpoint has already been found, delay validation for the
+    %% older remaining checkpoints until we attempt to promote them. This
+    %% reduces I/O usage on startup.
+    CP = filename:join(CheckpointDir, File),
+    case Module:read_meta(CP) of
+        {ok, #{index := Idx, term := Term}} ->
+            case Idx > CurrentIdx of
+                true ->
+                    find_checkpoints(
+                      Files, State, CurrentIdx, [{Idx, Term} | Checkpoints]);
+                false ->
+                    %% If this checkpoint is older than the current snapshot
+                    %% then all later `Files` will be as well. Delete them and
+                    %% finish searching.
+                    delete_stale_checkpoints(
+                      UId, CheckpointDir, [File | Files]),
+                    find_checkpoints([], State, CurrentIdx, Checkpoints)
+            end;
+        Err ->
+            ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as metadata could "
+                  "not be read. Err: ~w",
+                  [UId, CP, Err]),
+            _ = ra_lib:recursive_delete(CP),
+            find_checkpoints(Files, State, CurrentIdx, Checkpoints)
+    end.
+
+delete_stale_checkpoints(UId, CheckpointDir, Files) ->
+    [begin
+         CP = filename:join(CheckpointDir, File),
+         ?INFO("ra_snapshot: ~ts: removing checkpoint ~s as it was older than "
+               "the current snapshot.", [UId, CP]),
+         _ = ra_lib:recursive_delete(CP)
+     end || File <- Files],
+    ok.
 
 -spec init_ets() -> ok.
 init_ets() ->
