@@ -933,8 +933,23 @@ read_config(Dir) ->
     ra_lib:consult(ConfigPath).
 
 -spec delete_everything(state()) -> ok.
-delete_everything(#?MODULE{cfg = #cfg{directory = Dir}} = Log) ->
+delete_everything(#?MODULE{cfg = #cfg{directory = Dir},
+                           snapshot_state = SnapState} = Log) ->
     _ = close(Log),
+    %% if there is a snapshot process pending it could cause the directory
+    %% deletion to fail, best kill the snapshot process first
+    case ra_snapshot:pending(SnapState) of
+        {Pid, _, _} ->
+            case is_process_alive(Pid) of
+                true ->
+                    exit(Pid, kill),
+                    ok;
+                false ->
+                    ok
+            end;
+        _ ->
+            ok
+    end,
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch
