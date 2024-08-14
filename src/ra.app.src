@@ -1,6 +1,6 @@
 {application,ra,
              [{description,"Raft library"},
-              {vsn,"2.13.5"},
+              {vsn,"2.13.6"},
               {licenses,["Apache-2.0","MPL-2.0"]},
               {links,[{"github","https://github.com/rabbitmq/ra"}]},
               {modules,[]},
