@@ -33,7 +33,7 @@
 %% gen_statem callbacks
 -export([
          init/1,
-         format_status/2,
+         format_status/1,
          handle_event/4,
          terminate/3,
          code_change/4,
@@ -1087,26 +1087,26 @@ terminate(Reason, StateName, State) ->
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-format_status(Opt, [_PDict, StateName,
-                    #state{server_state = NS,
-                           leader_last_seen = LastSeen,
-                           pending_commands = Pending,
-                           low_priority_commands = Delayed,
-                           pending_notifys = PendingNots,
-                           election_timeout_set = ElectionSet
-                          }]) ->
+format_status(#{state := StateName,
+                data := #state{server_state = NS,
+                               leader_last_seen = LastSeen,
+                               pending_commands = Pending,
+                               low_priority_commands = Delayed,
+                               pending_notifys = PendingNots,
+                               election_timeout_set = ElectionSet
+                              }} = FormatStatus) ->
     NumPendingNots = maps:fold(fun (_, Corrs, Acc) -> Acc + length(Corrs) end,
                                0, PendingNots),
-    [{id, ra_server:id(NS)},
-     {opt, Opt},
-     {raft_state, StateName},
-     {leader_last_seen, LastSeen},
-     {num_pending_commands, length(Pending)},
-     {num_low_priority_commands, ra_ets_queue:len(Delayed)},
-     {num_pending_applied_notifications, NumPendingNots},
-     {election_timeout_set, ElectionSet},
-     {ra_server_state, ra_server:overview(NS)}
-    ].
+
+    FormatStatus#{data => [{id, ra_server:id(NS)},
+                           {raft_state, StateName},
+                           {leader_last_seen, LastSeen},
+                           {num_pending_commands, length(Pending)},
+                           {num_low_priority_commands, ra_ets_queue:len(Delayed)},
+                           {num_pending_applied_notifications, NumPendingNots},
+                           {election_timeout_set, ElectionSet},
+                           {ra_server_state, ra_server:overview(NS)}
+                          ]}.
 
 %%%===================================================================
 %%% Internal functions

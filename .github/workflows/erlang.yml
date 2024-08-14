@@ -6,24 +6,24 @@ on:
   pull_request:
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        otp:
-        - "26"
+        otp_version: [25, 26, 27]
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
     - name: CONFIGURE ERLANG
       uses: erlef/setup-beam@v1
       with:
-        otp-version: ${{ matrix.otp }}
+        otp-version: ${{ matrix.otp_version }}
     - name: XREF
       run: make xref
     - name: DEPS
       run: make test-deps
     - name: DIALYZE
+      if: ${{ matrix.otp_version == 27}}
       run: make dialyze
     - name: BUILD
       run: make test-build
@@ -37,7 +37,7 @@ jobs:
       uses: actions/upload-artifact@v2-preview
       if: failure()
       with:
-        name: ct-logs-${{matrix.otp}}
+        name: ct-logs-${{matrix.otp_version}}
         path: logs/*
   build-bazel:
     runs-on: ubuntu-20.04
@@ -45,8 +45,6 @@ jobs:
       fail-fast: false
       matrix:
         otp_major:
-        - "24"
-        - "25"
         - "26"
     steps:
     - name: CHECKOUT
