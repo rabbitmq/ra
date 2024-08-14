@@ -242,12 +242,11 @@ find_checkpoints(#?MODULE{current = Current,
 find_checkpoints([], State, _CurrentIdx, Checkpoints) ->
     %% Reverse so that the most recent checkpoints come first.
     State#?MODULE{checkpoints = lists:reverse(Checkpoints)};
-find_checkpoints(
-  [File | Files],
-  #?MODULE{uid = UId,
-           module = Module,
-           checkpoint_directory = CheckpointDir} = State,
-  CurrentIdx, []) ->
+find_checkpoints([File | Files],
+                 #?MODULE{uid = UId,
+                          module = Module,
+                          checkpoint_directory = CheckpointDir} = State,
+                 CurrentIdx, []) ->
     %% When we haven't yet found a valid checkpoint (`Checkpoints =:= []`),
     %% fully validate the file with the `ra_snapshot:validate/1` callback to
     %% ensure that we can recover from the latest checkpoint.
@@ -273,15 +272,14 @@ find_checkpoints(
             _ = ra_lib:recursive_delete(CP),
             find_checkpoints(Files, State, CurrentIdx, [])
     end;
-find_checkpoints(
-  [File | Files],
-  #?MODULE{uid = UId,
-           module = Module,
-           checkpoint_directory = CheckpointDir} = State,
-  CurrentIdx, Checkpoints) ->
-    %% If a valid checkpoint has already been found, delay validation for the
-    %% older remaining checkpoints until we attempt to promote them. This
-    %% reduces I/O usage on startup.
+find_checkpoints([File | Files],
+                 #?MODULE{uid = UId,
+                          module = Module,
+                          checkpoint_directory = CheckpointDir} = State,
+                 CurrentIdx, Checkpoints) ->
+    %% If a valid checkpoint has already been found it is assumed all older
+    %% checkpoints are also valid. Scanning all can introduce a lot of
+    %% additional I/O during recovery.
     CP = filename:join(CheckpointDir, File),
     case Module:read_meta(CP) of
         {ok, #{index := Idx, term := Term}} ->
