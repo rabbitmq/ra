@@ -1342,7 +1342,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                       machine_versions = MachineVersions,
                                       machine = Machine} = Cfg0,
                           log := Log0,
-                          current_term := CurTerm} = State0)
+                          current_term := CurTerm,
+                          machine_state := OldMacState} = State0)
   when Term >= CurTerm ->
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
            [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
@@ -1377,6 +1378,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
 
             SnapInstalledEffs = ra_machine:snapshot_installed(EffMacMod,
                                                               SnapMeta,
+                                                              CurEffMacVer,
+                                                              OldMacState,
                                                               MacState),
 
             State = update_term(Term,
