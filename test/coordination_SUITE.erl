@@ -1329,7 +1329,7 @@ apply(#{index := _Idx}, {segment_writer_or_wal_crash_follower, _}, State) ->
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
 
-snapshot_installed(Meta, _State) ->
+snapshot_installed(Meta, _OldMacVer, _OldState, _NewState) ->
     case whereis(snapshot_installed_proc) of
         undefined ->
             [];

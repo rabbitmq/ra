@@ -69,7 +69,7 @@
 -export([init/2,
          apply/4,
          tick/3,
-         snapshot_installed/3,
+         snapshot_installed/5,
          state_enter/3,
          overview/2,
          query/3,
@@ -210,6 +210,7 @@
 
 -optional_callbacks([tick/2,
                      snapshot_installed/2,
+                     snapshot_installed/4,
                      state_enter/2,
                      init_aux/1,
                      handle_aux/5,
@@ -242,6 +243,14 @@
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
 -callback snapshot_installed(ra_snapshot:meta(), state()) -> effects().
+
+-callback snapshot_installed(Meta, OldMacVer, OldState, NewState) -> Effects
+    when
+      Meta :: ra_snapshot:meta(),
+      OldMacVer :: version(),
+      OldState :: state(),
+      NewState :: state(),
+      Effects :: effects().
 
 -callback init_aux(Name :: atom()) -> AuxState :: term().
 
@@ -302,9 +311,27 @@ apply(Mod, Metadata, Cmd, State) ->
 tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
--spec snapshot_installed(module(), ra_snapshot:meta(), state()) -> effects().
-snapshot_installed(Mod, Meta, State) ->
-    ?OPT_CALL(Mod:snapshot_installed(Meta, State), []).
+-spec snapshot_installed(Module, Meta, OldMacVer, OldState, NewState) ->
+    Effects when
+      Module :: module(),
+      Meta :: ra_snapshot:meta(),
+      OldMacVer :: version(),
+      OldState :: state(),
+      NewState :: state(),
+      Effects :: effects().
+
+snapshot_installed(Mod, Meta, OldMacVer, OldState, NewState) ->
+    try
+        Mod:snapshot_installed(Meta, OldMacVer, OldState, NewState)
+    catch
+        error:undef ->
+            try
+                Mod:snapshot_installed(Meta, NewState)
+            catch
+                error:undef ->
+                    []
+            end
+    end.
 
 %% @doc called when the ra_server_proc enters a new state
 -spec state_enter(module(), ra_server:ra_state() | eol, state()) ->
