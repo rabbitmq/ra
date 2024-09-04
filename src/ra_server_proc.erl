@@ -857,6 +857,18 @@ receive_snapshot(enter, OldState, State0 = #state{conf = Conf}) ->
       | Actions]};
 receive_snapshot(_, tick_timeout, State0) ->
     {keep_state, State0, set_tick_timer(State0, [])};
+receive_snapshot({call, From}, {leader_call, Msg}, State) ->
+    maybe_redirect(From, Msg, State);
+receive_snapshot(EventType, {local_call, Msg}, State) ->
+    receive_snapshot(EventType, Msg, State);
+receive_snapshot({call, _From} = EventType, {local_query, QueryFun}, State) ->
+    receive_snapshot(EventType, {local_query, QueryFun, #{}}, State);
+receive_snapshot({call, From}, {local_query, QueryFun, Options}, State) ->
+    perform_or_delay_local_query(
+      receive_snapshot, From, QueryFun, Options, State);
+receive_snapshot({call, From}, {state_query, Spec}, State) ->
+    Reply = {ok, do_state_query(Spec, State), id(State)},
+    {keep_state, State, [{reply, From, Reply}]};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
