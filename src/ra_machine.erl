@@ -209,7 +209,6 @@
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
-                     snapshot_installed/2,
                      snapshot_installed/4,
                      state_enter/2,
                      init_aux/1,
@@ -242,14 +241,12 @@
 
 -callback tick(TimeMs :: milliseconds(), state()) -> effects().
 
--callback snapshot_installed(ra_snapshot:meta(), state()) -> effects().
-
--callback snapshot_installed(Meta, OldMacVer, OldState, NewState) -> Effects
+-callback snapshot_installed(Meta, State, OldMeta, OldState) -> Effects
     when
       Meta :: ra_snapshot:meta(),
-      OldMacVer :: version(),
+      State :: state(),
+      OldMeta :: ra_snapshot:meta(),
       OldState :: state(),
-      NewState :: state(),
       Effects :: effects().
 
 -callback init_aux(Name :: atom()) -> AuxState :: term().
@@ -311,22 +308,23 @@ apply(Mod, Metadata, Cmd, State) ->
 tick(Mod, TimeMs, State) ->
     ?OPT_CALL(Mod:tick(TimeMs, State), []).
 
--spec snapshot_installed(Module, Meta, OldMacVer, OldState, NewState) ->
-    Effects when
+-spec snapshot_installed(Module, Meta, State, OldMeta, OldState) ->
+    effects() when
       Module :: module(),
       Meta :: ra_snapshot:meta(),
-      OldMacVer :: version(),
-      OldState :: state(),
-      NewState :: state(),
-      Effects :: effects().
-
-snapshot_installed(Mod, Meta, OldMacVer, OldState, NewState) ->
+      State :: state(),
+      OldMeta :: ra_snapshot:meta(),
+      OldState :: state().
+snapshot_installed(Mod, Meta, State, OldMeta, OldState)
+  when is_atom(Mod) andalso
+       is_map(Meta) andalso
+       is_map(OldMeta) ->
     try
-        Mod:snapshot_installed(Meta, OldMacVer, OldState, NewState)
+        Mod:snapshot_installed(Meta, State, OldMeta, OldState)
     catch
         error:undef ->
             try
-                Mod:snapshot_installed(Meta, NewState)
+                Mod:snapshot_installed(Meta, State)
             catch
                 error:undef ->
                     []

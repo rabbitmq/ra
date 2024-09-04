@@ -1342,7 +1342,9 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                       machine_versions = MachineVersions,
                                       machine = Machine} = Cfg0,
                           log := Log0,
+                          cluster := Cluster,
                           current_term := CurTerm,
+                          last_applied := LastApplied,
                           machine_state := OldMacState} = State0)
   when Term >= CurTerm ->
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
@@ -1376,12 +1378,19 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
 
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
 
+            OldServerIds = maps:map(fun (_, V) ->
+                                            maps:with([voter_status], V)
+                                    end, Cluster),
+            OldMeta = #{machine_version => CurEffMacVer,
+                        term => CurTerm,
+                        index => LastApplied,
+                        cluster => OldServerIds},
+
             SnapInstalledEffs = ra_machine:snapshot_installed(EffMacMod,
                                                               SnapMeta,
-                                                              CurEffMacVer,
-                                                              OldMacState,
-                                                              MacState),
-
+                                                              MacState,
+                                                              OldMeta,
+                                                              OldMacState),
             State = update_term(Term,
                                 State0#{cfg => Cfg,
                                         log => Log,
