@@ -1329,7 +1329,19 @@ apply(#{index := _Idx}, {segment_writer_or_wal_crash_follower, _}, State) ->
 apply(#{index := Idx}, _Cmd, State) ->
     {State, ok, [{release_cursor, Idx, State}]}.
 
-snapshot_installed(Meta, _OldMacVer, _OldState, _NewState) ->
+snapshot_installed(#{machine_version := _,
+                     index := Idx,
+                     term := _,
+                     cluster := Cluster} = Meta,
+                   _State,
+                   #{machine_version := _,
+                     index := OldIdx,
+                     term := _,
+                     cluster := OldCluster} = _OldMeta,
+                   _OldState)
+  when is_map(OldCluster) andalso
+       is_map(Cluster) andalso
+       Idx > OldIdx ->
     case whereis(snapshot_installed_proc) of
         undefined ->
             [];
