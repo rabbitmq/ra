@@ -1355,8 +1355,9 @@ unknown_local_call(Config) ->
     end.
 
 get_gen_statem_status(Ref) ->
-    {_, _, _, Items} = sys:get_status(Ref),
-    proplists:get_value(raft_state, lists:last(Items)).
+    {_, _, _, Misc} = sys:get_status(Ref),
+    [{_, State}] = [S || {data, [{"State", S}]} <- lists:last(Misc)],
+    proplists:get_value(raft_state, State).
 
 wait_for_gen_statem_status(Ref, ExpectedStatus, Timeout)
   when Timeout >= 0 ->
