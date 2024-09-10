@@ -1,4 +1,7 @@
-# A Raft Implementation for Erlang and Elixir
+# Ra: A Raft Implementation for Erlang and Elixir
+
+[![Hex.pm](https://img.shields.io/hexpm/v/ra)](https://hex.pm/packages/ra/)
+![Actions](https://github.com/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
 
 Ra is a [Raft](https://raft.github.io/) implementation
 by Team RabbitMQ. It is not tied to RabbitMQ and can be used in any Erlang or Elixir
@@ -23,10 +26,6 @@ The following Raft features are implemented:
  * Cluster membership changes: one server (member) at a time
  * Log compaction (with limitations and RabbitMQ-specific extensions)
  * Snapshot installation
-
-### Build Status
-
-![Actions](https://github.com/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
 
 ### Safety Verification
 
