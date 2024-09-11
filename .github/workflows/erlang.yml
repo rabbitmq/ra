@@ -34,7 +34,7 @@ jobs:
     - name: PROPER
       run: make proper
     - name: CAPTURE TEST LOGS ON FAILURE
-      uses: actions/upload-artifact@v2-preview
+      uses: actions/upload-artifact@v4
       if: failure()
       with:
         name: ct-logs-${{matrix.otp_version}}
