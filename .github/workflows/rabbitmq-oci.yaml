@@ -14,6 +14,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build-package-generic-unix:
+    # Limit this workflow to branches in the main repository.
+    # Forks are unable to run this workflow because they don't
+    # have access to the docker login credentials.
+    if: github.repository == 'rabbitmq/ra'
     runs-on: ubuntu-latest
     outputs:
       TAG_1: ${{ steps.tags.outputs.TAG_1 }}
