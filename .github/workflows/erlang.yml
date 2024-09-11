@@ -39,16 +39,3 @@ jobs:
       with:
         name: ct-logs-${{matrix.otp_version}}
         path: logs/*
-  build-bazel:
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: false
-      matrix:
-        otp_major:
-        - "26"
-    steps:
-    - name: CHECKOUT
-      uses: actions/checkout@v2
-    - name: TEST
-      run: |
-        bazelisk test //... --config=rbe-${{ matrix.otp_major }}
