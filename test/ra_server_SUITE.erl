@@ -57,6 +57,7 @@ all() ->
      follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
      receive_snapshot_timeout,
+     receive_snapshot_new_leader_aer,
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
@@ -2102,6 +2103,38 @@ receive_snapshot_timeout(_Config) ->
     %% revert back to follower on timeout
     {follower, #{log := Log}, _}
     = ra_server:handle_receive_snapshot(receive_snapshot_timeout, FState1),
+    %% snapshot should be aborted
+    SS = ra_log:snapshot_state(Log),
+    undefined = ra_snapshot:accepting(SS),
+    ok.
+
+receive_snapshot_new_leader_aer(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm,
+                            commit_index := CommitIdx}, _}}
+    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1, % snapshot term
+    Idx = 6,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  chunk_state = {1, last},
+                                  data = []},
+    {receive_snapshot, FState1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpc, FState),
+
+    %% revert back to follower on next-term AER
+    AER = #append_entries_rpc{term = CurTerm + 1, leader_id = N1,
+                              prev_log_index = CommitIdx,
+                              prev_log_term = CurTerm,
+                              leader_commit = CommitIdx,
+                              entries = []},
+    {follower, #{log := Log, current_term := NewTerm}, _}
+    = ra_server:handle_receive_snapshot(AER, FState1),
+    %% term should be updated
+    NewTerm = CurTerm + 1,
     %% snapshot should be aborted
     SS = ra_log:snapshot_state(Log),
     undefined = ra_snapshot:accepting(SS),

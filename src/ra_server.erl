@@ -1411,6 +1411,20 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = update_term(Term, State0#{log => Log}),
             {receive_snapshot, State, [{reply, Reply}]}
     end;
+handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
+                        #{current_term := CurTerm,
+                          cfg := #cfg{log_id = LogId},
+                          log := Log0} = State)
+  when Term > CurTerm ->
+    ?INFO("~ts: follower receiving snapshot saw append_entries_rpc from ~w for term ~b "
+          "abdicates term: ~b!",
+          [LogId, Msg#append_entries_rpc.leader_id,
+           Term, CurTerm]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log = ra_log:set_snapshot_state(SnapState, Log0),
+    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+     [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
                         State = #{cfg := #cfg{id = _Id, log_id = LogId},
                                   log := Log0}) ->

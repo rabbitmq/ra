@@ -874,10 +874,15 @@ receive_snapshot(EventType, Msg, State0) ->
         {receive_snapshot, State1, Effects} ->
             {#state{conf = Conf} = State, Actions} =
                 ?HANDLE_EFFECTS(Effects, EventType, State1),
-            #conf{receive_snapshot_timeout = ReceiveSnapshotTimeout} = Conf,
-            {keep_state, State,
-             [{state_timeout, ReceiveSnapshotTimeout,
-               receive_snapshot_timeout} | Actions]};
+            TimeoutActions = case Msg of
+                                 #install_snapshot_rpc{} ->
+                                     %% Reset timeout only on receive snapshot progress.
+                                     [{state_timeout, Conf#conf.receive_snapshot_timeout,
+                                                      receive_snapshot_timeout}];
+                                 _ ->
+                                     []
+                             end,
+            {keep_state, State, TimeoutActions ++ Actions};
         {follower, State1, Effects} ->
             {State2, Actions} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             State = follower_leader_change(State0, State2),
