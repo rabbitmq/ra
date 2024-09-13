@@ -56,8 +56,8 @@ erlang_package.hex_package(
 
 erlang_package.hex_package(
     name = "gen_batch_server",
-    sha256 = "94a49a528486298b009d2a1b452132c0a0d68b3e89d17d3764cb1ec879b7557a",
-    version = "0.8.7",
+    sha256 = "c8581fe4a4b6bccf91e53ce6a8c7e6c27c8c591bab5408b160166463f5579c22",
+    version = "0.8.9",
 )
 
 erlang_package.git_package(

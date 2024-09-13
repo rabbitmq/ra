@@ -26,11 +26,12 @@ all_tests() ->
      accept_mem_tables,
      accept_mem_tables_append,
      accept_mem_tables_overwrite,
-     accept_mem_tables_rollover,
+     accept_mem_tables_overwrite_same_wal,
+     accept_mem_tables_multi_segment,
+     accept_mem_tables_multi_segment_overwrite,
      accept_mem_tables_for_down_server,
+     accept_mem_tables_with_deleted_server,
      accept_mem_tables_with_corrupt_segment,
-     accept_mem_tables_with_gap,
-     accept_mem_tables_with_delete_server,
      truncate_segments,
      truncate_segments_with_pending_update,
      truncate_segments_with_pending_overwrite,
@@ -55,8 +56,10 @@ init_per_testcase(TestCase, Config) ->
     logger:set_primary_config(level, all),
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
-    ra_system:store(ra_system:default_config()),
-    ra_directory:init(default),
+    SysCfg = ra_system:default_config(),
+    ra_system:store(SysCfg),
+    _ = ra_log_ets:start_link(SysCfg),
+    % ra_directory:init(default),
     ra_counters:init(),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
@@ -65,19 +68,14 @@ init_per_testcase(TestCase, Config) ->
     ServerDir = filename:join(Dir, UId),
     ok = ra_lib:make_dir(ServerDir),
     register(TestCase, self()),
-    _ = ets:new(ra_open_file_metrics, [named_table, public,
-                                       {write_concurrency, true}]),
-    _ = ets:new(ra_io_metrics, [named_table, public,
-                                {write_concurrency, true}]),
     ets:new(ra_log_snapshot_state, [named_table, public]),
-    ra_file_handle:start_link(),
     [{uid, UId},
      {server_dir, ServerDir},
      {test_case, TestCase},
      {wal_dir, Dir} | Config].
 
 end_per_testcase(_, Config) ->
-    ok = gen_server:stop(ra_file_handle),
+    proc_lib:stop(ra_log_ets),
     Config.
 
 accept_mem_tables(Config) ->
@@ -88,26 +86,379 @@ accept_mem_tables(Config) ->
                                                             data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(UId, Entries),
-    MemTables = [{UId, 1, 3, Tid}],
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    % WalFile = "0000001.wal",
+    % FullWalFile = filename:join(Dir, WalFile),
+    % ok = file:write_file(FullWalFile, <<"waldata">>),
+    make_wal(Config, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     receive
-        {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+        {ra_log_event, {segments, TidRanges, [{1, 3, SegFile}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), SegFile),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
             Entries = [{I, T, binary_to_term(B)}
                        || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
     after 3000 ->
+              flush(),
               throw(ra_log_event_timeout)
     end,
 
     timer:sleep(250),
 
     % assert wal file has been deleted.
-    false = filelib:is_file(WalFile),
+    false = is_wal_file(Config, "w1.wal"),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_append(Config) ->
+    % append to a previously written segment
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    % first batch
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    Tid = ets:new(?FUNCTION_NAME, []),
+    _ = make_mem_table(UId, Tid, Entries),
+    Ranges = #{UId => [{Tid, {1, 3}}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    % second batch
+    Entries2 = [{4, 43, d}, {5, 43, e}],
+    _ = make_mem_table(UId, Tid, Entries2),
+    Ranges2 = #{UId => [{Tid, {4, 5}}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config,  "w2.wal")),
+    AllEntries = Entries ++ Entries2,
+    receive
+        {ra_log_event, {segments, [{Tid, {4, 5}}], [{1, 5, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert Entries have been fully transferred
+            AllEntries = [{I, T, binary_to_term(B)}
+                          || {I, T, B} <- read_sparse(Seg, lists:seq(1, 5))]
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    UId = ?config(uid, Config),
+    Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
+    Tid = ra_mt:tid(make_mem_table(UId, Entries)),
+    Ranges = #{UId => [{Tid, {3, 5}}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    receive
+        {ra_log_event, {segments, [{Tid, {3, 5}}], [{3, 5, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            ?assertMatch({3, 5, _}, ra_log_segment:segref(Seg)),
+            ra_log_segment:close(Seg),
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    % second batch
+    Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
+    Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
+    Ranges2 = #{UId => [{Tid2, {1, 3}}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
+    receive
+        {ra_log_event, {segments, [{Tid2, {1, 3}}], [{1, 3, Fn2}]}} ->
+            SegmentFile2 = filename:join(?config(server_dir, Config), Fn2),
+            {ok, Seg2} = ra_log_segment:open(SegmentFile2, #{mode => read}),
+            ?assertMatch({1, 3, _}, ra_log_segment:segref(Seg2)),
+            C2 = term_to_binary(c2),
+            [{1, 43, _}, {2, 43, _}] = read_sparse(Seg2, [1, 2]),
+            [{3, 43, C2}] = read_sparse(Seg2, [3]),
+            ?assertExit({missing_key, 4}, read_sparse(Seg2, [4]))
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    flush(),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_overwrite_same_wal(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    UId = ?config(uid, Config),
+
+    Entries = [{2, 42, b}, {3, 42, c}, {4, 42, d}, {5, 42, e}],
+    Tid = ra_mt:tid(make_mem_table(UId, Entries)),
+    % second batch
+    Entries2 = [{4, 43, d2}, {5, 43, e2}, {6, 43, f}],
+    Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
+    Ranges2 = #{UId => [{Tid2, {4, 6}}, {Tid, {2, 5}}]},
+    % debugger:start(),
+    % int:i(ra_log_segment_writer),
+    % int:break(ra_log_segment_writer, 240),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
+    receive
+        {ra_log_event,
+         {segments, [{Tid2, {4, 6}}, {Tid, {2, 5}}], [{2, 6, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            ?assertMatch({2, 6, _}, ra_log_segment:segref(Seg)),
+            [{2, 42, _},
+             {3, 42, _},
+             {4, 43, _},
+             {5, 43, _},
+             {6, 43, _}] = read_sparse(Seg, [2, 3, 4, 5, 6]),
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    flush(),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_multi_segment(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    % configure max segment size
+    Conf = #{data_dir => Dir,
+             system => default,
+             name => ?SEGWR,
+             segment_conf => #{max_count => 8}},
+    {ok, Pid} = ra_log_segment_writer:start_link(Conf),
+    % more entries than fit a single segment
+    Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w.wal")),
+    receive
+        {ra_log_event, {segments, TidRanges, [{9, 10, _Seg2}, {1, 8, _Seg1}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(Pid),
+    ok.
+accept_mem_tables_multi_segment_overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    % configure max segment size
+    Conf = #{data_dir => Dir,
+             system => default,
+             name => ?SEGWR,
+             segment_conf => #{max_count => 8}},
+    {ok, Pid} = ra_log_segment_writer:start_link(Conf),
+    % more entries than fit a single segment
+    Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w.wal")),
+    LastFile =
+    receive
+        {ra_log_event, {segments, TidRanges, [{9, 10, Seg2}, {1, 8, _Seg1}]}} ->
+            Seg2
+            % ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+
+    Entries2 = [{I, 3, x} || I <- lists:seq(7, 15)],
+    Mt2 = make_mem_table(UId, Entries2),
+    Tid2 = ra_mt:tid(Mt2),
+    TidRanges2 = [{Tid2, ra_mt:range(Mt2)}],
+    Ranges2 = #{UId => TidRanges2},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
+    receive
+        {ra_log_event, {segments, TidRanges2,
+                        [{13, 15, _}, {7, 12, LastFile}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    MySegments = ra_log_segment_writer:my_segments(?SEGWR, UId),
+    ct:pal("segrefs ~p", [[ra_log_segment:segref(F) || F <- MySegments]]),
+    ok = gen_server:stop(Pid),
+    ok.
+
+accept_mem_tables_for_down_server(Config) ->
+    %% fake a closed mem table
+    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    FakeUId = <<"down-uid">>,
+    %% only insert into dets so that the server is shown as registered
+    %% but not running
+    ok = dets:insert(maps:get(directory_rev, get_names(default)),
+                     {down_uid, FakeUId}),
+    ok = ra_lib:make_dir(filename:join(Dir, FakeUId)),
+    application:start(sasl),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    Mt = make_mem_table(FakeUId, Entries),
+    Mt2 = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    Tid2 = ra_mt:tid(Mt2),
+    Ranges = #{FakeUId => [{Tid, {1, 3}}],
+               UId => [{Tid2, {1, 3}}]},
+    WalFile = filename:join(Dir, "00001.wal"),
+    ok = file:write_file(WalFile, <<"waldata">>),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
+    receive
+        {ra_log_event, {segments, [{Tid2, {1, 3}}], [{1, 3, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert Entries have been fully transferred
+            Entries = [{I, T, binary_to_term(B)}
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    %% validate fake uid entries were written
+    ra_log_segment_writer:await(?SEGWR),
+    FakeSegmentFile = filename:join([?config(wal_dir, Config),
+                                     FakeUId,
+                                     "00000001.segment"]),
+    {ok, FakeSeg} = ra_log_segment:open(FakeSegmentFile, #{mode => read}),
+    % assert Entries have been fully transferred
+    Entries = [{I, T, binary_to_term(B)}
+               || {I, T, B} <- read_sparse(FakeSeg, [1, 2, 3])],
+
+    %% if the server is down at the time the segment writer send the segments
+    %% the segment writer should clear up the ETS mem tables
+    FakeMt = ra_mt:init(Tid),
+    ?assertMatch(#{size := 0}, ra_mt:info(FakeMt)),
+
+    % assert wal file has been deleted.
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_with_deleted_server(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    DeletedUId = <<"not_self">>,
+    ok = ra_lib:make_dir(filename:join(Dir, DeletedUId)),
+    application:start(sasl),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    {ok, Mt0} = ra_log_ets:mem_table_please(get_names(default), DeletedUId),
+    Mt = lists:foldl(fun(E, Acc0) ->
+                             {ok, Acc} = ra_mt:insert(E, Acc0),
+                             Acc
+                     end, Mt0, Entries),
+
+    Mt2 = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    Tid2 = ra_mt:tid(Mt2),
+    Ranges = #{DeletedUId => [{Tid, {1, 3}}],
+               UId => [{Tid2, {1, 3}}]},
+    WalFile = make_wal(Config, "00001.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
+    receive
+        {ra_log_event, {segments, [{Tid2, {1, 3}}], [{1, 3, Fn}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert Entries have been fully transferred
+            Entries = [{I, T, binary_to_term(B)}
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    %% validate fake uid entries were written
+    ra_log_segment_writer:await(?SEGWR),
+    FakeSegmentFile = filename:join([?config(wal_dir, Config),
+                                     DeletedUId,
+                                     "00000001.segment"]),
+    ?assertNot(filelib:is_file(FakeSegmentFile)),
+    gen_server:call(ra_log_ets, dummy),
+
+    %% if the server is down at the time the segment writer send the segments
+    %% the segment writer should clear up the ETS mem tables
+    ?assertNot(ra_directory:is_registered_uid(default, DeletedUId)),
+    ?assertEqual(undefined, ets:info(Tid)),
+
+    % assert wal file has been deleted.
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_with_corrupt_segment(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{name => ?SEGWR,
+                                                            system => default,
+                                                            data_dir => Dir}),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    WalFile = make_wal(Config, "0000001.wal"),
+    %% write an empty file to simulate corrupt segment
+    %% this can happen if a segment is opened but is interrupted before syncing
+    %% the header
+    file:write_file(filename:join(?config(server_dir, Config), "0000001.segment"), <<>>),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
+    receive
+        {ra_log_event, {segments, TidRanges, [{1, 3, SegFile}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), SegFile),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert Entries have been fully transferred
+            Entries = [{I, T, binary_to_term(B)}
+                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+
+    % the delete happens after the segment notification so we need to retry
+    ok = ra_lib:retry(fun() ->
+                              false = filelib:is_file(WalFile),
+                              ok
+                      end, 5, 100),
     ok = gen_server:stop(TblWriterPid),
     ok.
 
@@ -120,23 +471,25 @@ truncate_segments(Config) ->
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    WalFile = make_wal(Config, "0000001.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
+        {ra_log_event, {segments, TidRanges, [{25, 32, S} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
-            validate_segment_deleted(100, SegmentFile),
-            % test a fully inclusive snapshot index _does_ delete the current
-            % segment file
+            ra_log_segment_writer:await(?SEGWR),
             [{_, _, S1}, {_, _, S2}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
-            validate_segment_deleted(100, SegmentFile1),
+            ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
-            validate_segment_deleted(10, SegmentFile2),
+            ?assertNot(filelib:is_file(SegmentFile2)),
             ?assertMatch([_], segments_for(UId, Dir)),
             ok
     after 3000 ->
@@ -148,40 +501,46 @@ truncate_segments(Config) ->
 truncate_segments_with_pending_update(Config) ->
     Dir = ?config(wal_dir, Config),
     SegConf = #{max_count => 12},
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(
-                           #{system => default,
-                             name => ?SEGWR,
-                             data_dir => Dir,
-                             segment_conf => SegConf}),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir,
+                                                            segment_conf => SegConf}),
     UId = ?config(uid, Config),
-    % fake up a mem segment for Self
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    %% write one more entry separately
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    ra_log_segment_writer:await(?SEGWR),
+    %% write another range
     Entries2 = [{N, 42, N} || N <- lists:seq(33, 40)],
-    {MemTables2, _} = fake_mem_table(UId, Dir, Entries2),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables2, WalFile),
+    Mt2 = make_mem_table(UId, Entries2),
+    Ranges2 = #{UId => [{ra_mt:tid(Mt2), ra_mt:range(Mt2)}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.erl")),
     receive
         {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
-            % test a lower index _does not_ delete the file
+            % this is the event from the first call to accept_mem_tables,
+            % the Cur segments has been appended to since so should _not_
+            % be deleted when it is provided as the cutoff segref for
+            % truncation
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
-            timer:sleep(1000),
-            SegmentFile = filename:join(?config(server_dir, Config), S),
-            % test a fully inclusive snapshot index _does_ delete the current
-            % segment file
+            ra_log_segment_writer:await(?SEGWR),
+            ?assert(filelib:is_file(SegmentFile)),
             [{_, _, S1}, {_, _, S2}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
-            validate_segment_deleted(100, SegmentFile1),
+            ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
-            validate_segment_deleted(10, SegmentFile2),
+            ?assertNot(filelib:is_file(SegmentFile2)),
             ok
     after 3000 ->
+              flush(),
               throw(ra_log_event_timeout)
     end,
+    flush(),
     ok = gen_server:stop(TblWriterPid),
     ok.
 
@@ -195,12 +554,16 @@ truncate_segments_with_pending_overwrite(Config) ->
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     %% write one more entry separately
     Entries2 = [{N, 43, N} || N <- lists:seq(12, 25)],
-    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables2, WalFile2),
+    Mt2 = make_mem_table(UId, Entries2),
+    Ranges2 = #{UId => [{ra_mt:tid(Mt2), ra_mt:range(Mt2)}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
     receive
         {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
@@ -208,30 +571,34 @@ truncate_segments_with_pending_overwrite(Config) ->
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
-            _ = ra_log_segment_writer:my_segments(?SEGWR, UId),
+            _ = ra_log_segment_writer:await(?SEGWR),
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
-            % test a fully inclusive snapshot index _does_ delete the current
-            % segment file
             [{_, _, S1}, {_, _, S2}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
-            validate_segment_deleted(100, SegmentFile1),
+            ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
-            validate_segment_deleted(10, SegmentFile2),
+            ?assertNot(filelib:is_file(SegmentFile2)),
+            ct:pal("segments for ~p",  [segments_for(UId, Dir)]),
             ok
     after 3000 ->
+              flush(),
               throw(ra_log_event_timeout)
     end,
     receive
         {ra_log_event, {segments, _, [{16, 25, F} = Cur2, {12, 15, F2}]}} ->
+            ?assertMatch([_, _], segments_for(UId, Dir)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur2),
+            _ = ra_log_segment_writer:await(?SEGWR),
             SegFile = filename:join(?config(server_dir, Config), F),
-            validate_segment_deleted(100, SegFile),
+            ?assertNot(filelib:is_file(SegFile)),
             SegFile2 = filename:join(?config(server_dir, Config), F2),
-            validate_segment_deleted(10, SegFile2),
+            ?assertNot(filelib:is_file(SegFile2)),
             %% validate there is a new empty segment
-            ?assertMatch([_], segments_for(UId, Dir)),
+            [NewSegFile] = segments_for(UId, Dir),
+            {ok, NewSeg} = ra_log_segment:open(NewSegFile, #{mode => read}),
+            ?assertEqual(undefined, ra_log_segment:segref(NewSeg)),
             ok
     after 3000 ->
               flush(),
@@ -239,19 +606,6 @@ truncate_segments_with_pending_overwrite(Config) ->
     end,
     ok = gen_server:stop(TblWriterPid),
     ok.
-
-validate_segment_deleted(0, _) ->
-    exit(file_was_not_deleted);
-validate_segment_deleted(N, SegFile) ->
-    timer:sleep(20),
-    case filelib:is_file(SegFile) of
-        true ->
-            validate_segment_deleted(N-1, SegFile),
-            ok;
-        false ->
-            ok
-    end.
-
 
 my_segments(Config) ->
     Dir = ?config(wal_dir, Config),
@@ -261,18 +615,19 @@ my_segments(Config) ->
     UId = ?config(uid, Config),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(UId, Entries),
-    MemTables = [{UId, 1, 3, Tid}],
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR,MemTables, WalFile),
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
+    TidRanges = maps:get(UId, Ranges),
+    WalFile = make_wal(Config, "00001.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, Tid, [{1, 3, Fn}]}} ->
+        {ra_log_event, {segments, TidRanges, [{1, 3, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
             ?assertEqual(SegmentFile, unicode:characters_to_binary(MyFile)),
             ?assert(filelib:is_file(SegmentFile))
     after 2000 ->
+              flush(),
               exit(ra_log_event_timeout)
     end,
     proc_lib:stop(TblWriterPid),
@@ -291,10 +646,12 @@ skip_entries_lower_than_snapshot_index(Config) ->
                {4, 43, d},
                {5, 43, e}
               ],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR,MemTables, WalFile),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     receive
         {ra_log_event, {segments, _Tid, [{4, 5, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
@@ -305,6 +662,7 @@ skip_entries_lower_than_snapshot_index(Config) ->
             ?assertExit({missing_key, 1}, read_sparse(Seg, [1,2, 3])),
             [{4, _, _}, {5, _, _}] = read_sparse(Seg, [4, 5])
     after 3000 ->
+              flush(),
               ok = gen_server:stop(TblWriterPid),
               throw(ra_log_event_timeout)
     end,
@@ -321,288 +679,22 @@ skip_all_entries_lower_than_snapshot_index(Config) ->
                {2, 43, d},
                {3, 43, e}
               ],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR,MemTables, WalFile),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    TIDRANGES = maps:get(UId, Ranges),
     receive
-        {ra_log_event, {segments, _Tid, []}} ->
+        {ra_log_event, {segments, TIDRANGES, []}} ->
             %% no segments were generated for this mem table
             ok
     after 3000 ->
+              flush(),
               ok = gen_server:stop(TblWriterPid),
               throw(ra_log_event_timeout)
     end,
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_append(Config) ->
-    % append to a previously written segment
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    % first batch
-    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    % second batch
-    Entries2 = [{4, 43, d}, {5, 43, e}],
-    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables2, WalFile2),
-    AllEntries = Entries ++ Entries2,
-    receive
-        {ra_log_event, {segments, _Tid, [{1, 5, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
-            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            % assert Entries have been fully transferred
-            AllEntries = [{I, T, binary_to_term(B)}
-                          || {I, T, B} <- read_sparse(Seg, lists:seq(1, 5))]
-    after 3000 ->
-              throw(ra_log_event_timeout)
-    end,
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_overwrite(Config) ->
-    Dir = ?config(wal_dir, Config),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    UId = ?config(uid, Config),
-    % first batch
-    Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    % second batch overwrites the first
-    Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
-    {MemTables2, WalFile2} = fake_mem_table(UId, Dir, Entries2),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables2, WalFile2),
-
-    receive
-        {ra_log_event, {segments, _Tid, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
-            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            C2 = term_to_binary(c2),
-            [{1, 43, _}, {2, 43, _}] = read_sparse(Seg, [1, 2]),
-            [{3, 43, C2}] = read_sparse(Seg, [3]),
-            ?assertExit({missing_key, 4}, read_sparse(Seg, [4]))
-    after 3000 ->
-              throw(ra_log_event_timeout)
-    end,
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_rollover(Config) ->
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    % configure max segment size
-    Conf = #{data_dir => Dir,
-             system => default,
-             name => ?SEGWR,
-             segment_conf => #{max_count => 8}},
-    {ok, Pid} = ra_log_segment_writer:start_link(Conf),
-    % more entries than fit a single segment
-    Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
-    {MemTables, WalFile} = fake_mem_table(UId, Dir, Entries),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    receive
-        {ra_log_event, {segments, _Tid, [{9, 10, _Seg2}, {1, 8, _Seg1}]}} ->
-            ok
-    after 3000 ->
-              throw(ra_log_event_timeout)
-    end,
-    % receive then receive again to breach segment size limit
-    ok = gen_server:stop(Pid),
-    ok.
-
-accept_mem_tables_for_down_server(Config) ->
-    %% fake a closed mem table
-    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    FakeUId = <<"not_self">>,
-    ok = ra_lib:make_dir(filename:join(Dir, FakeUId)),
-    application:start(sasl),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    % fake up a mem segment for Self
-    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Tid = make_mem_table(FakeUId, Entries),
-    Tid2 = make_mem_table(UId, Entries),
-    MemTables = [{FakeUId, 1, 3, Tid},
-                 {UId, 1, 3, Tid2}],
-    ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    receive
-        {ra_log_event, {segments, Tid2, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
-            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            % assert Entries have been fully transferred
-            Entries = [{I, T, binary_to_term(B)}
-                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
-    after 3000 ->
-              throw(ra_log_event_timeout)
-    end,
-    %% as segments are written in parallel we need await the segment writer
-    %% before asserting
-    ra_log_segment_writer:await(?SEGWR),
-
-    %% if the server is down at the time the segment writer send the segments
-    %% the segment writer should clear up the ETS mem tables
-    %% This is safe as the server synchronises through the segment writer
-    %% on start.
-    %% check the fake tid is removed
-    ?assertEqual(undefined, ets:info(Tid)),
-    [] = ets:tab2list(ra_log_closed_mem_tables),
-
-    % assert wal file has been deleted.
-    % the delete happens after the segment notification so we need to retry
-    ok = ra_lib:retry(fun() ->
-                              false = filelib:is_file(WalFile),
-                              ok
-                      end, 5, 100),
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_with_corrupt_segment(Config) ->
-    %% fake a closed mem table
-    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    % FakeUId = <<"not_self">>,
-    % ok = ra_lib:make_dir(filename:join(Dir, FakeUId)),
-    application:start(sasl),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    % fake up a mem segment for Self
-    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    % Tid = make_mem_table(FakeUId, Entries),
-    Tid2 = make_mem_table(UId, Entries),
-    MemTables = [{UId, 1, 3, Tid2}],
-    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    %% write an empty file to simulate corrupt segment
-    %% this can happen if a segment is opened but is interrupted before syncing
-    %% the header
-    file:write_file(filename:join(?config(server_dir, Config), "0000001.segment"), <<>>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    receive
-        {ra_log_event, {segments, Tid2, [{1, 3, Fn}]}} ->
-            SegmentFile = filename:join(?config(server_dir, Config), Fn),
-            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            % assert Entries have been fully transferred
-            Entries = [{I, T, binary_to_term(B)}
-                       || {I, T, B} <- read_sparse(Seg, [1, 2, 3])]
-    after 3000 ->
-              flush(),
-              throw(ra_log_event_timeout)
-    end,
-
-    %% if the server is down at the time the segment writer send the segments
-    %% the segment writer should clear up the ETS mem tables
-    %% This is safe as the server synchronises through the segment writer
-    %% on start.
-    %% check the fake tid is removed
-    % undefined = ets:info(Tid),
-    [] = ets:tab2list(ra_log_closed_mem_tables),
-
-    % assert wal file has been deleted.
-    % the delete happens after the segment notification so we need to retry
-    ok = ra_lib:retry(fun() ->
-                              false = filelib:is_file(WalFile),
-                              ok
-                      end, 5, 100),
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_with_gap(Config) ->
-    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    application:start(sasl),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    % fake up a mem segment with a gap due to snapshot index
-    Tid = make_mem_table(UId, [{1, 42, a}, {3, 42, c}, {4, 42, d}]),
-    MemTables = [{UId, 1, 4, Tid}],
-    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    %% however the server is being deleted and is at the stage where it's
-    %% diretory still exists but it has been unregistered
-    UId = ra_directory:unregister_name(default, UId),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    receive
-        {ra_log_event, {segments, Tid, [{1, 3, _Fn}]}} ->
-            ct:fail("unexpected segments received")
-    after 200 ->
-              ok
-    end,
-    ok = ra_lib:retry(fun() ->
-                              false = filelib:is_file(WalFile),
-                              ok
-                      end, 5, 100),
-    ok = gen_server:stop(TblWriterPid),
-    ok.
-
-accept_mem_tables_with_delete_server(Config) ->
-    ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
-    Dir = ?config(wal_dir, Config),
-    UId = ?config(uid, Config),
-    application:start(sasl),
-    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
-                                                            name => ?SEGWR,
-                                                            data_dir => Dir}),
-    % fake up a mem segment for Self
-    Tid = make_mem_table(UId, [{1, 42, a}, {2, 42, b}, {3, 42, c}]),
-    Tid2 = make_mem_table(UId, [{4, 42, d}]),
-    MemTables = [{UId, 1, 3, Tid}],
-    MemTables2 = [{UId, 4, 4, Tid2}],
-    % ets:insert(ra_log_closed_mem_tables, {FakeUId, 1, 1, 3, Tid}),
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables, WalFile),
-    receive
-        {ra_log_event, {segments, Tid, [{1, 3, _Fn}]}} ->
-            ok
-    after 3000 ->
-              flush(),
-              throw(ra_log_event_timeout)
-    end,
-
-    %% delete server directory to simulate server deletion
-    ServerDir = ?config(server_dir, Config),
-    ra_lib:recursive_delete(ServerDir),
-    ?assert(filelib:is_dir(ServerDir) == false),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, MemTables2, WalFile),
-    receive
-        {ra_log_event, {segments, Tid2, _}} ->
-            exit(unexpected_log_event)
-    after 1000 ->
-              ok
-    end,
-    %% if the server is down at the time the segment writer send the segments
-    %% the segment writer should clear up the ETS mem tables
-    %% This is safe as the server synchronises through the segment writer
-    %% on start.
-    %% check the fake tid is removed
-    % undefined = ets:info(Tid),
-    [] = ets:tab2list(ra_log_closed_mem_tables),
-
-    % assert wal file has been deleted.
-    % the delete happens after the segment notification so we need to retry
-    ok = ra_lib:retry(fun() ->
-                              false = filelib:is_file(WalFile),
-                              ok
-                      end, 5, 100),
     ok = gen_server:stop(TblWriterPid),
     ok.
 
@@ -617,9 +709,15 @@ fake_mem_table(UId, Dir, Entries) ->
 
 make_mem_table(UId, Entries) ->
     N = ra_directory:name_of(default, UId),
-    Tid = ets:new(N, [public]),
-    [ets:insert(Tid, E) || E <- Entries],
-    Tid.
+    Tid = ets:new(N, [set, public]),
+    make_mem_table(UId, Tid, Entries).
+
+make_mem_table(_UId, Tid, Entries) ->
+    Mt = ra_mt:init(Tid),
+    lists:foldl(fun(E, Acc0) ->
+                        {ok, Acc} = ra_mt:insert(E, Acc0),
+                        Acc
+                end, Mt, Entries).
 
 flush() ->
     receive Msg ->
@@ -636,3 +734,18 @@ segments_for(UId, DataDir) ->
 read_sparse(R, Idxs) ->
     {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
     lists:reverse(Entries).
+
+get_names(System) when is_atom(System) ->
+    #{names := Names} = ra_system:fetch(System),
+    Names.
+
+make_wal(Config, Name) ->
+    Dir = ?config(wal_dir, Config),
+    FullWalFile = filename:join(Dir, Name),
+    ok = file:write_file(FullWalFile, <<"waldata">>),
+    Name.
+
+is_wal_file(Config, Name) ->
+    Dir = ?config(wal_dir, Config),
+    WalFile = filename:join(Dir, Name),
+    filelib:is_file(WalFile).

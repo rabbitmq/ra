@@ -79,45 +79,48 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   to monitor effects</p>
 
 <h3 class="typedecl"><a name="type-command">command()</a></h3>
-<p><pre>command() = <a href="#type-user_command">user_command()</a> | <a href="#type-builtin_command">builtin_command()</a></pre></p>
+<p><pre>command() = <a href="#type-user_command" docgen-rel="seetype" docgen-href="#user_command/0">user_command()</a> | <a href="#type-builtin_command" docgen-rel="seetype" docgen-href="#builtin_command/0">builtin_command()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-command_meta_data">command_meta_data()</a></h3>
 <p><pre>command_meta_data() = 
     #{system_time := integer(),
-      index := <a href="#type-ra_index">ra_index()</a>,
-      term := <a href="#type-ra_term">ra_term()</a>,
-      machine_version =&gt; <a href="#type-version">version()</a>,
-      from =&gt; <a href="#type-from">from()</a>}</pre></p>
+      index := <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
+      term := <a href="#type-ra_term" docgen-rel="seetype" docgen-href="#ra_term/0">ra_term()</a>,
+      machine_version =&gt; <a href="#type-version" docgen-rel="seetype" docgen-href="#version/0">version()</a>,
+      from =&gt; <a href="#type-from" docgen-rel="seetype" docgen-href="#from/0">from()</a>,
+      reply_mode =&gt; <a href="ra_server.html#type-command_reply_mode" docgen-rel="seetype" docgen-href="ra_server#command_reply_mode/0">ra_server:command_reply_mode()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
 <p><pre>effect() = 
-    {send_msg, To :: <a href="#type-locator">locator()</a>, Msg :: term()} |
+    {send_msg, To :: <a href="#type-locator" docgen-rel="seetype" docgen-href="#locator/0">locator()</a>, Msg :: term()} |
     {send_msg,
-     To :: <a href="#type-locator">locator()</a>,
+     To :: <a href="#type-locator" docgen-rel="seetype" docgen-href="#locator/0">locator()</a>,
      Msg :: term(),
-     Options :: <a href="#type-send_msg_opts">send_msg_opts()</a>} |
+     Options :: <a href="#type-send_msg_opts" docgen-rel="seetype" docgen-href="#send_msg_opts/0">send_msg_opts()</a>} |
     {mod_call, module(), Function :: atom(), [term()]} |
     {append, term()} |
-    {append, term(), <a href="ra_server.html#type-command_reply_mode">ra_server:command_reply_mode()</a>} |
+    {append, term(), <a href="ra_server.html#type-command_reply_mode" docgen-rel="seetype" docgen-href="ra_server#command_reply_mode/0">ra_server:command_reply_mode()</a>} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
-    {log, [<a href="#type-ra_index">ra_index()</a>], fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>)} |
+    {log, [<a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>], fun(([<a href="#type-user_command" docgen-rel="seetype" docgen-href="#user_command/0">user_command()</a>]) -&gt; <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a>)} |
     {log,
-     [<a href="#type-ra_index">ra_index()</a>],
-     fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>),
+     [<a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>],
+     fun(([<a href="#type-user_command" docgen-rel="seetype" docgen-href="#user_command/0">user_command()</a>]) -&gt; <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a>),
      {local, node()}} |
-    {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
+    {release_cursor, <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>} |
+    {release_cursor, <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>} |
+    {checkpoint, <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>
 
 
 <h3 class="typedecl"><a name="type-effects">effects()</a></h3>
-<p><pre>effects() = [<a href="#type-effect">effect()</a>]</pre></p>
+<p><pre>effects() = [<a href="#type-effect" docgen-rel="seetype" docgen-href="#effect/0">effect()</a>]</pre></p>
 <p>  See: <a docgen-rel="seeerl" docgen-href="effect" href="effect.html"><code>effect</code></a></p>
 
 <h3 class="typedecl"><a name="type-locator">locator()</a></h3>
@@ -150,7 +153,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   configured</p>
 
 <h3 class="typedecl"><a name="type-send_msg_opts">send_msg_opts()</a></h3>
-<p><pre>send_msg_opts() = <a href="#type-send_msg_opt">send_msg_opt()</a> | [<a href="#type-send_msg_opt">send_msg_opt()</a>]</pre></p>
+<p><pre>send_msg_opts() = <a href="#type-send_msg_opt" docgen-rel="seetype" docgen-href="#send_msg_opt/0">send_msg_opt()</a> | [<a href="#type-send_msg_opt" docgen-rel="seetype" docgen-href="#send_msg_opt/0">send_msg_opt()</a>]</pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
@@ -171,6 +174,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   from.</td></tr>
 <tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#snapshot_installed-5">snapshot_installed/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#version-1">version/1</a></td><td>used to discover the latest machine version supported by the current
@@ -179,6 +183,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <tr><td valign="top"><a href="#which_module-2">which_module/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-6">handle_aux/6</a></td><td></td></tr>
+<tr><td valign="top"><a href="#which_aux_fun-1">which_aux_fun/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#snapshot_module-1">snapshot_module/1</a></td><td></td></tr>
@@ -188,7 +194,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
-<p><pre>init(Machine :: <a href="#type-machine">machine()</a>, Name :: atom()) -&gt; <a href="#type-state">state()</a></pre></p>
+<p><pre>init(Machine :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>, Name :: atom()) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div><p>initialise a new machine
   This is only called on startup only if there isn't yet a snapshot to recover
@@ -197,51 +203,59 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="function"><a name="apply-4">apply/4</a></h3>
 <div class="spec">
 <p><pre>apply(Mod :: module(),
-      Metadata :: <a href="#type-command_meta_data">command_meta_data()</a>,
-      Cmd :: <a href="#type-command">command()</a>,
+      Metadata :: <a href="#type-command_meta_data" docgen-rel="seetype" docgen-href="#command_meta_data/0">command_meta_data()</a>,
+      Cmd :: <a href="#type-command" docgen-rel="seetype" docgen-href="#command/0">command()</a>,
       State) -&gt;
-         {State, <a href="#type-reply">reply()</a>, <a href="#type-effects">effects()</a>} | {State, <a href="#type-reply">reply()</a>}</pre></p>
+         {State, <a href="#type-reply" docgen-rel="seetype" docgen-href="#reply/0">reply()</a>, <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a>} | {State, <a href="#type-reply" docgen-rel="seetype" docgen-href="#reply/0">reply()</a>}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="tick-3">tick/3</a></h3>
 <div class="spec">
-<p><pre>tick(Mod :: module(), TimeMs :: <a href="#type-milliseconds">milliseconds()</a>, State :: <a href="#type-state">state()</a>) -&gt;
-        <a href="#type-effects">effects()</a></pre></p>
+<p><pre>tick(Mod :: module(), TimeMs :: <a href="#type-milliseconds" docgen-rel="seetype" docgen-href="#milliseconds/0">milliseconds()</a>, State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+        <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="snapshot_installed-5">snapshot_installed/5</a></h3>
+<div class="spec">
+<p><pre>snapshot_installed(Module, Meta, State, OldMeta, OldState) -&gt;
+                      <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a></pre>
+<ul class="definitions"><li><pre>Module = module()</pre></li><li><pre>Meta = <a href="ra_snapshot.html#type-meta" docgen-rel="seetype" docgen-href="ra_snapshot#meta/0">ra_snapshot:meta()</a></pre></li><li><pre>State = <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></li><li><pre>OldMeta = <a href="ra_snapshot.html#type-meta" docgen-rel="seetype" docgen-href="ra_snapshot#meta/0">ra_snapshot:meta()</a></pre></li><li><pre>OldState = <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></li></ul></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
 <div class="spec">
 <p><pre>state_enter(Mod :: module(),
-            RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a> | eol,
-            State :: <a href="#type-state">state()</a>) -&gt;
-               <a href="#type-effects">effects()</a></pre></p>
+            RaftState :: <a href="ra_server.html#type-ra_state" docgen-rel="seetype" docgen-href="ra_server#ra_state/0">ra_server:ra_state()</a> | eol,
+            State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+               <a href="#type-effects" docgen-rel="seetype" docgen-href="#effects/0">effects()</a></pre></p>
 <p> </p>
 </div><p>called when the ra_server_proc enters a new state</p>
 
 <h3 class="function"><a name="overview-2">overview/2</a></h3>
 <div class="spec">
-<p><pre>overview(Mod :: module(), State :: <a href="#type-state">state()</a>) -&gt; map()</pre></p>
+<p><pre>overview(Mod :: module(), State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; map()</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="version-1">version/1</a></h3>
 <div class="spec">
-<p><pre>version(X1 :: <a href="#type-machine">machine()</a>) -&gt; <a href="#type-version">version()</a></pre></p>
+<p><pre>version(X1 :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>) -&gt; <a href="#type-version" docgen-rel="seetype" docgen-href="#version/0">version()</a></pre></p>
 <p> </p>
 </div><p>used to discover the latest machine version supported by the current
   code</p>
 
 <h3 class="function"><a name="is_versioned-1">is_versioned/1</a></h3>
 <div class="spec">
-<p><pre>is_versioned(Machine :: <a href="#type-machine">machine()</a>) -&gt; boolean()</pre></p>
+<p><pre>is_versioned(X1 :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>) -&gt; boolean()</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="which_module-2">which_module/2</a></h3>
 <div class="spec">
-<p><pre>which_module(X1 :: <a href="#type-machine">machine()</a>, Version :: <a href="#type-version">version()</a>) -&gt; module()</pre></p>
+<p><pre>which_module(X1 :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>, Version :: <a href="#type-version" docgen-rel="seetype" docgen-href="#version/0">version()</a>) -&gt; module()</pre></p>
 <p> </p>
 </div>
 
@@ -254,11 +268,11 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <h3 class="function"><a name="handle_aux-7">handle_aux/7</a></h3>
 <div class="spec">
 <p><pre>handle_aux(Mod :: module(),
-           RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>,
-           Type :: {call, From :: <a href="#type-from">from()</a>} | cast,
+           RaftState :: <a href="ra_server.html#type-ra_state" docgen-rel="seetype" docgen-href="ra_server#ra_state/0">ra_server:ra_state()</a>,
+           Type :: {call, From :: <a href="#type-from" docgen-rel="seetype" docgen-href="#from/0">from()</a>} | cast,
            Command :: term(),
            AuxState, LogState,
-           MacState :: <a href="#type-state">state()</a>) -&gt;
+           MacState :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
               undefined |
               {reply, Reply :: term(), AuxState, LogState} |
               {reply,
@@ -268,15 +282,40 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
               {no_reply, AuxState, LogState} |
               {no_reply, AuxState, LogState,
                [{monitor, process, aux, pid()}]}</pre>
-<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state">ra_log:state()</a></pre></li></ul></p>
+<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state" docgen-rel="seetype" docgen-href="ra_log#state/0">ra_log:state()</a></pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_aux-6">handle_aux/6</a></h3>
+<div class="spec">
+<p><pre>handle_aux(Mod :: module(),
+           RaftState :: <a href="ra_server.html#type-ra_state" docgen-rel="seetype" docgen-href="ra_server#ra_state/0">ra_server:ra_state()</a>,
+           Type :: {call, From :: <a href="#type-from" docgen-rel="seetype" docgen-href="#from/0">from()</a>} | cast,
+           Command :: term(),
+           AuxState, State) -&gt;
+              {reply, Reply :: term(), AuxState, State} |
+              {reply,
+               Reply :: term(),
+               AuxState, State,
+               [{monitor, process, aux, pid()}]} |
+              {no_reply, AuxState, State} |
+              {no_reply, AuxState, State,
+               [{monitor, process, aux, pid()}]}</pre>
+<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>State = <a href="ra_server.html#type-state" docgen-rel="seetype" docgen-href="ra_server#state/0">ra_server:state()</a></pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="which_aux_fun-1">which_aux_fun/1</a></h3>
+<div class="spec">
+<p><pre>which_aux_fun(Mod :: module()) -&gt; undefined | {atom(), arity()}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>
 <div class="spec">
 <p><pre>query(Mod :: module(),
-      Fun :: fun((<a href="#type-state">state()</a>) -&gt; Result),
-      State :: <a href="#type-state">state()</a>) -&gt;
+      Fun :: fun((<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; Result),
+      State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
          Result</pre>
 <ul class="definitions"><li><pre>Result = term()</pre></li></ul></p>
 <p> </p>
@@ -284,13 +323,13 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="module-1">module/1</a></h3>
 <div class="spec">
-<p><pre>module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
+<p><pre>module(X1 :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>) -&gt; module()</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="snapshot_module-1">snapshot_module/1</a></h3>
 <div class="spec">
-<p><pre>snapshot_module(X1 :: <a href="#type-machine">machine()</a>) -&gt; module()</pre></p>
+<p><pre>snapshot_module(X1 :: <a href="#type-machine" docgen-rel="seetype" docgen-href="#machine/0">machine()</a>) -&gt; module()</pre></p>
 <p> </p>
 </div>
 <hr>

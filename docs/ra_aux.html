@@ -1,0 +1,93 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_aux</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_aux</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-internal_state">internal_state()</a></h3>
+<p><b>abstract datatype</b>: <code>internal_state()</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#machine_state-1">machine_state/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#leader_id-1">leader_id/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#last_applied-1">last_applied/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#members_info-1">members_info/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#log_last_index_term-1">log_last_index_term/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#log_fetch-2">log_fetch/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#log_stats-1">log_stats/1</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="machine_state-1">machine_state/1</a></h3>
+<div class="spec">
+<p><pre>machine_state(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; term()</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="leader_id-1">leader_id/1</a></h3>
+<div class="spec">
+<p><pre>leader_id(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt;
+             undefined | <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="last_applied-1">last_applied/1</a></h3>
+<div class="spec">
+<p><pre>last_applied(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="members_info-1">members_info/1</a></h3>
+<div class="spec">
+<p><pre>members_info(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="#type-ra_cluster" docgen-rel="seetype" docgen-href="#ra_cluster/0">ra_cluster()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="overview-1">overview/1</a></h3>
+<div class="spec">
+<p><pre>overview(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; map()</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="log_last_index_term-1">log_last_index_term/1</a></h3>
+<div class="spec">
+<p><pre>log_last_index_term(X1 :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="log_fetch-2">log_fetch/2</a></h3>
+<div class="spec">
+<p><pre>log_fetch(Idx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt;
+             {undefined |
+              {<a href="#type-ra_term" docgen-rel="seetype" docgen-href="#ra_term/0">ra_term()</a>,
+               CmdMetadata :: <a href="ra_server.html#type-command_meta" docgen-rel="seetype" docgen-href="ra_server#command_meta/0">ra_server:command_meta()</a>,
+               Command :: term()},
+              <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="log_stats-1">log_stats/1</a></h3>
+<div class="spec">
+<p><pre>log_stats(X1 :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="ra_log.html#type-overview" docgen-rel="seetype" docgen-href="ra_log#overview/0">ra_log:overview()</a></pre></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

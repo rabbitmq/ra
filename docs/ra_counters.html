@@ -19,10 +19,6 @@
 <p><pre>name() = term()</pre></p>
 
 
-<h3 class="typedecl"><a name="type-state">state()</a></h3>
-<p><b>abstract datatype</b>: <tt>state()</tt></p>
-
-
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-0">init/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#new-2">new/2</a></td><td></td></tr>
@@ -30,6 +26,7 @@
 <tr><td valign="top"><a href="#delete-1">delete/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-0">overview/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#counters-2">counters/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -42,13 +39,14 @@
 
 <h3 class="function"><a name="new-2">new/2</a></h3>
 <div class="spec">
-<p><pre>new(Name :: <a href="#type-name">name()</a>, Fields :: [atom()]) -&gt; <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref">counters:counters_ref()</a></pre></p>
+<p><pre>new(Name :: <a href="#type-name" docgen-rel="seetype" docgen-href="#name/0">name()</a>, FieldsSpec :: <a href="/Users/nkarl/code/rabbitmq/seshat/doc/seshat.html#type-fields_spec" docgen-rel="seetype" docgen-href="seshat:seshat#fields_spec/0">seshat:fields_spec()</a>) -&gt;
+       <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="fetch-1">fetch/1</a></h3>
 <div class="spec">
-<p><pre>fetch(Name :: <a href="#type-name">name()</a>) -&gt; undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref">counters:counters_ref()</a></pre></p>
+<p><pre>fetch(Name :: <a href="#type-name" docgen-rel="seetype" docgen-href="#name/0">name()</a>) -&gt; undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a></pre></p>
 <p> </p>
 </div>
 
@@ -60,13 +58,20 @@
 
 <h3 class="function"><a name="overview-0">overview/0</a></h3>
 <div class="spec">
-<p><pre>overview() -&gt; #{<a href="#type-name">name()</a> =&gt; #{atom() =&gt; non_neg_integer()}}</pre></p>
+<p><pre>overview() -&gt; #{<a href="#type-name" docgen-rel="seetype" docgen-href="#name/0">name()</a> =&gt; #{atom() =&gt; non_neg_integer()}}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><pre>overview(Name :: <a href="#type-name">name()</a>) -&gt; #{atom() =&gt; non_neg_integer()}</pre></p>
+<p><pre>overview(Name :: <a href="#type-name" docgen-rel="seetype" docgen-href="#name/0">name()</a>) -&gt; #{atom() =&gt; non_neg_integer()}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="counters-2">counters/2</a></h3>
+<div class="spec">
+<p><pre>counters(Name :: <a href="#type-name" docgen-rel="seetype" docgen-href="#name/0">name()</a>, Fields :: [atom()]) -&gt;
+            #{atom() =&gt; non_neg_integer()} | undefined</pre></p>
 <p> </p>
 </div>
 <hr>

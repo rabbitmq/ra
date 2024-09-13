@@ -113,6 +113,7 @@ init_per_testcase(TestCase, Config) ->
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
+    flush(),
     ra_server_sup_sup:remove_all(default),
     Config.
 
@@ -122,7 +123,11 @@ single_server_processes_command(Config) ->
     N1 = nth_server_name(Config, 1),
     ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
+    monitor(process, element(1, N1)),
     % index is 2 as leaders commit a no-op entry on becoming leaders
+    % debugger:start(),
+    % int:i(ra_server_proc),
+    % int:break(ra_server_proc, 440),
     {ok, 5, _} = ra:process_command(N1, 5, 2000),
     {ok, 10, _} = ra:process_command(N1, 5, 2000),
     terminate_cluster([N1]).
@@ -755,6 +760,7 @@ consistent_query_after_restart(Config) ->
     %% this test occasionally reproduces a stale read bug after a restart
     %% NB: occasionally....
     [begin
+         ct:pal("attempt ~b", [N]),
          {ok, _, _} = ra:process_command(A, N, ?PROCESS_COMMAND_TIMEOUT),
          application:stop(ra),
          restart_ra(DataDir),

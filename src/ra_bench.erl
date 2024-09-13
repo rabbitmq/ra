@@ -34,6 +34,10 @@
 
         ]).
 
+-define(TARGET_OPS_SEC, 100000).
+-define(TARGET_SEC, 60).
+-define(DEGREE, 5).
+
 
 init(#{}) ->
     undefined.
@@ -55,17 +59,17 @@ run(Name, Nodes, Pipe)
   when is_atom(Name)
        andalso is_list(Nodes) ->
     run(#{name => Name,
-          seconds => 30,
-          target => 20000, % commands / sec
-          degree => 5,
+          seconds => ?TARGET_SEC,
+          target => ?TARGET_OPS_SEC,
+          degree => ?DEGREE,
           pipe => Pipe,
           nodes => Nodes}).
 
 run() ->
     run(#{name => noop,
-          seconds => 10,
-          target => 20000, % commands / sec
-          degree => 5,
+          seconds => ?TARGET_SEC,
+          target => ?TARGET_OPS_SEC,
+          degree => ?DEGREE,
           nodes => [node() | nodes()]}).
 
 print_counter(Last, Counter) ->
@@ -77,9 +81,9 @@ print_counter(Last, Counter) ->
 
 run(Nodes) when is_list(Nodes) ->
     run(#{name => noop,
-          seconds => 30,
-          target => 20000, % commands / sec
-          degree => 5,
+          seconds => ?TARGET_SEC,
+          target => ?TARGET_OPS_SEC,
+          degree => ?DEGREE,
           nodes => Nodes});
 run(#{name := Name,
       seconds := Secs,
@@ -124,7 +128,7 @@ run(#{name := Name,
     BName = atom_to_binary(Name, utf8),
     _ = [rpc:call(N, ?MODULE, print_metrics, [BName])
      || N <- Nodes],
-    _ = ra:delete_cluster(ServerIds),
+    % _ = ra:delete_cluster(ServerIds),
     %%
     ok.
 
@@ -147,12 +151,18 @@ start(Name, Nodes) when is_atom(Name) ->
 prepare() ->
     _ = application:ensure_all_started(ra),
     _ = ra_system:start_default(),
-    % error_logger:logfile(filename:join(ra_env:data_dir(), "log.log")),
+    ra_env:configure_logger(logger),
+    LogFile = filename:join(ra_env:data_dir(), "ra-" ++ atom_to_list(node()) ++ ".log"),
+    logger:set_primary_config(level, debug),
+    Config = #{config => #{file => LogFile}},
+    logger:add_handler(ra_handler, logger_std_h, Config),
+    % application:load(sasl),
+    % application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     ok.
 
 send_n(_, _Data, 0, _Counter) -> ok;
 send_n(Leader, Data, N, Counter) ->
-    ra:pipeline_command(Leader, {noop, Data}, make_ref(), low),
+    ra:pipeline_command(Leader, {noop, Data}, make_ref(), normal),
     counters:add(Counter, 1, 1),
     send_n(Leader, Data, N-1, Counter).
 

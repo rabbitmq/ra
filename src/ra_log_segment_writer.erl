@@ -64,9 +64,15 @@
 start_link(#{name := Name} = Config) ->
     gen_server:start_link({local, Name}, ?MODULE, [Config], []).
 
-accept_mem_tables(_SegmentWriter, [], undefined) ->
+-spec accept_mem_tables(atom() | pid(),
+                        #{ra_uid() => [{ets:tid(), ra:range()}]},
+                        string()) ->
+    ok.
+accept_mem_tables(_SegmentWriter, Tables, undefined)
+  when map_size(Tables) == 0 ->
     ok;
-accept_mem_tables(SegmentWriter, Tables, WalFile) ->
+accept_mem_tables(SegmentWriter, Tables, WalFile)
+  when is_map(Tables) ->
     gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
@@ -87,9 +93,9 @@ overview(SegWriter) ->
 await(SegWriter)  ->
     IsAlive = fun IsAlive(undefined) -> false;
                   IsAlive(P) when is_pid(P) ->
-                            is_process_alive(P);
+                      is_process_alive(P);
                   IsAlive(A) when is_atom(A) ->
-                            IsAlive(whereis(A))
+                      IsAlive(whereis(A))
               end,
     case IsAlive(SegWriter) of
         true ->
@@ -126,13 +132,34 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
-handle_cast({mem_tables, Tables, WalFile}, State) ->
-    ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
+handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
+                                                  system = System} = State) ->
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
+    #{names := Names} = ra_system:fetch(System),
     Degree = erlang:system_info(schedulers),
+    %% TODO: refactor to make better use of time where each uid has an
+    %% uneven amount of work to do.
+    RangesList = maps:fold(
+                   fun (UId, TidRanges, Acc) ->
+                           case ra_directory:is_registered_uid(Names, UId) of
+                               true ->
+                                   [{UId, TidRanges} | Acc];
+                               false ->
+                                   %% delete all tids as the uid is not
+                                   %% registered
+                                   ?DEBUG("segment_writer in '~w': deleting memtable "
+                                          "for ~w as not a registered uid",
+                                          [System, UId]),
+                                   ok = ra_log_ets:delete_mem_tables(Names, UId),
+                                   Acc
+                           end
+                   end, [], Ranges),
+
+    T1 = erlang:monotonic_time(),
     _ = [begin
              {_, Failures} = ra_lib:partition_parallel(
                                fun (E) ->
-                                       ok = do_segment(E, State),
+                                       ok = flush_mem_table_ranges(E, State),
                                        true
                                end, Tabs, infinity),
              case Failures of
@@ -142,22 +169,15 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
                  _ ->
                      ?ERROR("segment_writer: ~b failures encountered during segment"
                             " flush. Errors: ~P", [length(Failures), Failures, 32]),
-                     exit(segment_writer_segment_write_failure)
+                     exit({segment_writer_segment_write_failure, Failures})
              end
-         end || Tabs <- ra_lib:lists_chunk(Degree, Tables)],
-    % delete wal file once done
-    % TODO: test scenario when server crashes after segments but before
-    % deleting walfile
-    % can we make segment writer idempotent somehow
-    ?DEBUG("segment_writer: deleting wal file: ~ts",
-          [filename:basename(WalFile)]),
-    %% temporarily disable wal deletion
-    %% TODO: this should be a debug option config?
-    % Base = filename:basename(WalFile),
-    % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
-    % filelib:ensure_dir(BkFile),
-    % file:copy(WalFile, BkFile),
-    _ = prim_file:delete(WalFile),
+         end || Tabs <- ra_lib:lists_chunk(Degree, RangesList)],
+    %% delete wal file once done
+    ok = prim_file:delete(filename:join(Dir, WalFile)),
+    T2 = erlang:monotonic_time(),
+    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+    ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file ~s in ~bms",
+          [System, length(RangesList), WalFile, Diff]),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             #state{segment_conf = SegConf} = State0) ->
@@ -218,23 +238,60 @@ code_change(_OldVsn, State, _Extra) ->
 get_overview(#state{data_dir = Dir,
                     segment_conf = Conf}) ->
     #{data_dir => Dir,
-      segment_conf => Conf
-     }.
+      segment_conf => Conf}.
 
-do_segment({ServerUId, StartIdx0, EndIdx, Tid},
-           #state{system = System,
-                  data_dir = DataDir,
-                  segment_conf = SegConf} = State) ->
+flush_mem_table_ranges({ServerUId, TidRanges0},
+                       #state{system = System} = State) ->
+    SnapIdx = snap_idx(ServerUId),
+
+    %% truncate and limit all ranges to create a contiguous non-overlapping
+    %% list of tid ranges to flush to disk
+    TidRanges =
+        lists:foldl(fun ({T, Range}, []) ->
+                            [{T, ra_range:truncate(SnapIdx, Range)}];
+                        ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
+                            Range1 = ra_range:truncate(SnapIdx, Range0),
+                            case ra_range:limit(Start, Range1) of
+                                undefined ->
+                                    Acc;
+                                Range ->
+                                    [{T, Range} | Acc]
+                            end
+                    end, [], TidRanges0),
+
+    SegRefs0 = lists:append(
+                [flush_mem_table_range(ServerUId, TidRange, State)
+                 || {_Tid, Range} = TidRange <- TidRanges,
+                    Range =/= undefined]),
+
+    %% compact cases where a segment was appended in a subsequent call to
+    %% flush_mem_table_range
+    SegRefs = lists:reverse(
+                lists:foldl(
+                  fun ({_, _, FILE} = New, [{_, _, FILE} | Rem]) ->
+                          %% same
+                          [New | Rem];
+                      (Seg, Acc) ->
+                          [Seg | Acc]
+                  end, [], SegRefs0)),
+
+    ok = send_segments(System, ServerUId, TidRanges0, SegRefs),
+    ok.
+
+flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
+                      #state{data_dir = DataDir,
+                             segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
-
+    StartIdx = start_index(ServerUId, StartIdx0),
+    ?DEBUG("~s ~s ~b:~b to ~b",
+          [?FUNCTION_NAME, ServerUId, StartIdx0, StartIdx, EndIdx]),
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
-                  "not exist", [Dir]),
+                   "not exist", [Dir]),
+            %% TODO: delete mem table
             %% clean up the tables for this process
-            _ = ets:delete(Tid),
-            _ = clean_closed_mem_tables(System, ServerUId, Tid),
-            ok;
+            [];
         Segment0 ->
             case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
                                    Segment0, State) of
@@ -242,7 +299,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                     ?WARN("segment_writer: skipping segments for ~w as
                            directory ~ts disappeared whilst writing",
                            [ServerUId, Dir]),
-                    ok;
+                    [];
                 {Segment, Closed0} ->
                     % notify writerid of new segment update
                     % includes the full range of the segment
@@ -259,33 +316,37 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                               end,
 
                     _ = ra_log_segment:close(Segment),
-
-                    ok = send_segments(System, ServerUId, Tid, SegRefs),
-                    ok
+                    SegRefs
             end
     end.
 
 start_index(ServerUId, StartIdx0) ->
+    max(snap_idx(ServerUId) + 1, StartIdx0).
+
+snap_idx(ServerUId) ->
     case ets:lookup(ra_log_snapshot_state, ServerUId) of
         [{_, SnapIdx}] ->
-            max(SnapIdx + 1, StartIdx0);
-        [] ->
-            StartIdx0
+            SnapIdx;
+        _ ->
+            -1
     end.
 
-send_segments(System, ServerUId, Tid, Segments) ->
-    Msg = {ra_log_event, {segments, Tid, Segments}},
+send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of
         undefined ->
             ?DEBUG("ra_log_segment_writer: error sending "
                    "ra_log_event to: "
                    "~ts. Error: ~s",
                    [ServerUId, "No Pid"]),
-            _ = ets:delete(Tid),
-            _ = clean_closed_mem_tables(System, ServerUId, Tid),
+            %% delete from the memtable on the non-running server's behalf
+            [begin
+                 %% this looks a bit weird but
+                 %% we dont need full init to run a delete
+                 _  = ra_mt:delete({range, Tid, Range})
+             end || {Tid, Range} <- TidRanges],
             ok;
         Pid ->
-            Pid ! Msg,
+            Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},
             ok
     end.
 
@@ -310,21 +371,30 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
     case ets:lookup(Tid, Idx) of
         [] ->
-            %% oh dear, an expected index was not found in the mem table.
-            ?WARN("segment_writer: missing index ~b in mem table ~s for uid ~s"
-                  "checking to see if UId has been unregistered",
-                  [Idx, Tid, UId]),
-            case ra_directory:is_registered_uid(State#state.system, UId) of
+            StartIdx = start_index(UId, Idx),
+            case Idx < StartIdx of
                 true ->
-                    ?ERROR("segment_writer: uid ~s is registered, exiting...",
-                           [UId]),
-                    exit({missing_index, UId, Idx});
+                    %% TODO: we could combine registered check with this
+                    %% although registered check could be slow
+                    append_to_segment(UId, Tid, StartIdx, EndIdx, Seg0,
+                                      Closed, State);
                 false ->
-                    ?INFO("segment_writer: UId ~s was not registered, skipping",
-                          [UId]),
-                    undefined
+                    %% oh dear, an expected index was not found in the mem table.
+                    ?WARN("segment_writer: missing index ~b in mem table for uid ~s"
+                          "start index ~b checking to see if UId has been unregistered",
+                          [Idx, UId, StartIdx]),
+                    case ra_directory:is_registered_uid(State#state.system, UId) of
+                        true ->
+                            ?ERROR("segment_writer: uid ~s is registered, exiting...",
+                                   [UId]),
+                            exit({missing_index, UId, Idx});
+                        false ->
+                            ?INFO("segment_writer: UId ~s was not registered, skipping",
+                                  [UId]),
+                            undefined
+                    end
             end;
-        [{_, Term, Data0}] ->
+        [{Idx, Term, Data0}] ->
             Data = term_to_iovec(Data0),
             DataSize = iolist_size(Data),
             case ra_log_segment:append(Seg0, Idx, Term, {DataSize, Data}) of
@@ -343,7 +413,6 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             %% a successor cannot be opened - this is most likely due
                             %% to the directory having been deleted.
                             %% clear close mem tables here
-                            _ = ets:delete(Tid),
                             _ = clean_closed_mem_tables(State#state.system, UId, Tid),
                             undefined;
                         Seg ->
@@ -351,7 +420,6 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             %% re-evaluate snapshot state for the server in case
                             %% a snapshot has completed during segment flush
                             StartIdx = start_index(UId, Idx),
-                            % recurse
                             append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
                                               [Seg0 | Closed], State)
                     end;

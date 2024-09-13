@@ -303,7 +303,7 @@ do_init(#{id := Id,
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
     Config = #{counter := Counter,
-               system_config := SysConf} = maps:merge(config_defaults(Id),
+               system_config := #{names := Names} = SysConf} = maps:merge(config_defaults(Id),
                                                       Config0),
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
@@ -312,6 +312,7 @@ do_init(#{id := Id,
     process_flag(message_queue_data, MsgQData),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
+    %% wait for wal for a bit before initialising the server state and log
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
     LogId = ra_server:log_id(ServerState),
     UId = ra_server:uid(ServerState),
@@ -455,14 +456,15 @@ leader(EventType, {command, normal, {CmdType, Data, ReplyMode}},
                     {keep_state, State0, []}
             end
     end;
-leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
+leader(EventType, {command, low, {'$usr', Data, ReplyMode}},
        #state{conf = Conf,
               low_priority_commands = Delayed} = State0) ->
+    %% only user commands can be low priority
     case validate_reply_mode(ReplyMode) of
         ok ->
             %% cache the low priority command until the flush_commands message
             %% arrives
-            Cmd = make_command(CmdType, EventType, Data, ReplyMode),
+            Cmd = make_command('$usr', EventType, Data, ReplyMode),
             %% if there are no prior delayed commands
             %% (and thus no action queued to do so)
             %% queue a state timeout to flush them
@@ -487,6 +489,9 @@ leader(EventType, {command, low, {CmdType, Data, ReplyMode}},
                     {keep_state, State0, []}
             end
     end;
+leader(EventType, {command, low, Cmd}, #state{} = State) ->
+    %% non user low priority commands are upgraded to normal priority
+    leader(EventType, {command, normal, Cmd}, State);
 leader(EventType, {aux_command, Cmd}, State0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
                                                      Cmd, State0#state.server_state),
@@ -497,7 +502,6 @@ leader(EventType, {aux_command, Cmd}, State0) ->
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               low_priority_commands = Delayed0} = State0) ->
-
     {Commands, Delayed} = ra_ets_queue:take(Size, Delayed0),
     %% write a batch of delayed commands
     {NextState, State1, Effects} = handle_leader({commands, Commands}, State0),
@@ -2026,9 +2030,9 @@ update_peer(PeerId, Update,
 
 send_applied_notifications(#state{pending_notifys = PendingNots} = State,
                            Nots0) when map_size(PendingNots) > 0 ->
-    Nots = ra_lib:maps_merge_with(fun(_K, V1, V2) ->
-                                          V1 ++ V2
-                                  end, PendingNots, Nots0),
+    Nots = maps:merge_with(fun(_K, V1, V2) ->
+                                   V1 ++ V2
+                           end, PendingNots, Nots0),
     send_applied_notifications(State#state{pending_notifys = #{}}, Nots);
 send_applied_notifications(#state{} = State, Nots) ->
     Id = id(State),

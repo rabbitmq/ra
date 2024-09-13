@@ -142,7 +142,14 @@ name_of(SystemOrNames, UId) ->
     Tbl = get_name(SystemOrNames),
     case ets:lookup(Tbl, UId) of
         [{_, _, _, ServerName, _}] -> ServerName;
-        [] -> undefined
+        [] ->
+            TblRev = get_reverse(SystemOrNames),
+            case dets:select(TblRev, [{{'_', UId}, [], ['$_']}]) of
+                [] ->
+                    undefined;
+                [{Name, UId}] ->
+                    Name
+            end
     end.
 
 -spec cluster_name_of(ra_system:names() | atom(), ra_uid()) ->
@@ -150,8 +157,8 @@ name_of(SystemOrNames, UId) ->
 cluster_name_of(SystemOrNames, UId) ->
     Tbl = get_name(SystemOrNames),
     case ets:lookup(Tbl, UId) of
-	[{_, _, _, _, ClusterName}] -> ClusterName;
-	[] -> undefined
+        [{_, _, _, _, ClusterName}] -> ClusterName;
+        [] -> undefined
     end.
 
 
@@ -201,11 +208,11 @@ list_registered(System) when is_atom(System) ->
     Tbl = get_reverse(System),
     dets:select(Tbl, [{'_', [], ['$_']}]).
 
--spec is_registered_uid(atom(), ra_uid()) -> boolean().
-is_registered_uid(System, UId)
-  when is_atom(System) andalso
+-spec is_registered_uid(atom() | ra_system:names(), ra_uid()) -> boolean().
+is_registered_uid(SystemOrNames, UId)
+  when (is_atom(SystemOrNames) orelse is_map(SystemOrNames)) andalso
        is_binary(UId) ->
-    Tbl = get_reverse(System),
+    Tbl = get_reverse(SystemOrNames),
     [] =/= dets:select(Tbl, [{{'_', UId}, [], ['$_']}]).
 
 get_name(#{directory := Tbl}) ->
@@ -216,7 +223,9 @@ get_name(System) when is_atom(System) ->
 
 get_reverse(System) when is_atom(System) ->
     {ok, Tbl} = ra_system:lookup_name(System, directory_rev),
-    Tbl.
+    Tbl;
+get_reverse(#{directory_rev := DirRev}) ->
+    DirRev.
 
 get_names(System) when is_atom(System) ->
     #{names := Names} = ra_system:fetch(System),
