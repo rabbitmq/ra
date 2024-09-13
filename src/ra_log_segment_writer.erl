@@ -142,7 +142,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
                  _ ->
                      ?ERROR("segment_writer: ~b failures encountered during segment"
                             " flush. Errors: ~P", [length(Failures), Failures, 32]),
-                     exit(segment_writer_segment_write_failure)
+                     exit({segment_writer_segment_write_failure, Failures})
              end
          end || Tabs <- ra_lib:lists_chunk(Degree, Tables)],
     % delete wal file once done
@@ -221,22 +221,29 @@ get_overview(#state{data_dir = Dir,
       segment_conf => Conf
      }.
 
-do_segment({ServerUId, StartIdx0, EndIdx, Tid},
+do_segment({ServerUId, {StartIdx0, EndIdx}},
            #state{system = System,
                   data_dir = DataDir,
                   segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
+    #{names := Names} = ra_system:fetch(System),
+    %% TODO: mt: make read only function that only returnes existing tables
+    %% and do not create new ones
+    {ok, Mt} = ra_log_ets:mem_table_please(Names, ServerUId),
+    StartIdx = start_index(ServerUId, StartIdx0),
+    ?INFO("do_segment ~s ~b:~b to ~b", [ServerUId, StartIdx0, StartIdx, EndIdx]),
 
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
-                  "not exist", [Dir]),
+                   "not exist", [Dir]),
+            %% TODO: delete mem table
             %% clean up the tables for this process
-            _ = ets:delete(Tid),
-            _ = clean_closed_mem_tables(System, ServerUId, Tid),
+            % _ = ets:delete(Tid),
+            % _ = clean_closed_mem_tables(System, ServerUId, Tid),
             ok;
         Segment0 ->
-            case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
+            case append_to_segment(ServerUId, Mt, StartIdx0, EndIdx,
                                    Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
@@ -260,7 +267,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
 
                     _ = ra_log_segment:close(Segment),
 
-                    ok = send_segments(System, ServerUId, Tid, SegRefs),
+                    ok = send_segments(System, ServerUId, Mt, SegRefs),
                     ok
             end
     end.
@@ -273,16 +280,16 @@ start_index(ServerUId, StartIdx0) ->
             StartIdx0
     end.
 
-send_segments(System, ServerUId, Tid, Segments) ->
-    Msg = {ra_log_event, {segments, Tid, Segments}},
+send_segments(System, ServerUId, Mt, Segments) ->
+    Msg = {ra_log_event, {segments, Mt, Segments}},
     case ra_directory:pid_of(System, ServerUId) of
         undefined ->
             ?DEBUG("ra_log_segment_writer: error sending "
                    "ra_log_event to: "
                    "~ts. Error: ~s",
                    [ServerUId, "No Pid"]),
-            _ = ets:delete(Tid),
-            _ = clean_closed_mem_tables(System, ServerUId, Tid),
+            _ = ra_log_memtbl:delete(Mt),
+            % _ = clean_closed_mem_tables(System, ServerUId, Mt),
             ok;
         Pid ->
             Pid ! Msg,
@@ -299,32 +306,41 @@ clean_closed_mem_tables(System, UId, Tid) ->
          true = ets:delete_object(ClosedTbl, O)
      end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
-append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
+append_to_segment(UId, Mt, StartIdx0, EndIdx, Seg, State) ->
     StartIdx = start_index(UId, StartIdx0),
     % EndIdx + 1 because FP
-    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], State).
+    append_to_segment(UId, Mt, StartIdx, EndIdx+1, Seg, [], State).
 
 append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
   when StartIdx >= EndIdx ->
     {Seg, Closed};
-append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
-    case ets:lookup(Tid, Idx) of
-        [] ->
-            %% oh dear, an expected index was not found in the mem table.
-            ?WARN("segment_writer: missing index ~b in mem table ~s for uid ~s"
-                  "checking to see if UId has been unregistered",
-                  [Idx, Tid, UId]),
-            case ra_directory:is_registered_uid(State#state.system, UId) of
+append_to_segment(UId, Mt, Idx, EndIdx, Seg0, Closed, State) ->
+    case ra_log_memtbl:lookup(Idx, Mt) of
+        undefined ->
+            StartIdx = start_index(UId, Idx),
+            case Idx < StartIdx of
                 true ->
-                    ?ERROR("segment_writer: uid ~s is registered, exiting...",
-                           [UId]),
-                    exit({missing_index, UId, Idx});
+                    %% TODO: mt: we should combine registered check with this
+                    %% although registered check could be slow
+                    append_to_segment(UId, Mt, StartIdx, EndIdx, Seg0,
+                                      Closed, State);
                 false ->
-                    ?INFO("segment_writer: UId ~s was not registered, skipping",
-                          [UId]),
-                    undefined
+                    %% oh dear, an expected index was not found in the mem table.
+                    ?WARN("segment_writer: missing index ~b in mem table ~p for uid ~s"
+                          "start index ~b checking to see if UId has been unregistered",
+                          [Idx, ra_log_memtbl:info(Mt), UId, StartIdx]),
+                    case ra_directory:is_registered_uid(State#state.system, UId) of
+                        true ->
+                            ?ERROR("segment_writer: uid ~s is registered, exiting...",
+                                   [UId]),
+                            exit({missing_index, UId, Idx});
+                        false ->
+                            ?INFO("segment_writer: UId ~s was not registered, skipping",
+                                  [UId]),
+                            undefined
+                    end
             end;
-        [{_, Term, Data0}] ->
+        {Idx, Term, Data0} ->
             Data = term_to_iovec(Data0),
             DataSize = iolist_size(Data),
             case ra_log_segment:append(Seg0, Idx, Term, {DataSize, Data}) of
@@ -335,7 +351,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                     %% the segment index but is probably good enough to get comparative
                     %% data rates for different Ra components
                     ok = counters:add(State#state.counter, ?C_BYTES_WRITTEN, DataSize),
-                    append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
+                    append_to_segment(UId, Mt, Idx+1, EndIdx, Seg, Closed, State);
                 {error, full} ->
                     % close and open a new segment
                     case open_successor_segment(Seg0, State#state.segment_conf) of
@@ -343,8 +359,8 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             %% a successor cannot be opened - this is most likely due
                             %% to the directory having been deleted.
                             %% clear close mem tables here
-                            _ = ets:delete(Tid),
-                            _ = clean_closed_mem_tables(State#state.system, UId, Tid),
+                            _ = ets:delete(Mt),
+                            _ = clean_closed_mem_tables(State#state.system, UId, Mt),
                             undefined;
                         Seg ->
                             ok = counters:add(State#state.counter, ?C_SEGMENTS, 1),
@@ -352,7 +368,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             %% a snapshot has completed during segment flush
                             StartIdx = start_index(UId, Idx),
                             % recurse
-                            append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
+                            append_to_segment(UId, Mt, StartIdx, EndIdx, Seg,
                                               [Seg0 | Closed], State)
                     end;
                 {error, Posix} ->

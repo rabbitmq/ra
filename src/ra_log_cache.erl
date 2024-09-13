@@ -208,7 +208,7 @@ cache_read_sparse(Indexes, State, Acc) ->
     cache_read_sparse(Indexes, State, 0, Acc).
 
 cache_read_sparse([], _State, Num, Acc) ->
-    {Acc, Num, []}; %% no reminder
+    {Acc, Num, []}; %% no remainder
 cache_read_sparse([Next | Rem] = Indexes, State, Num, Acc) ->
     case fetch(Next, State, undefined) of
         undefined ->

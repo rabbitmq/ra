@@ -12,6 +12,9 @@
          give_away/2,
          delete_tables/2]).
 
+-export([mem_table_please/2,
+         execute_delete/3]).
+
 -export([init/1,
          handle_call/3,
          handle_cast/2,
@@ -21,7 +24,8 @@
 
 -include("ra.hrl").
 
--record(state, {names :: ra_system:names()}).
+-record(state, {names :: ra_system:names(),
+                memtbls = #{} :: #{ra:uid() => ets:tid()}}).
 
 %%% ra_log_ets - owns mem_table ETS tables
 
@@ -40,28 +44,61 @@ give_away(#{log_ets := Name}, Tid) ->
 delete_tables(#{log_ets := Name}, Tids) ->
     gen_server:cast(Name, {delete_tables, Tids}).
 
+-spec mem_table_please(ra_system:names(), ra:uid()) ->
+    {ok, ra_log_membtbl:state()} | {error, term()}.
+mem_table_please(#{log_ets := Name}, UId) ->
+    case gen_server:call(Name, {mem_table_please, UId}) of
+        {ok, Tid} ->
+            {ok, ra_log_memtbl:init(Tid)};
+        Err ->
+            Err
+    end.
+
+-spec execute_delete(ra_system:names(),
+                     ra_log_memtbl:delete_spec(),
+                     ra_log_memtbl:state()) ->
+    ok.
+execute_delete(#{log_ets := Name}, Spec, Mt) ->
+    gen_server:cast(Name, {exec_delete, Spec, Mt}).
+
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 init([#{data_dir := DataDir,
-        names := #{open_mem_tbls := OpenTbl,
-                   closed_mem_tbls := ClosedTbl} = Names}]) ->
+        names := #{} = Names} = _Config]) ->
     process_flag(trap_exit, true),
-    TableFlags =  [named_table,
-                   {write_concurrency, true},
-                   public],
+    % TableFlags =  [named_table,
+    %                {write_concurrency, true},
+    %                public],
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
-    _ = ets:new(OpenTbl, [set | TableFlags]),
-    _ = ets:new(ClosedTbl, [bag | TableFlags]),
+    % _ = ets:new(OpenTbl, [set | TableFlags]),
+    % _ = ets:new(ClosedTbl, [bag | TableFlags]),
     ok = ra_directory:init(DataDir, Names),
     {ok, #state{names = Names}}.
 
+handle_call({mem_table_please, UId}, _From,
+            #state{memtbls = Tbls} = State) ->
+    case Tbls of
+        #{UId := Tid} ->
+            {reply, {ok, Tid}, State};
+        _ ->
+            Tid = ets:new(memtbl, [ordered_set,
+                                   public,
+                                   {write_concurrency, auto}
+                                   % compressed
+                                  ]),
+            {reply, {ok, Tid}, State#state{memtbls = Tbls#{UId => Tid}}}
+    end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+handle_cast({exec_delete, Spec, Mt}, State) ->
+    catch ra_log_memtbl:delete(Spec, Mt),
+    {noreply, State};
 handle_cast({delete_tables, Tids}, State) ->
     %% delete ets tables,
     %% we need to be defensive here.

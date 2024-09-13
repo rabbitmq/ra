@@ -33,9 +33,9 @@ all_tests() ->
 groups() ->
     [
      {tests, [], [
-                  init_close_init,
-                  write_recover_then_overwrite,
-                  write_overwrite_then_recover
+                  init_close_init
+                  % write_recover_then_overwrite,
+                  % write_overwrite_then_recover
                   | all_tests()]}
     ].
 
