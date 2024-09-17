@@ -212,15 +212,15 @@ delete(Start, End, Tid) ->
     delete(Start+1, End, Tid).
 
 read_sparse(Indexes, State, Acc) ->
-    cache_read_sparse(Indexes, State, 0, Acc).
+    read_sparse(Indexes, State, 0, Acc).
 
-cache_read_sparse([], _State, Num, Acc) ->
+read_sparse([], _State, Num, Acc) ->
     {Acc, Num, []}; %% no remainder
-cache_read_sparse([Next | Rem] = Indexes, State, Num, Acc) ->
+read_sparse([Next | Rem] = Indexes, State, Num, Acc) ->
     case lookup(Next, State) of
         undefined ->
             {Acc, Num, Indexes};
         Entry ->
-            cache_read_sparse(Rem, State, Num + 1, [Entry | Acc])
+            read_sparse(Rem, State, Num + 1, [Entry | Acc])
     end.
 
