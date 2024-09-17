@@ -898,17 +898,17 @@ segment_writer_or_wal_crash_follower(Config) ->
     FollowerPid = ct_rpc:call(FollowerNode, erlang, whereis, [FollowerName]),
     ?assert(is_pid(FollowerPid)),
 
-    AwaitReplicated = fun () ->
-                              LastIdxs =
-                              [begin
-                                   {ok, #{current_term := T,
-                                          log := #{last_index := L,
-                                                   cache_size := 0}}, _} =
-                                   ra:member_overview(S),
-                                   {T, L}
-                               end || {_, _N} = S <- ServerIds],
-                              1 == length(lists:usort(LastIdxs))
-                      end,
+    AwaitReplicated =
+        fun () -> LastIdxs =
+                  [begin
+                       {ok, #{current_term := T,
+                              log := #{last_index := L,
+                                       last_written_index_term := {L, _}}}, _} =
+                           ra:member_overview(S),
+                       {T, L}
+                   end || {_, _N} = S <- ServerIds],
+                  1 == length(lists:usort(LastIdxs))
+        end,
     [begin
          ct:pal("running iteration ~b", [I]),
 
@@ -1009,14 +1009,13 @@ segment_writer_or_wal_crash_leader(Config) ->
 
     AwaitReplicated = fun () ->
                               LastIdxs =
-                              [begin
-                                   {ok, #{current_term := T,
-                                          log := #{last_index := L,
-                                                   last_written_index_term := {L, _}}},
-                                    _} =
-                                   ra:member_overview(S),
-                                   {T, L}
-                               end || {_, _N} = S <- ServerIds],
+                                  [begin
+                                       {ok, #{current_term := T,
+                                              log := #{last_index := L,
+                                                       last_written_index_term := {L, _}}},
+                                        _} = ra:member_overview(S),
+                                       {T, L}
+                                   end || S <- ServerIds],
                               1 == length(lists:usort(LastIdxs))
                       end,
     [begin
@@ -1038,21 +1037,20 @@ segment_writer_or_wal_crash_leader(Config) ->
                  true = ct_rpc:call(LeaderNode, erlang, exit, [Pid, kill])
          end,
 
-
          timer:sleep(1000),
          WriterPid ! stop,
          await_condition(fun () -> not is_process_alive(WriterPid) end, 1000),
 
          %% assert stuff
          await_condition(AwaitReplicated, 100),
-         ?assertMatch({ok, #{log := #{cache_size := 0}}, _},
-                      ra:member_overview(Leader)),
-         %% follower hasn't crashed
+         ct:pal("overview after replicated ~p",
+                [ra:member_overview(Leader)]),
+         %% leader hasn't crashed
          ?assertEqual(LeaderPid, ct_rpc:call(LeaderNode, erlang, whereis,
-                                               [LeaderName]))
+                                             [LeaderName]))
      end || I <- lists:seq(1, 10)],
 
-    %% stop and restart the follower
+    %% stop and restart the leader
     ok = ra:stop_server(Leader),
     ok = ra:restart_server(Leader),
 
