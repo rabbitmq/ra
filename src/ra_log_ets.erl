@@ -87,9 +87,9 @@ handle_call({mem_table_please, UId}, _From,
         _ ->
             Tid = ets:new(memtbl, [set,
                                    {write_concurrency, true},
-                                   {read_concurrency, true},
+                                   % {read_concurrency, true},
                                    {decentralized_counters, true},
-                                   % compressed
+                                   compressed,
                                    public
                                   ]),
             {reply, {ok, Tid}, State#state{memtbls = Tbls#{UId => Tid}}}
