@@ -99,6 +99,17 @@ perf(_Config) ->
          ok
      end || Mt <- Tables
     ],
+
+    Indexes = lists:seq(1, 1000, 2),
+    [begin
+         Fun = fun () -> _ = ra_log_memtbl:get_items(Indexes, Mt) end,
+         {Taken, _Read} = timer:tc(?MODULE, do_n, [0, 100, Fun]),
+         #{name := Name} = ra_log_memtbl:info(Mt),
+         ct:pal("~s read_sparse ~b took ~bms",
+                [Name, 0, Taken div 1000]),
+         ok
+     end || Mt <- Tables
+    ],
     % RangeSpec = [{{'$1','_'},
     %               [{'andalso',{'>=','$1',From},{'=<','$1',To}}],
     %               ['$1']}],
@@ -158,3 +169,9 @@ delete_n(N, N, Mt) ->
     Mt;
 delete_n(K, N, Mt) ->
     delete_n(K+1, N, ra_log_memtbl:delete(K, Mt)).
+
+do_n(N, N, _Fun) ->
+    ok;
+do_n(N, To, Fun) ->
+    Fun(),
+    do_n(N+1, To, Fun).
