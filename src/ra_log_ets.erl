@@ -100,7 +100,7 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({exec_delete, Spec, Mt}, State) ->
     try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
-        {Time, true} ->
+        {Time, _} ->
             ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
                    [Time div 1000, Spec]),
             ok
