@@ -87,7 +87,7 @@ handle_call({mem_table_please, UId}, _From,
         _ ->
             Tid = ets:new(memtbl, [ordered_set,
                                    public,
-                                   {write_concurrency, true},
+                                   {write_concurrency, auto},
                                    {decentralized_counters, true}
                                    % compressed
                                   ]),
