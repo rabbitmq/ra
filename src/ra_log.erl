@@ -1344,8 +1344,8 @@ now_ms() ->
     erlang:system_time(millisecond).
 
 delete_mem_table(#{} = _Names, Spec, Mt) ->
-    ra_log_memtbl:delete(Spec, Mt),
-    % ra_log_ets:execute_delete(_Names, Spec, Mt),
+    % ra_log_memtbl:delete(Spec, Mt),
+    ra_log_ets:execute_delete(_Names, Spec, Mt),
     ok.
 
 %%%% TESTS
