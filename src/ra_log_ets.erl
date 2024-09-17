@@ -99,7 +99,17 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({exec_delete, Spec, Mt}, State) ->
-    catch ra_log_memtbl:delete(Spec, Mt),
+    try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
+        {Time, true} ->
+            ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
+                   [Time div 1000, Spec]),
+            ok
+    catch
+        _:Err ->
+            ?WARN("ra_log_ets: failed to delete ~w ~w ",
+                  [Spec, Err]),
+            ok
+    end,
     {noreply, State};
 handle_cast({delete_tables, Tids}, State) ->
     %% delete ets tables,
