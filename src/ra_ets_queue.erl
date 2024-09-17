@@ -24,7 +24,7 @@
 
 -spec new() -> state().
 new() ->
-    Tid = ets:new(?MODULE, [ordered_set, private]),
+    Tid = ets:new(?MODULE, [set, private]),
     #?MODULE{tbl = Tid}.
 
 -spec in(item(), state()) -> state().

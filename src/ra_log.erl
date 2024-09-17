@@ -559,7 +559,6 @@ handle_event({segments, _Tid, NewSegs},
                  % ?INFO("~ts: ra_log: setting first memtbl index ~b, segments ~p",
                  %       [LogId, LastSegIdx+1, NewSegs]),
                  {Spec, Mt1} = ra_log_memtbl:set_first(LastSegIdx + 1, Mt0),
-                 %% TODO: send delete spec to another process (ra_log_ets?) to exectute
                  ra_log_ets:execute_delete(Names, Spec, Mt1),
                  % _ = ra_log_memtbl:delete(Spec, Mt1),
                  Mt1
@@ -798,8 +797,9 @@ flush_cache(#?MODULE{cache = Cache} = State) ->
     State#?MODULE{cache = ra_log_cache:flush(Cache)}.
 
 -spec needs_cache_flush(state()) -> boolean().
-needs_cache_flush(#?MODULE{cache = Cache}) ->
-    ra_log_cache:needs_flush(Cache).
+needs_cache_flush(#?MODULE{}) ->
+    false.
+    % ra_log_cache:needs_flush(Cache).
 
 -spec tick(Now :: integer(), state()) -> state().
 tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
