@@ -85,7 +85,7 @@ handle_call({mem_table_please, UId}, _From,
         #{UId := Tid} ->
             {reply, {ok, Tid}, State};
         _ ->
-            Tid = ets:new(memtbl, [set,
+            Tid = ets:new(memtbl, [ordered_set,
                                    public,
                                    {write_concurrency, true},
                                    {decentralized_counters, true}
