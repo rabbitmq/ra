@@ -1124,15 +1124,16 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                          mem_table = Mt0} = State,
                 Entries) ->
     WriterId = {UId, self()},
-    {WalCommands, Num, Mt} =
+    {WalCommands, Num, Mt1} =
         lists:foldl(fun ({Idx, Term, Cmd} = Entry, {WC, N, M0}) ->
                             % Cmd = {ttb, term_to_iovec(Cmd0)},
                             WalC = {append, WriterId, Idx, Term, Cmd},
-                            M = ra_log_memtbl:insert(Entry, M0),
+                            M = ra_log_memtbl:stage(Entry, M0),
                             {[WalC | WC], N+1, M}
                     end, {[], 0, Mt0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
+    Mt = ra_log_memtbl:commit(Mt1),
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),

@@ -5,6 +5,8 @@
 -export([
          init/1,
          insert/2,
+         stage/2,
+         commit/1,
          lookup/2,
          lookup_term/2,
          fold/5,
@@ -42,7 +44,9 @@
 
 -record(?MODULE, {tbl :: ets:tid(),
                   range :: undefined | {ra:index(), ra:index()},
-                  cache = #{} :: #{ra:index() => log_entry()}}).
+                  staged = [] :: [log_entry()]
+                  % cache = #{} :: #{ra:index() => log_entry()}
+                 }).
 
 -opaque state() :: #?MODULE{}.
 
@@ -67,8 +71,9 @@ init(Tid) ->
                       end, undefined, Entries)
             end,
     #?MODULE{tbl = Tid,
-             range = Range,
-             cache = #{}}.
+             range = Range
+             % cache = #{}
+            }.
 
 -spec insert(log_entry(), state()) -> state().
 insert({Idx, _, _} = Entry,
@@ -90,6 +95,27 @@ insert({Idx, _, _} = _Entry,
     % _ = delete(Spec, State),
     % insert(Entry, State).
 
+-spec stage(log_entry(), state()) -> state().
+stage({Idx, _, _} = Entry,
+       #?MODULE{tbl = _Tid,
+                staged = Staged,
+                range = Range} = State)
+  when ?IS_NEXT_IDX(Idx, Range) ->
+    State#?MODULE{staged = [Entry | Staged],
+                  range = update_range_end(Idx, Range)};
+stage({Idx, _, _} = _Entry,
+       #?MODULE{range = Range} = _State0)
+  when ?IN_RANGE(Idx, Range) orelse
+       ?IS_BEFORE_RANGE(Idx, Range) ->
+    {error, overwriting}.
+
+-spec commit(state()) -> state().
+commit(#?MODULE{staged = []} = State) ->
+    State;
+commit(#?MODULE{tbl = Tid,
+                staged = Staged} = State) ->
+    true = ets:insert(Tid, lists:reverse(Staged)),
+    State#?MODULE{staged = []}.
 
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
