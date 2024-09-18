@@ -565,9 +565,11 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
     end;
 handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                                               log_id = LogId} = Cfg,
-                                  cluster := Cluster} =  State00) ->
+                                  cluster := Cluster,
+                                  log := Log0} = State000) ->
     %% TODO: refactor to use wal batch API?
     Num = length(Cmds),
+    State00 = State000#{log => ra_log:begin_tx(Log0)},
     case catch  lists:foldl(fun(C, {S0, E0}) ->
                             case append_log_leader(C, S0, E0) of
                                 {ok, I, T, S, E} ->
@@ -579,8 +581,10 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
         {State0, Effects0} ->
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-            {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
-            {leader, State, Effects};
+            {#{log := Log1} = State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
+            %% TODO: we need to detect wal down here instaed!!!
+            Log = ra_log:commit_tx(Log1),
+            {leader, State#{log => Log}, Effects};
         {not_appended, wal_down, State0, Effects} ->
             ?WARN("~ts ~b commands NOT appended to Raft log. Reason: wal_down",
                   [LogId, length(Cmds)]),

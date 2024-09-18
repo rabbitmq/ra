@@ -42,11 +42,11 @@
         (Range == undefined orelse
          Idx == element(2, Range) + 1)).
 
--record(?MODULE, {tbl :: ets:tid(),
-                  range :: undefined | {ra:index(), ra:index()},
-                  staged = [] :: [log_entry()]
-                  % cache = #{} :: #{ra:index() => log_entry()}
-                 }).
+-record(?MODULE,
+        {tbl :: ets:tid(),
+         range :: undefined | {ra:index(), ra:index()},
+         staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]}
+        }).
 
 -opaque state() :: #?MODULE{}.
 
@@ -87,7 +87,7 @@ insert({Idx, _, _} = _Entry,
        #?MODULE{range = Range} = _State0)
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
-    {error, overwriting}.
+    exit({error, overwriting}).
     % ct:pal("mem tbl insert out ~p, ~p", [Idx, Range]),
     %% TODO: we may need to return {error, overwriting} and have the caller
     %% call set_last/2 explicitly
@@ -97,29 +97,46 @@ insert({Idx, _, _} = _Entry,
 
 -spec stage(log_entry(), state()) -> state().
 stage({Idx, _, _} = Entry,
-       #?MODULE{tbl = _Tid,
-                staged = Staged,
+       #?MODULE{ staged = {FstIdx, Staged},
                 range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
-    State#?MODULE{staged = [Entry | Staged],
+    State#?MODULE{staged = {FstIdx, [Entry | Staged]},
+                  range = update_range_end(Idx, Range)};
+stage({Idx, _, _} = Entry,
+       #?MODULE{tbl = _Tid,
+                staged = undefined,
+                range = Range} = State)
+  when ?IS_NEXT_IDX(Idx, Range) ->
+    State#?MODULE{staged = {Idx, [Entry]},
                   range = update_range_end(Idx, Range)};
 stage({Idx, _, _} = _Entry,
        #?MODULE{range = Range} = _State0)
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
-    {error, overwriting}.
+    exit({error, overwriting}).
 
 -spec commit(state()) -> state().
-commit(#?MODULE{staged = []} = State) ->
+commit(#?MODULE{staged = undefined} = State) ->
     State;
 commit(#?MODULE{tbl = Tid,
-                staged = Staged} = State) ->
-    true = ets:insert(Tid, lists:reverse(Staged)),
-    State#?MODULE{staged = []}.
+                staged = {_, Staged0}} = State) ->
+    Staged = lists:reverse(Staged0),
+    true = ets:insert(Tid, Staged),
+    {Staged, State#?MODULE{staged = undefined}}.
 
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
-lookup(Idx, #?MODULE{tbl = Tid}) ->
+lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
+  when Idx >= FstStagedIdx ->
+    %% staged read
+    case lists:keysearch(Idx, 1, Staged) of
+        {value, Entry} ->
+            Entry;
+        _ ->
+            undefined
+    end;
+lookup(Idx, #?MODULE{tbl = Tid,
+                    staged = undefined}) ->
     case ets:lookup(Tid, Idx) of
         [Entry] ->
             Entry;
@@ -129,6 +146,15 @@ lookup(Idx, #?MODULE{tbl = Tid}) ->
 
 -spec lookup_term(ra:index(), state()) ->
     ra_term() | undefined.
+lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
+  when Idx >= FstStagedIdx ->
+    %% staged read
+    case lists:keysearch(Idx, 1, Staged) of
+        {value, {_, T, _}} ->
+            T;
+        _ ->
+            undefined
+    end;
 lookup_term(Idx, #?MODULE{tbl = Tid,
                           range = Range})
   when ?IN_RANGE(Idx, Range) ->

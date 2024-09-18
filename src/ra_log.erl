@@ -12,6 +12,8 @@
 -export([pre_init/1,
          init/1,
          close/1,
+         begin_tx/1,
+         commit_tx/1,
          append/2,
          write/2,
          append_sync/2,
@@ -111,7 +113,8 @@
          last_wal_write :: {pid(), Ms :: integer()},
          reader :: ra_log_reader:state(),
          readers = [] :: [pid()],
-         mem_table :: ra_log_memtbl:state()
+         mem_table :: ra_log_memtbl:state(),
+         tx = false :: boolean()
         }).
 
 
@@ -298,10 +301,44 @@ close(#?MODULE{cfg = #cfg{uid = UId},
     catch ets:delete(ra_log_snapshot_state, UId),
     ok.
 
+-spec begin_tx(state()) -> state().
+begin_tx(State) ->
+    State#?MODULE{tx = true}.
+
+-spec commit_tx(state()) -> state().
+commit_tx(#?MODULE{cfg = #cfg{uid = UId,
+                              wal = Wal} = Cfg,
+                   tx = true,
+                   mem_table = Mt1} = State) ->
+    {Entries, Mt} = ra_log_memtbl:commit(Mt1),
+    WriterId = {UId, self()},
+    {WalCommands, Num} =
+        lists:foldl(fun ({Idx, Term, Cmd}, {WC, N}) ->
+                            % Cmd = {ttb, term_to_iovec(Cmd0)},
+                            WalC = {append, WriterId, Idx, Term, Cmd},
+                            {[WalC | WC], N+1}
+                    end, {[], 0}, Entries),
+
+    case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
+        {ok, Pid} ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
+            % put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+            State#?MODULE{%last_index = LastIdx,
+                          tx = false,
+                          % last_term = LastTerm,
+                          last_wal_write = {Pid, now_ms()},
+                          mem_table = Mt};
+        {error, wal_down} ->
+            error(wal_down)
+    end;
+commit_tx(#?MODULE{tx = false} = State) ->
+    State.
+
 -spec append(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
 append({Idx, _, _Cmd} = Entry,
        #?MODULE{last_index = LastIdx,
+                tx = false,
                 snapshot_state = SnapState} = State0)
       when Idx =:= LastIdx + 1 ->
     case ra_snapshot:current(SnapState) of
@@ -309,10 +346,26 @@ append({Idx, _, _Cmd} = Entry,
             % it is the next entry after a snapshot
             % we need to tell the wal to truncate as we
             % are not going to receive any entries prior to the snapshot
+            % TODO: we probably dont need this as the WAL will inspect the
+            % snapshot state table before every write
+            % Alt we could include our current first index in the WAL request
             wal_truncate_write(State0, Entry);
         _ ->
             wal_write(State0, Entry)
     end;
+append({Idx, Term, _Cmd} = Entry,
+       #?MODULE{cfg = Cfg,
+                last_index = LastIdx,
+                tx = true,
+                mem_table = Mt0
+                % snapshot_state = SnapState
+               } = State)
+      when Idx =:= LastIdx + 1 ->
+    Mt = ra_log_memtbl:stage(Entry, Mt0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+    State#?MODULE{last_index = Idx,
+                  last_term = Term,
+                  mem_table = Mt};
 append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
     Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b",
                                       [Idx, LastIdx+1])),
@@ -1133,7 +1186,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                     end, {[], 0, Mt0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
-    Mt = ra_log_memtbl:commit(Mt1),
+    {_, Mt} = ra_log_memtbl:commit(Mt1),
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
