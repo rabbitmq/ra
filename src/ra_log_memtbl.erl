@@ -219,11 +219,11 @@ info(#?MODULE{tbl = Tid}) ->
 
 -spec set_first(ra:index(), state()) ->
     {undefined |  delete_spec(), state()}.
-set_first(Idx, #?MODULE{range = {Start, _} = Range} = State)
+set_first(Idx, #?MODULE{range = {_Start, _} = Range} = State)
   when ?IN_RANGE(Idx, Range) ->
-    % {{'<', Idx}, State#?MODULE{range = update_range_start(Idx, Range)}};
-    {{range, {Start, Idx - 1}},
-     State#?MODULE{range = update_range_start(Idx, Range)}};
+    {{'<', Idx}, State#?MODULE{range = update_range_start(Idx, Range)}};
+    % {{range, {Start, Idx - 1}},
+    %  State#?MODULE{range = update_range_start(Idx, Range)}};
 set_first(Idx, #?MODULE{range = Range} = State)
   when ?IS_AFTER_RANGE(Idx, Range) ->
     {all, State#?MODULE{range = undefined}};
