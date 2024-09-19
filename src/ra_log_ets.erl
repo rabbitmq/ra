@@ -25,7 +25,8 @@
 -include("ra.hrl").
 
 -record(state, {names :: ra_system:names(),
-                memtbls = #{} :: #{ra:uid() => ets:tid()}}).
+                memtbls = #{} :: #{ra:uid() => ets:tid()},
+                deletes = []}).
 
 %%% ra_log_ets - owns mem_table ETS tables
 
@@ -98,6 +99,15 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+handle_cast({exec_delete, _Spec, _Mt} = Del,
+            #state{deletes = Deletes} = State) ->
+    case Deletes of
+        [] ->
+            erlang:send_after(1000, self(), do_deletes),
+            {noreply, State#state{deletes = [Del]}};
+        _ ->
+            {noreply, State#state{deletes = [Del | Deletes]}}
+    end;
 handle_cast({exec_delete, Spec, Mt}, State) ->
     try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
         {Time, _} ->
@@ -133,6 +143,23 @@ handle_cast({delete_tables, Tids}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info(do_deletes, #state{deletes = Deletes} = State) ->
+    _ = lists:foldr(
+          fun ({exec_delete, Spec, Mt}, S0) ->
+                  try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
+                      {Time, _} ->
+                          ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
+                                 [Time div 1000, Spec]),
+                          ok
+                  catch
+                      _:Err ->
+                          ?WARN("ra_log_ets: failed to delete ~w ~w ",
+                                [Spec, Err]),
+                          ok
+                  end,
+                  S0
+          end, undefined, Deletes),
+    {noreply, State#state{deletes = []}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
