@@ -581,7 +581,8 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
         {State0, Effects0} ->
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-            {#{log := Log1} = State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
+            {#{log := Log1} = State, _, Effects} =
+                make_pipelined_rpc_effects(State0, Effects0),
             %% TODO: we need to detect wal down here instaed!!!
             Log = ra_log:commit_tx(Log1),
             {leader, State#{log => Log}, Effects};
