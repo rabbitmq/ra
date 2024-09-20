@@ -99,15 +99,15 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({exec_delete, _Spec, _Mt} = Del,
-            #state{deletes = Deletes} = State) ->
-    case Deletes of
-        [] ->
-            erlang:send_after(1000, self(), do_deletes),
-            {noreply, State#state{deletes = [Del]}};
-        _ ->
-            {noreply, State#state{deletes = [Del | Deletes]}}
-    end;
+% handle_cast({exec_delete, _Spec, _Mt} = Del,
+%             #state{deletes = Deletes} = State) ->
+%     case Deletes of
+%         [] ->
+%             erlang:send_after(1000, self(), do_deletes),
+%             {noreply, State#state{deletes = [Del]}};
+%         _ ->
+%             {noreply, State#state{deletes = [Del | Deletes]}}
+%     end;
 handle_cast({exec_delete, Spec, Mt}, State) ->
     try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
         {Time, _} ->
