@@ -313,8 +313,8 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
     {Entries, Mt} = ra_log_memtbl:commit(Mt1),
     WriterId = {UId, self()},
     {WalCommands, Num} =
-        lists:foldl(fun ({Idx, Term, Cmd}, {WC, N}) ->
-                            % Cmd = {ttb, term_to_iovec(Cmd0)},
+        lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
+                            Cmd = {ttb, term_to_iovec(Cmd0)},
                             WalC = {append, WriterId, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
@@ -1123,11 +1123,11 @@ wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
                                        wal = Wal} = Cfg,
                             % cache = _Cache,
                             mem_table = Mt0} = State,
-                   {Idx, Term, Cmd} = Entry) ->
+                   {Idx, Term, Cmd0} = Entry) ->
     % this is the next write after a snapshot was taken or received
     % we need to indicate to the WAL that this may be a non-contiguous write
     % and that prior entries should be considered stale
-    % Cmd = {ttb, term_to_iovec(Cmd0)},
+    Cmd = {ttb, term_to_iovec(Cmd0)},
     case ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
@@ -1142,8 +1142,8 @@ wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
 wal_write(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
                    mem_table = Mt} = State,
-          {Idx, Term, Cmd} = Entry) ->
-    % Cmd = {ttb, term_to_iovec(Cmd0)},
+          {Idx, Term, Cmd0} = Entry) ->
+    Cmd = {ttb, term_to_iovec(Cmd0)},
     case ra_log_wal:write({UId, self()}, Wal, Idx, Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
@@ -1178,8 +1178,8 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                 Entries) ->
     WriterId = {UId, self()},
     {WalCommands, Num, Mt1} =
-        lists:foldl(fun ({Idx, Term, Cmd} = Entry, {WC, N, M0}) ->
-                            % Cmd = {ttb, term_to_iovec(Cmd0)},
+        lists:foldl(fun ({Idx, Term, Cmd0} = Entry, {WC, N, M0}) ->
+                            Cmd = {ttb, term_to_iovec(Cmd0)},
                             WalC = {append, WriterId, Idx, Term, Cmd},
                             M = ra_log_memtbl:stage(Entry, M0),
                             {[WalC | WC], N+1, M}
