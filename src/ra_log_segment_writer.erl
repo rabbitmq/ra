@@ -359,7 +359,7 @@ append_to_segment(UId, Mt, Idx, EndIdx, Seg0, Closed, State) ->
                             %% a successor cannot be opened - this is most likely due
                             %% to the directory having been deleted.
                             %% clear close mem tables here
-                            _ = ets:delete(Mt),
+                            _ = ra_log_memtbl:delete(Mt),
                             _ = clean_closed_mem_tables(State#state.system, UId, Mt),
                             undefined;
                         Seg ->
