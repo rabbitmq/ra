@@ -198,9 +198,17 @@ delete(Idx, #?MODULE{tbl = Tid}) when is_integer(Idx) ->
     %% cant rely on range, may need to revise API during optimisation
     true = ets:delete(Tid, Idx),
     1;
-delete({range, {Start, End}}, #?MODULE{tbl = Tid}) ->
-    delete(Start, End, Tid),
-    End - Start + 1;
+delete({range, {Start, End}}, #?MODULE{tbl = Tid} = State) ->
+    NumToDelete = End - Start + 1,
+    Limit = ets:info(Tid, size) div 2,
+    case NumToDelete > Limit of
+        true ->
+            %% more than half the table is to be deleted
+            delete({'<', End + 1}, State);
+        false ->
+            delete(Start, End, Tid),
+            End - Start + 1
+    end;
 delete({Op, Idx}, #?MODULE{tbl = Tid})
   when is_integer(Idx) and is_atom(Op) ->
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
@@ -229,11 +237,11 @@ info(#?MODULE{tbl = Tid}) ->
 
 -spec set_first(ra:index(), state()) ->
     {undefined |  delete_spec(), state()}.
-set_first(Idx, #?MODULE{range = {_Start, _} = Range} = State)
+set_first(Idx, #?MODULE{range = {Start, _} = Range} = State)
   when ?IN_RANGE(Idx, Range) ->
-    {{'<', Idx}, State#?MODULE{range = update_range_start(Idx, Range)}};
-    % {{range, {Start, Idx - 1}},
-    %  State#?MODULE{range = update_range_start(Idx, Range)}};
+    % {{'<', Idx}, State#?MODULE{range = update_range_start(Idx, Range)}};
+    {{range, {Start, Idx - 1}},
+     State#?MODULE{range = update_range_start(Idx, Range)}};
 set_first(Idx, #?MODULE{range = Range} = State)
   when ?IS_AFTER_RANGE(Idx, Range) ->
     {all, State#?MODULE{range = undefined}};
