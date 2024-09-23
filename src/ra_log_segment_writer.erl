@@ -229,7 +229,7 @@ do_segment({ServerUId, {StartIdx0, EndIdx}},
     #{names := Names} = ra_system:fetch(System),
     %% TODO: mt: make read only function that only returnes existing tables
     %% and do not create new ones
-    {ok, Mt} = ra_log_ets:mem_table_please(Names, ServerUId),
+    {ok, Mt} = ra_log_ets:mem_table_please(Names, ServerUId, read),
     StartIdx = start_index(ServerUId, StartIdx0),
     ?INFO("do_segment ~s ~b:~b to ~b", [ServerUId, StartIdx0, StartIdx, EndIdx]),
 

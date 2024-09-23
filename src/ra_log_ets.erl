@@ -12,7 +12,9 @@
          give_away/2,
          delete_tables/2]).
 
--export([mem_table_please/2,
+-export([
+         mem_table_please/2,
+         mem_table_please/3,
          execute_delete/3]).
 
 -export([init/1,
@@ -47,10 +49,15 @@ delete_tables(#{log_ets := Name}, Tids) ->
 
 -spec mem_table_please(ra_system:names(), ra:uid()) ->
     {ok, ra_log_membtbl:state()} | {error, term()}.
-mem_table_please(#{log_ets := Name}, UId) ->
+mem_table_please(Names, UId) ->
+    mem_table_please(Names, UId, read_write).
+
+-spec mem_table_please(ra_system:names(), ra:uid(), read | read_write) ->
+    {ok, ra_log_membtbl:state()} | {error, term()}.
+mem_table_please(#{log_ets := Name}, UId, Mode) ->
     case gen_server:call(Name, {mem_table_please, UId}) of
         {ok, Tid} ->
-            {ok, ra_log_memtbl:init(Tid)};
+            {ok, ra_log_memtbl:init(Tid, Mode)};
         Err ->
             Err
     end.

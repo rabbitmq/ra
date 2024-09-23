@@ -4,6 +4,7 @@
 
 -export([
          init/1,
+         init/2,
          insert/2,
          stage/2,
          commit/1,
@@ -54,6 +55,15 @@
 -export_type([
               state/0
               ]).
+
+-spec init(ets:tid(), read | read_write) ->
+    {ok, state()} | {error, term()}.
+init(Tid, read_write) ->
+    init(Tid);
+init(Tid, read) ->
+    #?MODULE{tbl = Tid,
+             range = undefined
+            }.
 
 -spec init(ets:tid()) ->
     {ok, state()} | {error, term()}.
