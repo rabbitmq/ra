@@ -57,7 +57,7 @@ mem_table_please(Names, UId) ->
 mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
-        [Tid] ->
+        [{_, Tid}] ->
             {ok, ra_log_memtbl:init(Tid, Mode)};
         [] ->
             case gen_server:call(Name, {mem_table_please, UId}) of
