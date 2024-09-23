@@ -54,8 +54,9 @@ mem_table_please(Names, UId) ->
 
 -spec mem_table_please(ra_system:names(), ra:uid(), read | read_write) ->
     {ok, ra_log_membtbl:state()} | {error, term()}.
-mem_table_please(#{log_ets := Name}, UId, Mode) ->
-    case ets:lookup(?MODULE, UId) of
+mem_table_please(#{log_ets := Name,
+                   open_mem_tbls := OpnMemTbls}, UId, Mode) ->
+    case ets:lookup(OpnMemTbls, UId) of
         [Tid] ->
             {ok, ra_log_memtbl:init(Tid, Mode)};
         [] ->
@@ -81,20 +82,21 @@ execute_delete(#{log_ets := Name}, Spec, Mt) ->
 %%%===================================================================
 
 init([#{data_dir := DataDir,
-        names := #{} = Names} = _Config]) ->
+        names := #{open_mem_tbls := OpenMemTbls} = Names} = _Config]) ->
     process_flag(trap_exit, true),
     % TableFlags =  [named_table,
     %                {write_concurrency, true},
     %                public],
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
-    _ = ets:new(?MODULE, [set, protected, named_table]),
+    _ = ets:new(OpenMemTbls, [set, protected, named_table]),
     % _ = ets:new(ClosedTbl, [bag | TableFlags]),
     ok = ra_directory:init(DataDir, Names),
     {ok, #state{names = Names}}.
 
 handle_call({mem_table_please, UId}, _From,
-            #state{memtbls = Tbls} = State) ->
+            #state{names = #{open_mem_tbls := OpnMemTbls},
+                             memtbls = Tbls} = State) ->
     case Tbls of
         #{UId := Tid} ->
             {reply, {ok, Tid}, State};
@@ -106,7 +108,7 @@ handle_call({mem_table_please, UId}, _From,
                                    % compressed,
                                    public
                                   ]),
-            true = ets:insert(?MODULE, {UId, Tid}),
+            true = ets:insert(OpnMemTbls, {UId, Tid}),
             {reply, {ok, Tid}, State#state{memtbls = Tbls#{UId => Tid}}}
     end;
 handle_call(_Request, _From, State) ->
