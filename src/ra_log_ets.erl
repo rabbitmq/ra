@@ -55,12 +55,18 @@ mem_table_please(Names, UId) ->
 -spec mem_table_please(ra_system:names(), ra:uid(), read | read_write) ->
     {ok, ra_log_membtbl:state()} | {error, term()}.
 mem_table_please(#{log_ets := Name}, UId, Mode) ->
-    case gen_server:call(Name, {mem_table_please, UId}) of
-        {ok, Tid} ->
+    case ets:lookup(?MODULE, UId) of
+        [Tid] ->
             {ok, ra_log_memtbl:init(Tid, Mode)};
-        Err ->
-            Err
+        [] ->
+            case gen_server:call(Name, {mem_table_please, UId}) of
+                {ok, Tid} ->
+                    {ok, ra_log_memtbl:init(Tid, Mode)};
+                Err ->
+                    Err
+            end
     end.
+
 
 -spec execute_delete(ra_system:names(),
                      ra_log_memtbl:delete_spec(),
@@ -82,7 +88,7 @@ init([#{data_dir := DataDir,
     %                public],
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
-    % _ = ets:new(OpenTbl, [set | TableFlags]),
+    _ = ets:new(?MODULE, [set, protected, named_table]),
     % _ = ets:new(ClosedTbl, [bag | TableFlags]),
     ok = ra_directory:init(DataDir, Names),
     {ok, #state{names = Names}}.
@@ -100,6 +106,7 @@ handle_call({mem_table_please, UId}, _From,
                                    % compressed,
                                    public
                                   ]),
+            true = ets:insert(?MODULE, {UId, Tid}),
             {reply, {ok, Tid}, State#state{memtbls = Tbls#{UId => Tid}}}
     end;
 handle_call(_Request, _From, State) ->
