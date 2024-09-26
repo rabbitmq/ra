@@ -87,9 +87,9 @@ overview(SegWriter) ->
 await(SegWriter)  ->
     IsAlive = fun IsAlive(undefined) -> false;
                   IsAlive(P) when is_pid(P) ->
-                            is_process_alive(P);
+                      is_process_alive(P);
                   IsAlive(A) when is_atom(A) ->
-                            IsAlive(whereis(A))
+                      IsAlive(whereis(A))
               end,
     case IsAlive(SegWriter) of
         true ->

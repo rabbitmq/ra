@@ -15,6 +15,7 @@
 -export([
          mem_table_please/2,
          mem_table_please/3,
+         delete_mem_table/2,
          execute_delete/3]).
 
 -export([init/1,
@@ -67,6 +68,10 @@ mem_table_please(#{log_ets := Name,
                     Err
             end
     end.
+
+delete_mem_table(#{log_ets := Name}, UId) ->
+    gen_server:cast(Name, {delete_mem_table, UId}).
+
 
 
 -spec execute_delete(ra_system:names(),
@@ -156,6 +161,9 @@ handle_cast({delete_tables, Tids}, State) ->
          end
      end || Tid <- Tids],
     {noreply, State};
+% handle_call({delete_mem_table, UId}, _From,
+%             #state{} = State) ->
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

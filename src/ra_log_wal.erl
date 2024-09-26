@@ -9,7 +9,7 @@
 -behaviour(gen_batch_server).
 
 -export([start_link/1,
-         write/5,
+         write/6,
          write_batch/2,
          truncate_write/5,
          force_roll_over/1,
@@ -48,16 +48,19 @@
 % This has the effect that a restarted server has a different identity in terms
 % of it's write notification but the same identity in terms of it's ets
 % tables and segment notification
--type writer_id() :: {binary(), pid()}.
+-type writer_id() :: {ra_uid(), pid()}.
 
--record(batch_writer, {tbl_start :: ra_index(),
+-record(batch_writer, {snap_idx :: ra_index(),
+                       tid :: ets:tid(),
                        uid :: term(),
-                       from :: ra_index(),
-                       to :: ra_index(),
-                       term :: ra_term()
+                       range :: ra:range(),
+                       % from :: ra:index(),
+                       % to :: ra:index(),
+                       term :: ra_term(),
+                       old :: undefined | #batch_writer{}
                       }).
 
--record(batch, {writes = 0 :: non_neg_integer(),
+-record(batch, {num_writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{pid() => #batch_writer{}},
                 pending = [] :: iolist()
                }).
@@ -77,7 +80,7 @@
 
 -record(conf, {file_modes :: [term()],
                dir :: string(),
-               segment_writer = ra_log_segment_writer :: atom(),
+               segment_writer = ra_log_segment_writer :: atom() | pid(),
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
                max_entries :: undefined | non_neg_integer(),
@@ -96,16 +99,17 @@
 
 -record(wal, {fd :: option(file:io_device()),
               filename :: option(file:filename()),
+              file_size = 0 :: non_neg_integer(),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
               entry_count = 0 :: non_neg_integer(),
-              ranges = #{} :: #{ra_uid() => {ra:index(), ra:index()}}
+              ranges = #{} :: #{ra_uid() =>
+                                [{ets:tid(), {ra:index(), ra:index()}}]}
               }).
 
 -record(state, {conf = #conf{},
                 file_num = 0 :: non_neg_integer(),
                 wal :: #wal{} | undefined,
-                file_size = 0 :: non_neg_integer(),
                 % writers that have attempted to write an non-truncating
                 % out of seq % entry.
                 % No further writes are allowed until the missing
@@ -151,11 +155,13 @@
                   {call, from(), wal_command()}.
 -type wal_cmd() :: term() | {ttb, iodata()}.
 
--spec write(writer_id(), atom() | pid(), ra_index(), ra_term(),
+-spec write(atom() | pid(), writer_id(), ets:tid(), ra_index(), ra_term(),
             wal_cmd()) ->
     {ok, pid()} | {error, wal_down}.
-write(From, Wal, Idx, Term, Cmd) ->
-    named_cast(Wal, {append, From, Idx, Term, Cmd}).
+write(Wal, {_, _} = From, MtTid, Idx, Term, Cmd)
+  when is_integer(Idx) andalso
+       is_integer(Term) ->
+    named_cast(Wal, {append, From, MtTid, Idx, Term, Cmd}).
 
 -spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
     {ok, pid()} | {error, wal_down}.
@@ -314,8 +320,8 @@ format_status(#state{conf = #conf{write_strategy = Strat,
                                   names = #{wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
-                     file_size = FSize,
-                     wal = #wal{filename = Fn}}) ->
+                     wal = #wal{file_size = FSize,
+                                filename = Fn}}) ->
     #{write_strategy => Strat,
       sync_method => SyncMeth,
       compute_checksums => Cs,
@@ -379,7 +385,7 @@ recover_wal(Dir, #conf{segment_writer = _SegWriter,
 
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(undefined, #state{conf = Conf,
-                                         file_num = FileNum}),
+                                        file_num = FileNum}),
     % we can now delete all open mem tables as should be covered by recovered
     % closed tables
     % Open = ets:tab2list(OpenTbl),
@@ -422,16 +428,20 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
              {Next + 1, Cache#{UId => BinId}}}
     end.
 
-write_data({UId, _} = Id, Idx, Term, Data0, Trunc, SnapIdx,
-           #state{conf = #conf{compute_checksums = ComputeChecksum},
+write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
+           #state{conf = #conf{counter = Counter,
+                               compute_checksums = ComputeChecksum} = _Cfg,
+                  batch = Batch0,
+                  writers = Writers,
                   wal = #wal{writer_name_cache = Cache0,
-                             entry_count = Count} = Wal} = State00) ->
+                             file_size = FileSize,
+                             entry_count = Count} = Wal} = State0) ->
     % if the next write is going to exceed the configured max wal size
     % we roll over to a new wal.
-    case should_roll_wal(State00) of
+    case should_roll_wal(State0) of
         true ->
-            State = roll_over(State00),
-            write_data(Id, Idx, Term, Data0, Trunc, SnapIdx, State);
+            State = roll_over(State0),
+            write_data(Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx, State);
         false ->
             EntryData = case Data0 of
                             {ttb, Bin} ->
@@ -445,8 +455,6 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc, SnapIdx,
             % 24 bytes 2 * 64bit ints (idx, term) + 2 * 32 bit ints (checksum, datalen)
             DataSize = HeaderLen + 24 + EntryDataLen,
 
-            State0 = State00#state{wal = Wal#wal{writer_name_cache = Cache,
-                                                 entry_count = Count + 1}},
             Entry = [<<Idx:64/unsigned,
                        Term:64/unsigned>> |
                      EntryData],
@@ -457,13 +465,20 @@ write_data({UId, _} = Id, Idx, Term, Data0, Trunc, SnapIdx,
             Record = [HeaderData,
                       <<Checksum:32/integer, EntryDataLen:32/unsigned>> |
                       Entry],
-            append_data(State0, Id, Idx, Term,
-                        DataSize, Record, Trunc, SnapIdx)
+            Batch = incr_batch(Batch0, UId, Pid, MtTid,
+                               Idx, Term, Record, SnapIdx),
+            counters:add(Counter, ?C_BYTES_WRITTEN, DataSize),
+            State0#state{batch = Batch,
+                         wal = Wal#wal{writer_name_cache = Cache,
+                                       file_size = FileSize + DataSize,
+                                       entry_count = Count + 1},
+                         writers = Writers#{UId => {in_seq, Idx}}}
     end.
 
 
-handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
+handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
            #state{conf = Conf,
+                  % batch = Batch,
                   writers = Writers} = State0) ->
     SnapIdx = snap_idx(Conf, UId),
     case maps:find(UId, Writers) of
@@ -471,9 +486,9 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
             %% a snapshot already exists that is higher - just drop the write
             State0#state{writers = Writers#{UId => {in_seq, SnapIdx}}};
         {ok, {_, PrevIdx}} when Idx =< PrevIdx + 1 ->
-            write_data(Id, Idx, Term, Entry, false, SnapIdx, State0);
+            write_data(Id, MtTid, Idx, Term, Entry, false, SnapIdx, State0);
         error ->
-            write_data(Id, Idx, Term, Entry, false, SnapIdx, State0);
+            write_data(Id, MtTid, Idx, Term, Entry, false, SnapIdx, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes
@@ -487,57 +502,54 @@ handle_msg({append, {UId, Pid} = Id, Idx, Term, Entry},
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
-handle_msg({truncate, Id, Idx, Term, Entry}, #state{conf = Conf} = State0) ->
+handle_msg({truncate, Id, MtTid, Idx, Term, Entry},
+           #state{conf = Conf} = State0) ->
     SnapIdx = snap_idx(Conf, Id),
-    write_data(Id, Idx, Term, Entry, true, SnapIdx, State0);
+    write_data(Id, MtTid, Idx, Term, Entry, true, SnapIdx, State0);
 handle_msg(rollover, State) ->
     roll_over(State).
 
-append_data(#state{conf = #conf{counter = C} = Cfg,
-                   file_size = FileSize,
-                   batch = Batch0,
-                   wal = Wal,
-                   writers = Writers} = State,
-            {UId, Pid}, Idx, Term, DataSize, Data, Truncate, SnapIdx) ->
-    Batch = incr_batch(Cfg, Batch0, Wal#wal.ranges, UId, Pid,
-                       Idx, Term, Data, Truncate, SnapIdx),
-    counters:add(C, ?C_BYTES_WRITTEN, DataSize),
-    State#state{file_size = FileSize + DataSize,
-                batch = Batch,
-                writers = Writers#{UId => {in_seq, Idx}} }.
-
-incr_batch(#conf{open_mem_tbls_tid = _OpnMemTbl},
-           #batch{writes = Writes,
+incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
-                  pending = Pend} = Batch, Ranges,
-           UId, Pid, Idx, Term, Data, Truncate, SnapIdx) ->
+                  pending = Pend} = Batch,
+           UId, Pid, MtTid, Idx, Term, Data, SnapIdx) ->
     Waiting = case Waiting0 of
-                  #{Pid := #batch_writer{tbl_start = TblStart0,
+                  #{Pid := #batch_writer{term = Term, %% Pattern Match
+                                         tid = MtTid, %% PM
                                          from = From} = W} ->
-                      TblStart = max(SnapIdx, table_start(Truncate, Idx, TblStart0)),
+                      %% TODO: overwrites will be signalled by a different tid
+                      % TblStart = max(SnapIdx, table_start(Truncate, Idx, TblStart0)),
+                      %% it is totally possible that a different tid will be the source
+                      %% within the scope of same batch. how to handle this?
+                      %% IDEA: perhaps if the tid is different we start a new
+                      %% batch writer and put the old batch writers in an
+                      %% old batch writer field?
                       Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
-                                                      tbl_start = TblStart,
+                                                      snap_idx = SnapIdx,
                                                       to = Idx,
                                                       term = Term
                                                      }};
                   _ ->
-
-                      TblStart = case Ranges of
-                                     #{UId := {TblStart0, _}} ->
-                                         max(SnapIdx, table_start(Truncate, Idx, TblStart0));
-                                     _ ->
-                                         max(SnapIdx, Idx)
-                                 end,
-                      Writer = #batch_writer{tbl_start = TblStart,
+                      PrevBatchWriter = maps:get(Pid, Waiting0, undefined),
+                      % TblStart = case Ranges of
+                      %                #{UId := [{_MtTid, {Start0, _}} | _]} ->
+                      %                    max(SnapIdx, table_start(Truncate, Idx,
+                      %                                             Start0));
+                      %                _ ->
+                      %                    max(SnapIdx, Idx)
+                      %            end,
+                      Writer = #batch_writer{snap_idx = SnapIdx,
+                                             tid = MtTid,
                                              from = Idx,
                                              to = Idx,
                                              uid = UId,
-                                             term = Term
+                                             term = Term,
+                                             old = PrevBatchWriter
                                             },
                       Waiting0#{Pid => Writer}
               end,
 
-    Batch#batch{writes = Writes + 1,
+    Batch#batch{num_writes = Writes + 1,
                 waiting = Waiting,
                 pending = [Pend | Data]}.
 
@@ -573,10 +585,10 @@ roll_over(#state{conf = #conf{open_mem_tbls_tid = Tbl}} = State0) ->
     roll_over(Tbl, start_batch(State)).
 
 roll_over(_OpnMemTbls, #state{wal = Wal0, file_num = Num0,
-                             conf = #conf{dir = Dir,
-                                          segment_writer = SegWriter,
-                                          max_size_bytes = MaxBytes
-                                         } = Conf0} = State0) ->
+                              conf = #conf{dir = Dir,
+                                           segment_writer = SegWriter,
+                                           max_size_bytes = MaxBytes
+                                          } = Conf0} = State0) ->
     counters:add(Conf0#conf.counter, ?C_WAL_FILES, 1),
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
@@ -593,16 +605,20 @@ roll_over(_OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                        #wal{ranges = Ranges,
                             filename = Filename} ->
                            ok = close_file(Wal0#wal.fd),
-                           MemTables = maps:to_list(Ranges),
+                           MemTables = maps:map(
+                                         fun (_, TidRanges) ->
+                                                 [R || {_, {_, _}} = R <- TidRanges]
+                                         end, Ranges),
+                           %% TODO: only keep base name in state
+                           Basename = filename:basename(Filename),
                            ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                                         MemTables,
-                                                                        Filename),
+                                                                        Basename),
                            MaxBytes
                    end,
     {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
     State0#state{conf = Conf,
                  wal = Wal,
-                 file_size = 0,
                  file_num = Num}.
 
 open_wal(File, Max, #conf{write_strategy = o_sync,
@@ -760,7 +776,7 @@ sync(Fd, Meth) ->
 complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
-                                     writes = NumWrites},
+                                     num_writes = NumWrites},
                       wal = Wal,
                       conf = #conf{open_mem_tbls_tid = _OpnTbl} = Cfg
                       } = State0) ->
@@ -770,18 +786,25 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
 
     %% process writers
-    Ranges = maps:fold(
-               fun (Pid, #batch_writer{tbl_start = TblStart,
-                                       uid = UId,
-                                       from = From,
-                                       to = To,
-                                       term = Term
-                                      }, Acc) ->
-                       Pid ! {ra_log_event, {written, {From, To, Term}}},
-                       Acc#{UId => {TblStart, To}}
-               end, Wal#wal.ranges, Waiting),
+    Ranges = maps:fold(fun (Pid, BatchWriter, Acc) ->
+                               do_bw(Pid, BatchWriter, Acc)
+                       end, Wal#wal.ranges, Waiting),
     ok = post_notify_flush(State),
     State#state{wal = Wal#wal{ranges = Ranges}}.
+
+do_bw(Pid, #batch_writer{snap_idx = SnapIdx,
+                         tid = MtTid,
+                         uid = UId,
+                         from = From,
+                         to = To,
+                         term = Term,
+                         old = undefined
+                        }, Ranges) ->
+    Pid ! {ra_log_event, {written, Term, {From, To}}},
+    update_ranges(Ranges, UId, MtTid, SnapIdx, From, To);
+do_bw(Pid, #batch_writer{old = #batch_writer{} = OldBw} = Bw, Ranges0) ->
+    Ranges = do_bw(Pid, OldBw, Ranges0),
+    do_bw(Pid, Bw#batch_writer{old = undefined}, Ranges).
 
 wal2list(File) ->
     Data = open_existing(File),
@@ -979,8 +1002,8 @@ to_binary(Term) ->
     term_to_iovec(Term).
 
 should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
-                       file_size = FileSize,
                        wal = #wal{max_size = MaxWalSize,
+                                  file_size = FileSize,
                                   entry_count = Count}}) ->
     %% Initially, MaxWalSize was a hard limit for the file size: if FileSize +
     %% DataSize went over that limit, we would use a new file. This was an
@@ -996,20 +1019,70 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
                                          Count + 1 > MaxEntries
                                  end.
 
-table_start(false, Idx, TblStart) ->
-    %% take the smaller of the existing first item
-    %% in case we are overwriting a previous entry
-    min(TblStart, Idx);
-table_start(true, Idx, _TblStart) ->
-    Idx.
+% table_start(false, Idx, TblStart) ->
+%     %% take the smaller of the existing first item
+%     %% in case we are overwriting a previous entry
+%     min(TblStart, Idx);
+% table_start(true, Idx, _TblStart) ->
+%     Idx.
 
 snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ets:lookup_element(Tid, ServerUId, 2, -1).
-    % try ets:lookup_element(Tid, ServerUId, 2, -1) of
-    %     Idx ->
-    %         Idx
-    % catch _:badarg ->
-    %           -1
-    % end.
+
+update_ranges(Ranges, UId, MtTid, SnapIdx, Start, End) ->
+    case Ranges of
+        #{UId := [{MtTid, Range0} | Rem]} ->
+            Range = range_extend({Start, End}, range_truncate(SnapIdx, Range0)),
+            Ranges#{UId => [{MtTid, Range} | Rem]};
+        #{UId := [{OldMtTid, Range} | Rem]} ->
+            Ranges#{UId => [{MtTid, {Start, End}},
+                            {OldMtTid, range_limit(Start, Range)} | Rem]};
+        _ ->
+            Ranges#{UId => [{MtTid, {Start, End}}]}
+    end.
+
+range_limit(CeilExcl, {Start, _End})
+  when CeilExcl =< Start ->
+    undefined;
+range_limit(CeilExcl, {Start, End})
+  when CeilExcl =< End ->
+    {Start, CeilExcl - 1};
+range_limit(_CeilExcl, Range) ->
+    Range.
+
+range_truncate(UpToIncl, {_Start, End})
+  when UpToIncl > End ->
+    undefined;
+range_truncate(UpToIncl, {Start, End})
+  when UpToIncl >= Start ->
+    {UpToIncl + 1, End};
+range_truncate(_UpToIncl, Range) ->
+    Range.
+
+range_extend({NewStart, NewEnd}, {Start, End})
+  when NewStart == End + 1 ->
+    {Start, NewEnd};
+range_extend(AddRange, undefined) ->
+    AddRange.
+
+% range_extend(UpToIncl, {Start, End})
+%   when UpToIncl >= Start ->
+%     {UpToIncl + 1, End};
+% range_extend(_UpToIncl, Range) ->
+%     Range.
+
+% update_tid_ranges(SnapIdx, BatchEnd, Tid, TidRanges) ->
+%     lists:foldr(
+%       fun ({T, Range}, Acc) when T == Tid ->
+%               [{T, range_truncate(SnapIdx, range_extend(BatchEnd, Range))} | Acc];
+%           ({T, Range}, Acc) ->
+%               case range_truncate(SnapIdx, Range) of
+%                   undefined ->
+%                       Acc;
+%                   NewRange ->
+%                       [{T, NewRange} | Acc]
+%               end
+%       end, [], TidRanges).
+
 
 

@@ -85,7 +85,8 @@ init(Tid) ->
              % cache = #{}
             }.
 
--spec insert(log_entry(), state()) -> state().
+-spec insert(log_entry(), state()) ->
+    state().
 insert({Idx, _, _} = Entry,
        #?MODULE{tbl = Tid,
                 range = Range} = State)

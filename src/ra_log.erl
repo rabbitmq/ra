@@ -559,10 +559,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
-            {State#?MODULE{last_written_index_term = {ToIdx, Term}},
-             %% delaying truncate_cache until the next event allows any entries
-             %% that became committed to be read from cache rather than ETS
-             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
+            {State#?MODULE{last_written_index_term = {ToIdx, Term}}, []};
         {undefined, State} when FromIdx =< element(1, MaybeCurrentSnap) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
@@ -573,9 +570,15 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             LastWrittenIdxTerm = {LastWrittenIdx,
                                   max(LastWrittenTerm0, Term)},
             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastWrittenIdx),
-            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
-             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
+            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
         {OtherTerm, State} ->
+            %% TODO: mt: there may be valid indexes in the range so need to
+            %% scan entire range to see if the last written index can be
+            %% updated - this would avoid erroneously entering resend state
+            %% e.g. if last_written is {5, 1} and we get {6, 7, 1} but have 
+            %% overwritten 7 with term 2 when we get {7, 7, 2} we'd have to
+            %% resend as we thing the last written is {5, 1} but it should
+            %% be {6, 1} as 6 is a valid index in term 1
             ?DEBUG("~ts: written event did not find term ~b for index ~b "
                    "found ~w",
                    [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
@@ -590,8 +593,8 @@ handle_event({written, {FromIdx, _, _Term}},
     ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
           [LogId, FromIdx, Expected]),
     {resend_from(Expected, State), []};
-handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
-    truncate_cache(FromIdx, ToIdx, State, []);
+% handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
+%     truncate_cache(FromIdx, ToIdx, State, []);
 handle_event(flush_cache, State) ->
     {flush_cache(State), []};
 handle_event({segments, _Tid, NewSegs},
@@ -670,11 +673,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
                     true ->
                         {LWIdxTerm0, Effects1};
                     false ->
-                        {Snap,
-                         [{next_event,
-                           {ra_log_event,
-                            {truncate_cache, LastWrittenIdx, SnapIdx}}}
-                          | Effects1]}
+                        {Snap, Effects1}
                 end,
             %% TODO mt: this will race with the segment writer but if the
             %% segwriter detects a missing index it will query the snaphost
@@ -1022,11 +1021,14 @@ read_config(Dir) ->
     ra_lib:consult(ConfigPath).
 
 -spec delete_everything(state()) -> ok.
-delete_everything(#?MODULE{cfg = #cfg{directory = Dir},
+delete_everything(#?MODULE{cfg = #cfg{uid = UId,
+                                      names = Names,
+                                      directory = Dir},
                            snapshot_state = SnapState} = Log) ->
     _ = close(Log),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
+    ok = ra_log_ets:delete_mem_table(Names, UId),
     case ra_snapshot:pending(SnapState) of
         {Pid, _, _} ->
             case is_process_alive(Pid) of
@@ -1199,11 +1201,11 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
             error(wal_down)
     end.
 
-truncate_cache(_FromIdx, ToIdx,
-               #?MODULE{cache = Cache} = State,
-               Effects) ->
-    CacheAfter = ra_log_cache:trim(ToIdx, Cache),
-    {State#?MODULE{cache = CacheAfter}, Effects}.
+% truncate_cache(_FromIdx, ToIdx,
+%                #?MODULE{cache = Cache} = State,
+%                Effects) ->
+%     CacheAfter = ra_log_cache:trim(ToIdx, Cache),
+%     {State#?MODULE{cache = CacheAfter}, Effects}.
 
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
