@@ -30,6 +30,7 @@ all_tests() ->
      consecutive_terms_in_batch_should_result_in_two_written_events,
      overwrite_in_same_batch,
      writes_snapshot_idx_overtakes,
+     writes_snapshot_idx_overtakes_same_batch,
      overwrite_completely,
      overwrite_inside,
      % write_to_unavailable_wal_returns_error,
@@ -130,9 +131,9 @@ basic_log_writes(Config) ->
     Tid = ets:new(?FUNCTION_NAME, []),
     {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
-    ok = await_written(WriterId, {12, 12, 1}),
+    ok = await_written(WriterId, 1, {12, 12}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 13, 1, "value2"),
-    ok = await_written(WriterId, {13, 13, 1}),
+    ok = await_written(WriterId, 1, {13, 13}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -154,12 +155,12 @@ same_uid_different_process(Config) ->
     Tid = ets:new(?FUNCTION_NAME, []),
     {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
-    ok = await_written(WriterId, {12, 12, 1}),
+    ok = await_written(WriterId, 1, {12, 12}),
     Self = self(),
     _ = spawn(fun() ->
                       Wid = {UId, self()},
                       {ok, _} = ra_log_wal:write(Pid, Wid, Tid, 13, 1, "value2"),
-                      ok = await_written(Wid, {13, 13, 1}),
+                      ok = await_written(Wid, 1, {13, 13}),
                       Self ! go
               end),
     receive
@@ -190,14 +191,14 @@ consecutive_terms_in_batch_should_result_in_two_written_events(Config) ->
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {1, 3}),
     % write next index then immediately overwrite
     erlang:suspend_process(Pid),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 4, 1, Data),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 5, 2, Data),
     erlang:resume_process(Pid),
-    await_written(WriterId, {4, 4, 1}),
-    await_written(WriterId, {5, 5, 2}),
+    await_written(WriterId, 1, {4, 4}),
+    await_written(WriterId, 2, {5, 5}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -221,12 +222,50 @@ writes_snapshot_idx_overtakes(Config) ->
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {1, 3}),
     % snapshot idx overtakes
     ets:insert(ra_log_snapshot_state, {UId, 5}),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(4, 7)],
-    await_written(WriterId, {6, 7, 1}),
+    await_written(WriterId, 1, {6, 7}),
+    ra_log_wal:force_roll_over(Pid),
+    receive
+        {'$gen_cast',
+         {mem_tables, #{UId := [{Tid, {6, 7}}]}, _WalFile}} ->
+            ok
+    after 5000 ->
+              flush(),
+              ct:fail("receiving mem tables timed out")
+    end,
+    proc_lib:stop(Pid),
+    meck:unload(ra_log_segment_writer),
+    ok.
+
+writes_snapshot_idx_overtakes_same_batch(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    Data = <<"data">>,
+    Tid = ets:new(?FUNCTION_NAME, []),
+    erlang:suspend_process(Pid),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 1, 1, Data),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 2, 1, Data),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 3, 1, Data),
+    %% this ensures the snapshot state is updated within the processing of a
+    %% single batch
+    gen_batch_server:cast(Pid, {query,
+                                fun (_) ->
+                                        ets:insert(ra_log_snapshot_state, {UId, 5})
+                                end}),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 4, 1, Data),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 5, 1, Data),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 6, 1, Data),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 7, 1, Data),
+    erlang:resume_process(Pid),
+    % await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {6, 7}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -251,7 +290,7 @@ overwrite_in_same_batch(Config) ->
     Tid2 = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {1, 3}),
     % write next index then immediately overwrite
     erlang:suspend_process(Pid),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 4, 1, Data),
@@ -259,15 +298,14 @@ overwrite_in_same_batch(Config) ->
     %% overwrites can _only_ be done with a new mem table,
     %% this should be the only time a new mem table should need to
     %% be opened
-    timer:sleep(5),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid2, 5, 2, Data),
     erlang:resume_process(Pid),
     % currently this event woudl cause ra_log to enter resend flow.
     % TODO: mt: find a way to avoid this, ideally we'd like to know the ranges
     % for each term such that we can walk back until the first index that matches
     % the term and set that as the last_written_index
-    await_written(WriterId, {4, 5, 1}),
-    await_written(WriterId, {5, 5, 2}),
+    await_written(WriterId, 1, {4, 5}),
+    await_written(WriterId, 2, {5, 5}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -294,11 +332,11 @@ overwrite_completely(Config) ->
     Tid2 = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(3, 5)],
-    await_written(WriterId, {3, 5, 1}),
+    await_written(WriterId, 1, {3, 5}),
     % overwrite it all
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid2, I, 2, Data)
      || I <- lists:seq(3, 5)],
-    await_written(WriterId, {3, 5, 2}),
+    await_written(WriterId, 2, {3, 5}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -323,11 +361,11 @@ overwrite_inside(Config) ->
     Tid2 = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(1, 5)],
-    await_written(WriterId, {1, 5, 1}),
+    await_written(WriterId, 1, {1, 5}),
     % overwrite it all
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid2, I, 2, Data)
      || I <- lists:seq(3, 4)],
-    await_written(WriterId, {3, 4, 2}),
+    await_written(WriterId, 2, {3, 4}),
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
@@ -502,11 +540,11 @@ truncate_write(Config) ->
     % write 1-3
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {1, 3}),
     % then write 7 as may happen after snapshot installation
     {ok, _} = ra_log_wal:truncate_write(WriterId, ra_log_wal, 7, 1, Data),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 8, 1, Data),
-    await_written(WriterId, {7, 8, 1}),
+    await_written(WriterId, 1, {7, 8}),
     [{UId, 7, 8, Tid}] = ets:lookup(ra_log_open_mem_tables, UId),
     [_] = ets:lookup(Tid, 7),
     [_] = ets:lookup(Tid, 8),
@@ -526,7 +564,7 @@ out_of_seq_writes(Config) ->
     % write 1-3
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, I, 1, Data)
      || I <- lists:seq(1, 3)],
-    await_written(WriterId, {1, 3, 1}),
+    await_written(WriterId, 1, {1, 3}),
     % then write 5
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
     % ensure an out of sync notification is received
@@ -540,9 +578,9 @@ out_of_seq_writes(Config) ->
 
     % then write 4 and 5
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 4, 1, Data),
-    await_written(WriterId, {4, 4, 1}),
+    await_written(WriterId, 1, {4, 4}),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 5, 1, Data),
-    await_written(WriterId, {5, 5, 1}),
+    await_written(WriterId, 1, {5, 5}),
 
     % perform another out of sync write
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 7, 1, Data),
@@ -564,7 +602,7 @@ out_of_seq_writes(Config) ->
     end,
     % write the missing one
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 6, 1, Data),
-    await_written(WriterId, {6, 6, 1}),
+    await_written(WriterId, 1, {6, 6}),
     proc_lib:stop(Pid),
     ok.
 
@@ -759,11 +797,11 @@ recover(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     ra_log_wal:force_roll_over(ra_log_wal),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
-    _ = await_written(WriterId, {101, 200, 2}),
+    _ = await_written(WriterId, 2, {101, 200}),
     empty_mailbox(),
     ok = proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf),
@@ -811,7 +849,7 @@ recover_overwrite_in_same_batch(Config) ->
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 1, <<"data1">>),
     timer:sleep(1),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 1, 2, <<"data2">>),
-    _ = await_written(WriterId, {1, 1, 2}),
+    _ = await_written(WriterId, 2, {1, 1}),
     ra_log_wal:force_roll_over(ra_log_wal),
     empty_mailbox(),
     proc_lib:stop(ra_log_wal),
@@ -849,11 +887,11 @@ recover_with_small_chunks(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     ra_log_wal:force_roll_over(ra_log_wal),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
-    _ = await_written(WriterId, {101, 200, 2}),
+    _ = await_written(WriterId, 1, {101, 200}),
     proc_lib:stop(ra_log_wal),
     {ok, Pid} = ra_log_wal:start_link(Conf),
 
@@ -910,7 +948,7 @@ recover_with_partial_last_entry(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     empty_mailbox(),
     ok = proc_lib:stop(ra_log_wal),
 
@@ -940,7 +978,7 @@ recover_with_last_entry_corruption(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     empty_mailbox(),
     ok = proc_lib:stop(ra_log_wal),
 
@@ -970,7 +1008,7 @@ recover_with_last_entry_corruption_pre_allocate(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     empty_mailbox(),
     ok = proc_lib:stop(ra_log_wal),
 
@@ -1002,7 +1040,7 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
     {ok, _Wal} = ra_log_wal:start_link(Conf),
     [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
-    _ = await_written(WriterId, {1, 100, 1}),
+    _ = await_written(WriterId, 1, {1, 100}),
     empty_mailbox(),
     ok = proc_lib:stop(ra_log_wal),
 
@@ -1025,9 +1063,9 @@ drop_writes_if_snapshot_has_higher_index(Config) ->
     {UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 12, 1, "value"),
-    {12, 1, "value"} = await_written(WriterId, {12, 12, 1}),
+    {12, 1, "value"} = await_written(WriterId, 1, {12, 12}),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 13, 1, "value2"),
-    {13, 1, "value2"} = await_written(WriterId, {13, 13, 1}),
+    {13, 1, "value2"} = await_written(WriterId, 1, {13, 13}),
 
     ets:insert(ra_log_snapshot_state, {UId, 20}),
     {ok, _} = ra_log_wal:write(WriterId, ra_log_wal, 14, 1, "value2"),
@@ -1069,19 +1107,19 @@ empty_mailbox() ->
               ok
     end.
 
-await_written(Id, {From, To, Term} = Written) ->
+await_written(Id, Term, {From, To} = Written) ->
     receive
-        {ra_log_event, {written, Written}} ->
-            ct:pal("~s, got ~w", [?FUNCTION_NAME, Written]),
+        {ra_log_event, {written, Term, Written}} ->
+            ct:pal("~s, got ~b ~w", [?FUNCTION_NAME, Term, Written]),
             ok;
-        {ra_log_event, {written, {From, To, _} = W}} ->
-            ct:pal("~s, got ~w", [?FUNCTION_NAME, W]),
+        {ra_log_event, {written, Term, {From, To} = W}} ->
+            ct:pal("~s, got ~b ~w", [?FUNCTION_NAME, Term, W]),
             %% indexes are the same but term is different,
             %% lets wait for the original
-            await_written(Id, Written);
-        {ra_log_event, {written, {From, T, _} = W}} ->
-            ct:pal("~s, got ~w", [?FUNCTION_NAME, W]),
-            await_written(Id, {T+1, To, Term})
+            await_written(Id, Term, Written);
+        {ra_log_event, {written, Term, {From, To0} = W}} ->
+            ct:pal("~s, got ~b ~w", [?FUNCTION_NAME, Term, W]),
+            await_written(Id, Term, {To0+1, To})
     after 5000 ->
               flush(),
               throw({written_timeout, To})

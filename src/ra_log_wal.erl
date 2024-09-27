@@ -506,6 +506,9 @@ handle_msg({truncate, Id, MtTid, Idx, Term, Entry},
            #state{conf = Conf} = State0) ->
     SnapIdx = snap_idx(Conf, Id),
     write_data(Id, MtTid, Idx, Term, Entry, true, SnapIdx, State0);
+handle_msg({query, Fun}, State) ->
+    _ = catch Fun(State),
+    State;
 handle_msg(rollover, State) ->
     roll_over(State).
 
@@ -516,7 +519,9 @@ incr_batch(#batch{num_writes = Writes,
     Waiting = case Waiting0 of
                   #{Pid := #batch_writer{term = Term, %% Pattern Match
                                          tid = MtTid, %% PM
-                                         from = From} = W} ->
+                                         range = Range0
+                                         % from = From
+                                        } = W} ->
                       %% TODO: overwrites will be signalled by a different tid
                       % TblStart = max(SnapIdx, table_start(Truncate, Idx, TblStart0)),
                       %% it is totally possible that a different tid will be the source
@@ -524,9 +529,11 @@ incr_batch(#batch{num_writes = Writes,
                       %% IDEA: perhaps if the tid is different we start a new
                       %% batch writer and put the old batch writers in an
                       %% old batch writer field?
-                      Waiting0#{Pid => W#batch_writer{from = min(Idx, From),
+                      Range = range_extend(Idx, range_truncate(SnapIdx, Range0)),
+                      Waiting0#{Pid => W#batch_writer{range = Range,
+                                                      % from = min(Idx, From),
                                                       snap_idx = SnapIdx,
-                                                      to = Idx,
+                                                      % to = Idx,
                                                       term = Term
                                                      }};
                   _ ->
@@ -540,8 +547,9 @@ incr_batch(#batch{num_writes = Writes,
                       %            end,
                       Writer = #batch_writer{snap_idx = SnapIdx,
                                              tid = MtTid,
-                                             from = Idx,
-                                             to = Idx,
+                                             range = ra_range:new(Idx),
+                                             % from = Idx,
+                                             % to = Idx,
                                              uid = UId,
                                              term = Term,
                                              old = PrevBatchWriter
@@ -795,13 +803,14 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
 do_bw(Pid, #batch_writer{snap_idx = SnapIdx,
                          tid = MtTid,
                          uid = UId,
-                         from = From,
-                         to = To,
+                         range = Range,
+                         % from = From,
+                         % to = To,
                          term = Term,
                          old = undefined
                         }, Ranges) ->
-    Pid ! {ra_log_event, {written, Term, {From, To}}},
-    update_ranges(Ranges, UId, MtTid, SnapIdx, From, To);
+    Pid ! {ra_log_event, {written, Term, Range}},
+    update_ranges(Ranges, UId, MtTid, SnapIdx, Range);
 do_bw(Pid, #batch_writer{old = #batch_writer{} = OldBw} = Bw, Ranges0) ->
     Ranges = do_bw(Pid, OldBw, Ranges0),
     do_bw(Pid, Bw#batch_writer{old = undefined}, Ranges).
@@ -1029,16 +1038,18 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ets:lookup_element(Tid, ServerUId, 2, -1).
 
-update_ranges(Ranges, UId, MtTid, SnapIdx, Start, End) ->
+update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
     case Ranges of
         #{UId := [{MtTid, Range0} | Rem]} ->
-            Range = range_extend({Start, End}, range_truncate(SnapIdx, Range0)),
+            Range = range_extend(AddRange, range_truncate(SnapIdx, Range0)),
             Ranges#{UId => [{MtTid, Range} | Rem]};
-        #{UId := [{OldMtTid, Range} | Rem]} ->
-            Ranges#{UId => [{MtTid, {Start, End}},
-                            {OldMtTid, range_limit(Start, Range)} | Rem]};
+        #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
+            %% limit the old mt range by the start of the new mt range to
+            %% truncate overwritten indexes
+            Ranges#{UId => [{MtTid, AddRange},
+                            {OldMtTid, range_limit(Start, OldMtRange)} | Rem]};
         _ ->
-            Ranges#{UId => [{MtTid, {Start, End}}]}
+            Ranges#{UId => [{MtTid, AddRange}]}
     end.
 
 range_limit(CeilExcl, {Start, _End})
@@ -1062,8 +1073,14 @@ range_truncate(_UpToIncl, Range) ->
 range_extend({NewStart, NewEnd}, {Start, End})
   when NewStart == End + 1 ->
     {Start, NewEnd};
-range_extend(AddRange, undefined) ->
-    AddRange.
+range_extend(Idx, {Start, End})
+  when is_integer(Idx) andalso
+       Idx == End + 1 ->
+    {Start, Idx};
+range_extend({_, _} = AddRange, undefined) ->
+    AddRange;
+range_extend(Idx, undefined) when is_integer(Idx) ->
+    ra_range:new(Idx).
 
 % range_extend(UpToIncl, {Start, End})
 %   when UpToIncl >= Start ->
