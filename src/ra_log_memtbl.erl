@@ -12,7 +12,7 @@
          lookup_term/2,
          fold/5,
          get_items/2,
-         set_first/2,
+         set_first/3,
          set_last/2,
          delete/2,
          info/1,
@@ -44,9 +44,10 @@
          Idx == element(2, Range) + 1)).
 
 -record(?MODULE,
-        {tbl :: ets:tid(),
+        {tid :: ets:tid(),
          range :: undefined | {ra:index(), ra:index()},
-         staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]}
+         staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]},
+         prev :: undefined | #?MODULE{}
         }).
 
 -opaque state() :: #?MODULE{}.
@@ -56,42 +57,46 @@
               state/0
               ]).
 
--spec init(ets:tid(), read | read_write) ->
-    {ok, state()} | {error, term()}.
-init(Tid, read_write) ->
-    init(Tid);
-init(Tid, read) ->
-    #?MODULE{tbl = Tid,
-             range = undefined
-            }.
-
--spec init(ets:tid()) ->
-    {ok, state()} | {error, term()}.
-init(Tid) ->
-    %% TODO: mt: optimise
-    Range = case ets:tab2list(Tid) of
-                [] ->
+-spec init([ets:tid()], read | read_write) -> state().
+init([Tid | RemTids], Mode) ->
+    Prev = case RemTids of
+               [] ->
+                   undefined;
+               _ ->
+                   init(RemTids, read)
+           end,
+    Range = case Mode of
+                read ->
                     undefined;
-                Entries ->
-                    lists:foldl(
-                      fun ({I, _, _}, undefined) ->
-                              {I, I};
-                          ({I, _, _}, {S, E}) ->
-                              {min(I, S), max(I, E)}
-                      end, undefined, Entries)
+                read_write ->
+                    %% TODO: this is potentially horrendously slow
+                    case ets:tab2list(Tid) of
+                        [] ->
+                            undefined;
+                        Entries ->
+                            lists:foldl(
+                              fun ({I, _, _}, undefined) ->
+                                      {I, I};
+                                  ({I, _, _}, {S, E}) ->
+                                      {min(I, S), max(I, E)}
+                              end, undefined, Entries)
+                    end
             end,
-    #?MODULE{tbl = Tid,
-             range = Range
-             % cache = #{}
+
+    #?MODULE{tid = Tid,
+             range = Range,
+             prev = Prev
             }.
 
--spec insert(log_entry(), state()) ->
-    state().
+-spec init([ets:tid()]) -> state().
+init(Tids) ->
+    init(Tids, read_write).
+
+-spec insert(log_entry(), state()) -> state().
 insert({Idx, _, _} = Entry,
-       #?MODULE{tbl = Tid,
+       #?MODULE{tid = Tid,
                 range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
-    % ct:pal("mem tbl insert ~p, ~p", [Entry, Range]),
     true = ets:insert(Tid, Entry),
     State#?MODULE{range = update_range_end(Idx, Range)};
 insert({Idx, _, _} = _Entry,
@@ -99,12 +104,6 @@ insert({Idx, _, _} = _Entry,
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
     exit({error, overwriting}).
-    % ct:pal("mem tbl insert out ~p, ~p", [Idx, Range]),
-    %% TODO: we may need to return {error, overwriting} and have the caller
-    %% call set_last/2 explicitly
-    % {Spec, State} = set_last(Idx - 1, State0),
-    % _ = delete(Spec, State),
-    % insert(Entry, State).
 
 -spec stage(log_entry(), state()) -> state().
 stage({Idx, _, _} = Entry,
@@ -114,7 +113,7 @@ stage({Idx, _, _} = Entry,
     State#?MODULE{staged = {FstIdx, [Entry | Staged]},
                   range = update_range_end(Idx, Range)};
 stage({Idx, _, _} = Entry,
-       #?MODULE{tbl = _Tid,
+       #?MODULE{tid = _Tid,
                 staged = undefined,
                 range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
@@ -129,7 +128,7 @@ stage({Idx, _, _} = _Entry,
 -spec commit(state()) -> state().
 commit(#?MODULE{staged = undefined} = State) ->
     State;
-commit(#?MODULE{tbl = Tid,
+commit(#?MODULE{tid = Tid,
                 staged = {_, Staged0}} = State) ->
     Staged = lists:reverse(Staged0),
     true = ets:insert(Tid, Staged),
@@ -146,8 +145,8 @@ lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
         _ ->
             undefined
     end;
-lookup(Idx, #?MODULE{tbl = Tid,
-                    staged = undefined}) ->
+lookup(Idx, #?MODULE{tid = Tid,
+                     staged = undefined}) ->
     case ets:lookup(Tid, Idx) of
         [Entry] ->
             Entry;
@@ -166,7 +165,7 @@ lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
         _ ->
             undefined
     end;
-lookup_term(Idx, #?MODULE{tbl = Tid,
+lookup_term(Idx, #?MODULE{tid = Tid,
                           range = Range})
   when ?IN_RANGE(Idx, Range) ->
     ets:lookup_element(Tid, Idx, 2);
@@ -194,27 +193,27 @@ get_items(Indexes, #?MODULE{} = State) ->
     non_neg_integer().
 delete(undefined, #?MODULE{}) ->
     0;
-delete(Idx, #?MODULE{tbl = Tid}) when is_integer(Idx) ->
+delete(Idx, #?MODULE{tid = Tid}) when is_integer(Idx) ->
     %% TODO: this is designed to be called from another process so we
     %% cant rely on range, may need to revise API during optimisation
     true = ets:delete(Tid, Idx),
     1;
-delete({range, {Start, End}}, #?MODULE{tbl = Tid} = State) ->
+delete({range, Tid, {Start, End}}, #?MODULE{tid = Tid} = State) ->
     NumToDelete = End - Start + 1,
     Limit = ets:info(Tid, size) div 2,
     case NumToDelete > Limit of
         true ->
             %% more than half the table is to be deleted
-            delete({'<', End + 1}, State);
+            delete({'<', Tid, End + 1}, State);
         false ->
             delete(Start, End, Tid),
             End - Start + 1
     end;
-delete({Op, Idx}, #?MODULE{tbl = Tid})
+delete({Op, Tid, Idx}, #?MODULE{tid = Tid})
   when is_integer(Idx) and is_atom(Op) ->
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
     ets:select_delete(Tid, DelSpec);
-delete(all, #?MODULE{tbl = Tid}) ->
+delete({all, Tid}, #?MODULE{tid = Tid}) ->
     Size = ets:info(Tid, size),
     true = ets:delete_all_objects(Tid),
     Size.
@@ -225,28 +224,30 @@ range(#?MODULE{range = Range}) ->
     Range.
 
 -spec delete(state()) -> ok.
-delete(#?MODULE{tbl = Tid}) ->
+delete(#?MODULE{tid = Tid}) ->
     _ = ets:delete(Tid),
     ok.
 
 -spec info(state()) -> map().
-info(#?MODULE{tbl = Tid}) ->
+info(#?MODULE{tid = Tid}) ->
     #{tid => Tid,
       size => ets:info(Tid, size),
       name => ets:info(Tid, name)
      }.
 
--spec set_first(ra:index(), state()) ->
+-spec set_first(ra:index(), ets:tid(), state()) ->
     {undefined |  delete_spec(), state()}.
-set_first(Idx, #?MODULE{range = {Start, _} = Range} = State)
+set_first(Idx, Tid, #?MODULE{tid = Tid,
+                             range = {Start, _} = Range} = State)
   when ?IN_RANGE(Idx, Range) ->
-    % {{'<', Idx}, State#?MODULE{range = update_range_start(Idx, Range)}};
-    {{range, {Start, Idx - 1}},
+    {{range, Tid, {Start, Idx - 1}},
      State#?MODULE{range = update_range_start(Idx, Range)}};
-set_first(Idx, #?MODULE{range = Range} = State)
+set_first(Idx, Tid, #?MODULE{tid = Tid,
+                             range = Range} = State)
   when ?IS_AFTER_RANGE(Idx, Range) ->
-    {all, State#?MODULE{range = undefined}};
-set_first(_Idx, State) ->
+    {{all, Tid}, State#?MODULE{range = undefined}};
+set_first(_Idx, _, State) ->
+    %% TODO fall back to prev
     {undefined, State}.
 
 -spec set_last(ra:index(), state()) ->

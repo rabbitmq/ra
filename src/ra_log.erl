@@ -555,6 +555,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     % been fully flushed
     %
     % last written cannot even go larger than last_index
+    % TODO: mt: can it ever do this as we will validate against the term for each
+    % index in the range, re-consider using min/2 here
     ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
@@ -566,6 +568,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             % followers returning appending the entry and the leader committing
             % and processing a snapshot before the written event comes in.
             % ensure last_written_index_term does not go backwards
+            % TODO: mt: this also feels a bit shonky, should it not just be
+            % left as is given 
             LastWrittenIdx = max(LastWrittenIdx0, ToIdx),
             LastWrittenIdxTerm = {LastWrittenIdx,
                                   max(LastWrittenTerm0, Term)},
@@ -597,7 +601,7 @@ handle_event({written, {FromIdx, _, _Term}},
 %     truncate_cache(FromIdx, ToIdx, State, []);
 handle_event(flush_cache, State) ->
     {flush_cache(State), []};
-handle_event({segments, _Tid, NewSegs},
+handle_event({segments, Tid, NewSegs},
              #?MODULE{cfg = #cfg{log_id = _LogId, names = Names},
                       reader = Reader0,
                       mem_table = Mt0,
@@ -614,7 +618,7 @@ handle_event({segments, _Tid, NewSegs},
              [{_, LastSegIdx, _} | _] ->
                  % ?INFO("~ts: ra_log: setting first memtbl index ~b, segments ~p",
                  %       [LogId, LastSegIdx+1, NewSegs]),
-                 {Spec, Mt1} = ra_log_memtbl:set_first(LastSegIdx + 1, Mt0),
+                 {Spec, Mt1} = ra_log_memtbl:set_first(LastSegIdx + 1, Tid, Mt0),
                  ra_log_ets:execute_delete(Names, Spec, Mt1),
                  % _ = ra_log_memtbl:delete(Spec, Mt1),
                  Mt1

@@ -33,6 +33,7 @@ all_tests() ->
      writes_snapshot_idx_overtakes_same_batch,
      overwrite_completely,
      overwrite_inside,
+     recover,
      % write_to_unavailable_wal_returns_error,
      % write_many,
      % write_many_by_many,
@@ -41,7 +42,6 @@ all_tests() ->
      % roll_over,
      % roll_over_with_data_larger_than_max_size,
      % roll_over_entry_limit,
-     % recover,
      % recover_overwrite_in_same_batch,
      % recover_with_small_chunks,
      % recover_empty,
@@ -106,9 +106,10 @@ init_per_testcase(TestCase, Config) ->
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
                                     TestCase, TestCase),
+    Names = maps:get(names, Sys),
     WalConf = #{dir => Dir,
                 name => ra_log_wal,
-                names => maps:get(names, Sys),
+                names => Names,
                 write_strategy => G,
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_log_snapshot_state,
@@ -117,6 +118,7 @@ init_per_testcase(TestCase, Config) ->
      {writer_id, {UId, self()}},
      {test_case, TestCase},
      {wal_conf, WalConf},
+     {names, Names},
      {wal_dir, Dir} | Config].
 
 end_per_testcase(_TestCase, Config) ->
@@ -310,7 +312,7 @@ overwrite_in_same_batch(Config) ->
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid2, {5, 5}},%% the range to flush from the new table
-                                {Tid, {1, 4}}] %% this is the old table
+                                {Tid, {1, 5}}] %% this is the old table
                        }, _WalFile}} ->
             ok
     after 5000 ->
@@ -340,7 +342,8 @@ overwrite_completely(Config) ->
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
-         {mem_tables, #{UId := [{Tid2, {3, 5}}]}, _WalFile}} ->
+         {mem_tables, #{UId := [{Tid2, {3, 5}},
+                                {Tid, {3, 5}}]}, _WalFile}} ->
             ok
     after 5000 ->
               flush(),
@@ -370,7 +373,7 @@ overwrite_inside(Config) ->
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid2, {3, 4}},
-                                {Tid, {1, 2}}]}, _WalFile}} ->
+                                {Tid, {1, 5}}]}, _WalFile}} ->
             ok
     after 5000 ->
               flush(),
@@ -794,41 +797,38 @@ recover(Config) ->
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
-    {ok, _Wal} = ra_log_wal:start_link(Conf),
-    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 1, Data)
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
      || Idx <- lists:seq(1, 100)],
     _ = await_written(WriterId, 1, {1, 100}),
     ra_log_wal:force_roll_over(ra_log_wal),
-    [{ok, _} = ra_log_wal:write(WriterId, ra_log_wal, Idx, 2, Data)
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 2, Data)
      || Idx <- lists:seq(101, 200)],
     _ = await_written(WriterId, 2, {101, 200}),
-    empty_mailbox(),
+    % empty_mailbox(),
+    flush(),
     ok = proc_lib:stop(ra_log_wal),
-    {ok, Pid} = ra_log_wal:start_link(Conf),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
+    ct:pal("Mt ~p", [ra_log_memtbl:info(Mt)]),
+    ?assertMatch(#{size := 200}, ra_log_memtbl:info(Mt)),
     % there should be no open mem tables after recovery as we treat any found
     % wal files as complete
-    [] = ets:lookup(ra_log_open_mem_tables, UId),
-    [ {UId, _, 1, 100, MTid1}, % this is the "old" table
-      % these are the recovered tables
-      {UId, _, 1, 100, MTid2}, {UId, _, 101, 200, MTid4} ] =
-        lists:sort(ets:lookup(ra_log_closed_mem_tables, UId)),
-    100 = ets:info(MTid1, size),
-    100 = ets:info(MTid2, size),
-    100 = ets:info(MTid4, size),
     % check that both mem_tables notifications are received by the segment writer
-    receive
-        {'$gen_cast', {mem_tables, [{UId, 1, 100, _}], _}} -> ok
-    after 2000 ->
-              throw(new_mem_tables_timeout)
-    end,
-    receive
-        {'$gen_cast', {mem_tables, [{UId, 101, 200, _}], _}} -> ok
-    after 2000 ->
-              throw(new_mem_tables_timeout)
-    end,
+    % receive
+    %     {'$gen_cast', {mem_tables, [{UId, 1, 100, _}], _}} -> ok
+    % after 2000 ->
+    %           throw(new_mem_tables_timeout)
+    % end,
+    % receive
+    %     {'$gen_cast', {mem_tables, [{UId, 101, 200, _}], _}} -> ok
+    % after 2000 ->
+    %           throw(new_mem_tables_timeout)
+    % end,
 
     meck:unload(),
-    proc_lib:stop(Pid),
+    proc_lib:stop(Pid2),
     ok.
 
 recover_overwrite_in_same_batch(Config) ->

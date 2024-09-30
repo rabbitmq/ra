@@ -339,10 +339,10 @@ handle_op({cast, WalCmd}, State) ->
 handle_op({info,{'EXIT', _, Reason}}, _State) ->
     throw({stop, Reason}).
 
-recover_wal(Dir, #conf{segment_writer = _SegWriter,
-                       open_mem_tbls_tid = _OpenTbl,
+recover_wal(Dir, #conf{segment_writer = SegWriter,
+                       % open_mem_tbls_tid = OpenTbl,
                        % closed_mem_tbls_tid = ClosedTbl,
-                       recovery_chunk_size = _RecoveryChunkSize} = Conf) ->
+                       recovery_chunk_size = RecoveryChunkSize} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
     %  recover each mem table and notify segment writer
@@ -361,20 +361,23 @@ recover_wal(Dir, #conf{segment_writer = _SegWriter,
     % % read partially recovered
     % % tables mixed with old tables
     % RecoverConf = Conf#conf{open_mem_tbls_tid = RecoverTid},
-    % All = [begin
-    %            FBase = filename:basename(F),
-    %            ?DEBUG("wal: recovering ~ts", [FBase]),
-    %            Fd = open_at_first_record(F),
-    %            {Time, ok} = timer:tc(
-    %                           fun () ->
-    %                                   recover_wal_chunks(RecoverConf, Fd,
-    %                                                      RecoveryChunkSize)
-    %                           end),
-    %            ?DEBUG("wal: recovered ~ts time taken ~bms",
-    %                   [FBase, Time div 1000]),
-    %            close_existing(Fd),
-    %            recovering_to_closed(RecoverTid, F)
-    %        end || F <- WalFiles],
+    [begin
+         FBase = filename:basename(F),
+         ?DEBUG("wal: recovering ~ts", [FBase]),
+         Fd = open_at_first_record(F),
+         {Time, _Mts} = timer:tc(
+                        fun () ->
+                                recover_wal_chunks(Conf, Fd,
+                                                   RecoveryChunkSize)
+                        end),
+         % FlushRanges = maps:map(fun(UId, Mt) ->
+         %                                ra_log_memtbl:
+
+         % ok = ra_log_segment_writer:accept_mem_tables(SegWriter, M, F),
+         ?DEBUG("wal: recovered ~ts time taken ~bms",
+                [FBase, Time div 1000]),
+         close_existing(Fd)
+     end || F <- WalFiles],
     % % get all the recovered tables and insert them into closed
     % % Closed = lists:append([C || {C, _, _} <- All]),
     % % true = ets:insert(ClosedTbl, Closed),
@@ -613,10 +616,11 @@ roll_over(_OpnMemTbls, #state{wal = Wal0, file_num = Num0,
                        #wal{ranges = Ranges,
                             filename = Filename} ->
                            ok = close_file(Wal0#wal.fd),
-                           MemTables = maps:map(
-                                         fun (_, TidRanges) ->
-                                                 [R || {_, {_, _}} = R <- TidRanges]
-                                         end, Ranges),
+                           MemTables = Ranges,
+                           % MemTables = maps:map(
+                           %               fun (_, TidRanges) ->
+                           %                       [R || {_, {_, _}} = R <- TidRanges]
+                           %               end, Ranges),
                            %% TODO: only keep base name in state
                            Basename = filename:basename(Filename),
                            ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
@@ -828,23 +832,23 @@ open_existing(File) ->
             exit({unknown_wal_file_format, Magic, UnknownVersion})
     end.
 
-% open_at_first_record(File) ->
-%     {ok, Fd} = file:open(File, [read, binary, raw]),
-%     case file:read(Fd, 5) of
-%         {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>} ->
-%             %% the only version currently supported
-%             Fd;
-%         {ok, <<Magic:4/binary, UnknownVersion:8/unsigned>>} ->
-%             exit({unknown_wal_file_format, Magic, UnknownVersion})
-%     end.
+open_at_first_record(File) ->
+    {ok, Fd} = file:open(File, [read, binary, raw]),
+    case file:read(Fd, 5) of
+        {ok, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>} ->
+            %% the only version currently supported
+            Fd;
+        {ok, <<Magic:4/binary, UnknownVersion:8/unsigned>>} ->
+            exit({unknown_wal_file_format, Magic, UnknownVersion})
+    end.
 
-% close_existing(Fd) ->
-%     case file:close(Fd) of
-%         ok ->
-%             ok;
-%         {error, Reason} ->
-%             exit({could_not_close, Reason})
-%     end.
+close_existing(Fd) ->
+    case file:close(Fd) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            exit({could_not_close, Reason})
+    end.
 
 dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
                IdDataLen:16/unsigned, _:IdDataLen/binary,
@@ -884,114 +888,124 @@ dump_records(<<>>, Entries) ->
     Entries.
 
 % TODO: recover writers info, i.e. last index seen
-% recover_wal_chunks(Conf, Fd, RecoveryChunkSize) ->
-%     Chunk = read_from_wal_file(Fd, RecoveryChunkSize),
-%     recover_records(Conf, Fd, Chunk, #{}, RecoveryChunkSize).
-% % All zeros indicates end of a pre-allocated wal file
-% recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
-%                           IdDataLen:16/unsigned, _:IdDataLen/binary,
-%                           0:32/integer, 0:32/unsigned, _/binary>>,
-%                 _Cache, _ChunkSize) ->
-%     ok;
-% First record or different UID to last record
-% recover_records(Conf, Fd,
-%                 <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
-%                   IdDataLen:16/unsigned, UId:IdDataLen/binary,
-%                   Checksum:32/integer,
-%                   EntryDataLen:32/unsigned,
-%                   Idx:64/unsigned, Term:64/unsigned,
-%                   EntryData:EntryDataLen/binary,
-%                   Rest/binary>>,
-%                 Cache, RecoveryChunkSize) ->
+recover_wal_chunks(Conf, Fd, Tables) ->
+    Chunk = read_from_wal_file(Fd, Conf#conf.recovery_chunk_size),
+    recover_records(Conf, Fd, Chunk, #{}, Tables).
+% All zeros indicates end of a pre-allocated wal file
+recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
+                          IdDataLen:16/unsigned, _:IdDataLen/binary,
+                          0:32/integer, 0:32/unsigned, _/binary>>,
+                _Cache, _T) ->
+    ok;
+% First encounter of UId in this file
+recover_records(Conf, Fd,
+                <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
+                  IdDataLen:16/unsigned, UId:IdDataLen/binary,
+                  Checksum:32/integer,
+                  EntryDataLen:32/unsigned,
+                  Idx:64/unsigned, Term:64/unsigned,
+                  EntryData:EntryDataLen/binary,
+                  Rest/binary>>,
+                Cache, Tables) ->
 
-%     case validate_checksum(Checksum, Idx, Term, EntryData) of
-%         ok ->
-%             true = update_mem_table(Conf, UId, Idx, Term,
-%                                     binary_to_term(EntryData), Trunc =:= 1),
-%             Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
-%             recover_records(Conf, Fd, Rest, Cache0, RecoveryChunkSize);
-%         error ->
-%             ?DEBUG("WAL: record failed CRC check. If this is the last record"
-%                    " recovery can resume", []),
-%             %% if this is the last entry in the wal we can just drop the
-%             %% record;
-%             is_last_record(Fd, Rest)
-%     end;
-% % Same UID as last record
-% recover_records(Conf, Fd,
-%                 <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
-%                   Checksum:32/integer,
-%                   EntryDataLen:32/unsigned,
-%                   Idx:64/unsigned, Term:64/unsigned,
-%                   EntryData:EntryDataLen/binary,
-%                   Rest/binary>>,
-%                 Cache, RecoveryChunkSize) ->
-%     #{IdRef := {UId, _}} = Cache,
-%     case validate_checksum(Checksum, Idx, Term, EntryData) of
-%         ok ->
-%             true = update_mem_table(Conf, UId, Idx, Term,
-%                                     binary_to_term(EntryData), Trunc =:= 1),
-%             recover_records(Conf, Fd, Rest, Cache, RecoveryChunkSize);
-%         error ->
-%             ?DEBUG("WAL: record failed CRC check. If this is the last record"
-%                    " recovery can resume", []),
-%             %% if this is the last entry in the wal we can just drop the
-%             %% record;
-%             is_last_record(Fd, Rest)
-%     end;
-% % Not enough remainder to parse another record, need to read
-% recover_records(Conf, Fd, Chunk, Cache, RecoveryChunkSize) ->
-%     NextChunk = read_from_wal_file(Fd, RecoveryChunkSize),
-%     case NextChunk of
-%         <<>> ->
-%             %% we have reached the end of the file
-%             ok;
-%         _ ->
-%             %% append this chunk to the remainder of the last chunk
-%             Chunk0 = <<Chunk/binary, NextChunk/binary>>,
-%             recover_records(Conf, Fd, Chunk0, Cache, RecoveryChunkSize)
-%     end.
+    case validate_checksum(Checksum, Idx, Term, EntryData) of
+        ok ->
+            %% if the mt is non empty we can assume that all required entires
+            %% are already in the table.
+            %% However, we still need to recover the flush ranges for each
+            %% WAL file so that we can tell the segment writer.
+            %% NB: we don't know if more than one mem table is currently open
+            %% for the UId and the segment writer needs to know which ETS table
+            %% to look for the entry, gah!!!
+            % case Tables of
+            %     #{UId := _} ->
+            %         {ok, Mt} = ra_log_ets:mem_table_please(Conf#conf.names, UId),
+            % true = update_mem_table(Conf, UId, Idx, Term,
+            %                         binary_to_term(EntryData), Trunc =:= 1),
+            Cache0 = Cache#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
+            recover_records(Tables, Fd, Rest, Cache0, Tables);
+        error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
+            %% if this is the last entry in the wal we can just drop the
+            %% record;
+            is_last_record(Fd, Rest)
+    end;
+% Same UID as last record
+recover_records(Conf, Fd,
+                <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
+                  Checksum:32/integer,
+                  EntryDataLen:32/unsigned,
+                  Idx:64/unsigned, Term:64/unsigned,
+                  EntryData:EntryDataLen/binary,
+                  Rest/binary>>,
+                Cache, Tables) ->
+    #{IdRef := {UId, _}} = Cache,
+    case validate_checksum(Checksum, Idx, Term, EntryData) of
+        ok ->
+            % true = update_mem_table(Conf, UId, Idx, Term,
+            %                         binary_to_term(EntryData), Trunc =:= 1),
+            recover_records(Conf, Fd, Rest, Cache, Tables);
+        error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
+            %% if this is the last entry in the wal we can just drop the
+            %% record;
+            is_last_record(Fd, Rest)
+    end;
+% Not enough remainder to parse another record, need to read
+recover_records(Conf, Fd, Chunk, Cache, Tables) ->
+    NextChunk = read_from_wal_file(Fd, Conf#conf.recovery_chunk_size),
+    case NextChunk of
+        <<>> ->
+            %% we have reached the end of the file
+            ok;
+        _ ->
+            %% append this chunk to the remainder of the last chunk
+            Chunk0 = <<Chunk/binary, NextChunk/binary>>,
+            recover_records(Conf, Fd, Chunk0, Cache, Tables)
+    end.
 
-% is_last_record(_Fd, <<0:104, _/binary>>) ->
-%     ok;
-% is_last_record(Fd, Rest) ->
-%     case byte_size(Rest) < 13 of
-%         true ->
-%             case read_from_wal_file(Fd, 256) of
-%                 <<>> ->
-%                     ok;
-%                 Next ->
-%                     is_last_record(Fd, <<Rest/binary, Next/binary>>)
-%             end;
-%         false ->
-%             ?ERROR("WAL: record failed CRC check during recovery. "
-%                    "Unable to recover WAL data safely", []),
-%             throw({stop, wal_checksum_validation_failure})
+is_last_record(_Fd, <<0:104, _/binary>>) ->
+    ok;
+is_last_record(Fd, Rest) ->
+    case byte_size(Rest) < 13 of
+        true ->
+            case read_from_wal_file(Fd, 256) of
+                <<>> ->
+                    ok;
+                Next ->
+                    is_last_record(Fd, <<Rest/binary, Next/binary>>)
+            end;
+        false ->
+            ?ERROR("WAL: record failed CRC check during recovery. "
+                   "Unable to recover WAL data safely", []),
+            throw({stop, wal_checksum_validation_failure})
 
-%     end.
+    end.
 
-% read_from_wal_file(Fd, Len) ->
-%     case file:read(Fd, Len) of
-%         {ok, <<Data/binary>>} ->
-%             Data;
-%         eof ->
-%             <<>>;
-%         {error, Reason} ->
-%             exit({could_not_read_wal_chunk, Reason})
-%     end.
+read_from_wal_file(Fd, Len) ->
+    case file:read(Fd, Len) of
+        {ok, <<Data/binary>>} ->
+            Data;
+        eof ->
+            <<>>;
+        {error, Reason} ->
+            exit({could_not_read_wal_chunk, Reason})
+    end.
 
-% validate_checksum(0, _, _, _) ->
-%     % checksum not used
-%     ok;
-% validate_checksum(Checksum, Idx, Term, Data) ->
-%     % building a binary just for the checksum may feel a bit wasteful
-%     % but this is only called during recovery which should be a rare event
-%     case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, Data/binary>>) of
-%         Checksum ->
-%             ok;
-%         _ ->
-%             error
-%     end.
+validate_checksum(0, _, _, _) ->
+    % checksum not used
+    ok;
+validate_checksum(Checksum, Idx, Term, Data) ->
+    % building a binary just for the checksum may feel a bit wasteful
+    % but this is only called during recovery which should be a rare event
+    case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, Data/binary>>) of
+        Checksum ->
+            ok;
+        _ ->
+            error
+    end.
 
 merge_conf_defaults(Conf) ->
     maps:merge(#{segment_writer => ra_log_segment_writer,
@@ -1038,7 +1052,7 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ets:lookup_element(Tid, ServerUId, 2, -1).
 
-update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
+update_ranges(Ranges, UId, MtTid, SnapIdx, {_Start, _} = AddRange) ->
     case Ranges of
         #{UId := [{MtTid, Range0} | Rem]} ->
             Range = range_extend(AddRange, range_truncate(SnapIdx, Range0)),
@@ -1047,7 +1061,8 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
             %% limit the old mt range by the start of the new mt range to
             %% truncate overwritten indexes
             Ranges#{UId => [{MtTid, AddRange},
-                            {OldMtTid, range_limit(Start, OldMtRange)} | Rem]};
+                            {OldMtTid, OldMtRange} | Rem]};
+                            % {OldMtTid, range_limit(Start, OldMtRange)} | Rem]};
         _ ->
             Ranges#{UId => [{MtTid, AddRange}]}
     end.

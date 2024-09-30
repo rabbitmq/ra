@@ -94,7 +94,7 @@ init([#{data_dir := DataDir,
     %                public],
     % create mem table lookup table to be used to map ra cluster name
     % to table identifiers to query.
-    _ = ets:new(OpenMemTbls, [set, protected, named_table]),
+    _ = ets:new(OpenMemTbls, [bag, protected, named_table]),
     % _ = ets:new(ClosedTbl, [bag | TableFlags]),
     ok = ra_directory:init(DataDir, Names),
     {ok, #state{names = Names}}.
