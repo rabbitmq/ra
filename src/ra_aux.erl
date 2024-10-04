@@ -10,6 +10,7 @@
          effective_machine_version/1,
          leader_id/1,
          last_applied/1,
+         current_term/1,
          members_info/1,
          overview/1,
          log_last_index_term/1,
@@ -39,6 +40,10 @@ leader_id(State) ->
 
 -spec last_applied(ra_aux:internal_state()) -> ra_index().
 last_applied(State) ->
+    maps:get(?FUNCTION_NAME, State).
+
+-spec current_term(ra_aux:internal_state()) -> ra_term().
+current_term(State) ->
     maps:get(?FUNCTION_NAME, State).
 
 -spec members_info(ra_aux:internal_state()) -> ra_cluster().
