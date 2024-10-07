@@ -21,6 +21,8 @@ all() ->
 all_tests() ->
     [
      basics,
+     successor,
+     successor_below,
      perf
     ].
 
@@ -56,10 +58,64 @@ basics(_Config) ->
             fun (I, Acc) ->
                     ra_log_memtbl:insert({I, I, <<"banana">>}, Acc)
             end, Mt0, lists:seq(1, 1000)),
-    {Spec, Mt} = ra_log_memtbl:set_first(500, Mt1),
+    {[Spec], Mt} = ra_log_memtbl:set_first(500, Mt1),
     499 = ra_log_memtbl:delete(Spec, Mt),
     ?assertEqual({500, 1000}, ra_log_memtbl:range(Mt)),
     ?assertEqual(501, ets:info(Tid, size)),
+    ok.
+
+successor(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc)
+            end, Mt0, lists:seq(1, 100)),
+    ?assertMatch({1, 100}, ra_log_memtbl:range(Mt1)),
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc)
+            end, Mt2, lists:seq(50, 120)),
+    ?assertMatch({1, 120}, ra_log_memtbl:range(Mt3)),
+
+    {{range, Tid, {1, 20}}, Mt4a} = ra_log_memtbl:record_flushed(Tid, {1, 20}, Mt3),
+    ?assertMatch({21, 120}, ra_log_memtbl:range(Mt4a)),
+
+    {{range, Tid, {1, 60}}, Mt4b} = ra_log_memtbl:record_flushed(Tid, {1, 60}, Mt3),
+    ?assertMatch({50, 120}, ra_log_memtbl:range(Mt4b)),
+
+    ok.
+
+successor_below(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc)
+            end, Mt0, lists:seq(100, 200)),
+    ?assertMatch({100, 200}, ra_log_memtbl:range(Mt1)),
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc)
+            end, Mt2, lists:seq(50, 75)),
+    ?assertMatch({50, 75}, ra_log_memtbl:range(Mt3)),
+
+    {{range, Tid, {100, 150}}, Mt4a} =
+        ra_log_memtbl:record_flushed(Tid, {100, 150}, Mt3),
+    ?assertMatch({50, 75}, ra_log_memtbl:range(Mt4a)),
+
+    {{range, Tid2, {50, 60}}, Mt4b} =
+        ra_log_memtbl:record_flushed(Tid2, {50, 60}, Mt3),
+    ?assertMatch({61, 75}, ra_log_memtbl:range(Mt4b)),
+
+    {{delete, Tid}, Mt4c} =
+        ra_log_memtbl:record_flushed(Tid, {100, 200}, Mt3),
+    ?assertMatch({50, 75}, ra_log_memtbl:range(Mt4c)),
+    ?assertMatch(#{has_previous := false}, ra_log_memtbl:info(Mt4c)),
     ok.
 
 perf(_Config) ->

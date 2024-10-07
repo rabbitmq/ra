@@ -221,10 +221,11 @@ get_overview(#state{data_dir = Dir,
       segment_conf => Conf
      }.
 
-do_segment({ServerUId, {StartIdx0, EndIdx}},
+do_segment({ServerUId, TidRanges},
            #state{system = System,
                   data_dir = DataDir,
                   segment_conf = SegConf} = State) ->
+    {_Tid, {StartIdx0, EndIdx}} = TidRanges,
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
     #{names := Names} = ra_system:fetch(System),
     %% TODO: mt: make read only function that only returnes existing tables

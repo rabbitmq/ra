@@ -346,9 +346,6 @@ append({Idx, _, _Cmd} = Entry,
             % it is the next entry after a snapshot
             % we need to tell the wal to truncate as we
             % are not going to receive any entries prior to the snapshot
-            % TODO: we probably dont need this as the WAL will inspect the
-            % snapshot state table before every write
-            % Alt we could include our current first index in the WAL request
             wal_truncate_write(State0, Entry);
         _ ->
             wal_write(State0, Entry)
@@ -1127,7 +1124,6 @@ delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
 
 wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
                                        wal = Wal} = Cfg,
-                            % cache = _Cache,
                             mem_table = Mt0} = State,
                    {Idx, Term, Cmd0} = Entry) ->
     % this is the next write after a snapshot was taken or received

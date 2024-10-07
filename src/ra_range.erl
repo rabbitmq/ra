@@ -9,7 +9,8 @@
 
 -export([
          new/1,
-         new/2
+         new/2,
+         add/2
         ]).
 
 
@@ -27,3 +28,36 @@ new(Start, End)
        is_integer(End) andalso
        Start =< End ->
     {Start, End}.
+
+-spec add(range(), range()) -> range().
+add(Range, undefined) ->
+    Range;
+add({Start1, End1}, {Start2, End2})
+  when Start2 =< End1 + 1 andalso
+       End2 >= Start1 ->
+    %% TODO: refine logic for unhappy cases
+    {min(Start1, Start2), End2};
+add(_Range, Range) ->
+    Range.
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+add_test() ->
+    ?assertEqual(undefined, add(undefined, undefined)),
+    ?assertEqual({1, 10}, add(undefined, {1, 10})),
+    ?assertEqual({1, 10}, add({1, 10}, undefined)),
+
+    ?assertEqual({1, 20}, add({1, 10}, {11, 20})),
+    ?assertEqual({1, 20}, add({1, 10}, {5, 20})),
+
+    ?assertEqual({1, 9}, add({1, 10}, {5, 9})),
+    ?assertEqual({5, 9}, add({6, 10}, {5, 9})),
+
+    %% when the new range is smaller than the prior range
+    ?assertEqual({1, 3}, add({6, 10}, {1, 3})),
+    ?assertEqual({1, 7}, add({6, 10}, {1, 7})),
+    ok.
+
+-endif.

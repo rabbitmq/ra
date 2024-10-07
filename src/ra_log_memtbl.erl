@@ -5,16 +5,21 @@
 -export([
          init/1,
          init/2,
+         init_successor/3,
          insert/2,
          stage/2,
          commit/1,
          lookup/2,
          lookup_term/2,
+         tid_for/3,
          fold/5,
          get_items/2,
-         set_first/3,
+         record_flushed/3,
+         set_first/2,
          set_last/2,
          delete/2,
+         tid/1,
+         prev/1,
          info/1,
          range/1,
          delete/1
@@ -52,19 +57,18 @@
 
 -opaque state() :: #?MODULE{}.
 
--type delete_spec() :: ra:index() | {'<', ra:index()}.
+-type delete_spec() :: ra:index() |
+                       {'<', ra:index()} |
+                       {all, ets:tid()} |
+                       {delete, ets:tid()} |
+                       {range, ets:tid(), ra:range()}.
 -export_type([
-              state/0
+              state/0,
+              delete_spec/0
               ]).
 
--spec init([ets:tid()], read | read_write) -> state().
-init([Tid | RemTids], Mode) ->
-    Prev = case RemTids of
-               [] ->
-                   undefined;
-               _ ->
-                   init(RemTids, read)
-           end,
+-spec init(ets:tid(), read | read_write) -> state().
+init(Tid, Mode) ->
     Range = case Mode of
                 read ->
                     undefined;
@@ -84,26 +88,32 @@ init([Tid | RemTids], Mode) ->
             end,
 
     #?MODULE{tid = Tid,
-             range = Range,
-             prev = Prev
+             range = Range
             }.
 
--spec init([ets:tid()]) -> state().
-init(Tids) ->
-    init(Tids, read_write).
+-spec init(ets:tid()) -> state().
+init(Tid) ->
+    init(Tid, read_write).
 
--spec insert(log_entry(), state()) -> state().
+-spec init_successor(ets:tid(), read | read_write, state()) -> state().
+init_successor(Tid, Mode, #?MODULE{} = State) ->
+    %%TODO: mt: I suspec the mode would always be read_write
+    Succ = init(Tid, Mode),
+    Succ#?MODULE{prev = State}.
+
+-spec insert(log_entry(), state()) ->
+    {ok, state()} | {error, overwriting}.
 insert({Idx, _, _} = Entry,
        #?MODULE{tid = Tid,
                 range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
     true = ets:insert(Tid, Entry),
-    State#?MODULE{range = update_range_end(Idx, Range)};
+    {ok, State#?MODULE{range = update_range_end(Idx, Range)}};
 insert({Idx, _, _} = _Entry,
        #?MODULE{range = Range} = _State0)
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
-    exit({error, overwriting}).
+    {error, overwriting}.
 
 -spec stage(log_entry(), state()) -> state().
 stage({Idx, _, _} = Entry,
@@ -172,6 +182,18 @@ lookup_term(Idx, #?MODULE{tid = Tid,
 lookup_term(_Idx, _State) ->
     undefined.
 
+-spec tid_for(ra:index(), ra_term(), state()) ->
+    undefine | ets:tid().
+tid_for(_Idx, _Term, undefined) ->
+    undefined;
+tid_for(Idx, Term, State) ->
+    case lookup_term(Idx, State) of
+        Term ->
+            tid(State);
+        _ ->
+            tid_for(Idx, Term, State#?MODULE.prev)
+    end.
+
 -spec fold(ra:index(), ra:index(), fun(), term(), state()) ->
     term().
 fold(To, To, Fun, Acc, State) ->
@@ -220,35 +242,70 @@ delete({all, Tid}, #?MODULE{tid = Tid}) ->
 
 -spec range(state()) ->
     undefined | {ra:index(), ra:index()}.
-range(#?MODULE{range = Range}) ->
-    Range.
+range(#?MODULE{range = Range,
+               prev = undefined}) ->
+    Range;
+range(#?MODULE{range = Range,
+               prev = Prev}) ->
+    PrevRange = ra_log_memtbl:range(Prev),
+    ra_range:add(PrevRange, Range).
 
 -spec delete(state()) -> ok.
 delete(#?MODULE{tid = Tid}) ->
     _ = ets:delete(Tid),
     ok.
 
+-spec tid(state()) -> ets:tid().
+tid(#?MODULE{tid = Tid}) ->
+    Tid.
+
+-spec prev(state()) -> undefined | state().
+prev(#?MODULE{prev = Prev}) ->
+    Prev.
+
 -spec info(state()) -> map().
-info(#?MODULE{tid = Tid}) ->
+info(#?MODULE{tid = Tid,
+              prev = Prev} = State) ->
     #{tid => Tid,
       size => ets:info(Tid, size),
-      name => ets:info(Tid, name)
+      name => ets:info(Tid, name),
+      range => range(State),
+      has_previous => Prev =/= undefined
      }.
 
--spec set_first(ra:index(), ets:tid(), state()) ->
-    {undefined |  delete_spec(), state()}.
-set_first(Idx, Tid, #?MODULE{tid = Tid,
-                             range = {Start, _} = Range} = State)
+-spec record_flushed(ets:tid(), ra:range(), state()) -> {delete_spec(), state()}.
+record_flushed(Tid, {_, End}, #?MODULE{tid = Tid} = State0) ->
+    case set_first(End+1, State0) of
+        {[], State} ->
+            {undefined, State};
+        {[Spec], State} ->
+            {Spec, State}
+    end;
+record_flushed(_Tid, _Range, #?MODULE{prev = undefined} = State) ->
+    {undefined, State};
+record_flushed(Tid, Range, #?MODULE{prev = Prev0} = State) ->
+    case record_flushed(Tid, Range, Prev0) of
+        {{all, Tid}, _Prev} ->
+            %% upgrade all spec to delete
+            {{delete, Tid}, State#?MODULE{prev = undefined}};
+        {Spec, Prev} ->
+            {Spec, State#?MODULE{prev = Prev}}
+    end.
+
+-spec set_first(ra:index(), state()) ->
+    {[delete_spec()], state()}.
+set_first(Idx, #?MODULE{tid = Tid,
+                        range = {Start, _} = Range} = State)
   when ?IN_RANGE(Idx, Range) ->
-    {{range, Tid, {Start, Idx - 1}},
+    {[{range, Tid, {Start, Idx - 1}}],
      State#?MODULE{range = update_range_start(Idx, Range)}};
-set_first(Idx, Tid, #?MODULE{tid = Tid,
-                             range = Range} = State)
+set_first(Idx, #?MODULE{tid = Tid,
+                        range = Range} = State)
   when ?IS_AFTER_RANGE(Idx, Range) ->
-    {{all, Tid}, State#?MODULE{range = undefined}};
-set_first(_Idx, _, State) ->
+    {[{all, Tid}], State#?MODULE{range = undefined}};
+set_first(_Idx, State) ->
     %% TODO fall back to prev
-    {undefined, State}.
+    {[], State}.
 
 -spec set_last(ra:index(), state()) ->
     {undefined |  delete_spec(), state()}.

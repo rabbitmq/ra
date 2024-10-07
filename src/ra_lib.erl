@@ -14,6 +14,8 @@
          dump/1,
          dump/2,
          id/1,
+         ignore/1,
+         ignore/2,
          % maybe
          iter_maybe/2,
          % cohercion
@@ -86,6 +88,9 @@ dump(Prefix, Term) ->
     Term.
 
 id(X) -> X.
+
+ignore(_X) -> ok.
+ignore(_X, _Y) -> ok.
 
 
 -spec iter_maybe(undefined | term(), fun()) -> ok.
