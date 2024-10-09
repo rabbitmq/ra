@@ -10,7 +10,10 @@
 -export([
          new/1,
          new/2,
-         add/2
+         add/2,
+         extend/2,
+         limit/2,
+         truncate/2
         ]).
 
 
@@ -40,6 +43,45 @@ add({Start1, End1}, {Start2, End2})
 add(_Range, Range) ->
     Range.
 
+
+-spec limit(ra:index(), range()) -> range().
+limit(CeilExcl, {Start, _End})
+  when is_integer(CeilExcl) andalso
+       CeilExcl =< Start ->
+    undefined;
+limit(CeilExcl, {Start, End})
+  when is_integer(CeilExcl) andalso
+       CeilExcl =< End ->
+    {Start, CeilExcl - 1};
+limit(CeilExcl, Range)
+  when is_integer(CeilExcl) ->
+    Range.
+
+-spec truncate(ra:index(), range()) -> range().
+truncate(UpToIncl, {_Start, End})
+  when is_integer(UpToIncl) andalso
+       UpToIncl >= End ->
+    undefined;
+truncate(UpToIncl, {Start, End})
+  when is_integer(UpToIncl) andalso
+       UpToIncl >= Start ->
+    {UpToIncl + 1, End};
+truncate(UpToIncl, Range)
+  when is_integer(UpToIncl) ->
+    Range.
+
+-spec extend(range() | ra:index(), range()) -> range().
+extend({NewStart, NewEnd}, {Start, End})
+  when NewStart == End + 1 ->
+    {Start, NewEnd};
+extend(Idx, {Start, End})
+  when is_integer(Idx) andalso
+       Idx == End + 1 ->
+    {Start, Idx};
+extend({_, _} = AddRange, undefined) ->
+    AddRange;
+extend(Idx, undefined) when is_integer(Idx) ->
+    ra_range:new(Idx).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

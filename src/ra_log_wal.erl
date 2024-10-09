@@ -517,7 +517,7 @@ incr_batch(#batch{num_writes = Writes,
                       %% IDEA: perhaps if the tid is different we start a new
                       %% batch writer and put the old batch writers in an
                       %% old batch writer field?
-                      Range = range_extend(Idx, range_truncate(SnapIdx, Range0)),
+                      Range = ra_range:extend(Idx, ra_range:truncate(SnapIdx, Range0)),
                       Waiting0#{Pid => W#batch_writer{range = Range,
                                                       % from = min(Idx, From),
                                                       snap_idx = SnapIdx,
@@ -1006,46 +1006,16 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {_Start, _} = AddRange) ->
         #{UId := [{MtTid, Range0} | Rem]} ->
             %% SnapIdx might have moved to we truncate the old range first
             %% before extending
-            Range = range_extend(AddRange, range_truncate(SnapIdx, Range0)),
+            Range = ra_range:extend(AddRange, ra_range:truncate(SnapIdx, Range0)),
             Ranges#{UId => [{MtTid, Range} | Rem]};
         #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
             %% new Tid, need to add a new range record for this
             Ranges#{UId => [{MtTid, AddRange},
-                            range_truncate(SnapIdx, {OldMtTid, OldMtRange})
+                            ra_range:truncate(SnapIdx, {OldMtTid, OldMtRange})
                             | Rem]};
         _ ->
             Ranges#{UId => [{MtTid, AddRange}]}
     end.
-
-% range_limit(CeilExcl, {Start, _End})
-%   when CeilExcl =< Start ->
-%     undefined;
-% range_limit(CeilExcl, {Start, End})
-%   when CeilExcl =< End ->
-%     {Start, CeilExcl - 1};
-% range_limit(_CeilExcl, Range) ->
-%     Range.
-
-range_truncate(UpToIncl, {_Start, End})
-  when UpToIncl >= End ->
-    undefined;
-range_truncate(UpToIncl, {Start, End})
-  when UpToIncl >= Start ->
-    {UpToIncl + 1, End};
-range_truncate(_UpToIncl, Range) ->
-    Range.
-
-range_extend({NewStart, NewEnd}, {Start, End})
-  when NewStart == End + 1 ->
-    {Start, NewEnd};
-range_extend(Idx, {Start, End})
-  when is_integer(Idx) andalso
-       Idx == End + 1 ->
-    {Start, Idx};
-range_extend({_, _} = AddRange, undefined) ->
-    AddRange;
-range_extend(Idx, undefined) when is_integer(Idx) ->
-    ra_range:new(Idx).
 
 recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
               #recovery{mode = clean,

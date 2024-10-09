@@ -450,32 +450,6 @@ get_segment(#cfg{directory = Dir,
             end
     end.
 
-% closed_mem_tables(Tbl, Id) ->
-%     case ets:lookup(Tbl, Id) of
-%         [] ->
-%             [];
-%         Tables ->
-%             lists:sort(fun (A, B) ->
-%                                element(2, A) > element(2, B)
-%                        end, Tables)
-%     end.
-
-% closed_mem_table_term_query(Tbl, Idx, Id) ->
-%     case closed_mem_tables(Tbl, Id) of
-%         [] ->
-%             undefined;
-%         Tables ->
-%             closed_mem_table_term_query0(Idx, Tables)
-%     end.
-
-% closed_mem_table_term_query0(_Idx, []) ->
-%     undefined;
-% closed_mem_table_term_query0(Idx, [{_, _, From, To, Tid} | _Tail])
-%   when Idx >= From andalso Idx =< To ->
-%     ets:lookup_element(Tid, Idx, 2);
-% closed_mem_table_term_query0(Idx, [_ | Tail]) ->
-%     closed_mem_table_term_query0(Idx, Tail).
-
 compact_seg_refs([], PreviousSegRefs) ->
     PreviousSegRefs;
 compact_seg_refs(NewSegRefs, []) ->
