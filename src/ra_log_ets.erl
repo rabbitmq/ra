@@ -94,6 +94,8 @@ delete_mem_table(#{log_ets := Name}, UId) ->
                      ra_log_memtbl:delete_spec(),
                      ra_log_memtbl:state()) ->
     ok.
+execute_delete(#{}, undefined, _Mt) ->
+    ok;
 execute_delete(#{log_ets := Name}, Spec, Mt) ->
     gen_server:cast(Name, {exec_delete, Spec, Mt}).
 
@@ -150,9 +152,9 @@ handle_call(_Request, _From, State) ->
 %     end;
 handle_cast({exec_delete, Spec, Mt}, State) ->
     try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
-        {Time, _} ->
-            ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
-                   [Time div 1000, Spec]),
+        {Time, Num} ->
+            ct:pal("ra_log_ets: ets:delete/1 took ~bms to delete ~w ~b entries",
+                   [Time div 1000, Spec, Num]),
             ok
     catch
         _:Err ->

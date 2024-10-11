@@ -18,13 +18,13 @@ all() ->
 
 all_tests() ->
     [
-     % resend_write,
-     % resend_write_after_tick,
+     resend_write_lost_in_wal_crash,
+     resend_write_after_tick,
      handle_overwrite,
      receive_segment,
      read_one,
      %% TODO:
-     % take_after_overwrite_and_init,
+     take_after_overwrite_and_init,
      validate_sequential_fold,
      validate_reads_for_overlapped_writes,
      cache_overwrite_then_take,
@@ -42,7 +42,7 @@ all_tests() ->
      wal_down_write_returns_error_wal_down,
 
      detect_lost_written_range,
-     % snapshot_recovery,
+     snapshot_recovery,
      snapshot_installation,
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
@@ -106,6 +106,9 @@ init_per_testcase(TestCase, Config) ->
     ok = ra_lib:write_file(filename:join([DataDir, node(), UId, "config"]),
                            list_to_binary(io_lib:format("~p.", [ServerConf]))),
 
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+    _ = supervisor:restart_child(SupPid, ra_log_wal),
     [{uid, UId}, {test_case, TestCase}, {wal_dir, DataDir} | Config].
 
 end_per_testcase(_, Config) ->
@@ -121,7 +124,7 @@ handle_overwrite(Config) ->
     {ok, Log1} = ra_log:write([{1, 1, "value"},
                                {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, {1, 2, 1}}} -> ok
+        {ra_log_event, {written, 1, {1, 2}}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
@@ -131,11 +134,11 @@ handle_overwrite(Config) ->
     {ok, Log4} = ra_log:write([{2, 2, "value"}], Log3),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    {Log, _} = ra_log:handle_event({written, {1, 2, 1}}, Log4),
+    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
     % ensure last written has not been incremented
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
-               element(1, ra_log:handle_event({written, {1, 2, 2}}, Log))),
+               element(1, ra_log:handle_event({written, 2, {1, 2}}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
@@ -151,17 +154,12 @@ receive_segment(Config) ->
     Log1 = lists:foldl(fun(E, Acc0) ->
                                ra_log:append(E, Acc0)
                        end, Log0, Entries),
-    % Log2 = deliver_all_log_events(Log1, 500),
     Log2 = deliver_log_events_cond(
              Log1, fun (L) ->
                            {PostWritten, _} = ra_log:last_written(L),
                            PostWritten >= (PreWritten + 3)
                    end, 100),
     {3, 1} = ra_log:last_written(Log2),
-    UId = ?config(uid, Config),
-    [MemTblTid] = [Tid || {Key, _, _, Tid}
-                          <- ets:tab2list(ra_log_open_mem_tables), Key == UId],
-    ?assert(ets:info(MemTblTid) =/= undefined),
     % force wal roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     % Log3 = deliver_all_log_events(Log2, 1500),
@@ -169,9 +167,6 @@ receive_segment(Config) ->
              Log2, fun (L) ->
                            #{mem_table_range := MtRange} = ra_log:overview(L),
                            MtRange == undefined
-                           % ets:info(MemTblTid) == undefined andalso
-                           % [] =:= ets:tab2list(ra_log_open_mem_tables) andalso
-                           % [] =:= ets:tab2list(ra_log_closed_mem_tables)
                    end, 100),
     % validate reads
     {Entries, FinalLog} = ra_log_take(1, 3, Log3),
@@ -469,7 +464,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     %% no written notifications for anything lower than the snapshot should
     %% be received
     Log5 = receive
-               {ra_log_event, {written, {From, _To, _Term}} = E}
+               {ra_log_event, {written, _Term, {From, _To}} = E}
                  when From == 101 ->
                    {Log4b, Effs} = ra_log:handle_event(E, Log4),
                    Log4c = lists:foldl(
@@ -572,16 +567,15 @@ last_index_reset(Config) ->
 
 last_index_reset_before_written(Config) ->
     Log0 = ra_log_init(Config),
-    #{cache_size := 0} = ra_log:overview(Log0),
     Log1 = write_n(1, 5, 1, Log0),
-    #{cache_size := 4} = ra_log:overview(Log1),
+    #{mem_table_range := {0, 4}} = ra_log:overview(Log1),
     {0, 0} = ra_log:last_written(Log1),
     5 = ra_log:next_index(Log1),
     {4, 1} = ra_log:last_index_term(Log1),
     % reverts last index to a previous index
     % needs to be done if a new leader sends an empty AER
     {ok, Log2} = ra_log:set_last_index(3, Log1),
-    #{cache_size := 3} = ra_log:overview(Log2),
+    % #{cache_size := 3} = ra_log:overview(Log2),
     {0, 0} = ra_log:last_written(Log2),
     4 = ra_log:next_index(Log2),
     {3, 1} = ra_log:last_index_term(Log2),
@@ -592,7 +586,7 @@ last_index_reset_before_written(Config) ->
                                    end),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
-    #{cache_size := 0} = ra_log:overview(Log3),
+    % #{cache_size := 0} = ra_log:overview(Log3),
     ok.
 
 recovery(Config) ->
@@ -710,17 +704,7 @@ recovery_with_missing_config_file(Config) ->
 
     ok.
 
-resend_write(Config) ->
-    % logger:set_primary_config(level, debug),
-    % simulate lost messages requiring the ra server to resend in flight
-    % writes
-    meck:new(ra_log_wal, [passthrough]),
-    meck:expect(ra_log_wal, write, fun (_, _, 10, _, _) ->
-                                           {ok, self()};
-                                       (A, B, C, D, E) ->
-                                           meck:passthrough([A, B, C, D, E])
-                                   end),
-    timer:sleep(100),
+resend_write_lost_in_wal_crash(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
     %% write 1..9
@@ -728,18 +712,22 @@ resend_write(Config) ->
     Log2 = assert_log_events(Log1, fun (L) ->
                                            {9, 2} == ra_log:last_written(L)
                                    end),
-    % fake missing entry
-    %% write 10 which will be dropped by meck interception
+    WalPid = whereis(ra_log_wal),
+    %% suspend wal, write an entry then kill it
+    erlang:suspend_process(WalPid),
     Log2b = append_n(10, 11, 2, Log2),
+    exit(WalPid, kill),
+    ra_lib:retry(fun () -> is_pid(whereis(ra_log_wal)) end, 100),
     %% write 11..12 which should trigger resend
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
-                   %% unload mock so that write of index 10 can go through
-                   meck:unload(ra_log_wal),
-                   element(1, ra_log:handle_event(Evt, Log3))
+                   element(1, ra_log:handle_event(Evt, Log3));
+               {ra_log_event, {written, 2, {11, 12}}} ->
+                   ct:fail("unexpected gappy write!!")
            after 500 ->
-                     throw(resend_write_timeout)
+                     flush(),
+                     ct:fail(resend_write_timeout)
            end,
     Log5 = ra_log:append({13, 2, banana}, Log4),
     Log6 = assert_log_events(Log5, fun (L) ->
@@ -753,12 +741,9 @@ resend_write(Config) ->
 resend_write_after_tick(Config) ->
     meck:new(ra_log_wal, [passthrough]),
     WalPid = whereis(ra_log_wal),
-    timer:sleep(100),
-    ct:pal("ra_log_init"),
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
-    %% ct:pal("appending"),
-    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) ->
+    meck:expect(ra_log_wal, write, fun (_, _, _, _, _, _) ->
                                            {ok, WalPid}
                                    end),
     Log1 = ra_log:append({1, 2, banana}, Log0),
@@ -766,7 +751,6 @@ resend_write_after_tick(Config) ->
     meck:unload(ra_log_wal),
     %% restart wal to get a new wal pid so that the ra_log detects on tick
     %% that the wal process has changed
-    %% ct:pal("restart wal"),
     restart_wal(),
 
     Ms = erlang:system_time(millisecond) + 5001,
@@ -774,7 +758,7 @@ resend_write_after_tick(Config) ->
     Log = assert_log_events(Log2, fun (L) ->
                                           {1, 2} == ra_log:last_written(L)
                                   end),
-    ct:pal("overvew ~p", [ra_log:overview(Log)]),
+    % ct:pal("overvew ~p", [ra_log:overview(Log)]),
     ra_log:close(Log),
     ok.
 
@@ -790,10 +774,19 @@ wal_crash_recover(Config) ->
     Log3 = write_n(75, 100, 2, Log2),
     % wait long enough for the resend window to pass
     timer:sleep(1000),
-    Log = assert_log_events(write_n(100, 101, 2,  Log3),
+    % debugger:start(),
+    % int:i(ra_log_memtbl),
+    % int:i(?MODULE),
+    % % int:break(ra_log_memtbl, 228),
+    % int:break(?MODULE, 788),
+    Log4 = write_n(100, 101, 2, Log3),
+    {true, _} = ra_log:exists({100, 2}, Log4),
+    Log = assert_log_events(Log4,
                             fun (L) ->
+                                    {Exists, _} = ra_log:exists({100, 2}, L),
+                                    ct:pal("Exists ~w", [Exists]),
                                     {100, 2} == ra_log:last_written(L)
-                            end),
+                            end, 2000000),
     {100, 2} = ra_log:last_written(Log),
     validate_fold(1, 99, 2, Log),
     ok.
@@ -818,7 +811,7 @@ wal_down_append_throws(Config) ->
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
     ?assert(not ra_log:can_write(Log0)),
-    ?assertError(wal_down, ra_log:append({1,1,hi}, Log0)),
+    ?assertError(wal_down, ra_log:append({1, 1, hi}, Log0)),
     ok.
 
 wal_down_write_returns_error_wal_down(Config) ->
@@ -826,31 +819,29 @@ wal_down_write_returns_error_wal_down(Config) ->
     [SupPid] = [P || {ra_log_wal_sup, P, _, _}
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
-    {error, wal_down} = ra_log:write([{1,1,hi}], Log0),
+    {error, wal_down} = ra_log:write([{1, 1, hi}], Log0),
     ok.
 
 detect_lost_written_range(Config) ->
     Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
-    meck:new(ra_log_wal, [passthrough]),
     {0, 0} = ra_log:last_index_term(Log0),
     % write some entries
     Log1 = append_and_roll_no_deliver(1, 10, 2, Log0),
     Log2 = assert_log_events(Log1, fun (L) ->
                                            {9, 2} == ra_log:last_written(L)
                                    end),
-    % WAL rolls over and WAL file is deleted
     % simulate wal outage
-    meck:expect(ra_log_wal, write, fun (_, _, _, _, _) -> {ok, self()} end),
+    WalPid = whereis(ra_log_wal),
+    true = ra_log_wal_SUITE:suspend_process(WalPid),
 
     % append some messages that will be lost
     Log3 = append_n(10, 15, 2, Log2),
 
-    % restart WAL to ensure lose the transient state keeping track of
+    % kill WAL to ensure lose the transient state keeping track of
     % each writer's last written index
-    restart_wal(),
+    exit(WalPid, kill),
 
-    % WAL recovers
-    meck:unload(ra_log_wal),
+    ra_lib:retry(fun () -> whereis(ra_log_wal) /= undefined end, 1000),
 
     % append some more stuff
     Log4 = append_n(15, 20, 2, Log3),
@@ -861,6 +852,8 @@ detect_lost_written_range(Config) ->
     {Entries, _} = ra_log_take(0, 20, Log5),
     ?assertEqual(20, length(Entries)),
     ra_log:close(Log5),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    timer:sleep(1000),
     Log = ra_log_init(Config),
     {19, 2} = ra_log:last_written(Log5),
     {RecoveredEntries, _} = ra_log_take(0, 20, Log),
@@ -1490,6 +1483,7 @@ assert_log_events(Log0, AssertPred, Timeout) ->
             %% handle any next events
             Log = lists:foldl(
                     fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                            ct:pal("eff log evt: ~p", [E]),
                             {Acc, _Effs} = ra_log:handle_event(E, Acc0),
                             Acc;
                         (_, Acc) ->
@@ -1539,7 +1533,7 @@ deliver_one_log_events(Log0, Timeout) ->
 
 deliver_written_log_events(Log0, Timeout) ->
     receive
-        {ra_log_event, {written, _} = Evt} ->
+        {ra_log_event, {written, _, _} = Evt} ->
             ct:pal("log evt: ~p", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log0),
             deliver_written_log_events(Log, 100)

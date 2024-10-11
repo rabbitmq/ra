@@ -16,9 +16,9 @@
          get_items/2,
          record_flushed/3,
          set_first/2,
-         set_last/2,
          delete/2,
          tid/1,
+         is_active/2,
          prev/1,
          info/1,
          range/1,
@@ -36,9 +36,9 @@
         (is_tuple(Range) andalso
          Idx < element(1, Range))).
 
--define(IS_AFTER_RANGE(Idx, Range),
-        (is_tuple(Range) andalso
-         Idx > element(2, Range))).
+% -define(IS_AFTER_RANGE(Idx, Range),
+%         (is_tuple(Range) andalso
+%          Idx > element(2, Range))).
 
 % -define(RANGE_OUT(Idx, Range),
 %         (Idx < element(1, Range) orelse
@@ -57,7 +57,8 @@
 
 -opaque state() :: #?MODULE{}.
 
--type delete_spec() :: ra:index() |
+-type delete_spec() :: undefined |
+                       ra:index() |
                        {'<', ra:index()} |
                        {all, ets:tid()} |
                        {delete, ets:tid()} |
@@ -115,25 +116,26 @@ insert({Idx, _, _} = _Entry,
        ?IS_BEFORE_RANGE(Idx, Range) ->
     {error, overwriting}.
 
--spec stage(log_entry(), state()) -> state().
+-spec stage(log_entry(), state()) ->
+    {ok, state()} | {error, overwriting}.
 stage({Idx, _, _} = Entry,
-       #?MODULE{ staged = {FstIdx, Staged},
-                range = Range} = State)
+      #?MODULE{staged = {FstIdx, Staged},
+               range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
-    State#?MODULE{staged = {FstIdx, [Entry | Staged]},
-                  range = update_range_end(Idx, Range)};
+    {ok, State#?MODULE{staged = {FstIdx, [Entry | Staged]},
+                       range = update_range_end(Idx, Range)}};
 stage({Idx, _, _} = Entry,
-       #?MODULE{tid = _Tid,
-                staged = undefined,
-                range = Range} = State)
+      #?MODULE{tid = _Tid,
+               staged = undefined,
+               range = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
-    State#?MODULE{staged = {Idx, [Entry]},
-                  range = update_range_end(Idx, Range)};
+    {ok, State#?MODULE{staged = {Idx, [Entry]},
+                       range = update_range_end(Idx, Range)}};
 stage({Idx, _, _} = _Entry,
-       #?MODULE{range = Range} = _State0)
+      #?MODULE{range = Range} = _State0)
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
-    exit({error, overwriting}).
+    {error, overwriting}.
 
 -spec commit(state()) -> state().
 commit(#?MODULE{staged = undefined} = State) ->
@@ -178,12 +180,12 @@ lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
 lookup_term(Idx, #?MODULE{tid = Tid,
                           range = Range})
   when ?IN_RANGE(Idx, Range) ->
-    ets:lookup_element(Tid, Idx, 2);
+    ets:lookup_element(Tid, Idx, 2, undefined);
 lookup_term(_Idx, _State) ->
     undefined.
 
 -spec tid_for(ra:index(), ra_term(), state()) ->
-    undefine | ets:tid().
+    undefined | ets:tid().
 tid_for(_Idx, _Term, undefined) ->
     undefined;
 tid_for(Idx, Term, State) ->
@@ -225,15 +227,18 @@ delete({range, Tid, {Start, End}}, #?MODULE{tid = Tid} = State) ->
     Limit = ets:info(Tid, size) div 2,
     case NumToDelete > Limit of
         true ->
+            ct:pal("delete < ~b ~b", [Start, End]),
             %% more than half the table is to be deleted
             delete({'<', Tid, End + 1}, State);
         false ->
+            ct:pal("delete ~b ~b", [Start, End]),
             delete(Start, End, Tid),
             End - Start + 1
     end;
 delete({Op, Tid, Idx}, #?MODULE{tid = Tid})
   when is_integer(Idx) and is_atom(Op) ->
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
+    ct:pal("DelSpec ~p", [DelSpec]),
     ets:select_delete(Tid, DelSpec);
 delete({all, Tid}, #?MODULE{tid = Tid}) ->
     Size = ets:info(Tid, size),
@@ -259,6 +264,10 @@ delete(#?MODULE{tid = Tid}) ->
 tid(#?MODULE{tid = Tid}) ->
     Tid.
 
+-spec is_active(ets:tid(), state()) -> boolean().
+is_active(Tid, State) ->
+    Tid =:= tid(State).
+
 -spec prev(state()) -> undefined | state().
 prev(#?MODULE{prev = Prev}) ->
     Prev.
@@ -273,50 +282,70 @@ info(#?MODULE{tid = Tid,
       has_previous => Prev =/= undefined
      }.
 
--spec record_flushed(ets:tid(), ra:range(), state()) -> {delete_spec(), state()}.
-record_flushed(Tid, {_, End}, #?MODULE{tid = Tid} = State0) ->
-    case set_first(End+1, State0) of
-        {[], State} ->
-            {undefined, State};
-        {[Spec], State} ->
-            {Spec, State}
-    end;
+-spec record_flushed(ets:tid(), ra:range(), state()) ->
+    {delete_spec(), state()}.
+record_flushed(TID = Tid, {Start, End},
+               #?MODULE{tid = TID,
+                        range = Range} = State) ->
+  case ?IN_RANGE(End, Range) of
+      true ->
+          {{range, Tid, {Start, End}},
+           State#?MODULE{range = ra_range:truncate(End, Range)}};
+      false ->
+            {undefined, State}
+  end;
 record_flushed(_Tid, _Range, #?MODULE{prev = undefined} = State) ->
     {undefined, State};
 record_flushed(Tid, Range, #?MODULE{prev = Prev0} = State) ->
-    case record_flushed(Tid, Range, Prev0) of
-        {{all, Tid}, _Prev} ->
-            %% upgrade all spec to delete
+    {Spec, Prev} = record_flushed(Tid, Range, Prev0),
+    case range(Prev) of
+        undefined ->
+            %% the prev table is now empty and can be deleted,
             {{delete, Tid}, State#?MODULE{prev = undefined}};
-        {Spec, Prev} ->
+        _ ->
             {Spec, State#?MODULE{prev = Prev}}
     end.
 
 -spec set_first(ra:index(), state()) ->
     {[delete_spec()], state()}.
 set_first(Idx, #?MODULE{tid = Tid,
-                        range = {Start, _} = Range} = State)
-  when ?IN_RANGE(Idx, Range) ->
-    {[{range, Tid, {Start, Idx - 1}}],
-     State#?MODULE{range = update_range_start(Idx, Range)}};
-set_first(Idx, #?MODULE{tid = Tid,
-                        range = Range} = State)
-  when ?IS_AFTER_RANGE(Idx, Range) ->
-    {[{all, Tid}], State#?MODULE{range = undefined}};
+                        range = Range,
+                        prev = Prev0} = State)
+  when (is_tuple(Range) andalso Idx > element(1, Range)) orelse
+       Range == undefined ->
+    {PrevSpecs, Prev} = case Prev0 of
+                            undefined ->
+                                {[], undefined};
+                            _ ->
+                                case set_first(Idx, Prev0) of
+                                    {[{range, PTID, _} | Rem],
+                                     #?MODULE{tid = PTID} = P} = Res ->
+                                        %% set_first/2 returned a range spec for
+                                        %% prev and prev is now empty,
+                                        %% upgrade to delete spec of whole tid
+                                        case range(P) of
+                                            undefined ->
+                                                {[{delete, tid(P)} | Rem],
+                                                 prev(P)};
+                                            _ ->
+                                                Res
+                                        end;
+                                    Res ->
+                                        Res
+                                end
+                        end,
+    Specs = case Range of
+                {Start, End} ->
+                    [{range, Tid, {Start, min(Idx - 1, End)}} | PrevSpecs];
+                undefined ->
+                    PrevSpecs
+            end,
+    {Specs,
+     State#?MODULE{range = ra_range:truncate(Idx - 1, Range),
+                   prev = Prev}};
 set_first(_Idx, State) ->
-    %% TODO fall back to prev
     {[], State}.
 
--spec set_last(ra:index(), state()) ->
-    {undefined |  delete_spec(), state()}.
-set_last(Idx, #?MODULE{range = Range} = State)
-  when ?IN_RANGE(Idx, Range) ->
-    {{'>', Idx}, State#?MODULE{range = update_range_end(Idx, Range)}};
-set_last(Idx, #?MODULE{range = {Start, _End}} = State)
-  when Idx < Start ->
-    {all, State#?MODULE{range = undefined}};
-set_last(_Idx, State) ->
-    {undefined, State}.
 
 %% internal
 
@@ -326,13 +355,6 @@ update_range_end(Idx, {Start, End})
     {Start, Idx};
 update_range_end(Idx, undefined) ->
     {Idx, Idx}.
-
-update_range_start(Idx, {Start, End})
-  when Idx >= Start andalso
-       Idx =< End ->
-    {Idx, End};
-update_range_start(_Idx, Range) ->
-    Range.
 
 delete(End, End, Tid) ->
     ets:delete(Tid, End);

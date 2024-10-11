@@ -21,6 +21,13 @@ all() ->
 all_tests() ->
     [
      basics,
+     record_flushed,
+     record_flushed_prev,
+     set_first,
+     set_first_with_multi_prev,
+     set_first_with_middle_small_range,
+     set_first_with_old_larger_range,
+     set_first_with_old_smaller_range,
      successor,
      successor_below,
      perf
@@ -56,12 +63,208 @@ basics(_Config) ->
     Mt0 = ra_log_memtbl:init(Tid),
     Mt1 = lists:foldl(
             fun (I, Acc) ->
-                    ra_log_memtbl:insert({I, I, <<"banana">>}, Acc)
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
             end, Mt0, lists:seq(1, 1000)),
-    {[Spec], Mt} = ra_log_memtbl:set_first(500, Mt1),
-    499 = ra_log_memtbl:delete(Spec, Mt),
-    ?assertEqual({500, 1000}, ra_log_memtbl:range(Mt)),
+    {[Spec], Mt2} = ra_log_memtbl:set_first(500, Mt1),
+    499 = ra_log_memtbl:delete(Spec, Mt2),
+    ?assertEqual({500, 1000}, ra_log_memtbl:range(Mt2)),
     ?assertEqual(501, ets:info(Tid, size)),
+    {Spec2, Mt3} = ra_log_memtbl:record_flushed(Tid, {1, 999}, Mt2),
+    500 = ra_log_memtbl:delete(Spec2, Mt3),
+    ?assertEqual(1, ra_log_memtbl:lookup_term(1000, Mt3)),
+    ok.
+
+record_flushed(_Config) ->
+    %%TODO: test that deletes the same spec twice
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+    {Spec, Mt2} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt1),
+    ?assertMatch({range, _, {1, 49}}, Spec),
+    ?assertMatch({50, 100}, ra_log_memtbl:range(Mt2)),
+    {Spec2, Mt3} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt2),
+    ?assertMatch(undefined, Spec2),
+    {Spec3, Mt4} = ra_log_memtbl:record_flushed(Tid, {50, 100}, Mt3),
+    ?assertMatch({range, _, {50, 100}}, Spec3),
+    ?assertEqual(undefined, ra_log_memtbl:range(Mt4)),
+    ok.
+
+record_flushed_prev(_Config) ->
+    %%TODO: test that deletes the same spec twice
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, Mt2, lists:seq(50, 80)),
+    ?assertMatch({1, 100}, ra_log_memtbl:range(ra_log_memtbl:prev(Mt3))),
+    %%
+    {Spec, Mt4} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt3),
+    ?assertMatch({range, Tid, {1, 49}}, Spec),
+    ?assertMatch({50, 80}, ra_log_memtbl:range(Mt4)),
+    ?assertMatch({50, 100}, ra_log_memtbl:range(ra_log_memtbl:prev(Mt4))),
+
+    %% delete the remainder of the old mt
+    {Spec2, Mt5} = ra_log_memtbl:record_flushed(Tid, {50, 100}, Mt4),
+    ?assertMatch({delete, Tid}, Spec2),
+    ?assertEqual(undefined, ra_log_memtbl:prev(Mt5)),
+    ?assertMatch({50, 80}, ra_log_memtbl:range(Mt5)),
+    ok.
+
+set_first(_Config) ->
+    %% test with prev
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, Mt2, lists:seq(50, 120)),
+    {[Spec1, Spec2], Mt4} = ra_log_memtbl:set_first(75, Mt3),
+    ?assertMatch({range, Tid2, {50, 74}}, Spec1),
+    ?assertMatch({range, Tid, {1, 74}}, Spec2),
+    ?assertMatch({75, 120}, ra_log_memtbl:range(Mt4)),
+
+    {[Spec3, Spec4], Mt5} = ra_log_memtbl:set_first(105, Mt4),
+    ?assertMatch({range, Tid2, {75, 104}}, Spec3),
+    ?assertMatch({delete, Tid}, Spec4),
+    ?assertMatch({105, 120}, ra_log_memtbl:range(Mt5)),
+    ?assertMatch(undefined, ra_log_memtbl:prev(Mt5)),
+    ok.
+
+set_first_with_multi_prev(_Config) ->
+    Tid1 = ets:new(t1, []),
+    Mt0 = ra_log_memtbl:init(Tid1),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+
+    Tid2 = ets:new(t2, []),
+    Mt2 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+            lists:seq(50, 150)),
+
+    Tid3 = ets:new(t2, []),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 3, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid3, read_write, Mt2),
+            lists:seq(75, 200)),
+
+    ?assertEqual({1, 200}, ra_log_memtbl:range(Mt3)),
+
+    {[{range, Tid3, {75, 79}},
+      {range, Tid2, {50, 79}},
+      {range, Tid1, {1, 79}}], Mt4} = ra_log_memtbl:set_first(80, Mt3),
+
+    {[{range, Tid3, {80, 159}},
+      {delete, Tid2},
+      {delete, Tid1}], _Mt5} = ra_log_memtbl:set_first(160, Mt4),
+    ok.
+
+set_first_with_middle_small_range(_Config) ->
+    %% {1, 200}, {50, 120}, set_first(105) should delete prev completely as it
+    %% will never be needed?? (what about wal recovery?)
+    Tid1 = ets:new(t1, []),
+    Mt0 = ra_log_memtbl:init(Tid1),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+
+    Tid2 = ets:new(t2, []),
+    Mt2 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+            lists:seq(50, 75)),
+
+    Tid3 = ets:new(t2, []),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 3, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid3, read_write, Mt2),
+            lists:seq(75, 200)),
+
+    ?assertEqual({1, 200}, ra_log_memtbl:range(Mt3)),
+
+    % debugger:start(),
+    % int:i(ra_log_memtbl),
+    % int:break(ra_log_memtbl, 319),
+    {[{range, Tid3, {75, 84}},
+      {delete, Tid2},
+      {range, Tid1, {1, 84}}], Mt4} = ra_log_memtbl:set_first(85, Mt3),
+    ?assertEqual({85, 200}, ra_log_memtbl:range(Mt4)),
+
+    {[{range, Tid3, {85, 100}},
+      {delete, Tid1}], Mt5} = ra_log_memtbl:set_first(101, Mt4),
+    ?assertEqual({101, 200}, ra_log_memtbl:range(Mt5)),
+    ?assertEqual(undefined, ra_log_memtbl:prev(Mt5)),
+
+    ok.
+
+set_first_with_old_larger_range(_Config) ->
+    %% {1, 200}, {50, 120}, set_first(105) should delete prev completely as it
+    %% will never be needed?? (what about wal recovery?)
+    Tid1 = ets:new(t1, []),
+    Mt0 = ra_log_memtbl:init(Tid1),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+
+    Tid2 = ets:new(t2, []),
+    Mt2 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+            lists:seq(50, 75)),
+    {[{range, Tid2, {50, 75}},
+      {range, Tid1, {1, 84}}], Mt3} = ra_log_memtbl:set_first(85, Mt2),
+    ?assertEqual(undefined, ra_log_memtbl:range(Mt3)),
+    %% eventually when set_first passes the end of the old range it gets
+    %% deleted
+    {[{delete, Tid1}], Mt4} = ra_log_memtbl:set_first(101, Mt3),
+    ?assertEqual(undefined, ra_log_memtbl:prev(Mt4)),
+    ok.
+
+set_first_with_old_smaller_range(_Config) ->
+    Tid1 = ets:new(t1, []),
+    Mt0 = ra_log_memtbl:init(Tid1),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(50, 75)),
+
+    Tid2 = ets:new(t2, []),
+    Mt2 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
+            end, ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
+            lists:seq(1, 100)),
+
+    ?assertEqual({1, 100}, ra_log_memtbl:range(Mt2)),
+    {[{range, Tid2, {1, 84}},
+      {delete, Tid1}], Mt3} = ra_log_memtbl:set_first(85, Mt2),
+    ?assertEqual({85, 100}, ra_log_memtbl:range(Mt3)),
     ok.
 
 successor(_Config) ->
@@ -69,14 +272,14 @@ successor(_Config) ->
     Mt0 = ra_log_memtbl:init(Tid),
     Mt1 = lists:foldl(
             fun (I, Acc) ->
-                    ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc)
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
             end, Mt0, lists:seq(1, 100)),
     ?assertMatch({1, 100}, ra_log_memtbl:range(Mt1)),
     Tid2 = ets:new(t2, [set, public]),
     Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
     Mt3 = lists:foldl(
             fun (I, Acc) ->
-                    ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc)
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
             end, Mt2, lists:seq(50, 120)),
     ?assertMatch({1, 120}, ra_log_memtbl:range(Mt3)),
 
@@ -93,14 +296,14 @@ successor_below(_Config) ->
     Mt0 = ra_log_memtbl:init(Tid),
     Mt1 = lists:foldl(
             fun (I, Acc) ->
-                    ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc)
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
             end, Mt0, lists:seq(100, 200)),
     ?assertMatch({100, 200}, ra_log_memtbl:range(Mt1)),
     Tid2 = ets:new(t2, [set, public]),
     Mt2 = ra_log_memtbl:init_successor(Tid2, read_write, Mt1),
     Mt3 = lists:foldl(
             fun (I, Acc) ->
-                    ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc)
+                    element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
             end, Mt2, lists:seq(50, 75)),
     ?assertMatch({50, 75}, ra_log_memtbl:range(Mt3)),
 
@@ -189,7 +392,7 @@ perf(_Config) ->
     DelTo = (trunc(Num * 0.9)),
     % DelSpec = [{{'$1', '_'}, [], [{'<', '$1', DelTo}]}],
     [begin
-         {Spec, _} = ra_log_memtbl:set_first(DelTo-1, Mt),
+         {[Spec], _} = ra_log_memtbl:set_first(DelTo-1, Mt),
          {Taken, Deleted} = timer:tc(ra_log_memtbl, delete, [Spec, Mt]),
           #{name := Name, size := Size} = ra_log_memtbl:info(Mt),
          ct:pal("~s size ~b select_delete ~b entries took ~bms Spec ~p",
@@ -219,7 +422,7 @@ insert_n(N, N, _Data, Mt) ->
     Mt;
 insert_n(K, N, Data, Mt) ->
     insert_n(K+1, N, Data,
-             ra_log_memtbl:insert({K, 42, Data}, Mt)).
+             element(2, ra_log_memtbl:insert({K, 42, Data}, Mt))).
 
 delete_n(N, N, Mt) ->
     Mt;

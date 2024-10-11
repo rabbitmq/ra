@@ -1106,7 +1106,13 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% application as applied index could be higher
                             %% than written (if consensus has already been acheived from
                             %% other members)
-                            Log = ra_log:reset_to_last_known_written(Log1),
+                            %% TODO: mt: we cannot do this anymore as the WAL does
+                            %% not write the mem tables. We could implement something
+                            %% alternative where the WAL writes the last index, term
+                            %% it wrote for each UID into an ETS table and query
+                            %% this.
+                            % Log = ra_log:reset_to_last_known_written(Log1),
+                            Log = Log1,
                             {await_condition,
                              State1#{log => Log,
                                      condition =>

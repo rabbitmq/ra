@@ -109,8 +109,9 @@
 
 -record(recovery, {mode :: clean | dirty,
                    ranges = #{} :: #{ra_uid() =>
-                                [{ets:tid(), {ra:index(), ra:index()}}]},
-                   tables = #{} :: #{ra_uid() => ra_log_memtbl:state()}
+                                     [{ets:tid(), {ra:index(), ra:index()}}]},
+                   tables = #{} :: #{ra_uid() => ra_log_memtbl:state()},
+                   writers = #{} :: #{ra_uid() => {in_seq, ra:index()}}
                   }).
 -record(state, {conf = #conf{},
                 file_num = 0 :: non_neg_integer(),
@@ -345,9 +346,7 @@ handle_op({info,{'EXIT', _, Reason}}, _State) ->
     throw({stop, Reason}).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
-                       open_mem_tbls_tid = OpenTbl,
-                       % closed_mem_tbls_tid = ClosedTbl,
-                       recovery_chunk_size = _RecoveryChunkSize} = Conf) ->
+                       open_mem_tbls_tid = OpenTbl} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
     WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
@@ -359,25 +358,37 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
                _ ->
                    dirty
            end,
+    AllWriters =
     [begin
          FBase = filename:basename(F),
          ?DEBUG("wal: recovering ~ts", [FBase]),
          Fd = open_at_first_record(F),
-         {Time, #recovery{ranges = Ranges}} =
+         {Time, #recovery{ranges = Ranges,
+                          writers = Writers
+                          % tables = Mts
+                         }} =
              timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
          ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                       Ranges,
                                                       FBase),
 
-         ?DEBUG("wal: recovered ~ts time taken ~bms",
-                [FBase, Time div 1000]),
-         close_existing(Fd)
+         ?DEBUG("wal: recovered ~ts time taken ~bms - Writer state recovered ~p",
+                [FBase, Time div 1000, Writers]),
+         close_existing(Fd),
+         Writers
      end || F <- WalFiles],
 
+    FinalWriters = lists:foldl(fun (New, Acc) ->
+                                       maps:merge(Acc, New)
+                               end, #{}, AllWriters),
+
+    ?DEBUG("wal: final writer state recovered ~p", [FinalWriters]),
+
     FileNum = extract_file_num(lists:reverse(WalFiles)),
-    State = roll_over(undefined, #state{conf = Conf,
-                                        file_num = FileNum}),
+    State = roll_over(#state{conf = Conf,
+                              writers = FinalWriters,
+                              file_num = FileNum}),
     true = erlang:garbage_collect(),
     State.
 
@@ -424,7 +435,7 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
     % we roll over to a new wal.
     case should_roll_wal(State0) of
         true ->
-            State = roll_over(State0),
+            State = complete_batch_and_roll(State0),
             write_data(Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx, State);
         false ->
             EntryData = case Data0 of
@@ -498,46 +509,31 @@ handle_msg({query, Fun}, State) ->
     _ = catch Fun(State),
     State;
 handle_msg(rollover, State) ->
-    roll_over(State).
+    complete_batch_and_roll(State).
 
 incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
-           UId, Pid, MtTid, Idx, Term, Data, SnapIdx) ->
+           UId, Pid, MT_TID = MtTid,
+           Idx, TERM = Term, Data, SnapIdx) ->
     Waiting = case Waiting0 of
-                  #{Pid := #batch_writer{term = Term, %% Pattern Match
-                                         tid = MtTid, %% PM
+                  #{Pid := #batch_writer{term = TERM,
+                                         tid = MT_TID,
                                          range = Range0
-                                         % from = From
                                         } = W} ->
-                      %% TODO: overwrites will be signalled by a different tid
-                      % TblStart = max(SnapIdx, table_start(Truncate, Idx, TblStart0)),
-                      %% it is totally possible that a different tid will be the source
-                      %% within the scope of same batch. how to handle this?
-                      %% IDEA: perhaps if the tid is different we start a new
-                      %% batch writer and put the old batch writers in an
-                      %% old batch writer field?
+                      %% The Tid and term is the same so add to current batch_writer
                       Range = ra_range:extend(Idx, ra_range:truncate(SnapIdx, Range0)),
                       Waiting0#{Pid => W#batch_writer{range = Range,
-                                                      % from = min(Idx, From),
                                                       snap_idx = SnapIdx,
-                                                      % to = Idx,
                                                       term = Term
                                                      }};
                   _ ->
+                      %% The tid is different, open a new batch writer for the
+                      %% new tid and term
                       PrevBatchWriter = maps:get(Pid, Waiting0, undefined),
-                      % TblStart = case Ranges of
-                      %                #{UId := [{_MtTid, {Start0, _}} | _]} ->
-                      %                    max(SnapIdx, table_start(Truncate, Idx,
-                      %                                             Start0));
-                      %                _ ->
-                      %                    max(SnapIdx, Idx)
-                      %            end,
                       Writer = #batch_writer{snap_idx = SnapIdx,
                                              tid = MtTid,
                                              range = ra_range:new(Idx),
-                                             % from = Idx,
-                                             % to = Idx,
                                              uid = UId,
                                              term = Term,
                                              old = PrevBatchWriter
@@ -549,47 +545,18 @@ incr_batch(#batch{num_writes = Writes,
                 waiting = Waiting,
                 pending = [Pend | Data]}.
 
-% update_mem_table(#conf{open_mem_tbls_tid = OpnMemTbl} = Cfg,
-%                  UId, Idx, Term, Entry, Truncate) ->
-%     % TODO: if Idx =< First we could truncate the entire table and save
-%     % some disk space when it later is flushed to disk
-%     SnapIdx = snap_idx(Cfg, UId),
-%     case ets:lookup(OpnMemTbl, UId) of
-%         [{_UId, From0, _To, Tid}] ->
-%             case Idx > SnapIdx of
-%                 true ->
-%                     true = ets:insert(Tid, {Idx, Term, Entry}),
-%                     From = table_start(Truncate, Idx, From0),
-%                     % update Last idx for current tbl
-%                     % this is how followers overwrite previously seen entries
-%                     _ = ets:update_element(OpnMemTbl, UId, [{2, From}, {3, Idx}]);
-%                 false ->
-%                     From = max(SnapIdx, table_start(Truncate, Idx, From0)),
-%                     _ = ets:update_element(OpnMemTbl, UId, [{2, From}])
-%             end;
-%         [] when Idx > SnapIdx ->
-%             % open new ets table
-%             Tid = open_mem_table(Cfg, UId),
-%             true = ets:insert_new(OpnMemTbl, {UId, Idx, Idx, Tid}),
-%             true = ets:insert(Tid, {Idx, Term, Entry});
-%         _ ->
-%             true
-%     end.
-
-roll_over(#state{conf = #conf{open_mem_tbls_tid = Tbl}} = State0) ->
+complete_batch_and_roll(#state{} = State0) ->
     State = complete_batch(State0),
-    roll_over(Tbl, start_batch(State)).
+    roll_over(start_batch(State)).
 
-roll_over(_OpnMemTbls, #state{wal = Wal0, file_num = Num0,
-                              conf = #conf{dir = Dir,
-                                           segment_writer = SegWriter,
-                                           max_size_bytes = MaxBytes
-                                          } = Conf0} = State0) ->
+roll_over(#state{wal = Wal0, file_num = Num0,
+                 conf = #conf{dir = Dir,
+                              segment_writer = SegWriter,
+                              max_size_bytes = MaxBytes} = Conf0} = State0) ->
     counters:add(Conf0#conf.counter, ?C_WAL_FILES, 1),
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    % ?DEBUG("wal: opening new file ~ts open mem tables: ~w", [Fn, OpnMemTbls]),
     ?DEBUG("wal: opening new file ~ts", [Fn]),
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelihood that each erlang node will
@@ -1020,6 +987,7 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {_Start, _} = AddRange) ->
 recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
               #recovery{mode = clean,
                         ranges = Ranges0,
+                        writers = Writers,
                         tables = Tables} = State) ->
     Mt0 = case Tables of
               #{UId := M} -> M;
@@ -1032,6 +1000,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
             Ranges = update_ranges(Ranges0, UId, ra_log_memtbl:tid(Mt1),
                                    SnapIdx, ra_range:new(Idx)),
             {ok, State#recovery{ranges = Ranges,
+                                writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt1}}};
         {error, overwriting} ->
             %% create successor memtable
@@ -1041,6 +1010,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
 recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
               #recovery{mode = dirty,
                         ranges = Ranges0,
+                        writers = Writers,
                         tables = Tables} = State) ->
     Mt0 = case Tables of
               #{UId := M} -> M;
@@ -1057,6 +1027,7 @@ recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
             Ranges = update_ranges(Ranges0, UId, Tid,
                                    SnapIdx, ra_range:new(Idx)),
             {ok, State#recovery{ranges = Ranges,
+                                writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt0}}}
     end.
 

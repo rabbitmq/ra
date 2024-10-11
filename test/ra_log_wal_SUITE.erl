@@ -581,6 +581,7 @@ out_of_seq_writes(Config) ->
     receive
         {ra_log_event, {resend_write, 4}} -> ok
     after 500 ->
+              flush(),
               throw(reset_write_timeout)
     end,
     % try writing 6
@@ -597,6 +598,7 @@ out_of_seq_writes(Config) ->
     receive
         {ra_log_event, {resend_write, 6}} -> ok
     after 500 ->
+              flush(),
               throw(written_timeout)
     end,
     % force a roll over
@@ -606,7 +608,7 @@ out_of_seq_writes(Config) ->
     % ensure a written event is _NOT_ received
     % when a roll-over happens after out of sync write
     receive
-        {ra_log_event, {written, {8, 8, 1}}} ->
+        {ra_log_event, {written, 1, {8, 8}}} ->
             throw(unexpected_written_event)
     after 500 -> ok
     end,
@@ -769,6 +771,16 @@ recover(Config) ->
     after 2000 ->
               flush(),
               ct:fail("new_mem_tables_timeout")
+    end,
+
+    %% try an out of sequence write to check the tracking state was recovered
+    % ensure an out of sync notification is received
+    {ok, _} = ra_log_wal:write(ra_log_wal, WriterId, Tid, 220, 2, Data),
+    receive
+        {ra_log_event, {resend_write, 201}} -> ok
+    after 500 ->
+              flush(),
+              throw(reset_write_timeout)
     end,
 
     meck:unload(),
@@ -939,6 +951,15 @@ recover_existing_mem_table(Config) ->
               ct:fail("new_mem_tables_timeout")
     end,
 
+    %% try an out of sequence write to check the tracking state was recovered
+    % ensure an out of sync notification is received
+    {ok, _} = ra_log_wal:write(ra_log_wal, WriterId, Tid, 220, 2, Data),
+    receive
+        {ra_log_event, {resend_write, 101}} -> ok
+    after 500 ->
+              flush(),
+              throw(reset_write_timeout)
+    end,
     meck:unload(),
     proc_lib:stop(Pid2),
     ok.
