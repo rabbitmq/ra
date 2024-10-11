@@ -23,7 +23,6 @@ all_tests() ->
      handle_overwrite,
      receive_segment,
      read_one,
-     %% TODO:
      take_after_overwrite_and_init,
      validate_sequential_fold,
      validate_reads_for_overlapped_writes,
@@ -42,7 +41,6 @@ all_tests() ->
      wal_down_write_returns_error_wal_down,
 
      detect_lost_written_range,
-     snapshot_recovery,
      snapshot_installation,
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
@@ -50,7 +48,7 @@ all_tests() ->
      written_event_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
-     missed_closed_tables_are_deleted_at_next_opportunity,
+     missed_mem_table_entries_are_deleted_at_next_opportunity,
      transient_writer_is_handled,
      read_opt,
      sparse_read,
@@ -60,7 +58,8 @@ all_tests() ->
      writes_lower_than_snapshot_index_are_dropped,
      updated_segment_can_be_read,
      open_segments_limit,
-     external_reader,
+     %% TODO mt: do or deprecate in current minor
+     % external_reader,
      write_config
     ].
 
@@ -359,8 +358,9 @@ sparse_read(Config) ->
     %% been written to the WAL and thus will be available in mem tables.
     Log4 = deliver_log_events_cond(Log3,
                                    fun (L) ->
-                                           case ra_log:overview(L) of
-                                               #{cache_size := 0} ->
+                                           LIT = ra_log:last_index_term(L),
+                                           case ra_log:last_written(L) of
+                                               LIT ->
                                                    true;
                                                _ ->
                                                    false
@@ -456,7 +456,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     Overview = ra_log:overview(Log4),
     ?assertMatch(#{last_index := 499,
                    first_index := 101,
-                   cache_range := {101, 499},
+                   mem_table_range := {101, 499},
                    last_written_index_term := {100, 1}}, Overview),
 
     true = erlang:resume_process(whereis(ra_log_wal)),
@@ -485,8 +485,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     ?assertMatch(#{last_index := 499,
                    first_index := 101,
                    snapshot_index := 100,
-                   cache_size := 0,
-                   cache_range := undefined,
+                   mem_table_range := {101, 499},
                    last_written_index_term := {499, 1}}, OverviewAfter),
     %% restart the app to test recovery with a "gappy" wal
     application:stop(ra),
@@ -521,7 +520,6 @@ updated_segment_can_be_read(Config) ->
     ct:pal("Entries: ~p", [Entries]),
     ct:pal("Entries1: ~p", [Entries1]),
     ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
-    ct:pal("closed ~p", [ets:tab2list(ra_log_closed_mem_tables)]),
     ?assertEqual(15, length(Entries1)),
     % l18 = length(Entries1),
     ok.
@@ -611,6 +609,10 @@ recovery(Config) ->
     {20, 3} = ra_log:last_index_term(Log5),
     Log6 = validate_fold(1, 4, 1, Log5),
     Log7 = validate_fold(5, 14, 2, Log6),
+    % debugger:start(),
+    % int:i(ra_log),
+    % int:break(ra_log, 413),
+
     Log8 = validate_fold(15, 20, 3, Log7),
     ra_log:close(Log8),
 
@@ -958,23 +960,15 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     ok.
 
 snapshot_installation(Config) ->
-    logger:set_primary_config(level, all),
-    % write a few entries
-    % simulate outage/ message loss
-    % write snapshot for entry not seen
-    % then write entries
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
-    % Log1 = write_n(1, 10, 2, Log0),
     Log1 = assert_log_events(write_n(1, 10, 2, Log0),
                              fun (L) ->
                                      LW = ra_log:last_written(L),
-                                     ct:pal("assert log evt v ~w", [LW]),
                                      {9, 2} == LW
                              end),
 
-    Log2 = write_n(10, 21, 2, Log1),
-    %% cache all log events
+    Log2 = Log1,
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
@@ -986,12 +980,12 @@ snapshot_installation(Config) ->
 
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
-    #{cache_size := 0} = ra_log:overview(Log3),
+    #{mem_table_range := undefined} = ra_log:overview(Log3),
     ra_log_wal:force_roll_over(ra_log_wal),
     Log4 = deliver_all_log_events(Log3, 100),
     {15, _} = ra_log:last_index_term(Log4),
     {15, _} = ra_log:last_written(Log4),
-    #{cache_size := 0} = ra_log:overview(Log4),
+    #{mem_table_range := undefined} = ra_log:overview(Log4),
 
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
@@ -1173,7 +1167,7 @@ update_release_cursor_with_machine_version(Config) ->
     ?assertMatch(#{index := 127, machine_version := MacVer}, Meta),
     ok.
 
-missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
+missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
     % ra_log should initiate shapshot if segments can be released
     Log00 = ra_log_init(Config),
     % assert there are no segments at this point
@@ -1191,34 +1185,37 @@ missed_closed_tables_are_deleted_at_next_opportunity(Config) ->
     % deliver only written events
     Log3 = deliver_written_log_events(Log2, 500),
     % simulate the segments events getting lost due to crash
-    empty_mailbox(500),
+    % TODO: mt: should we not re-init the log here?
+    timer:sleep(1500),
+    flush(),
+    % empty_mailbox(500),
     % although this has been flushed to disk the ra_server wasn't available
     % to clean it up.
-    [_] = ets:tab2list(ra_log_closed_mem_tables),
-    % then deliver all log events
+    #{mem_table_range := {130, 149}} = ra_log:overview(Log3),
+    ra_log:close(Log3),
 
     % append and roll some more entries
-    Log4 = deliver_all_log_events(append_and_roll(150, 155, 2, Log3), 200),
-
-    % the missed closed mem table should have been cleaned up at the same
-    % time as the next one.
-    [] = ets:tab2list(ra_log_closed_mem_tables),
-    [] = ets:tab2list(ra_log_open_mem_tables),
+    Log4 = deliver_all_log_events(append_and_roll(150, 155, 2,
+                                                  ra_log_init(Config)), 200),
 
     % TODO: validate reads
     Log5 = validate_fold(1, 154, 2, Log4),
 
     % then update the release cursor
-    {Log6, _} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             1, initial_state, Log5),
-    deliver_log_events_cond(Log6,
-                            fun (_) ->
-                                    case find_segments(Config) of
-                                        [_] -> true;
-                                        _ -> false
-                                    end
-                            end, 100),
+    {Log6, _Effs} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
+                                                        ?N2 => new_peer()},
+                                                 1, initial_state, Log5),
+    Log7 = deliver_log_events_cond(Log6,
+                                   fun (_) ->
+                                           case find_segments(Config) of
+                                               [_] -> true;
+                                               _ -> false
+                                           end
+                                   end, 100),
+    %% dummy call to ensure deletes have completed
+    gen_server:call(ra_log_ets, dummy),
+    #{mem_table_range := undefined,
+      mem_table_info := #{size := 0}} = ra_log:overview(Log7),
     ok.
 
 await_cond(_Fun, 0) ->

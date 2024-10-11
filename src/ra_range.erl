@@ -13,7 +13,8 @@
          add/2,
          extend/2,
          limit/2,
-         truncate/2
+         truncate/2,
+         size/1
         ]).
 
 
@@ -69,6 +70,11 @@ truncate(UpToIncl, {Start, End})
 truncate(UpToIncl, Range)
   when is_integer(UpToIncl) ->
     Range.
+
+size(undefined) ->
+    0;
+size({Start, End}) ->
+    End - Start + 1.
 
 -spec extend(range() | ra:index(), range()) -> range().
 extend({NewStart, NewEnd}, {Start, End})

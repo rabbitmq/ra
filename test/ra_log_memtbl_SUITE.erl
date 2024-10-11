@@ -22,6 +22,7 @@ all_tests() ->
     [
      basics,
      record_flushed,
+     record_flushed_after_set_first,
      record_flushed_prev,
      set_first,
      set_first_with_multi_prev,
@@ -85,15 +86,36 @@ record_flushed(_Config) ->
     {Spec, Mt2} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt1),
     ?assertMatch({range, _, {1, 49}}, Spec),
     ?assertMatch({50, 100}, ra_log_memtbl:range(Mt2)),
+    _ = ra_log_memtbl:delete(Spec, Mt2),
     {Spec2, Mt3} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt2),
     ?assertMatch(undefined, Spec2),
+    _ = ra_log_memtbl:delete(Spec2, Mt3),
     {Spec3, Mt4} = ra_log_memtbl:record_flushed(Tid, {50, 100}, Mt3),
     ?assertMatch({range, _, {50, 100}}, Spec3),
     ?assertEqual(undefined, ra_log_memtbl:range(Mt4)),
+    _ = ra_log_memtbl:delete(Spec3, Mt4),
+    ?assertMatch(#{size := 0}, ra_log_memtbl:info(Mt4)),
+    ok.
+
+record_flushed_after_set_first(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+    {Spec, Mt2} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt1),
+    ?assertMatch({range, _, {1, 49}}, Spec),
+    ?assertMatch({50, 100}, ra_log_memtbl:range(Mt2)),
+    _ = ra_log_memtbl:delete(Spec, Mt2),
+    {[Spec2], Mt3} = ra_log_memtbl:set_first(150, Mt2),
+    ?assertMatch({range, Tid, {50, 100}}, Spec2),
+    ?assertMatch(undefined, ra_log_memtbl:range(Mt3)),
+    {undefined, Mt4} = ra_log_memtbl:record_flushed(Tid, {1, 49}, Mt3),
+    ?assertMatch(undefined, ra_log_memtbl:range(Mt4)),
     ok.
 
 record_flushed_prev(_Config) ->
-    %%TODO: test that deletes the same spec twice
     Tid = ets:new(t1, [set, public]),
     Mt0 = ra_log_memtbl:init(Tid),
     Mt1 = lists:foldl(
@@ -113,12 +135,14 @@ record_flushed_prev(_Config) ->
     ?assertMatch({range, Tid, {1, 49}}, Spec),
     ?assertMatch({50, 80}, ra_log_memtbl:range(Mt4)),
     ?assertMatch({50, 100}, ra_log_memtbl:range(ra_log_memtbl:prev(Mt4))),
+    _ = ra_log_memtbl:delete(Spec, Mt4),
 
     %% delete the remainder of the old mt
     {Spec2, Mt5} = ra_log_memtbl:record_flushed(Tid, {50, 100}, Mt4),
     ?assertMatch({delete, Tid}, Spec2),
     ?assertEqual(undefined, ra_log_memtbl:prev(Mt5)),
     ?assertMatch({50, 80}, ra_log_memtbl:range(Mt5)),
+    _ = ra_log_memtbl:delete(Spec2, Mt4),
     ok.
 
 set_first(_Config) ->

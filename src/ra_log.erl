@@ -204,6 +204,7 @@ init(#{uid := UId,
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
     MtRange = ra_log_memtbl:range(Mt0),
+    ct:pal("ra_log:init MtRange ~p", [MtRange]),
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, MtRange, SegWriter) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
@@ -212,8 +213,9 @@ init(#{uid := UId,
     %% TODO dont thing this is necessary given the range is calculated from this
     %% but can't hurt as it will do some cleanup
     {DeleteSpec, Mt} = ra_log_memtbl:set_first(FirstIdx, Mt0),
+    ct:pal("ra_log:init DeleteSpec ~p", [DeleteSpec ]),
 
-    delete_mem_table(Names, DeleteSpec, Mt),
+    exec_mem_table_delete(Names, DeleteSpec, Mt),
     % _NumDeleted = ra_log_memtbl:delete(DeleteSpec, Mt),
     %% TODO: can there be obsolete segments returned here?
     Reader0 = ra_log_reader:init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
@@ -666,7 +668,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
             %% state and if that is higher it will resume flush
             {Spec, Mt1} = ra_log_memtbl:set_first(SnapIdx + 1, Mt0),
             % _ = ra_log_memtbl:delete(Spec, Mt1),
-            delete_mem_table(Names, Spec, Mt1),
+            exec_mem_table_delete(Names, Spec, Mt1),
 
             {State#?MODULE{first_index = SnapIdx + 1,
                            last_index = max(LstIdx, SnapIdx),
@@ -759,7 +761,7 @@ install_snapshot({SnapIdx, _} = IdxTerm, SnapState0,
     %% TODO: should we set first on the mem tables here? what if the seg writer
     %% is writing at the same time?
     {Spec, Mt} = ra_log_memtbl:set_first(SnapIdx, Mt0),
-    delete_mem_table(Names, Spec, Mt),
+    exec_mem_table_delete(Names, Spec, Mt),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
                    last_index = SnapIdx,
@@ -962,6 +964,7 @@ overview(#?MODULE{last_index = LastIndex,
               {I, _} -> I
           end,
       mem_table_range => ra_log_memtbl:range(Mt),
+      mem_table_info => ra_log_memtbl:info(Mt),
       last_wal_write => LastMs
      }.
 
@@ -1393,7 +1396,7 @@ maps_with_values(Keys, Map) ->
 now_ms() ->
     erlang:system_time(millisecond).
 
-delete_mem_table(#{} = _Names, Spec, Mt) ->
+exec_mem_table_delete(#{} = _Names, Spec, Mt) ->
     % ra_log_memtbl:delete(Spec, Mt),
     ra_log_ets:execute_delete(_Names, Spec, Mt),
     ok.

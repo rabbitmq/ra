@@ -29,7 +29,8 @@
 %
 
 -define(IN_RANGE(Idx, Range),
-        (Idx >= element(1, Range) andalso
+        (is_tuple(Range) andalso
+         Idx >= element(1, Range) andalso
          Idx =< element(2, Range))).
 
 -define(IS_BEFORE_RANGE(Idx, Range),
@@ -225,25 +226,28 @@ delete(Idx, #?MODULE{tid = Tid}) when is_integer(Idx) ->
 delete({range, Tid, {Start, End}}, #?MODULE{tid = Tid} = State) ->
     NumToDelete = End - Start + 1,
     Limit = ets:info(Tid, size) div 2,
-    case NumToDelete > Limit of
+    %% check if there is an entry below the start of the deletion range,
+    %% if there is we've missed a segment event at some point and need
+    %% to perform a mop-up delete with `<`, irrespective of how many entries
+    LowerExists = ets:member(Tid, Start-1),
+    case NumToDelete > Limit orelse LowerExists of
         true ->
-            ct:pal("delete < ~b ~b", [Start, End]),
             %% more than half the table is to be deleted
             delete({'<', Tid, End + 1}, State);
         false ->
-            ct:pal("delete ~b ~b", [Start, End]),
             delete(Start, End, Tid),
             End - Start + 1
     end;
 delete({Op, Tid, Idx}, #?MODULE{tid = Tid})
   when is_integer(Idx) and is_atom(Op) ->
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
-    ct:pal("DelSpec ~p", [DelSpec]),
     ets:select_delete(Tid, DelSpec);
-delete({all, Tid}, #?MODULE{tid = Tid}) ->
-    Size = ets:info(Tid, size),
-    true = ets:delete_all_objects(Tid),
-    Size.
+delete({delete, Tid}, #?MODULE{tid = Tid}) ->
+    true = ets:delete(Tid),
+    0;
+delete(Spec, #?MODULE{prev =  #?MODULE{} = Prev}) ->
+    %% no match on tid try prev
+    delete(Spec, Prev).
 
 -spec range(state()) ->
     undefined | {ra:index(), ra:index()}.
@@ -287,13 +291,17 @@ info(#?MODULE{tid = Tid,
 record_flushed(TID = Tid, {Start, End},
                #?MODULE{tid = TID,
                         range = Range} = State) ->
-  case ?IN_RANGE(End, Range) of
-      true ->
-          {{range, Tid, {Start, End}},
-           State#?MODULE{range = ra_range:truncate(End, Range)}};
-      false ->
+    HasExtraEntries = ets:info(Tid, size) > ra_range:size(Range),
+    case ?IN_RANGE(End, Range) of
+        true when HasExtraEntries ->
+            {{'<', Tid, End + 1},
+             State#?MODULE{range = ra_range:truncate(End, Range)}};
+        true ->
+            {{range, Tid, {Start, End}},
+             State#?MODULE{range = ra_range:truncate(End, Range)}};
+        false ->
             {undefined, State}
-  end;
+    end;
 record_flushed(_Tid, _Range, #?MODULE{prev = undefined} = State) ->
     {undefined, State};
 record_flushed(Tid, Range, #?MODULE{prev = Prev0} = State) ->
@@ -311,7 +319,8 @@ record_flushed(Tid, Range, #?MODULE{prev = Prev0} = State) ->
 set_first(Idx, #?MODULE{tid = Tid,
                         range = Range,
                         prev = Prev0} = State)
-  when (is_tuple(Range) andalso Idx > element(1, Range)) orelse
+  when (is_tuple(Range) andalso
+        Idx > element(1, Range)) orelse
        Range == undefined ->
     {PrevSpecs, Prev} = case Prev0 of
                             undefined ->
