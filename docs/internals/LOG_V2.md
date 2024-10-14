@@ -46,3 +46,28 @@ segment writer when a WAL file has filled up.
 ## Segment Writer
 
 
+....
+
+
+
+## Diagrams
+
+
+```mermaid
+sequenceDiagram
+    participant ra-server
+    participant wal
+    participant segment-writer
+
+    loop until wal full
+        ra-server->>+wal: write(Index=1..N, Term=T)
+        wal->>wal: write-batch([1]
+        wal->>-ra-server: written event: Term=T, Range=(1, N)
+    end
+    wal->>+segment-writer: flush-wal-ranges
+    segment-writer-->segment-writer: flush to segment files
+    segment-writer->>ra-server: notify flushed segments
+    ra-server-->ra-server: update mem-table-ranges
+    ra-server->>ets-server: delete range from mem-table
+```
+
