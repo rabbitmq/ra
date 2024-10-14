@@ -78,7 +78,7 @@ mem_table_please(#{log_ets := Name,
 -spec new_mem_table_please(ra_system:names(), ra:uid(), ra_log_membtbl:state()) ->
     {ok, ra_log_membtbl:state()} | {error, term()}.
 new_mem_table_please(#{log_ets := Name}, UId, Prev) ->
-    case gen_server:call(Name, {new_mem_table_please, UId}) of
+    case gen_server:call(Name, {new_mem_table_please, UId}, infinity) of
         {ok, Tid} ->
             {ok, ra_log_memtbl:init_successor(Tid, read_write, Prev)};
         Err ->
@@ -141,19 +141,10 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-% handle_cast({exec_delete, _Spec, _Mt} = Del,
-%             #state{deletes = Deletes} = State) ->
-%     case Deletes of
-%         [] ->
-%             erlang:send_after(1000, self(), do_deletes),
-%             {noreply, State#state{deletes = [Del]}};
-%         _ ->
-%             {noreply, State#state{deletes = [Del | Deletes]}}
-%     end;
 handle_cast({exec_delete, Spec, Mt}, State) ->
     try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
         {Time, Num} ->
-            ct:pal("ra_log_ets: ets:delete/1 took ~bms to delete ~w ~b entries",
+            ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w ~b entries",
                    [Time div 1000, Spec, Num]),
             ok
     catch
@@ -182,8 +173,6 @@ handle_cast({delete_tables, Tids}, State) ->
          end
      end || Tid <- Tids],
     {noreply, State};
-% handle_call({delete_mem_table, UId}, _From,
-%             #state{} = State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -212,7 +201,8 @@ ets_delete(Tid) ->
     _ = ets:delete(Tid),
     true.
 
-terminate(_Reason, #state{names = Names}) ->
+terminate(Reason, #state{names = Names}) ->
+    ?DEBUG("ra_log_ets: terminating with ~p", [Reason]),
     ok = ra_directory:deinit(Names),
     ok.
 

@@ -11,6 +11,7 @@
          new/1,
          new/2,
          add/2,
+         in/2,
          extend/2,
          limit/2,
          truncate/2,
@@ -44,6 +45,11 @@ add({Start1, End1}, {Start2, End2})
 add(_Range, Range) ->
     Range.
 
+-spec in(ra:index(), range()) -> boolean().
+in(_Idx, undefined) ->
+    false;
+in(Idx, {Start, End}) ->
+    Idx >= Start andalso Idx =< End.
 
 -spec limit(ra:index(), range()) -> range().
 limit(CeilExcl, {Start, _End})

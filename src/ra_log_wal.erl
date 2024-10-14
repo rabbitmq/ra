@@ -89,7 +89,6 @@
                sync_method = datasync :: sync | datasync | none,
                counter :: counters:counters_ref(),
                open_mem_tbls_tid :: ets:tid(),
-               % closed_mem_tbls_tid :: ets:tid(),
                names :: ra_system:names(),
                explicit_gc = false :: boolean(),
                pre_allocate = false :: boolean(),
@@ -247,7 +246,9 @@ start_link(#{name := Name} = Config)
 
 %%% Callbacks
 
--spec init(wal_conf()) -> {ok, state()} | {stop, wal_checksum_validation_failure}.
+-spec init(wal_conf()) ->
+    {ok, state()} |
+    {stop, wal_checksum_validation_failure} | {stop, term()}.
 init(#{dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       max_entries := MaxEntries,
@@ -262,12 +263,11 @@ init(#{dir := Dir} = Conf0) ->
       min_bin_vheap_size := MinBinVheapSize,
       compress_mem_tables := CompressMemTables,
       names := #{wal := WalName,
-                 open_mem_tbls := OpenTblsName,
-                 closed_mem_tbls := ClosedTblsName
+                 open_mem_tbls := OpenTblsName
                 } = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~ts init, open tbls: ~w, closed tbls: ~w",
-            [WalName, OpenTblsName, ClosedTblsName]),
+    ?NOTICE("WAL: ~ts init, open tbls: ~w",
+            [WalName, OpenTblsName]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
@@ -276,8 +276,6 @@ init(#{dir := Dir} = Conf0) ->
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
     CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
-    % wait for the segment writer to process anything in flight
-    ok = ra_log_segment_writer:await(SegWriter),
     %% TODO: recover wal should return {stop, Reason} if it fails
     %% rather than crash
     FileModes = [raw, write, read, binary],
@@ -299,9 +297,12 @@ init(#{dir := Dir} = Conf0) ->
                  ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
     try recover_wal(Dir, Conf) of
         Result ->
+            % wait for the segment writer to process any flush requests
+            % generated during recovery
+            ok = ra_log_segment_writer:await(SegWriter),
             {ok, Result}
     catch _:Err:_Stack ->
-              Err
+              {stop, Err}
     end.
 
 -spec handle_batch([wal_op()], state()) ->
@@ -342,40 +343,41 @@ format_status(#state{conf = #conf{write_strategy = Strat,
 
 handle_op({cast, WalCmd}, State) ->
     handle_msg(WalCmd, State);
-handle_op({info,{'EXIT', _, Reason}}, _State) ->
+handle_op({info, {'EXIT', _, Reason}}, _State) ->
     throw({stop, Reason}).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
                        open_mem_tbls_tid = OpenTbl} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
-    WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
 
     %% TODO: mt: provde a proper ra_log_ets API to discover recovery mode
     Mode = case ets:info(OpenTbl, size) of
                0 ->
                    clean;
                _ ->
+                   %% in this case it is possible that the segment writer
+                   %% could be flushing wal data right now so we need to
+                   %% wait for the segment writer to finish the current work
+                   %% before we get the wal files to recover
+                   ok = ra_log_segment_writer:await(SegWriter),
                    dirty
            end,
+    WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
     AllWriters =
     [begin
          FBase = filename:basename(F),
-         ?DEBUG("wal: recovering ~ts", [FBase]),
+         ?DEBUG("wal: recovering ~ts, Mode ~s", [FBase, Mode]),
          Fd = open_at_first_record(F),
          {Time, #recovery{ranges = Ranges,
-                          writers = Writers
-                          % tables = Mts
-                         }} =
+                          writers = Writers}} =
              timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
-         ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
-                                                      Ranges,
-                                                      FBase),
+         ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, FBase),
 
+         close_existing(Fd),
          ?DEBUG("wal: recovered ~ts time taken ~bms - Writer state recovered ~p",
                 [FBase, Time div 1000, Writers]),
-         close_existing(Fd),
          Writers
      end || F <- WalFiles],
 
@@ -387,8 +389,8 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
 
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
-                              writers = FinalWriters,
-                              file_num = FileNum}),
+                             writers = FinalWriters,
+                             file_num = FileNum}),
     true = erlang:garbage_collect(),
     State.
 
@@ -903,7 +905,7 @@ is_last_record(Fd, Rest) ->
         false ->
             ?ERROR("WAL: record failed CRC check during recovery. "
                    "Unable to recover WAL data safely", []),
-            throw({stop, wal_checksum_validation_failure})
+            throw(wal_checksum_validation_failure)
 
     end.
 
@@ -1021,7 +1023,12 @@ recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
     %% find the tid for the given idxterm
     case ra_log_memtbl:tid_for(Idx, Term, Mt0) of
         undefined ->
-            %% not found, this is weird
+            %% not found, this entry may already have been flushed
+            %% skip, and reset ranges but update writers as we need to
+            %% recover the last idx
+            % {ok, State#recovery{ranges = maps:remove(UId, Ranges0),
+            %                     writers = Writers#{UId => {in_seq, Idx}},
+            %                     tables = Tables#{UId => Mt0}}};
             exit({tid_for_index_term_not_found, Idx, Term});
         Tid ->
             Ranges = update_ranges(Ranges0, UId, Tid,

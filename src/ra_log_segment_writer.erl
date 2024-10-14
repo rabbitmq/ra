@@ -132,7 +132,8 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
-handle_cast({mem_tables, Ranges, WalFile}, #state{system = System} = State) ->
+handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
+                                                  system = System} = State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
     Degree = erlang:system_info(schedulers),
     %% TODO: run each "chunk" in a single parallel function to make better use
@@ -180,7 +181,7 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{system = System} = State) ->
     % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
-    _ = prim_file:delete(WalFile),
+    ok = prim_file:delete(filename:join(Dir, WalFile)),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             #state{segment_conf = SegConf} = State0) ->

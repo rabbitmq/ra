@@ -42,7 +42,8 @@ all_tests() ->
      custom_ra_event_formatter,
      config_modification_at_restart,
      segment_writer_handles_server_deletion,
-     external_reader,
+     %% TODO: mt decide on whether to support this
+     % external_reader,
      add_member_without_quorum,
      force_start_follower_as_single_member,
      force_start_follower_as_single_member_nonvoter,
@@ -66,7 +67,6 @@ init_per_suite(Config) ->
                default_max_append_entries_rpc_batch_size => 32,
                message_queue_data => off_heap,
                data_dir => SysDir},
-    ct:pal("SYS CFG ~p", [SysCfg]),
     {ok, _} = ra_system:start(SysCfg),
     application:ensure_all_started(lg),
     [{sys_cfg, SysCfg} | Config].
@@ -194,11 +194,10 @@ force_deleted_server_mem_tables_are_cleaned_up(Config) ->
     ok = ra:force_delete_server(?SYS, ServerId),
 
     #{names := #{open_mem_tbls := OpnMemTbls,
-                 closed_mem_tbls := ClosedMemTbls,
                  wal := Wal,
                  segment_writer := SegWriter}} = ra_system:fetch(?SYS),
 
-    [{_, _, _, Tid}] = ets:lookup(OpnMemTbls, UId),
+    [{_, Tid}] = ets:lookup(OpnMemTbls, UId),
     % force roll over after
     ok = ra_log_wal:force_roll_over(Wal),
     timer:sleep(100),
@@ -206,7 +205,6 @@ force_deleted_server_mem_tables_are_cleaned_up(Config) ->
 
     %% validate there are no mem tables for this server anymore
     ?assertMatch(undefined, ets:info(Tid)),
-    ?assertMatch([], ets:lookup(ClosedMemTbls, UId)),
 
     ok.
 

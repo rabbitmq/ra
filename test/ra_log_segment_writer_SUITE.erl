@@ -86,10 +86,12 @@ accept_mem_tables(Config) ->
     Tid = ra_log_memtbl:tid(Mt),
     TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
     Ranges = #{UId => TidRanges},
-    WalFile = "0000001.wal",
-    FullWalFile = filename:join(Dir, WalFile),
-    ok = file:write_file(FullWalFile, <<"waldata">>),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
+    % WalFile = "0000001.wal",
+    % FullWalFile = filename:join(Dir, WalFile),
+    % ok = file:write_file(FullWalFile, <<"waldata">>),
+    make_wal(Config, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     receive
         {ra_log_event, {segments, TidRanges, [{1, 3, SegFile}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), SegFile),
@@ -105,7 +107,7 @@ accept_mem_tables(Config) ->
     timer:sleep(250),
 
     % assert wal file has been deleted.
-    false = filelib:is_file(WalFile),
+    false = is_wal_file(Config, "w1.wal"),
     ok = gen_server:stop(TblWriterPid),
     ok.
 
@@ -121,12 +123,14 @@ accept_mem_tables_append(Config) ->
     Tid = ets:new(?FUNCTION_NAME, []),
     _ = make_mem_table(UId, Tid, Entries),
     Ranges = #{UId => [{Tid, {1, 3}}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     % second batch
     Entries2 = [{4, 43, d}, {5, 43, e}],
     _ = make_mem_table(UId, Tid, Entries2),
     Ranges2 = #{UId => [{Tid, {4, 5}}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2, "w2.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config,  "w2.wal")),
     AllEntries = Entries ++ Entries2,
     receive
         {ra_log_event, {segments, [{Tid, {4, 5}}], [{1, 5, Fn}]}} ->
@@ -151,7 +155,8 @@ accept_mem_tables_overwrite(Config) ->
     Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
     Tid = ra_log_memtbl:tid(make_mem_table(UId, Entries)),
     Ranges = #{UId => [{Tid, {3, 5}}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     receive
         {ra_log_event, {segments, [{Tid, {3, 5}}], [{3, 5, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
@@ -167,7 +172,8 @@ accept_mem_tables_overwrite(Config) ->
     Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
     Tid2 = ra_log_memtbl:tid(make_mem_table(UId, Entries2)),
     Ranges2 = #{UId => [{Tid2, {1, 3}}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2, "w2.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
     receive
         {ra_log_event, {segments, [{Tid2, {1, 3}}], [{1, 3, Fn2}]}} ->
             SegmentFile2 = filename:join(?config(server_dir, Config), Fn2),
@@ -201,7 +207,8 @@ accept_mem_tables_overwrite_same_wal(Config) ->
     % debugger:start(),
     % int:i(ra_log_segment_writer),
     % int:break(ra_log_segment_writer, 240),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2, "w2.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
     receive
         {ra_log_event,
          {segments, [{Tid2, {4, 6}}, {Tid, {2, 5}}], [{2, 6, Fn}]}} ->
@@ -237,7 +244,8 @@ accept_mem_tables_multi_segment(Config) ->
     Tid = ra_log_memtbl:tid(Mt),
     TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
     Ranges = #{UId => TidRanges},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w.wal")),
     receive
         {ra_log_event, {segments, TidRanges, [{9, 10, _Seg2}, {1, 8, _Seg1}]}} ->
             ok
@@ -326,8 +334,7 @@ accept_mem_tables_with_deleted_server(Config) ->
     Tid2 = ra_log_memtbl:tid(Mt2),
     Ranges = #{DeletedUId => [{Tid, {1, 3}}],
                UId => [{Tid2, {1, 3}}]},
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
+    WalFile = make_wal(Config, "00001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
         {ra_log_event, {segments, [{Tid2, {1, 3}}], [{1, 3, Fn}]}} ->
@@ -372,9 +379,7 @@ accept_mem_tables_with_corrupt_segment(Config) ->
     Tid = ra_log_memtbl:tid(Mt),
     TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
     Ranges = #{UId => TidRanges},
-    WalFile = "0000001.wal",
-    FullWalFile = filename:join(Dir, WalFile),
-    ok = file:write_file(FullWalFile, <<"waldata">>),
+    WalFile = make_wal(Config, "0000001.wal"),
     %% write an empty file to simulate corrupt segment
     %% this can happen if a segment is opened but is interrupted before syncing
     %% the header
@@ -413,7 +418,7 @@ truncate_segments(Config) ->
     Tid = ra_log_memtbl:tid(Mt),
     TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
     Ranges = #{UId => TidRanges},
-    WalFile = "0000001.wal",
+    WalFile = make_wal(Config, "0000001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
         {ra_log_event, {segments, TidRanges, [{25, 32, S} = Cur | Rem]}} ->
@@ -447,13 +452,15 @@ truncate_segments_with_pending_update(Config) ->
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
     Mt = make_mem_table(UId, Entries),
     Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     ra_log_segment_writer:await(?SEGWR),
     %% write another range
     Entries2 = [{N, 42, N} || N <- lists:seq(33, 40)],
     Mt2 = make_mem_table(UId, Entries2),
     Ranges2 = #{UId => [{ra_log_memtbl:tid(Mt2), ra_log_memtbl:range(Mt2)}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2, "w2.erl"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.erl")),
     receive
         {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
             % this is the event from the first call to accept_mem_tables,
@@ -492,12 +499,14 @@ truncate_segments_with_pending_overwrite(Config) ->
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
     Mt = make_mem_table(UId, Entries),
     Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     %% write one more entry separately
     Entries2 = [{N, 43, N} || N <- lists:seq(12, 25)],
     Mt2 = make_mem_table(UId, Entries2),
     Ranges2 = #{UId => [{ra_log_memtbl:tid(Mt2), ra_log_memtbl:range(Mt2)}]},
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2, "w2.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
     receive
         {ra_log_event, {segments, _Tid, [{25, 32, S} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
@@ -552,8 +561,7 @@ my_segments(Config) ->
     Mt = make_mem_table(UId, Entries),
     Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
     TidRanges = maps:get(UId, Ranges),
-    WalFile = filename:join(Dir, "00001.wal"),
-    ok = file:write_file(WalFile, <<"waldata">>),
+    WalFile = make_wal(Config, "00001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
         {ra_log_event, {segments, TidRanges, [{1, 3, Fn}]}} ->
@@ -585,7 +593,8 @@ skip_entries_lower_than_snapshot_index(Config) ->
     Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     receive
         {ra_log_event, {segments, _Tid, [{4, 5, Fn}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
@@ -617,7 +626,8 @@ skip_all_entries_lower_than_snapshot_index(Config) ->
     Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
-    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, "w1.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
     TIDRANGES = maps:get(UId, Ranges),
     receive
         {ra_log_event, {segments, TIDRANGES, []}} ->
@@ -670,3 +680,14 @@ read_sparse(R, Idxs) ->
 get_names(System) when is_atom(System) ->
     #{names := Names} = ra_system:fetch(System),
     Names.
+
+make_wal(Config, Name) ->
+    Dir = ?config(wal_dir, Config),
+    FullWalFile = filename:join(Dir, Name),
+    ok = file:write_file(FullWalFile, <<"waldata">>),
+    Name.
+
+is_wal_file(Config, Name) ->
+    Dir = ?config(wal_dir, Config),
+    WalFile = filename:join(Dir, Name),
+    filelib:is_file(WalFile).

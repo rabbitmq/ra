@@ -25,9 +25,6 @@
          delete/1
         ]).
 
-% -record(cfg, {}).
-%
-
 -define(IN_RANGE(Idx, Range),
         (is_tuple(Range) andalso
          Idx >= element(1, Range) andalso
@@ -39,10 +36,6 @@
 
 % -define(IS_AFTER_RANGE(Idx, Range),
 %         (is_tuple(Range) andalso
-%          Idx > element(2, Range))).
-
-% -define(RANGE_OUT(Idx, Range),
-%         (Idx < element(1, Range) orelse
 %          Idx > element(2, Range))).
 
 -define(IS_NEXT_IDX(Idx, Range),
@@ -59,9 +52,7 @@
 -opaque state() :: #?MODULE{}.
 
 -type delete_spec() :: undefined |
-                       ra:index() |
-                       {'<', ra:index()} |
-                       {all, ets:tid()} |
+                       {'<', ets:tid(), ra:index()} |
                        {delete, ets:tid()} |
                        {range, ets:tid(), ra:range()}.
 -export_type([
@@ -138,14 +129,22 @@ stage({Idx, _, _} = _Entry,
        ?IS_BEFORE_RANGE(Idx, Range) ->
     {error, overwriting}.
 
--spec commit(state()) -> state().
+-spec commit(state()) -> {[log_entry()], state()}.
 commit(#?MODULE{staged = undefined} = State) ->
-    State;
+    {[], State};
 commit(#?MODULE{tid = Tid,
-                staged = {_, Staged0}} = State) ->
+                staged = {_, Staged0},
+                prev = Prev0} = State) ->
+    {PrevStaged, Prev} = case Prev0 of
+                             undefined ->
+                                 {[], Prev0};
+                             _ ->
+                                 commit(Prev0)
+                         end,
     Staged = lists:reverse(Staged0),
     true = ets:insert(Tid, Staged),
-    {Staged, State#?MODULE{staged = undefined}}.
+    {Staged ++ PrevStaged, State#?MODULE{staged = undefined,
+                                         prev = Prev}}.
 
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
@@ -159,12 +158,17 @@ lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
             undefined
     end;
 lookup(Idx, #?MODULE{tid = Tid,
+                     range = Range,
+                     prev = Prev,
                      staged = undefined}) ->
-    case ets:lookup(Tid, Idx) of
-        [Entry] ->
+    case ?IN_RANGE(Idx, Range) of
+        true ->
+            [Entry] = ets:lookup(Tid, Idx),
             Entry;
-        _ ->
-            undefined
+        false when Prev == undefined->
+            undefined;
+        false ->
+            lookup(Idx, Prev)
     end.
 
 -spec lookup_term(ra:index(), state()) ->
@@ -181,7 +185,9 @@ lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
 lookup_term(Idx, #?MODULE{tid = Tid,
                           range = Range})
   when ?IN_RANGE(Idx, Range) ->
-    ets:lookup_element(Tid, Idx, 2, undefined);
+    ets:lookup_element(Tid, Idx, 2);
+lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
+    lookup_term(Idx, Prev);
 lookup_term(_Idx, _State) ->
     undefined.
 
@@ -190,9 +196,10 @@ lookup_term(_Idx, _State) ->
 tid_for(_Idx, _Term, undefined) ->
     undefined;
 tid_for(Idx, Term, State) ->
-    case lookup_term(Idx, State) of
+    Tid = tid(State),
+    case ets:lookup_element(Tid, Idx, 2, undefined) of
         Term ->
-            tid(State);
+            Tid;
         _ ->
             tid_for(Idx, Term, State#?MODULE.prev)
     end.
@@ -218,11 +225,6 @@ get_items(Indexes, #?MODULE{} = State) ->
     non_neg_integer().
 delete(undefined, #?MODULE{}) ->
     0;
-delete(Idx, #?MODULE{tid = Tid}) when is_integer(Idx) ->
-    %% TODO: this is designed to be called from another process so we
-    %% cant rely on range, may need to revise API during optimisation
-    true = ets:delete(Tid, Idx),
-    1;
 delete({range, Tid, {Start, End}}, #?MODULE{tid = Tid} = State) ->
     NumToDelete = End - Start + 1,
     Limit = ets:info(Tid, size) div 2,

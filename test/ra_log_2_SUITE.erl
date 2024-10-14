@@ -1493,6 +1493,7 @@ assert_log_events(Log0, AssertPred, Timeout) ->
                     assert_log_events(Log, AssertPred, Timeout)
             end
     after Timeout ->
+              flush(),
               exit({assert_log_events_timeout, Log0})
     end.
 

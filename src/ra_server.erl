@@ -605,7 +605,7 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
 
             {await_condition, State, Effects}
     end;
-handle_leader({ra_log_event, {written, _} = Evt},
+handle_leader({ra_log_event, {written, _, _} = Evt},
               #{log := Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
@@ -1090,8 +1090,7 @@ handle_follower(#append_entries_rpc{term = Term,
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
                                                                Effects0),
-                                {NextState, State,
-                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
+                                {NextState, State, Effects};
                         {error, wal_down} ->
                             %% at this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
@@ -1191,7 +1190,7 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
                 #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, {written, _} = Evt},
+handle_follower({ra_log_event, {written, _, _} = Evt},
                 State0 = #{log := Log0,
                            cfg := #cfg{id = Id},
                            leader_id := LeaderId,
@@ -1912,15 +1911,7 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               end;
           (_, _, Acc) ->
               Acc
-      end, {State0, false, add_flush_event(State0, Effects0)}, Cluster).
-
-add_flush_event(#{log := Log}, Effects) ->
-    case ra_log:needs_cache_flush(Log) of
-        true ->
-            [{next_event, {ra_log_event, flush_cache}} | Effects];
-        false ->
-            Effects
-    end.
+      end, {State0, false, Effects0}, Cluster).
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),

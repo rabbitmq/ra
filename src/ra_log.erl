@@ -204,7 +204,6 @@ init(#{uid := UId,
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
     MtRange = ra_log_memtbl:range(Mt0),
-    ct:pal("ra_log:init MtRange ~p", [MtRange]),
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, MtRange, SegWriter) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
@@ -213,7 +212,6 @@ init(#{uid := UId,
     %% TODO dont thing this is necessary given the range is calculated from this
     %% but can't hurt as it will do some cleanup
     {DeleteSpec, Mt} = ra_log_memtbl:set_first(FirstIdx, Mt0),
-    ct:pal("ra_log:init DeleteSpec ~p", [DeleteSpec ]),
 
     exec_mem_table_delete(Names, DeleteSpec, Mt),
     % _NumDeleted = ra_log_memtbl:delete(DeleteSpec, Mt),
@@ -306,21 +304,19 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                    tx = true,
                    mem_table = Mt1} = State) ->
     {Entries, Mt} = ra_log_memtbl:commit(Mt1),
+    Tid = ra_log_memtbl:tid(Mt1),
     WriterId = {UId, self()},
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Idx, Term, Cmd},
+                            WalC = {append, WriterId, Tid, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
-            % put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
-            State#?MODULE{%last_index = LastIdx,
-                          tx = false,
-                          % last_term = LastTerm,
+            State#?MODULE{tx = false,
                           last_wal_write = {Pid, now_ms()},
                           mem_table = Mt};
         {error, wal_down} ->
@@ -337,24 +333,13 @@ append({Idx, _, _Cmd} = Entry,
                 snapshot_state = _SnapState} = State0)
       when Idx =:= LastIdx + 1 ->
     wal_write(State0, Entry);
-    % case ra_snapshot:current(SnapState) of
-    %     {SnapIdx, _} when Idx =:= SnapIdx + 1 ->
-    %         % it is the next entry after a snapshot
-    %         % we need to tell the wal to truncate as we
-    %         % are not going to receive any entries prior to the snapshot
-    %         wal_truncate_write(State0, Entry);
-    %     _ ->
-    %         wal_write(State0, Entry)
-    % end;
 append({Idx, Term, _Cmd} = Entry,
        #?MODULE{cfg = Cfg,
                 last_index = LastIdx,
                 tx = true,
-                mem_table = Mt0
-                % snapshot_state = SnapState
-               } = State)
+                mem_table = Mt0} = State)
       when Idx =:= LastIdx + 1 ->
-    Mt = ra_log_memtbl:stage(Entry, Mt0),
+    {ok, Mt} = ra_log_memtbl:stage(Entry, Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     State#?MODULE{last_index = Idx,
                   last_term = Term,
@@ -583,15 +568,30 @@ handle_event({written, Term, {FromIdx, ToIdx0}},
                    [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
             {State, []}
     end;
-handle_event({written, _Term, {FromIdx, _}},
+handle_event({written, _Term, {FromIdx, _}} = Evt,
              #?MODULE{cfg = #cfg{log_id = LogId},
-                      last_written_index_term = {LastWrittenIdx, _}} = State)
+                      mem_table = Mt,
+                      last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - may need to resend from cache
     Expected = LastWrittenIdx + 1,
-    ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
-          [LogId, FromIdx, Expected]),
-    {resend_from(Expected, State), []};
+    MtRange = ra_log_memtbl:range(Mt),
+    case ra_range:in(Expected, MtRange) of
+        true ->
+            ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
+                  [LogId, FromIdx, Expected]),
+            {resend_from(Expected, State0), []};
+        false ->
+            ?INFO("~ts: ra_log: written gap detected at ~b but is outside
+                  of mem table range. Updating last written index to ~b!",
+                  [LogId, FromIdx, Expected]),
+            %% if the entry is not in the mem table we may have missed a
+            %% written event due to wal crash. Accept written event by updating
+            %% last written index term and recursing
+            {Term, State} = fetch_term(Expected, State0),
+            handle_event(Evt,
+                         State#?MODULE{last_written_index_term = {Expected, Term}})
+    end;
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{log_id = _LogId, names = Names},
                       reader = Reader0,
@@ -603,7 +603,6 @@ handle_event({segments, TidRanges, NewSegs},
     Mt = lists:foldl(
            fun ({Tid, Range}, Acc0) ->
                    {Spec, Acc} = ra_log_memtbl:record_flushed(Tid, Range, Acc0),
-                   ct:pal("Spec ~p ~p", [Spec, ra_log_memtbl:info(Acc)]),
                     ok = ra_log_ets:execute_delete(Names, Spec, Acc),
                     Acc
            end, Mt0, TidRanges),
@@ -697,8 +696,11 @@ handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
                 ra_snapshot:directory(SnapState, SnapKind),
                 Snap}],
     {State0, Effects};
-handle_event({resend_write, Idx}, State) ->
+handle_event({resend_write, Idx},
+             #?MODULE{cfg =#cfg{log_id = LogId}} = State) ->
     % resend missing entries from mem tables.
+    ?INFO("~ts: ra_log: wal requested resend from ~b",
+          [LogId, Idx]),
     {resend_from(Idx, State), []};
 handle_event({down, Pid, _Info},
              #?MODULE{readers = Readers} =
@@ -1093,25 +1095,6 @@ delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
             {State, log_update_effects(Readers, Pid, State)}
     end.
 
-% wal_truncate_write(#?MODULE{cfg = #cfg{uid = UId,
-%                                        wal = Wal} = Cfg,
-%                             mem_table = Mt0} = State,
-%                    {Idx, Term, Cmd0} = Entry) ->
-%     % this is the next write after a snapshot was taken or received
-%     % we need to indicate to the WAL that this may be a non-contiguous write
-%     % and that prior entries should be considered stale
-%     Cmd = {ttb, term_to_iovec(Cmd0)},
-%     case ra_log_wal:truncate_write({UId, self()}, Wal, Idx, Term, Cmd) of
-%         {ok, Pid} ->
-%             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
-%             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-%             State#?MODULE{last_index = Idx, last_term = Term,
-%                           last_wal_write = {Pid, now_ms()},
-%                           mem_table = ra_log_memtbl:insert(Entry, Mt0)};
-%         {error, wal_down} ->
-%             error(wal_down)
-%     end.
-
 wal_write(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
                    mem_table = Mt0} = State,
@@ -1124,7 +1107,8 @@ wal_write(#?MODULE{cfg = #cfg{uid = UId,
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State#?MODULE{last_index = Idx, last_term = Term,
+            State#?MODULE{last_index = Idx,
+                          last_term = Term,
                           last_wal_write = {Pid, now_ms()},
                           mem_table = Mt};
         {error, wal_down} ->
@@ -1159,7 +1143,6 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
                             WalC = {append, WriterId, Tid, Idx, Term, Cmd},
-                            % M = ra_log_memtbl:stage(Entry, M0),
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
@@ -1183,7 +1166,10 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
-        {ra_log_event, {written, 0, {0, 0}}} -> ok
+        {ra_log_event, {written, 0, {0, 0}}} ->
+            ok
+    after 60000 ->
+              exit({?FUNCTION_NAME, timeout})
     end,
     State#?MODULE{first_index = 0,
                   last_written_index_term = {0, 0}};
@@ -1254,6 +1240,8 @@ stage_entries(Cfg, [Entry | Rem] = Entries, Mt0) ->
         {ok, Mt} ->
             stage_entries0(Rem, Mt);
         {error, overwriting} ->
+            ?DEBUG("~ts: mem table overwrite detected, opening new mem table",
+                   [Cfg#cfg.log_id]),
             %% TODO: mt: error handling
             {ok, Mt} = ra_log_ets:new_mem_table_please(Cfg#cfg.names,
                                                        Cfg#cfg.uid, Mt0),

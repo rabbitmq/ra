@@ -31,6 +31,7 @@ all_tests() ->
      set_first_with_old_smaller_range,
      successor,
      successor_below,
+     stage_commit,
      perf
     ].
 
@@ -306,6 +307,11 @@ successor(_Config) ->
                     element(2, ra_log_memtbl:insert({I, 2, <<"banana">>}, Acc))
             end, Mt2, lists:seq(50, 120)),
     ?assertMatch({1, 120}, ra_log_memtbl:range(Mt3)),
+    %% assert all entries are readable
+    lists:foreach(fun (I) ->
+                          T = ra_log_memtbl:lookup_term(I, Mt3),
+                          ?assertMatch({I, T, _}, ra_log_memtbl:lookup(I, Mt3))
+                  end, lists:seq(1, 100)),
 
     {{range, Tid, {1, 20}}, Mt4a} = ra_log_memtbl:record_flushed(Tid, {1, 20}, Mt3),
     ?assertMatch({21, 120}, ra_log_memtbl:range(Mt4a)),
@@ -345,6 +351,24 @@ successor_below(_Config) ->
     ?assertMatch(#{has_previous := false}, ra_log_memtbl:info(Mt4c)),
     ok.
 
+stage_commit(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_log_memtbl:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_log_memtbl:stage({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 10)),
+    ?assertMatch({1, 10}, ra_log_memtbl:range(Mt1)),
+    [{I, _, _} = ra_log_memtbl:lookup(I, Mt1)
+    || I <- lists:seq(1, 10)],
+    {Entries, Mt2}= ra_log_memtbl:commit(Mt1),
+    ?assertMatch({1, 10}, ra_log_memtbl:range(Mt2)),
+    ?assertEqual(10, length(Entries)),
+    ?assertMatch([{1, 1, _} | _], Entries),
+    [{I, _, _} = ra_log_memtbl:lookup(I, Mt2)
+    || I <- lists:seq(1, 10)],
+    ok.
+
 perf(_Config) ->
     Num = 1_000_000,
     Tables = [ra_log_memtbl:init(ets:new(t1, [set, public])),
@@ -369,7 +393,7 @@ perf(_Config) ->
          ct:pal("~s read_keys took ~bms",
                 [Name, Taken div 1000]),
          ok
-     end || Mt <- Tables
+     end || Mt <- InsertedMts
     ],
 
     From = trunc(Num * 0.9),
@@ -380,7 +404,7 @@ perf(_Config) ->
          ct:pal("~s read_n ~b took ~bms",
                 [Name, length(Read), Taken div 1000]),
          ok
-     end || Mt <- Tables
+     end || Mt <- InsertedMts
     ],
 
     Indexes = lists:seq(1, 1000, 2),
@@ -391,7 +415,7 @@ perf(_Config) ->
          ct:pal("~s read_sparse ~b took ~bms",
                 [Name, 0, Taken div 1000]),
          ok
-     end || Mt <- Tables
+     end || Mt <- InsertedMts
     ],
     % RangeSpec = [{{'$1','_'},
     %               [{'andalso',{'>=','$1',From},{'=<','$1',To}}],

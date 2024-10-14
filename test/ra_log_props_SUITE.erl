@@ -169,7 +169,6 @@ write_prop(TestCase) ->
                           Entries,
                           ra_log_init(#{uid => TestCase})),
            {LogEntries, Log} = ra_log_take(1, length(Entries), Log0),
-           reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p",
                                [LogEntries, Log]),
                      Entries == LogEntries)
@@ -834,7 +833,7 @@ run_proper_noshrink(Fun, Args, NumTests) ->
 basic_reset(Log) ->
     ra_log:write([{0, 0, empty}], Log),
     receive
-        {ra_log_event, {written, {_, 0, 0}}} ->
+        {ra_log_event, {written, _, {0, 0}}} ->
             ok
     end,
     ra_log:close(Log).
