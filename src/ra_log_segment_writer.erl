@@ -246,7 +246,7 @@ get_overview(#state{data_dir = Dir,
 
 flush_mem_table_ranges({ServerUId, TidRanges0},
                        #state{system = System} = State) ->
-    SnapIdx = -1,
+    SnapIdx = start_index(ServerUId, -1),
 
     %% truncate and limit all ranges to create a contiguous non-oeverlapping
     %% list of tid ranges to flush to disk

@@ -3,7 +3,7 @@
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
 %% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
-%%
+%% 
 -module(ra_log_reader).
 
 -compile(inline_list_funcs).
@@ -20,9 +20,6 @@
          fold/5,
          sparse_read/3,
          fetch_term/2,
-         % delete_closed_mem_table_object/2,
-         % closed_mem_tables/1,
-         % open_mem_table_lookup/1,
          range_overlap/4
          ]).
 

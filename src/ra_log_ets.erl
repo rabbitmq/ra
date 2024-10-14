@@ -8,9 +8,7 @@
 -module(ra_log_ets).
 -behaviour(gen_server).
 
--export([start_link/1,
-         give_away/2,
-         delete_tables/2]).
+-export([start_link/1]).
 
 -export([
          mem_table_please/2,
@@ -28,11 +26,9 @@
 
 -include("ra.hrl").
 
--record(state, {names :: ra_system:names(),
-                % memtbls = #{} :: #{ra:uid() => ets:tid()},
-                deletes = []}).
+-record(state, {names :: ra_system:names()}).
 
-%%% ra_log_ets - owns mem_table ETS tables
+%%% ra_log_ets - owns and creates mem_table ETS tables
 
 %%%===================================================================
 %%% API functions
@@ -40,14 +36,6 @@
 
 start_link(#{names := #{log_ets := Name}} = Cfg) ->
     gen_server:start_link({local, Name}, ?MODULE, [Cfg], []).
-
--spec give_away(ra_system:names(), ets:tid()) -> true.
-give_away(#{log_ets := Name}, Tid) ->
-    ets:give_away(Tid, whereis(Name), undefined).
-
--spec delete_tables(ra_system:names(), [ets:tid()]) -> ok.
-delete_tables(#{log_ets := Name}, Tids) ->
-    gen_server:cast(Name, {delete_tables, Tids}).
 
 -spec mem_table_please(ra_system:names(), ra:uid()) ->
     {ok, ra_log_membtbl:state()} | {error, term()}.
@@ -87,8 +75,6 @@ new_mem_table_please(#{log_ets := Name}, UId, Prev) ->
 
 delete_mem_table(#{log_ets := Name}, UId) ->
     gen_server:cast(Name, {delete_mem_table, UId}).
-
-
 
 -spec execute_delete(ra_system:names(),
                      ra_log_memtbl:delete_spec(),
@@ -154,10 +140,12 @@ handle_cast({exec_delete, Spec, Mt}, State) ->
             ok
     end,
     {noreply, State};
-handle_cast({delete_tables, Tids}, State) ->
+handle_cast({delete_mem_table, UId},
+            #state{names = #{open_mem_tbls := OpenMemTbls}}  = State) ->
     %% delete ets tables,
     %% we need to be defensive here.
     %% it is better to leak a table than to crash them all
+
     [begin
          try timer:tc(fun () -> ets_delete(Tid) end) of
              {Time, true} ->
@@ -171,29 +159,12 @@ handle_cast({delete_tables, Tids}, State) ->
                        [Tid, Err]),
                  ok
          end
-     end || Tid <- Tids],
+     end || {ok, Tid} <- ets:lookup(OpenMemTbls, UId)],
     {noreply, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(do_deletes, #state{deletes = Deletes} = State) ->
-    _ = lists:foldr(
-          fun ({exec_delete, Spec, Mt}, S0) ->
-                  try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
-                      {Time, _} ->
-                          ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
-                                 [Time div 1000, Spec]),
-                          ok
-                  catch
-                      _:Err ->
-                          ?WARN("ra_log_ets: failed to delete ~w ~w ",
-                                [Spec, Err]),
-                          ok
-                  end,
-                  S0
-          end, undefined, Deletes),
-    {noreply, State#state{deletes = []}};
 handle_info(_Info, State) ->
     {noreply, State}.
 

@@ -211,10 +211,9 @@ init(#{uid := UId,
                                       end,
     %% TODO dont thing this is necessary given the range is calculated from this
     %% but can't hurt as it will do some cleanup
-    {DeleteSpec, Mt} = ra_log_memtbl:set_first(FirstIdx, Mt0),
+    {DeleteSpecs, Mt} = ra_log_memtbl:set_first(FirstIdx, Mt0),
 
-    exec_mem_table_delete(Names, DeleteSpec, Mt),
-    % _NumDeleted = ra_log_memtbl:delete(DeleteSpec, Mt),
+    exec_mem_table_delete(Names, DeleteSpecs, Mt),
     %% TODO: can there be obsolete segments returned here?
     Reader0 = ra_log_reader:init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
                                  Names, Counter),
@@ -358,21 +357,6 @@ write([{FstIdx, _, _} = _First | _Rest] = Entries,
   when FstIdx =< LastIdx + 1 andalso
        FstIdx >= 0 ->
     write_entries(Entries, State00);
-    % case ra_snapshot:current(SnapState) of
-    %     {SnapIdx, _} when FstIdx =:= SnapIdx + 1 ->
-    %         % it is the next entry after a snapshot
-    %         % we need to tell the wal to truncate as we
-    %         % are not going to receive any entries prior to the snapshot
-    %         try wal_truncate_write(State00, First) of
-    %             State0 ->
-    %                 % write the rest normally
-    %                 write_entries(Rest, State0)
-    %         catch error:wal_down ->
-    %                   {error, wal_down}
-    %         end;
-    %     _ ->
-    %         write_entries(Entries, State00)
-    % end;
 write([], State) ->
     {ok, State};
 write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
@@ -1225,8 +1209,6 @@ resend_from0(Idx, #?MODULE{last_resend_time = {LastResend, WalPid},
 %     %% TODO mt: ra_log_memtbl:abort/1
 %     {error, {integrity_error, lists:flatten(Msg)}}.
 
-write_entries([], State) ->
-    {ok, State};
 write_entries(Entries, #?MODULE{cfg = Cfg, mem_table = Mt0} = State0) ->
     case stage_entries(Cfg, Entries, Mt0) of
         {ok, Mt} ->
@@ -1325,7 +1307,7 @@ await_written_idx(Idx, Term, Log0) ->
         {ra_log_event, {written, Term, {_, IDX}} = Evt} ->
             {Log, _} = handle_event(Evt, Log0),
             Log;
-        {ra_log_event, {written, _} = Evt} ->
+        {ra_log_event, {written, _, _} = Evt} ->
             {Log, _} = handle_event(Evt, Log0),
             await_written_idx(Idx, Term, Log)
     after ?LOG_APPEND_TIMEOUT ->
@@ -1384,9 +1366,10 @@ maps_with_values(Keys, Map) ->
 now_ms() ->
     erlang:system_time(millisecond).
 
-exec_mem_table_delete(#{} = _Names, Spec, Mt) ->
-    % ra_log_memtbl:delete(Spec, Mt),
-    ra_log_ets:execute_delete(_Names, Spec, Mt),
+exec_mem_table_delete(#{} = Names, Specs, Mt)
+  when is_list(Specs) ->
+    [ra_log_ets:execute_delete(Names, Spec, Mt)
+     || Spec <- Specs],
     ok.
 
 %%%% TESTS
