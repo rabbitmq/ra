@@ -428,14 +428,6 @@ perf(_Config) ->
     %  end || {Name, Tid} <- Tables
     % ],
 
-    % [begin
-    %      {Taken, MtOut} = timer:tc(?MODULE, delete_n, [0, From, Mt]),
-    %      #{name := Name, size := Size} = ra_log_memtbl:info(MtOut),
-    %      ct:pal("~s delete_n size left ~b took ~bms",
-    %             [Name, Size, Taken div 1000]),
-    %      ok
-    %  end || Mt <- Tables
-    % ],
 
     DelTo = (trunc(Num * 0.9)),
     % DelSpec = [{{'$1', '_'}, [], [{'<', '$1', DelTo}]}],
@@ -471,11 +463,6 @@ insert_n(N, N, _Data, Mt) ->
 insert_n(K, N, Data, Mt) ->
     insert_n(K+1, N, Data,
              element(2, ra_log_memtbl:insert({K, 42, Data}, Mt))).
-
-delete_n(N, N, Mt) ->
-    Mt;
-delete_n(K, N, Mt) ->
-    delete_n(K+1, N, ra_log_memtbl:delete(K, Mt)).
 
 do_n(N, N, _Fun) ->
     ok;

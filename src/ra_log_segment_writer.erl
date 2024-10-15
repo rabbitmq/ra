@@ -246,9 +246,9 @@ get_overview(#state{data_dir = Dir,
 
 flush_mem_table_ranges({ServerUId, TidRanges0},
                        #state{system = System} = State) ->
-    SnapIdx = start_index(ServerUId, -1),
+    SnapIdx = snap_idx(ServerUId),
 
-    %% truncate and limit all ranges to create a contiguous non-oeverlapping
+    %% truncate and limit all ranges to create a contiguous non-overlapping
     %% list of tid ranges to flush to disk
     TidRanges =
         lists:foldl(fun ({T, Range}, []) ->
@@ -265,7 +265,8 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
 
     SegRefs0 = lists:append(
                 [flush_mem_table_range(ServerUId, TidRange, State)
-                 || TidRange <- TidRanges]),
+                 || {_Tid, Range} = TidRange <- TidRanges,
+                    Range =/= undefined]),
 
     %% compact cases where a segment was appended in a subsequent call to
     %% flush_mem_table_range
@@ -329,11 +330,14 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
     end.
 
 start_index(ServerUId, StartIdx0) ->
+    max(snap_idx(ServerUId) + 1, StartIdx0).
+
+snap_idx(ServerUId) ->
     case ets:lookup(ra_log_snapshot_state, ServerUId) of
         [{_, SnapIdx}] ->
-            max(SnapIdx + 1, StartIdx0);
-        [] ->
-            StartIdx0
+            SnapIdx;
+        _ ->
+            -1
     end.
 
 send_segments(System, ServerUId, TidRanges, SegRefs) ->

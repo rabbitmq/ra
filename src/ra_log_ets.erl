@@ -38,12 +38,12 @@ start_link(#{names := #{log_ets := Name}} = Cfg) ->
     gen_server:start_link({local, Name}, ?MODULE, [Cfg], []).
 
 -spec mem_table_please(ra_system:names(), ra:uid()) ->
-    {ok, ra_log_membtbl:state()} | {error, term()}.
+    {ok, ra_log_memtbl:state()} | {error, term()}.
 mem_table_please(Names, UId) ->
     mem_table_please(Names, UId, read_write).
 
 -spec mem_table_please(ra_system:names(), ra:uid(), read | read_write) ->
-    {ok, ra_log_membtbl:state()} | {error, term()}.
+    {ok, ra_log_memtbl:state()} | {error, term()}.
 mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
@@ -63,8 +63,8 @@ mem_table_please(#{log_ets := Name,
             {ok, Mt}
     end.
 
--spec new_mem_table_please(ra_system:names(), ra:uid(), ra_log_membtbl:state()) ->
-    {ok, ra_log_membtbl:state()} | {error, term()}.
+-spec new_mem_table_please(ra_system:names(), ra:uid(), ra_log_memtbl:state()) ->
+    {ok, ra_log_memtbl:state()} | {error, term()}.
 new_mem_table_please(#{log_ets := Name}, UId, Prev) ->
     case gen_server:call(Name, {new_mem_table_please, UId}, infinity) of
         {ok, Tid} ->

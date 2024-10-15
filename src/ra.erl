@@ -112,6 +112,7 @@
 -type server_id() :: ra_server_id().
 -type cluster_name() :: ra_cluster_name().
 -type range() :: ra_range:range().
+-type uid() :: ra_uid().
 
 -type query_condition() :: {applied, idxterm()}.
 %% A condition that a query will wait for it to become true before it is
@@ -132,7 +133,8 @@
               range/0,
               query_fun/0,
               query_condition/0,
-              from/0]).
+              from/0,
+              uid/0]).
 
 %% @doc Starts the ra application.
 %% @end

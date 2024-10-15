@@ -791,7 +791,7 @@ deliver_log_events(Log0, Timeout) ->
 
 consume_events(Log0, Last) ->
     receive
-        {ra_log_event, {written, {_, To, Term}} = Evt} ->
+        {ra_log_event, {written, Term, {_, To}} = Evt} ->
             {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 0 ->
@@ -800,7 +800,7 @@ consume_events(Log0, Last) ->
 
 consume_all_events(Log0, Last) ->
     receive
-        {ra_log_event, {written, {_, To, Term}} = Evt} ->
+        {ra_log_event, {written, Term, {_, To}} = Evt} ->
             {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 15000 ->

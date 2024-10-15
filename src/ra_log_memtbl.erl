@@ -72,20 +72,13 @@ init(Tid, Mode) ->
                 read ->
                     undefined;
                 read_write ->
-                    %% TODO: this is potentially horrendously slow
-                    case ets:tab2list(Tid) of
-                        [] ->
-                            undefined;
-                        Entries ->
-                            lists:foldl(
-                              fun ({I, _, _}, undefined) ->
+                    %% TODO: mt: can this be optimised further?
+                    ets:foldl(fun ({I, _, _}, undefined) ->
                                       {I, I};
                                   ({I, _, _}, {S, E}) ->
                                       {min(I, S), max(I, E)}
-                              end, undefined, Entries)
-                    end
+                              end, undefined, Tid)
             end,
-
     #?MODULE{tid = Tid,
              range = Range
             }.
