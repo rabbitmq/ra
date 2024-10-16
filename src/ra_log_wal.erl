@@ -351,7 +351,7 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
 
-    %% TODO: mt: provde a proper ra_log_ets API to discover recovery mode
+    %% TODO: mt: provede a proper ra_log_ets API to discover recovery mode
     Mode = case ets:info(OpenTbl, size) of
                0 ->
                    clean;
@@ -487,7 +487,6 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
                Trunc ->
             %% allowing implicit truncate writes here by checking if
             %% Idx == SnapIdx+1 and set Trunc = true
-            % State = handle_overwrite(Idx =< PrevIdx, State0),
             write_data(Id, MtTid, Idx, Term, Entry, Trunc, SnapIdx, State0);
         error ->
             write_data(Id, MtTid, Idx, Term, Entry, false, SnapIdx, State0);
@@ -980,7 +979,8 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
                             %% AddRange did not immediately follow Range1
                             %% so must be an overwrite, limit existing range by
                             %% the start of the new range, then extend this
-                            ra_range:extend(AddRange, ra_range:limit(Start, Range1));
+                            ra_range:extend(AddRange,
+                                            ra_range:limit(Start, Range1));
                         Range2 ->
                             Range2
                     end,
@@ -1034,9 +1034,6 @@ recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
             %% not found, this entry may already have been flushed
             %% skip, and reset ranges but update writers as we need to
             %% recover the last idx
-            % {ok, State#recovery{ranges = maps:remove(UId, Ranges0),
-            %                     writers = Writers#{UId => {in_seq, Idx}},
-            %                     tables = Tables#{UId => Mt0}}};
             exit({tid_for_index_term_not_found, Idx, Term});
         Tid ->
             Ranges = update_ranges(Ranges0, UId, Tid,

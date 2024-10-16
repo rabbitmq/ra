@@ -55,8 +55,10 @@ init_per_testcase(TestCase, Config) ->
     logger:set_primary_config(level, all),
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
-    ra_system:store(ra_system:default_config()),
-    ra_directory:init(default),
+    SysCfg = ra_system:default_config(),
+    ra_system:store(SysCfg),
+    _ = ra_log_ets:start_link(SysCfg),
+    % ra_directory:init(default),
     ra_counters:init(),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
@@ -72,6 +74,7 @@ init_per_testcase(TestCase, Config) ->
      {wal_dir, Dir} | Config].
 
 end_per_testcase(_, Config) ->
+    proc_lib:stop(ra_log_ets),
     Config.
 
 accept_mem_tables(Config) ->
@@ -328,7 +331,12 @@ accept_mem_tables_with_deleted_server(Config) ->
                                                             data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Mt = make_mem_table(DeletedUId, Entries),
+    {ok, Mt0} = ra_log_ets:mem_table_please(get_names(default), DeletedUId),
+    Mt = lists:foldl(fun(E, Acc0) ->
+                             {ok, Acc} = ra_log_memtbl:insert(E, Acc0),
+                             Acc
+                     end, Mt0, Entries),
+
     Mt2 = make_mem_table(UId, Entries),
     Tid = ra_log_memtbl:tid(Mt),
     Tid2 = ra_log_memtbl:tid(Mt2),
@@ -353,9 +361,11 @@ accept_mem_tables_with_deleted_server(Config) ->
                                      DeletedUId,
                                      "00000001.segment"]),
     ?assertNot(filelib:is_file(FakeSegmentFile)),
+    gen_server:call(ra_log_ets, dummy),
 
     %% if the server is down at the time the segment writer send the segments
     %% the segment writer should clear up the ETS mem tables
+    ?assertNot(ra_directory:is_registered_uid(default, DeletedUId)),
     ?assertEqual(undefined, ets:info(Tid)),
 
     % assert wal file has been deleted.
@@ -677,6 +687,7 @@ segments_for(UId, DataDir) ->
 read_sparse(R, Idxs) ->
     {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
     lists:reverse(Entries).
+
 get_names(System) when is_atom(System) ->
     #{names := Names} = ra_system:fetch(System),
     Names.

@@ -14,7 +14,7 @@
          mem_table_please/2,
          mem_table_please/3,
          new_mem_table_please/3,
-         delete_mem_table/2,
+         delete_mem_tables/2,
          execute_delete/3]).
 
 -export([init/1,
@@ -27,6 +27,12 @@
 -include("ra.hrl").
 
 -record(state, {names :: ra_system:names()}).
+
+-define(TABLE_OPTS, [set,
+                     {write_concurrency, true},
+                     {decentralized_counters, true},
+                     public
+                    ]).
 
 %%% ra_log_ets - owns and creates mem_table ETS tables
 
@@ -48,10 +54,13 @@ mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
         [] ->
-            case gen_server:call(Name, {mem_table_please, UId}) of
-                {ok, [Tid]} ->
-                    %% TODO: theoretically there could be multiple
-                    {ok, ra_log_memtbl:init(Tid, Mode)};
+            case gen_server:call(Name, {mem_table_please, UId, #{}}) of
+                {ok, [Tid | Rem]} ->
+                    Mt = lists:foldl(
+                           fun (T, Acc) ->
+                                   ra_log_memtbl:init_successor(T, Mode, Acc)
+                           end, ra_log_memtbl:init(Tid, Mode), Rem),
+                    {ok, Mt};
                 Err ->
                     Err
             end;
@@ -66,15 +75,15 @@ mem_table_please(#{log_ets := Name,
 -spec new_mem_table_please(ra_system:names(), ra:uid(), ra_log_memtbl:state()) ->
     {ok, ra_log_memtbl:state()} | {error, term()}.
 new_mem_table_please(#{log_ets := Name}, UId, Prev) ->
-    case gen_server:call(Name, {new_mem_table_please, UId}, infinity) of
+    case gen_server:call(Name, {new_mem_table_please, UId, #{}}, infinity) of
         {ok, Tid} ->
             {ok, ra_log_memtbl:init_successor(Tid, read_write, Prev)};
         Err ->
             Err
     end.
 
-delete_mem_table(#{log_ets := Name}, UId) ->
-    gen_server:cast(Name, {delete_mem_table, UId}).
+delete_mem_tables(#{log_ets := Name}, UId) ->
+    gen_server:cast(Name, {delete_mem_tables, UId}).
 
 -spec execute_delete(ra_system:names(),
                      ra_log_memtbl:delete_spec(),
@@ -100,30 +109,25 @@ init([#{data_dir := DataDir,
     ok = ra_directory:init(DataDir, Names),
     {ok, #state{names = Names}}.
 
-handle_call({mem_table_please, UId}, _From,
+handle_call({mem_table_please, UId, Opts}, _From,
             #state{names = #{open_mem_tbls := OpnMemTbls}} = State) ->
     case ets:lookup(OpnMemTbls, UId) of
         [] ->
-            Tid = ets:new(memtbl, [set,
-                                   {write_concurrency, true},
-                                   {decentralized_counters, true},
-                                   public
-                                  ]),
+            Name = maps:get(table_name, Opts, ra_mem_table),
+            Tid = ets:new(Name, ?TABLE_OPTS),
             true = ets:insert(OpnMemTbls, {UId, Tid}),
             {reply, {ok, [Tid]}, State};
         Tids ->
             {reply, {ok, Tids}, State#state{}}
     end;
-handle_call({new_mem_table_please, UId}, _From,
+handle_call({new_mem_table_please, UId, Opts}, _From,
             #state{names = #{open_mem_tbls := OpnMemTbls}} = State) ->
-    Tid = ets:new(memtbl, [set,
-                           {write_concurrency, true},
-                           {decentralized_counters, true},
-                           public
-                          ]),
+    Name = maps:get(table_name, Opts, ra_mem_table),
+    Tid = ets:new(Name, ?TABLE_OPTS),
     true = ets:insert(OpnMemTbls, {UId, Tid}),
     {reply, {ok, Tid}, State};
-handle_call(_Request, _From, State) ->
+handle_call(Request, _From, State) ->
+    ?INFO("ra_log_ets:handle_call/3 unhandled request ~w", [Request]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -140,12 +144,12 @@ handle_cast({exec_delete, Spec, Mt}, State) ->
             ok
     end,
     {noreply, State};
-handle_cast({delete_mem_table, UId},
-            #state{names = #{open_mem_tbls := OpenMemTbls}}  = State) ->
+handle_cast({delete_mem_tables, UId},
+            #state{names = #{open_mem_tbls := MemTables}}  = State) ->
     %% delete ets tables,
     %% we need to be defensive here.
     %% it is better to leak a table than to crash them all
-
+    Objects = ets:take(MemTables, UId),
     [begin
          try timer:tc(fun () -> ets_delete(Tid) end) of
              {Time, true} ->
@@ -159,7 +163,7 @@ handle_cast({delete_mem_table, UId},
                        [Tid, Err]),
                  ok
          end
-     end || {ok, Tid} <- ets:lookup(OpenMemTbls, UId)],
+     end || {_, Tid} <- Objects],
     {noreply, State};
 
 handle_cast(_Msg, State) ->

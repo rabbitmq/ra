@@ -995,7 +995,7 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
     _ = close(Log),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
-    ok = ra_log_ets:delete_mem_table(Names, UId),
+    ok = ra_log_ets:delete_mem_tables(Names, UId),
     case ra_snapshot:pending(SnapState) of
         {Pid, _, _} ->
             case is_process_alive(Pid) of

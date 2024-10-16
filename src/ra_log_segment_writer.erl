@@ -135,20 +135,20 @@ segments_for(UId, #state{data_dir = DataDir}) ->
 handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                                                   system = System} = State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
+    #{names := Names} = ra_system:fetch(System),
     Degree = erlang:system_info(schedulers),
     %% TODO: run each "chunk" in a single parallel function to make better use
     %% of time when flushing for more then num schedulers writers
     RangesList = maps:fold(
                    fun (UId, TidRanges, Acc) ->
-                           case ra_directory:is_registered_uid(System, UId) of
+                           case ra_directory:is_registered_uid(Names, UId) of
                                true ->
                                    [{UId, TidRanges} | Acc];
                                false ->
                                    %% TODO: log
-                                   %% delete the tids here as the uid is not
+                                   %% delete all tids as the uid is not
                                    %% registered
-                                   %% TODO: mt should this be done by ra_log_ets
-                                   [ets:delete(Tid) || {Tid, _} <- TidRanges],
+                                   ok = ra_log_ets:delete_mem_tables(Names, UId),
                                    Acc
                            end
                    end, [], Ranges),

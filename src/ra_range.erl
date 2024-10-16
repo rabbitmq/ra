@@ -84,7 +84,8 @@ size(undefined) ->
 size({Start, End}) ->
     End - Start + 1.
 
--spec extend(range() | ra:index(), range()) -> range().
+-spec extend(range() | ra:index(), range()) ->
+    range() | not_extension.
 extend({NewStart, NewEnd}, {Start, End})
   when NewStart == End + 1 ->
     {Start, NewEnd};
