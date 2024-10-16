@@ -106,7 +106,7 @@
          last_wal_write :: {pid(), Ms :: integer()},
          reader :: ra_log_reader:state(),
          readers = [] :: [pid()],
-         mem_table :: ra_log_memtbl:state(),
+         mem_table :: ra_mt:state(),
          tx = false :: boolean()
         }).
 
@@ -203,15 +203,15 @@ init(#{uid := UId,
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
-    MtRange = ra_log_memtbl:range(Mt0),
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_range(UId, MtRange, SegWriter) of
+    MtRange = ra_mt:range(Mt0),
+    {{FirstIdx, LastIdx0}, SegRefs} = case recover_ranges(UId, MtRange, SegWriter) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
                                           R ->  R
                                       end,
     %% TODO dont thing this is necessary given the range is calculated from this
     %% but can't hurt as it will do some cleanup
-    {DeleteSpecs, Mt} = ra_log_memtbl:set_first(FirstIdx, Mt0),
+    {DeleteSpecs, Mt} = ra_mt:set_first(FirstIdx, Mt0),
 
     exec_mem_table_delete(Names, DeleteSpecs, Mt),
     %% TODO: can there be obsolete segments returned here?
@@ -302,8 +302,8 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
                    tx = true,
                    mem_table = Mt1} = State) ->
-    {Entries, Mt} = ra_log_memtbl:commit(Mt1),
-    Tid = ra_log_memtbl:tid(Mt1),
+    {Entries, Mt} = ra_mt:commit(Mt1),
+    Tid = ra_mt:tid(Mt1),
     WriterId = {UId, self()},
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
@@ -338,7 +338,7 @@ append({Idx, Term, _Cmd} = Entry,
                 tx = true,
                 mem_table = Mt0} = State)
       when Idx =:= LastIdx + 1 ->
-    {ok, Mt} = ra_log_memtbl:stage(Entry, Mt0),
+    {ok, Mt} = ra_mt:stage(Entry, Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     State#?MODULE{last_index = Idx,
                   last_term = Term,
@@ -387,7 +387,7 @@ fold(From0, To0, Fun, Acc0,
     To = min(To0, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
 
-    MtOverlap = case ra_log_memtbl:range(Mt) of
+    MtOverlap = case ra_mt:range(Mt) of
                     {MtStart, MtEnd} ->
                         ra_log_reader:range_overlap(From, To,
                                                     MtStart, MtEnd);
@@ -400,7 +400,7 @@ fold(From0, To0, Fun, Acc0,
             {Acc, State#?MODULE{reader = Reader}};
         {CF, CT, F, T} ->
             {Reader, Acc1} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
-            Acc = ra_log_memtbl:fold(CF, CT, Fun, Acc1, Mt),
+            Acc = ra_mt:fold(CF, CT, Fun, Acc1, Mt),
             NumRead = CT - CF + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
             {Acc, State#?MODULE{reader = Reader}}
@@ -431,7 +431,7 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
 
     %% drop any indexes that are larger than the last index available
     Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
-    {Entries0, CacheNumRead, Indexes} = ra_log_memtbl:get_items(Indexes2, Mt),
+    {Entries0, CacheNumRead, Indexes} = ra_mt:get_items(Indexes2, Mt),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, CacheNumRead),
     {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
     %% here we recover the original order of indexes
@@ -568,7 +568,7 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
   when FromIdx > LastWrittenIdx + 1 ->
     % leaving a gap is not ok - may need to resend from cache
     Expected = LastWrittenIdx + 1,
-    MtRange = ra_log_memtbl:range(Mt),
+    MtRange = ra_mt:range(Mt),
     case ra_range:in(Expected, MtRange) of
         true ->
             ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
@@ -595,7 +595,7 @@ handle_event({segments, TidRanges, NewSegs},
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
     Mt = lists:foldl(
            fun ({Tid, Range}, Acc0) ->
-                   {Spec, Acc} = ra_log_memtbl:record_flushed(Tid, Range, Acc0),
+                   {Spec, Acc} = ra_mt:record_flushed(Tid, Range, Acc0),
                     ok = ra_log_ets:execute_delete(Names, Spec, Acc),
                     Acc
            end, Mt0, TidRanges),
@@ -658,7 +658,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
             %% TODO mt: this will race with the segment writer but if the
             %% segwriter detects a missing index it will query the snaphost
             %% state and if that is higher it will resume flush
-            {Spec, Mt1} = ra_log_memtbl:set_first(SnapIdx + 1, Mt0),
+            {Spec, Mt1} = ra_mt:set_first(SnapIdx + 1, Mt0),
             % _ = ra_log_memtbl:delete(Spec, Mt1),
             exec_mem_table_delete(Names, Spec, Mt1),
 
@@ -721,7 +721,7 @@ fetch_term(Idx, #?MODULE{last_index = LastIdx,
   when Idx < FirstIdx orelse Idx > LastIdx ->
     {undefined, State0};
 fetch_term(Idx, #?MODULE{mem_table = Mt, reader = Reader0} = State0) ->
-    case ra_log_memtbl:lookup_term(Idx, Mt) of
+    case ra_mt:lookup_term(Idx, Mt) of
         undefined ->
             {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
             {Term, State0#?MODULE{reader = Reader}};
@@ -755,7 +755,7 @@ install_snapshot({SnapIdx, _} = IdxTerm, SnapState0,
                   Checkpoint} || Checkpoint <- Checkpoints],
     %% TODO: should we set first on the mem tables here? what if the seg writer
     %% is writing at the same time?
-    {Spec, Mt} = ra_log_memtbl:set_first(SnapIdx, Mt0),
+    {Spec, Mt} = ra_mt:set_first(SnapIdx, Mt0),
     exec_mem_table_delete(Names, Spec, Mt),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
@@ -829,7 +829,7 @@ tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
                    last_written_index_term = {LastWrittenIdx, _},
                    last_wal_write = {WalPid, Ms}} = State) ->
     CurWalPid = whereis(Wal),
-    MtRange = ra_log_memtbl:range(Mt),
+    MtRange = ra_mt:range(Mt),
     case Now > Ms + ?WAL_RESEND_TIMEOUT andalso
          CurWalPid =/= undefined andalso
          CurWalPid  =/= WalPid andalso
@@ -958,8 +958,8 @@ overview(#?MODULE{last_index = LastIndex,
               undefined -> undefined;
               {I, _} -> I
           end,
-      mem_table_range => ra_log_memtbl:range(Mt),
-      mem_table_info => ra_log_memtbl:info(Mt),
+      mem_table_range => ra_mt:range(Mt),
+      mem_table_info => ra_mt:info(Mt),
       last_wal_write => LastMs
      }.
 
@@ -1094,8 +1094,8 @@ wal_write(#?MODULE{cfg = #cfg{uid = UId,
           {Idx, Term, Cmd0} = Entry) ->
     Cmd = {ttb, term_to_iovec(Cmd0)},
     %% TODO: mt: handle the overwrite case
-    {ok, Mt} = ra_log_memtbl:insert(Entry, Mt0),
-    case ra_log_wal:write(Wal, {UId, self()}, ra_log_memtbl:tid(Mt),
+    {ok, Mt} = ra_mt:insert(Entry, Mt0),
+    case ra_log_wal:write(Wal, {UId, self()}, ra_mt:tid(Mt),
                           Idx, Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
@@ -1133,7 +1133,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     WriterId = {UId, self()},
     %% TODO: this isn't quite right, entries could theoretically be written to
     %% different tids, although the way this is called currently prevents that
-    Tid = ra_log_memtbl:tid(Mt0),
+    Tid = ra_mt:tid(Mt0),
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
@@ -1142,7 +1142,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                     end, {[], 0}, Entries),
 
     [{_, _, _, LastIdx, LastTerm, _} | _] = WalCommands,
-    {_, Mt} = ra_log_memtbl:commit(Mt0),
+    {_, Mt} = ra_mt:commit(Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
@@ -1189,8 +1189,8 @@ resend_from0(Idx, #?MODULE{cfg = Cfg,
            [State#?MODULE.cfg#cfg.log_id, Idx, LastIdx]),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, LastIdx - Idx + 1),
     lists:foldl(fun (I, Acc) ->
-                        {I, T, C} = ra_log_memtbl:lookup(I, Mt),
-                        Tid = ra_log_memtbl:tid_for(I, T, Mt),
+                        {I, T, C} = ra_mt:lookup(I, Mt),
+                        Tid = ra_mt:tid_for(I, T, Mt),
                         wal_rewrite(Acc, Tid, {I, T, C})
                 end,
                 State#?MODULE{last_resend_time = {erlang:system_time(seconds),
@@ -1210,7 +1210,7 @@ resend_from0(Idx, #?MODULE{last_resend_time = {LastResend, WalPid},
     end.
 
 stage_entries(Cfg, [Entry | Rem] = Entries, Mt0) ->
-    case ra_log_memtbl:stage(Entry, Mt0) of
+    case ra_mt:stage(Entry, Mt0) of
         {ok, Mt} ->
             stage_entries0(Rem, Mt);
         {error, overwriting} ->
@@ -1225,11 +1225,11 @@ stage_entries(Cfg, [Entry | Rem] = Entries, Mt0) ->
 stage_entries0([], Mt) ->
     {ok, Mt};
 stage_entries0([Entry | Rem], Mt0) ->
-    case ra_log_memtbl:stage(Entry, Mt0) of
+    case ra_mt:stage(Entry, Mt0) of
         {ok, Mt} ->
             stage_entries0(Rem, Mt);
         {error, overwriting} ->
-            Range  = ra_log_memtbl:range(Mt0),
+            Range  = ra_mt:range(Mt0),
             Msg = io_lib:format("ra_log:verify_entries/2 "
                                 "tried writing ~p - mem table range ~w",
                                 [Rem, Range]),
@@ -1250,18 +1250,11 @@ write_snapshot(Meta, MacRef, SnapKind,
                                                       SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
-recover_range(UId, MtRange, SegWriter) ->
+recover_ranges(UId, MtRange, SegWriter) ->
     % 0. check open mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_servers are part of the same
     % supervision tree
     % 1. check closed mem_tables to extend
-    % OpenRanges = case ra_log_reader:open_mem_table_lookup(Reader) of
-    %                  [] ->
-    %                      [];
-    %                  [{UId, First, Last, _}] ->
-    %                      [{First, Last}]
-    %              end,
-    % ClosedRanges = [{F, L} || {_, _, F, L, _} <- ra_log_reader:closed_mem_tables(Reader)],
     % 2. check segments
     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
     SegRefs = lists:foldl(

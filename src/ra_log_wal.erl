@@ -109,7 +109,7 @@
 -record(recovery, {mode :: clean | dirty,
                    ranges = #{} :: #{ra_uid() =>
                                      [{ets:tid(), {ra:index(), ra:index()}}]},
-                   tables = #{} :: #{ra_uid() => ra_log_memtbl:state()},
+                   tables = #{} :: #{ra_uid() => ra_mt:state()},
                    writers = #{} :: #{ra_uid() => {in_seq, ra:index()}}
                   }).
 -record(state, {conf = #conf{},
@@ -974,16 +974,9 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
             %% SnapIdx might have moved to we truncate the old range first
             %% before extending
             Range1 = ra_range:truncate(SnapIdx, Range0),
-            Range = case ra_range:extend(AddRange, Range1) of
-                        not_extension ->
-                            %% AddRange did not immediately follow Range1
-                            %% so must be an overwrite, limit existing range by
-                            %% the start of the new range, then extend this
-                            ra_range:extend(AddRange,
-                                            ra_range:limit(Start, Range1));
-                        Range2 ->
-                            Range2
-                    end,
+            %% limit the old range by the add end start as in some resend
+            %% cases we may have got back before the prior range.
+            Range = ra_range:add(AddRange, ra_range:limit(Start, Range1)),
             Ranges#{UId => [{MtTid, Range} | Rem]};
         #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
             %% new Tid, need to add a new range record for this
@@ -1005,9 +998,9 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
                   {ok, M} = ra_log_ets:mem_table_please(Names, UId),
                   M
           end,
-    case ra_log_memtbl:insert(Entry, Mt0) of
+    case ra_mt:insert(Entry, Mt0) of
         {ok, Mt1} ->
-            Ranges = update_ranges(Ranges0, UId, ra_log_memtbl:tid(Mt1),
+            Ranges = update_ranges(Ranges0, UId, ra_mt:tid(Mt1),
                                    SnapIdx, ra_range:new(Idx)),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
@@ -1029,7 +1022,7 @@ recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
                   M
           end,
     %% find the tid for the given idxterm
-    case ra_log_memtbl:tid_for(Idx, Term, Mt0) of
+    case ra_mt:tid_for(Idx, Term, Mt0) of
         undefined ->
             %% not found, this entry may already have been flushed
             %% skip, and reset ranges but update writers as we need to
@@ -1048,9 +1041,9 @@ handle_trunc(false, _UId, _Idx, State) ->
 handle_trunc(true, UId, Idx, #recovery{tables = Tbls} = State) ->
     case Tbls of
         #{UId := Mt0} ->
-            {Specs, Mt} = ra_log_memtbl:set_first(Idx-1, Mt0),
+            {Specs, Mt} = ra_mt:set_first(Idx-1, Mt0),
             %% TODO: mt: should all deletes be sent to ra_log_ets instead?
-            [_ = ra_log_memtbl:delete(Spec, Mt) || Spec <- Specs],
+            [_ = ra_mt:delete(Spec, Mt) || Spec <- Specs],
             State#recovery{tables = Tbls#{UId => Mt}};
         _ ->
             State

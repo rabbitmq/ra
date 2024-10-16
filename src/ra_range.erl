@@ -37,15 +37,15 @@ new(_Start, _End) ->
     undefined.
 
 -spec add(AddRange :: range(), CurRange :: range()) -> range().
-add(_Range, undefined) ->
-    undefined;
+add(undefined, Range) ->
+    Range;
 add({Start1, End1}, {Start2, End2})
   when Start2 =< End1 + 1 andalso
-       End2 >= Start1 ->
-    %% TODO: refine logic for unhappy cases
-    {min(Start1, Start2), End2};
-add(_Range, Range) ->
-    Range.
+       End2 + 1 >= Start1 ->
+    {min(Start1, Start2), max(End1, End2)};
+add(AddRange, _Range) ->
+    %% no overlap, return add range
+    AddRange.
 
 -spec in(ra:index(), range()) -> boolean().
 in(_Idx, undefined) ->
@@ -84,21 +84,23 @@ size(undefined) ->
 size({Start, End}) ->
     End - Start + 1.
 
--spec extend(range() | ra:index(), range()) ->
+-spec extend(ra:index(), range()) ->
     range() | not_extension.
-extend({NewStart, NewEnd}, {Start, End})
-  when NewStart == End + 1 ->
-    {Start, NewEnd};
-extend({_NewStart, _NewEnd}, {_Start, _End}) ->
-    not_extension;
+% extend({NewStart, NewEnd}, {Start, End})
+%   when NewStart == End + 1 ->
+%     {Start, NewEnd};
+% extend({_NewStart, _NewEnd}, {_Start, _End}) ->
+%     not_extension;
 extend(Idx, {Start, End})
   when is_integer(Idx) andalso
        Idx == End + 1 ->
     {Start, Idx};
-extend({_, _} = AddRange, undefined) ->
-    AddRange;
+% extend({_, _} = AddRange, undefined) ->
+%     AddRange;
 extend(Idx, undefined) when is_integer(Idx) ->
-    ra_range:new(Idx).
+    ra_range:new(Idx);
+extend(_Idx, _Range) ->
+    not_extension.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -106,20 +108,19 @@ extend(Idx, undefined) when is_integer(Idx) ->
 add_test() ->
     ?assertEqual(undefined, add(undefined, undefined)),
     ?assertEqual({1, 10}, add(undefined, {1, 10})),
-    ?assertEqual(undefined, add({1, 10}, undefined)),
+    ?assertEqual({1, 10}, add({1, 10}, undefined)),
 
     ?assertEqual({1, 20}, add({1, 10}, {11, 20})),
     ?assertEqual({1, 20}, add({1, 10}, {5, 20})),
 
-    ?assertEqual({1, 9}, add({1, 10}, {5, 9})),
-    ?assertEqual({5, 9}, add({6, 10}, {5, 9})),
+    ?assertEqual({1, 10}, add({1, 10}, {5, 9})),
+    ?assertEqual({5, 10}, add({6, 10}, {5, 9})),
+    ?assertEqual({1, 10}, add({6, 10}, {1, 5})),
 
-    %% when the new range is smaller than the prior range
-    ?assertEqual({1, 3}, add({6, 10}, {1, 3})),
-    ?assertEqual({1, 7}, add({6, 10}, {1, 7})),
-    %% when the old range is smaller than the add range
-    ?assertEqual({1, 3}, add({6, 10}, {1, 3})),
-    ?assertEqual({1, 7}, add({6, 10}, {1, 7})),
+    %% when the add range is smaller than the prior range
+    %% return the additional range
+    ?assertEqual({1, 3}, add({1, 3}, {6, 10})),
+    ?assertEqual({1, 10}, add({6, 10}, {1, 7})),
     ok.
 
 -endif.

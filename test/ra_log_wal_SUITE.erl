@@ -754,8 +754,8 @@ recover(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
-    ?assertMatch(#{size := 200}, ra_log_memtbl:info(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
+    ?assertMatch(#{size := 200}, ra_mt:info(Mt)),
+    MtTid = ra_mt:tid(Mt),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {1, 100}}]}, _Wal}} ->
@@ -808,8 +808,8 @@ recover_with_snapshot_index(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
-    ?assertMatch(#{size := 50}, ra_log_memtbl:info(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
+    ?assertMatch(#{size := 50}, ra_mt:info(Mt)),
+    MtTid = ra_mt:tid(Mt),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {51, 100}}]}, _Wal}} ->
@@ -849,9 +849,9 @@ recover_overwrite(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
-    ?assertMatch({1, 20}, ra_log_memtbl:range(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
-    PrevMtTid = ra_log_memtbl:tid(ra_log_memtbl:prev(Mt)),
+    ?assertMatch({1, 20}, ra_mt:range(Mt)),
+    MtTid = ra_mt:tid(Mt),
+    PrevMtTid = ra_mt:tid(ra_mt:prev(Mt)),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {5, 20}},
@@ -893,9 +893,9 @@ recover_overwrite_rollover(Config) ->
     ok = proc_lib:stop(ra_log_wal),
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
-    ?assertMatch({1, 20}, ra_log_memtbl:range(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
-    PrevMtTid = ra_log_memtbl:tid(ra_log_memtbl:prev(Mt)),
+    ?assertMatch({1, 20}, ra_mt:range(Mt)),
+    MtTid = ra_mt:tid(Mt),
+    PrevMtTid = ra_mt:tid(ra_mt:prev(Mt)),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{PrevMtTid, {1, 10}}]}, _Wal}} ->
@@ -927,11 +927,11 @@ recover_existing_mem_table(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, Mt0} = ra_log_ets:mem_table_please(?config(names, Config), UId),
-    Tid = ra_log_memtbl:tid(Mt0),
+    Tid = ra_mt:tid(Mt0),
     %% write some in one term
     Mt1 = lists:foldl(
             fun (Idx, Acc0) ->
-                    {ok, Acc} = ra_log_memtbl:insert({Idx, 1, Data}, Acc0),
+                    {ok, Acc} = ra_mt:insert({Idx, 1, Data}, Acc0),
                     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data),
                     Acc
             end, Mt0, lists:seq(1, 100)),
@@ -941,7 +941,7 @@ recover_existing_mem_table(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
     ?assertEqual(Mt1, Mt),
-    ?assertMatch({1, 100}, ra_log_memtbl:range(Mt)),
+    ?assertMatch({1, 100}, ra_mt:range(Mt)),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid, {1, 100}}]}, _}} ->
@@ -1012,17 +1012,17 @@ recover_existing_mem_table_overwrite(Config) ->
     %% write some in one term
     Mt1 = lists:foldl(
             fun (Idx, Acc0) ->
-                    {ok, Acc} = ra_log_memtbl:insert({Idx, 1, Data}, Acc0),
+                    {ok, Acc} = ra_mt:insert({Idx, 1, Data}, Acc0),
                     {ok, _} = ra_log_wal:write(Pid, WriterId,
-                                               ra_log_memtbl:tid(Acc0), Idx, 1, Data),
+                                               ra_mt:tid(Acc0), Idx, 1, Data),
                     Acc
             end, Mt0, lists:seq(1, 100)),
     _ = await_written(WriterId, 1, {1, 100}),
     Mt2 = lists:foldl(
            fun (Idx, Acc0) ->
-                   {ok, Acc} = ra_log_memtbl:insert({Idx, 2, Data}, Acc0),
+                   {ok, Acc} = ra_mt:insert({Idx, 2, Data}, Acc0),
                    {ok, _} = ra_log_wal:write(Pid, WriterId,
-                                              ra_log_memtbl:tid(Acc0), Idx, 2, Data),
+                                              ra_mt:tid(Acc0), Idx, 2, Data),
                    Acc
            end, element(2,
                         ra_log_ets:new_mem_table_please(?config(names, Config),
@@ -1034,10 +1034,10 @@ recover_existing_mem_table_overwrite(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
     ?assertEqual(Mt2, Mt),
-    ?assertMatch({1, 200}, ra_log_memtbl:range(Mt)),
+    ?assertMatch({1, 200}, ra_mt:range(Mt)),
     ct:pal("Mt ~p", [Mt]),
-    Tid = ra_log_memtbl:tid(Mt1),
-    Tid2 = ra_log_memtbl:tid(Mt2),
+    Tid = ra_mt:tid(Mt1),
+    Tid2 = ra_mt:tid(Mt2),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid2, {50, 200}},
@@ -1082,8 +1082,8 @@ recover_implicit_truncate(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
-    ?assertMatch(#{size := 2}, ra_log_memtbl:info(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
+    ?assertMatch(#{size := 2}, ra_mt:info(Mt)),
+    MtTid = ra_mt:tid(Mt),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {6, 7}}]}, _Wal}} ->
@@ -1121,9 +1121,9 @@ recover_delete_uid(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
 
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
-    ?assertMatch(#{size := 3}, ra_log_memtbl:info(Mt)),
-    ?assertMatch({1, 3}, ra_log_memtbl:range(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
+    ?assertMatch(#{size := 3}, ra_mt:info(Mt)),
+    ?assertMatch({1, 3}, ra_mt:range(Mt)),
+    MtTid = ra_mt:tid(Mt),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {1, 3}}]} = Tables, _Wal}}
@@ -1180,8 +1180,8 @@ recover_with_partial_last_entry(Config) ->
     {ok, Pid} = ra_log_wal:start_link(Conf),
     ?assert(erlang:is_process_alive(Pid)),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
-    ?assertMatch({1, 99}, ra_log_memtbl:range(Mt)),
-    MtTid = ra_log_memtbl:tid(Mt),
+    ?assertMatch({1, 99}, ra_mt:range(Mt)),
+    MtTid = ra_mt:tid(Mt),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, {1, 99}}]}, _File}} ->

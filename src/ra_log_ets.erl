@@ -44,12 +44,12 @@ start_link(#{names := #{log_ets := Name}} = Cfg) ->
     gen_server:start_link({local, Name}, ?MODULE, [Cfg], []).
 
 -spec mem_table_please(ra_system:names(), ra:uid()) ->
-    {ok, ra_log_memtbl:state()} | {error, term()}.
+    {ok, ra_mt:state()} | {error, term()}.
 mem_table_please(Names, UId) ->
     mem_table_please(Names, UId, read_write).
 
 -spec mem_table_please(ra_system:names(), ra:uid(), read | read_write) ->
-    {ok, ra_log_memtbl:state()} | {error, term()}.
+    {ok, ra_mt:state()} | {error, term()}.
 mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
@@ -58,8 +58,8 @@ mem_table_please(#{log_ets := Name,
                 {ok, [Tid | Rem]} ->
                     Mt = lists:foldl(
                            fun (T, Acc) ->
-                                   ra_log_memtbl:init_successor(T, Mode, Acc)
-                           end, ra_log_memtbl:init(Tid, Mode), Rem),
+                                   ra_mt:init_successor(T, Mode, Acc)
+                           end, ra_mt:init(Tid, Mode), Rem),
                     {ok, Mt};
                 Err ->
                     Err
@@ -67,17 +67,17 @@ mem_table_please(#{log_ets := Name,
         [{_, Tid} | Rem] ->
             Mt = lists:foldl(
                    fun ({_, T}, Acc) ->
-                           ra_log_memtbl:init_successor(T, Mode, Acc)
-                   end, ra_log_memtbl:init(Tid, Mode), Rem),
+                           ra_mt:init_successor(T, Mode, Acc)
+                   end, ra_mt:init(Tid, Mode), Rem),
             {ok, Mt}
     end.
 
--spec new_mem_table_please(ra_system:names(), ra:uid(), ra_log_memtbl:state()) ->
-    {ok, ra_log_memtbl:state()} | {error, term()}.
+-spec new_mem_table_please(ra_system:names(), ra:uid(), ra_mt:state()) ->
+    {ok, ra_mt:state()} | {error, term()}.
 new_mem_table_please(#{log_ets := Name}, UId, Prev) ->
     case gen_server:call(Name, {new_mem_table_please, UId, #{}}, infinity) of
         {ok, Tid} ->
-            {ok, ra_log_memtbl:init_successor(Tid, read_write, Prev)};
+            {ok, ra_mt:init_successor(Tid, read_write, Prev)};
         Err ->
             Err
     end.
@@ -86,8 +86,8 @@ delete_mem_tables(#{log_ets := Name}, UId) ->
     gen_server:cast(Name, {delete_mem_tables, UId}).
 
 -spec execute_delete(ra_system:names(),
-                     ra_log_memtbl:delete_spec(),
-                     ra_log_memtbl:state()) ->
+                     ra_mt:delete_spec(),
+                     ra_mt:state()) ->
     ok.
 execute_delete(#{}, undefined, _Mt) ->
     ok;
@@ -132,7 +132,7 @@ handle_call(Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({exec_delete, Spec, Mt}, State) ->
-    try timer:tc(fun () -> ra_log_memtbl:delete(Spec, Mt) end) of
+    try timer:tc(fun () -> ra_mt:delete(Spec, Mt) end) of
         {Time, Num} ->
             ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w ~b entries",
                    [Time div 1000, Spec, Num]),

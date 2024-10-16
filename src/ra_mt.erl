@@ -4,7 +4,7 @@
 %%
 %% Copyright (c) 2017-2024 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 %% @hidden
--module(ra_log_memtbl).
+-module(ra_mt).
 
 -include("ra.hrl").
 
@@ -255,10 +255,12 @@ delete(Spec, #?MODULE{prev =  #?MODULE{} = Prev}) ->
 range(#?MODULE{range = Range,
                prev = undefined}) ->
     Range;
-range(#?MODULE{range = Range,
+range(#?MODULE{range = {_, End} = Range,
                prev = Prev}) ->
-    PrevRange = ra_log_memtbl:range(Prev),
-    ra_range:add(PrevRange, Range).
+    PrevRange = ra_range:limit(End, range(Prev)),
+    ra_range:add(Range, PrevRange);
+range(_State) ->
+    undefined.
 
 -spec delete(state()) -> ok.
 delete(#?MODULE{tid = Tid}) ->

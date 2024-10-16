@@ -351,8 +351,8 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
             [begin
                  %% this looks a bit weird but
                  %% we dont need full init to run a delete
-                 M = ra_log_memtbl:init(Tid, read),
-                 _  = ra_log_memtbl:delete({range, Tid, Range}, M)
+                 M = ra_mt:init(Tid, read),
+                 _  = ra_mt:delete({range, Tid, Range}, M)
              end || {Tid, Range} <- TidRanges],
             ok;
         Pid ->

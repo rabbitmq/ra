@@ -86,8 +86,8 @@ accept_mem_tables(Config) ->
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Mt = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
     Ranges = #{UId => TidRanges},
     % WalFile = "0000001.wal",
     % FullWalFile = filename:join(Dir, WalFile),
@@ -156,7 +156,7 @@ accept_mem_tables_overwrite(Config) ->
                                                             data_dir => Dir}),
     UId = ?config(uid, Config),
     Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
-    Tid = ra_log_memtbl:tid(make_mem_table(UId, Entries)),
+    Tid = ra_mt:tid(make_mem_table(UId, Entries)),
     Ranges = #{UId => [{Tid, {3, 5}}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
@@ -173,7 +173,7 @@ accept_mem_tables_overwrite(Config) ->
     end,
     % second batch
     Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
-    Tid2 = ra_log_memtbl:tid(make_mem_table(UId, Entries2)),
+    Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
     Ranges2 = #{UId => [{Tid2, {1, 3}}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.wal")),
@@ -202,10 +202,10 @@ accept_mem_tables_overwrite_same_wal(Config) ->
     UId = ?config(uid, Config),
 
     Entries = [{2, 42, b}, {3, 42, c}, {4, 42, d}, {5, 42, e}],
-    Tid = ra_log_memtbl:tid(make_mem_table(UId, Entries)),
+    Tid = ra_mt:tid(make_mem_table(UId, Entries)),
     % second batch
     Entries2 = [{4, 43, d2}, {5, 43, e2}, {6, 43, f}],
-    Tid2 = ra_log_memtbl:tid(make_mem_table(UId, Entries2)),
+    Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
     Ranges2 = #{UId => [{Tid2, {4, 6}}, {Tid, {2, 5}}]},
     % debugger:start(),
     % int:i(ra_log_segment_writer),
@@ -244,8 +244,8 @@ accept_mem_tables_multi_segment(Config) ->
     % more entries than fit a single segment
     Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
     Mt = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
     Ranges = #{UId => TidRanges},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w.wal")),
@@ -278,8 +278,8 @@ accept_mem_tables_for_down_server(Config) ->
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Mt = make_mem_table(FakeUId, Entries),
     Mt2 = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    Tid2 = ra_log_memtbl:tid(Mt2),
+    Tid = ra_mt:tid(Mt),
+    Tid2 = ra_mt:tid(Mt2),
     Ranges = #{FakeUId => [{Tid, {1, 3}}],
                UId => [{Tid2, {1, 3}}]},
     WalFile = filename:join(Dir, "00001.wal"),
@@ -308,8 +308,8 @@ accept_mem_tables_for_down_server(Config) ->
 
     %% if the server is down at the time the segment writer send the segments
     %% the segment writer should clear up the ETS mem tables
-    FakeMt = ra_log_memtbl:init(Tid),
-    ?assertMatch(#{size := 0}, ra_log_memtbl:info(FakeMt)),
+    FakeMt = ra_mt:init(Tid),
+    ?assertMatch(#{size := 0}, ra_mt:info(FakeMt)),
 
     % assert wal file has been deleted.
     % the delete happens after the segment notification so we need to retry
@@ -333,13 +333,13 @@ accept_mem_tables_with_deleted_server(Config) ->
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     {ok, Mt0} = ra_log_ets:mem_table_please(get_names(default), DeletedUId),
     Mt = lists:foldl(fun(E, Acc0) ->
-                             {ok, Acc} = ra_log_memtbl:insert(E, Acc0),
+                             {ok, Acc} = ra_mt:insert(E, Acc0),
                              Acc
                      end, Mt0, Entries),
 
     Mt2 = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    Tid2 = ra_log_memtbl:tid(Mt2),
+    Tid = ra_mt:tid(Mt),
+    Tid2 = ra_mt:tid(Mt2),
     Ranges = #{DeletedUId => [{Tid, {1, 3}}],
                UId => [{Tid2, {1, 3}}]},
     WalFile = make_wal(Config, "00001.wal"),
@@ -386,8 +386,8 @@ accept_mem_tables_with_corrupt_segment(Config) ->
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Mt = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
     Ranges = #{UId => TidRanges},
     WalFile = make_wal(Config, "0000001.wal"),
     %% write an empty file to simulate corrupt segment
@@ -425,8 +425,8 @@ truncate_segments(Config) ->
     % fake up a mem segment for Self
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
     Mt = make_mem_table(UId, Entries),
-    Tid = ra_log_memtbl:tid(Mt),
-    TidRanges = [{Tid, ra_log_memtbl:range(Mt)}],
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
     Ranges = #{UId => TidRanges},
     WalFile = make_wal(Config, "0000001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
@@ -461,14 +461,14 @@ truncate_segments_with_pending_update(Config) ->
     UId = ?config(uid, Config),
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
     Mt = make_mem_table(UId, Entries),
-    Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     ra_log_segment_writer:await(?SEGWR),
     %% write another range
     Entries2 = [{N, 42, N} || N <- lists:seq(33, 40)],
     Mt2 = make_mem_table(UId, Entries2),
-    Ranges2 = #{UId => [{ra_log_memtbl:tid(Mt2), ra_log_memtbl:range(Mt2)}]},
+    Ranges2 = #{UId => [{ra_mt:tid(Mt2), ra_mt:range(Mt2)}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.erl")),
     receive
@@ -508,13 +508,13 @@ truncate_segments_with_pending_overwrite(Config) ->
     % fake up a mem segment for Self
     Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
     Mt = make_mem_table(UId, Entries),
-    Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     %% write one more entry separately
     Entries2 = [{N, 43, N} || N <- lists:seq(12, 25)],
     Mt2 = make_mem_table(UId, Entries2),
-    Ranges2 = #{UId => [{ra_log_memtbl:tid(Mt2), ra_log_memtbl:range(Mt2)}]},
+    Ranges2 = #{UId => [{ra_mt:tid(Mt2), ra_mt:range(Mt2)}]},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.wal")),
     receive
@@ -569,7 +569,7 @@ my_segments(Config) ->
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
     Mt = make_mem_table(UId, Entries),
-    Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     TidRanges = maps:get(UId, Ranges),
     WalFile = make_wal(Config, "00001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
@@ -600,7 +600,7 @@ skip_entries_lower_than_snapshot_index(Config) ->
                {5, 43, e}
               ],
     Mt = make_mem_table(UId, Entries),
-    Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
@@ -633,7 +633,7 @@ skip_all_entries_lower_than_snapshot_index(Config) ->
                {3, 43, e}
               ],
     Mt = make_mem_table(UId, Entries),
-    Ranges = #{UId => [{ra_log_memtbl:tid(Mt), ra_log_memtbl:range(Mt)}]},
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
     ets:insert(ra_log_snapshot_state, {UId, 3}),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
@@ -666,9 +666,9 @@ make_mem_table(UId, Entries) ->
     make_mem_table(UId, Tid, Entries).
 
 make_mem_table(_UId, Tid, Entries) ->
-    Mt = ra_log_memtbl:init(Tid),
+    Mt = ra_mt:init(Tid),
     lists:foldl(fun(E, Acc0) ->
-                        {ok, Acc} = ra_log_memtbl:insert(E, Acc0),
+                        {ok, Acc} = ra_mt:insert(E, Acc0),
                         Acc
                 end, Mt, Entries).
 
