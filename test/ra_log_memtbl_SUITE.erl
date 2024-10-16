@@ -417,20 +417,8 @@ perf(_Config) ->
          ok
      end || Mt <- InsertedMts
     ],
-    % RangeSpec = [{{'$1','_'},
-    %               [{'andalso',{'>=','$1',From},{'=<','$1',To}}],
-    %               ['$1']}],
-    % [begin
-    %      {Taken, Selected} = timer:tc(ets, select, [Tid, RangeSpec]),
-    %      ct:pal("~s select_range ~b entries took ~bms",
-    %             [Name, length(Selected), Taken div 1000]),
-    %      ok
-    %  end || {Name, Tid} <- Tables
-    % ],
-
 
     DelTo = (trunc(Num * 0.9)),
-    % DelSpec = [{{'$1', '_'}, [], [{'<', '$1', DelTo}]}],
     [begin
          {[Spec], _} = ra_log_memtbl:set_first(DelTo-1, Mt),
          {Taken, Deleted} = timer:tc(ra_log_memtbl, delete, [Spec, Mt]),

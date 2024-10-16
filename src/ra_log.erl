@@ -351,17 +351,23 @@ append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
 -spec write(Entries :: [log_entry()], State :: state()) ->
     {ok, state()} |
     {error, {integrity_error, term()} | wal_down}.
-write([{FstIdx, _, _} = _First | _Rest] = Entries,
-      #?MODULE{last_index = LastIdx,
-               snapshot_state = _SnapState} = State00)
+write([{FstIdx, _, _} | _Rest] = Entries,
+      #?MODULE{cfg = Cfg,
+               last_index = LastIdx,
+               mem_table = Mt0} = State0)
   when FstIdx =< LastIdx + 1 andalso
        FstIdx >= 0 ->
-    write_entries(Entries, State00);
+    case stage_entries(Cfg, Entries, Mt0) of
+        {ok, Mt} ->
+            wal_write_batch(State0#?MODULE{mem_table = Mt}, Entries);
+        Error ->
+            Error
+    end;
 write([], State) ->
     {ok, State};
 write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
                                   last_index = LastIdx}) ->
-    Msg = lists:flatten(io_lib:format("~p: ra_log:write/2 "
+    Msg = lists:flatten(io_lib:format("~s: ra_log:write/2 "
                                       "tried writing ~b - expected ~b",
                                       [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
@@ -396,7 +402,7 @@ fold(From0, To0, Fun, Acc0,
             {Reader, Acc1} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
             Acc = ra_log_memtbl:fold(CF, CT, Fun, Acc1, Mt),
             NumRead = CT - CF + 1,
-            ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, NumRead),
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
             {Acc, State#?MODULE{reader = Reader}}
     end;
 fold(_From, _To, _Fun, Acc, State) ->
@@ -426,7 +432,7 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
     %% drop any indexes that are larger than the last index available
     Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
     {Entries0, CacheNumRead, Indexes} = ra_log_memtbl:get_items(Indexes2, Mt),
-    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, CacheNumRead),
     {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
     %% here we recover the original order of indexes
     Entries = case Sort of
@@ -1122,6 +1128,8 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                          mem_table = Mt0} = State,
                 Entries) ->
     WriterId = {UId, self()},
+    %% TODO: this isn't quite right, entries could theoretically be written to
+    %% different tids, although the way this is called currently prevents that
     Tid = ra_log_memtbl:tid(Mt0),
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
@@ -1132,18 +1140,18 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 
     [{_, _, _, LastIdx, LastTerm, _} | _] = WalCommands,
     {_, Mt} = ra_log_memtbl:commit(Mt0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
-            ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
-            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
             {ok, State#?MODULE{last_index = LastIdx,
                                last_term = LastTerm,
                                last_wal_write = {Pid, now_ms()},
                                mem_table = Mt}};
         {error, wal_down} = Err ->
-            %% TODO: mt: if we get there the entry has already been inserted
+            %% if we get there the entry has already been inserted
             %% into the mem table but never reached the wal
-            %% consider ra_log_memtbl:abort(Entries, Mt)
+            %% the resend logic will take care of that
             Err
     end.
 
@@ -1196,25 +1204,6 @@ resend_from0(Idx, #?MODULE{last_resend_time = {LastResend, WalPid},
             resend_from(Idx, State#?MODULE{last_resend_time = undefined});
         false ->
             State
-    end.
-
-% verify_entries(_, []) ->
-%     ok;
-% verify_entries(Idx, [{NextIdx, _, _} | Tail]) when Idx + 1 == NextIdx ->
-%     verify_entries(NextIdx, Tail);
-% verify_entries(Idx, Tail) ->
-%     Msg = io_lib:format("ra_log:verify_entries/2 "
-%                         "tried writing ~p - expected ~b",
-%                         [Tail, Idx+1]),
-%     %% TODO mt: ra_log_memtbl:abort/1
-%     {error, {integrity_error, lists:flatten(Msg)}}.
-
-write_entries(Entries, #?MODULE{cfg = Cfg, mem_table = Mt0} = State0) ->
-    case stage_entries(Cfg, Entries, Mt0) of
-        {ok, Mt} ->
-            wal_write_batch(State0#?MODULE{mem_table = Mt}, Entries);
-        Error ->
-            Error
     end.
 
 stage_entries(Cfg, [Entry | Rem] = Entries, Mt0) ->
@@ -1288,7 +1277,7 @@ recover_range(UId, MtRange, SegWriter) ->
                         end
                 end, [], SegFiles),
     SegRanges = [{F, L} || {F, L, _} <- SegRefs],
-    Ranges = [MtRange | SegRanges], % OpenRanges ++ ClosedRanges ++ SegRanges,
+    Ranges = [MtRange | SegRanges],
     {pick_range(Ranges, undefined), SegRefs}.
 
 % picks the current range from a sorted (newest to oldest) list of ranges
