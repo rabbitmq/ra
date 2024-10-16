@@ -470,10 +470,9 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             LWIdx = min(Idx, LWIdx0),
             {LWTerm, State2} = fetch_term(LWIdx, State1),
             %% this should always be found but still assert just in case
-            %% TODO: mt: if the index genuinely goes backwards here we could
-            %% open a successor memtable here already
-            %% but we'd need to initiate it with the last index somehow something
-            %% memtbl doesn't currently support
+            %% _if_ this ends up as a genuine reversal next time we try
+            %% to write to the mem table it will detect this and open
+            %% a new one
             true = LWTerm =/= undefined,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
@@ -546,17 +545,21 @@ handle_event({written, Term, {FromIdx, ToIdx0}},
             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastWrittenIdx),
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
         {OtherTerm, State} ->
-            %% TODO: mt: there may be valid indexes in the range so need to
-            %% scan entire range to see if the last written index can be
-            %% updated - this would avoid erroneously entering resend state
-            %% e.g. if last_written is {5, 1} and we get {6, 7, 1} but have 
-            %% overwritten 7 with term 2 when we get {7, 7, 2} we'd have to
-            %% resend as we thing the last written is {5, 1} but it should
-            %% be {6, 1} as 6 is a valid index in term 1
-            ?DEBUG("~ts: written event did not find term ~b for index ~b "
-                   "found ~w",
-                   [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
-            {State, []}
+            case ra_range:new(FromIdx, ToIdx-1) of
+                undefined ->
+                    %% TODO: mt: there may be valid indexes in the range so need to
+                    %% last written is {5, 1} we wrote 6 and 7 in one then overwrote
+                    %% 7 with term two,
+                    %% we receive {1, {6,7}} which will end up in this clause
+                    %% in this case we should reduce the range by one and try again?
+                    ?DEBUG("~ts: written event did not find term ~b for index ~b "
+                           "found ~w",
+                           [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
+                    {State, []};
+                NextWrittenRange ->
+                    %% retry with a reduced range
+                    handle_event({written, Term, NextWrittenRange}, State0)
+            end
     end;
 handle_event({written, _Term, {FromIdx, _}} = Evt,
              #?MODULE{cfg = #cfg{log_id = LogId},

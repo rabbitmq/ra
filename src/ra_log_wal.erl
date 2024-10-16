@@ -487,6 +487,7 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
                Trunc ->
             %% allowing implicit truncate writes here by checking if
             %% Idx == SnapIdx+1 and set Trunc = true
+            % State = handle_overwrite(Idx =< PrevIdx, State0),
             write_data(Id, MtTid, Idx, Term, Entry, Trunc, SnapIdx, State0);
         error ->
             write_data(Id, MtTid, Idx, Term, Entry, false, SnapIdx, State0);
@@ -706,8 +707,6 @@ do_bw(Pid, #batch_writer{snap_idx = SnapIdx,
                          tid = MtTid,
                          uid = UId,
                          range = Range,
-                         % from = From,
-                         % to = To,
                          term = Term,
                          old = undefined
                         }, Ranges) ->
@@ -970,12 +969,21 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ets:lookup_element(Tid, ServerUId, 2, -1).
 
-update_ranges(Ranges, UId, MtTid, SnapIdx, {_Start, _} = AddRange) ->
+update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
     case Ranges of
         #{UId := [{MtTid, Range0} | Rem]} ->
             %% SnapIdx might have moved to we truncate the old range first
             %% before extending
-            Range = ra_range:extend(AddRange, ra_range:truncate(SnapIdx, Range0)),
+            Range1 = ra_range:truncate(SnapIdx, Range0),
+            Range = case ra_range:extend(AddRange, Range1) of
+                        not_extension ->
+                            %% AddRange did not immediately follow Range1
+                            %% so must be an overwrite, limit existing range by
+                            %% the start of the new range, then extend this
+                            ra_range:extend(AddRange, ra_range:limit(Start, Range1));
+                        Range2 ->
+                            Range2
+                    end,
             Ranges#{UId => [{MtTid, Range} | Rem]};
         #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
             %% new Tid, need to add a new range record for this
@@ -1050,25 +1058,3 @@ handle_trunc(true, UId, Idx, #recovery{tables = Tbls} = State) ->
         _ ->
             State
     end.
-
-% range_extend(UpToIncl, {Start, End})
-%   when UpToIncl >= Start ->
-%     {UpToIncl + 1, End};
-% range_extend(_UpToIncl, Range) ->
-%     Range.
-
-% update_tid_ranges(SnapIdx, BatchEnd, Tid, TidRanges) ->
-%     lists:foldr(
-%       fun ({T, Range}, Acc) when T == Tid ->
-%               [{T, range_truncate(SnapIdx, range_extend(BatchEnd, Range))} | Acc];
-%           ({T, Range}, Acc) ->
-%               case range_truncate(SnapIdx, Range) of
-%                   undefined ->
-%                       Acc;
-%                   NewRange ->
-%                       [{T, NewRange} | Acc]
-%               end
-%       end, [], TidRanges).
-
-
-

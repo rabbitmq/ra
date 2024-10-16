@@ -32,7 +32,9 @@ new(Start, End)
   when is_integer(Start) andalso
        is_integer(End) andalso
        Start =< End ->
-    {Start, End}.
+    {Start, End};
+new(_Start, _End) ->
+    undefined.
 
 -spec add(AddRange :: range(), CurRange :: range()) -> range().
 add(_Range, undefined) ->
@@ -86,6 +88,8 @@ size({Start, End}) ->
 extend({NewStart, NewEnd}, {Start, End})
   when NewStart == End + 1 ->
     {Start, NewEnd};
+extend({_NewStart, _NewEnd}, {_Start, _End}) ->
+    not_extension;
 extend(Idx, {Start, End})
   when is_integer(Idx) andalso
        Idx == End + 1 ->

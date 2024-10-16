@@ -558,7 +558,6 @@ follower_aer_5(_Config) ->
     ok.
 
 
-
 follower_aer_term_mismatch(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
                                              commit_index => 3},

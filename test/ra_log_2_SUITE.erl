@@ -28,6 +28,7 @@ all_tests() ->
      validate_reads_for_overlapped_writes,
      cache_overwrite_then_take,
      last_written_overwrite,
+     last_written_overwrite_2,
      last_index_reset,
      last_index_reset_before_written,
      recovery,
@@ -538,6 +539,33 @@ last_written_overwrite(Config) ->
     {ok, Log3} = ra_log:write([{3, 2, <<3:64/integer>>}], Log2),
     Log4 = assert_log_events(Log3, fun (L) ->
                                            {3, 2} == ra_log:last_written(L)
+                                   end),
+    ra_log:close(Log4),
+    ok.
+
+last_written_overwrite_2(Config) ->
+    Log0 = ra_log_init(Config),
+
+    WalPid = whereis(ra_log_wal),
+    erlang:suspend_process(WalPid),
+    %% ensure full batch
+    Log1 = write_n(1, 5, 1, Log0),
+    erlang:resume_process(WalPid),
+    %% how else to wait for wal processing but not process the written event
+    timer:sleep(500),
+
+    erlang:suspend_process(WalPid),
+    %% partially overwrite prior batch
+    Log2 = write_n(4, 6, 2, Log1),
+
+    %% ensure last written is applied up to the last valid index term
+    Log3 = assert_log_events(Log2, fun (L) ->
+                                           {3, 1} == ra_log:last_written(L)
+                                   end),
+    erlang:resume_process(WalPid),
+    %
+    Log4 = assert_log_events(Log3, fun (L) ->
+                                           {5, 2} == ra_log:last_written(L)
                                    end),
     ra_log:close(Log4),
     ok.
