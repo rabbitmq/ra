@@ -15,7 +15,9 @@
          extend/2,
          limit/2,
          truncate/2,
-         size/1
+         size/1,
+         overlap/2,
+         subtract/2
         ]).
 
 
@@ -39,10 +41,10 @@ new(_Start, _End) ->
 -spec add(AddRange :: range(), CurRange :: range()) -> range().
 add(undefined, Range) ->
     Range;
-add({Start1, End1}, {Start2, End2})
-  when Start2 =< End1 + 1 andalso
-       End2 + 1 >= Start1 ->
-    {min(Start1, Start2), max(End1, End2)};
+add({AddStart, AddEnd}, {Start, End})
+  when Start =< AddEnd + 1 andalso
+       End + 1 >= AddStart ->
+    {min(AddStart, Start), max(AddEnd, End)};
 add(AddRange, _Range) ->
     %% no overlap, return add range
     AddRange.
@@ -84,26 +86,66 @@ size(undefined) ->
 size({Start, End}) ->
     End - Start + 1.
 
--spec extend(ra:index(), range()) ->
-    range() | not_extension.
-% extend({NewStart, NewEnd}, {Start, End})
-%   when NewStart == End + 1 ->
-%     {Start, NewEnd};
-% extend({_NewStart, _NewEnd}, {_Start, _End}) ->
-%     not_extension;
+-spec extend(ra:index(), range()) -> range().
 extend(Idx, {Start, End})
-  when is_integer(Idx) andalso
-       Idx == End + 1 ->
+  when Idx == End + 1 ->
     {Start, Idx};
-% extend({_, _} = AddRange, undefined) ->
-%     AddRange;
 extend(Idx, undefined) when is_integer(Idx) ->
     ra_range:new(Idx);
-extend(_Idx, _Range) ->
-    not_extension.
+extend(Idx, Range) ->
+    error({cannot_extend, Idx, Range}).
+
+-spec overlap(range(), range()) -> range().
+overlap({ReqStart, ReqEnd}, {Start, End}) ->
+    new(max(ReqStart, Start), min(ReqEnd, End));
+overlap(_Range1, _Range2) ->
+    undefined.
+
+%% @doc subtracts the range in the first argument
+%% from that of the range in the second arg.
+%% Returns a list of remaining ranges
+%% @end
+-spec subtract(range(), range()) -> [range()].
+subtract(_Range1, undefined) ->
+    [];
+subtract(undefined, Range) ->
+    [Range];
+subtract({_SubStart, _SubEnd} = SubRange, {Start, End} = Range) ->
+    case overlap(SubRange, Range) of
+        undefined ->
+            [Range];
+        {OStart, OEnd} ->
+            [R || {_, _} = R <- [new(Start, OStart -1),
+                                 new(OEnd + 1, End)]]
+    end.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+subtract_test() ->
+    ?assertEqual([], subtract({1, 10}, undefined)),
+    ?assertEqual([{1, 10}], subtract(undefined, {1, 10})),
+    ?assertEqual([], subtract({1, 10}, {1, 10})),
+    ?assertEqual([], subtract({1, 10}, {4, 6})),
+    ?assertEqual([{4, 6}], subtract({8, 10}, {4, 6})),
+
+    ?assertEqual([{11, 20}], subtract({1, 10}, {1, 20})),
+    ?assertEqual([{1, 1}, {11, 20}], subtract({2, 10}, {1, 20})),
+    ?assertEqual([{1, 9}], subtract({10, 20}, {1, 20})),
+
+    ok.
+
+overlap_test() ->
+    ?assertEqual(undefined, overlap({1, 10}, undefined)),
+    ?assertEqual(undefined, overlap(undefined, {1, 10})),
+    ?assertEqual(undefined, overlap({1, 10}, {11, 15})),
+    ?assertEqual(undefined, overlap({16, 20}, {11, 15})),
+    ?assertEqual({11, 11}, overlap({1, 11}, {11, 15})),
+    ?assertEqual({14, 15}, overlap({14, 20}, {11, 15})),
+    ?assertEqual({12, 14}, overlap({12, 14}, {11, 15})),
+    ?assertEqual({11, 15}, overlap({1, 20}, {11, 15})),
+    ok.
 
 add_test() ->
     ?assertEqual(undefined, add(undefined, undefined)),
@@ -121,6 +163,37 @@ add_test() ->
     %% return the additional range
     ?assertEqual({1, 3}, add({1, 3}, {6, 10})),
     ?assertEqual({1, 10}, add({6, 10}, {1, 7})),
+    ok.
+
+truncate_test() ->
+    ?assertEqual(undefined, truncate(9, undefined)),
+    ?assertEqual({6, 10}, truncate(5, {1, 10})),
+    ?assertEqual(undefined, truncate(11, {1, 10})),
+    ?assertEqual({10, 20}, truncate(9, {10, 20})),
+    ok.
+
+limit_test() ->
+    ?assertEqual(undefined, limit(9, undefined)),
+    ?assertEqual({1, 4}, limit(5, {1, 10})),
+    ?assertEqual({1, 10}, limit(11, {1, 10})),
+    ?assertEqual(undefined, limit(10, {10, 20})),
+    ?assertEqual(undefined, limit(1, {10, 20})),
+    ok.
+
+in_test() ->
+    ?assertEqual(false, in(9, undefined)),
+    ?assertEqual(true, in(5, {1, 10})),
+    ?assertEqual(true, in(10, {1, 10})),
+    ?assertEqual(true, in(1, {1, 10})),
+    ?assertEqual(false, in(11, {1, 10})),
+    ?assertEqual(false, in(0, {1, 10})),
+    ok.
+
+extend_test() ->
+    ?assertEqual({9, 9}, extend(9, undefined)),
+    ?assertEqual({1, 11}, extend(11, {1, 10})),
+    ?assertError({cannot_extend, 1, {5, 10}}, extend(1, {5, 10})),
+    ?assertError({cannot_extend, 12, {1, 10}}, extend(12, {1, 10})),
     ok.
 
 -endif.

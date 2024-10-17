@@ -2026,9 +2026,9 @@ update_peer(PeerId, Update,
 
 send_applied_notifications(#state{pending_notifys = PendingNots} = State,
                            Nots0) when map_size(PendingNots) > 0 ->
-    Nots = ra_lib:maps_merge_with(fun(_K, V1, V2) ->
-                                          V1 ++ V2
-                                  end, PendingNots, Nots0),
+    Nots = maps:merge_with(fun(_K, V1, V2) ->
+                                   V1 ++ V2
+                           end, PendingNots, Nots0),
     send_applied_notifications(State#state{pending_notifys = #{}}, Nots);
 send_applied_notifications(#state{} = State, Nots) ->
     Id = id(State),

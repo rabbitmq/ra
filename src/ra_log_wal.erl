@@ -54,8 +54,6 @@
                        tid :: ets:tid(),
                        uid :: term(),
                        range :: ra:range(),
-                       % from :: ra:index(),
-                       % to :: ra:index(),
                        term :: ra_term(),
                        old :: undefined | #batch_writer{}
                       }).
