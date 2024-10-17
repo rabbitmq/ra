@@ -549,7 +549,7 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
                       mem_table = Mt,
                       last_written_index_term = {LastWrittenIdx, _}} = State0)
   when FromIdx > LastWrittenIdx + 1 ->
-    % leaving a gap is not ok - may need to resend from cache
+    % leaving a gap is not ok - may need to resend from mem table
     Expected = LastWrittenIdx + 1,
     MtRange = ra_mt:range(Mt),
     case ra_range:in(Expected, MtRange) of

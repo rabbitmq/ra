@@ -41,6 +41,8 @@
          {bytes_written, ?C_BYTES_WRITTEN, counter, "Number of bytes written"}
          ]).
 
+-define(FILE_MODES, [raw, write, read, binary]).
+
 % a writer_id consists of a unique local name (see ra_directory) and a writer's
 % current pid().
 % The pid is used for the immediate writer notification
@@ -76,8 +78,7 @@
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
 
--record(conf, {file_modes :: [term()],
-               dir :: string(),
+-record(conf, {dir :: string(),
                segment_writer = ra_log_segment_writer :: atom() | pid(),
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
@@ -86,11 +87,10 @@
                write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync | none,
                counter :: counters:counters_ref(),
-               open_mem_tbls_tid :: ets:tid(),
+               mem_tables_tid :: ets:tid(),
                names :: ra_system:names(),
                explicit_gc = false :: boolean(),
                pre_allocate = false :: boolean(),
-               compress_mem_tables = false :: boolean(),
                ra_log_snapshot_state_tid :: ets:tid()
               }).
 
@@ -144,8 +144,7 @@
                       max_batch_size => non_neg_integer(),
                       garbage_collect => boolean(),
                       min_heap_size => non_neg_integer(),
-                      min_bin_vheap_size => non_neg_integer(),
-                      compress_mem_tables => boolean()
+                      min_bin_vheap_size => non_neg_integer()
                      }.
 
 -export_type([wal_conf/0,
@@ -259,13 +258,11 @@ init(#{dir := Dir} = Conf0) ->
       garbage_collect := Gc,
       min_heap_size := MinHeapSize,
       min_bin_vheap_size := MinBinVheapSize,
-      compress_mem_tables := CompressMemTables,
       names := #{wal := WalName,
-                 open_mem_tbls := OpenTblsName
-                } = Names} =
+                 open_mem_tbls := MemTablesName} = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~ts init, open tbls: ~w",
-            [WalName, OpenTblsName]),
+    ?NOTICE("WAL: ~ts init, mem-tables table name: ~w",
+            [WalName, MemTablesName]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
@@ -274,11 +271,7 @@ init(#{dir := Dir} = Conf0) ->
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
     CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
-    %% TODO: recover wal should return {stop, Reason} if it fails
-    %% rather than crash
-    FileModes = [raw, write, read, binary],
-    Conf = #conf{file_modes = FileModes,
-                 dir = Dir,
+    Conf = #conf{dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = max(?WAL_MIN_SIZE, MaxWalSize),
@@ -287,11 +280,10 @@ init(#{dir := Dir} = Conf0) ->
                  write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
                  counter = CRef,
-                 open_mem_tbls_tid = ets:whereis(OpenTblsName),
+                 mem_tables_tid = ets:whereis(MemTablesName),
                  names = Names,
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
-                 compress_mem_tables = CompressMemTables,
                  ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
     try recover_wal(Dir, Conf) of
         Result ->
@@ -345,12 +337,12 @@ handle_op({info, {'EXIT', _, Reason}}, _State) ->
     throw({stop, Reason}).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
-                       open_mem_tbls_tid = OpenTbl} = Conf) ->
+                       mem_tables_tid = MemTblsTid} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
 
     %% TODO: mt: provede a proper ra_log_ets API to discover recovery mode
-    Mode = case ets:info(OpenTbl, size) of
+    Mode = case ets:info(MemTblsTid, size) of
                0 ->
                    clean;
                _ ->
@@ -581,9 +573,8 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                  wal = Wal,
                  file_num = Num}.
 
-open_wal(File, Max, #conf{write_strategy = o_sync,
-                          file_modes = Modes0} = Conf) ->
-        Modes = [sync | Modes0],
+open_wal(File, Max, #conf{write_strategy = o_sync} = Conf) ->
+        Modes = [sync | ?FILE_MODES],
         case prepare_file(File, Modes) of
             {ok, Fd} ->
                 % many platforms implement O_SYNC a bit like O_DSYNC
@@ -596,8 +587,8 @@ open_wal(File, Max, #conf{write_strategy = o_sync,
                       "Reverting back to default strategy.", []),
                 open_wal(File, Max, Conf#conf{write_strategy = default})
         end;
-open_wal(File, Max, #conf{file_modes = Modes} = Conf0) ->
-    {ok, Fd} = prepare_file(File, Modes),
+open_wal(File, Max, #conf{} = Conf0) ->
+    {ok, Fd} = prepare_file(File, ?FILE_MODES),
     Conf = maybe_pre_allocate(Conf0, Fd, Max),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
@@ -686,8 +677,7 @@ complete_batch(#state{batch = undefined} = State) ->
 complete_batch(#state{batch = #batch{waiting = Waiting,
                                      num_writes = NumWrites},
                       wal = Wal,
-                      conf = #conf{open_mem_tbls_tid = _OpnTbl} = Cfg
-                      } = State0) ->
+                      conf = Cfg} = State0) ->
     % TS = erlang:system_time(microsecond),
     State = flush_pending(State0),
     % SyncTS = erlang:system_time(microsecond),
@@ -939,8 +929,7 @@ merge_conf_defaults(Conf) ->
                  garbage_collect => false,
                  sync_method => datasync,
                  min_bin_vheap_size => ?MIN_BIN_VHEAP_SIZE,
-                 min_heap_size => ?MIN_HEAP_SIZE,
-                 compress_mem_tables => false}, Conf).
+                 min_heap_size => ?MIN_HEAP_SIZE}, Conf).
 
 to_binary(Term) ->
     term_to_iovec(Term).
