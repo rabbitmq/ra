@@ -509,48 +509,32 @@ handle_event({written, _Term, {FromIdx, _ToIdx}},
     %% installation taking place whilst the WAL was processing the write
     %% Just drop the event in this case as it is stale
     {State, []};
-handle_event({written, Term, {FromIdx, ToIdx0}},
+handle_event({written, Term, {FromIdx, ToIdx}},
              #?MODULE{cfg = Cfg,
                       last_written_index_term = {LastWrittenIdx0,
-                                                 LastWrittenTerm0},
-                      last_index = LastIdx,
-                      snapshot_state = SnapState} = State0)
+                                                 _LastWrittenTerm0},
+                      first_index = FirstIdx,
+                      snapshot_state = _SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
-    MaybeCurrentSnap = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
     % been fully flushed
-    %
-    % last written cannot even go larger than last_index
-    % TODO: mt: can it ever do this as we will validate against the term for each
-    % index in the range, re-consider using min/2 here
-    ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
             {State#?MODULE{last_written_index_term = {ToIdx, Term}}, []};
-        {undefined, State} when FromIdx =< element(1, MaybeCurrentSnap) ->
+        {undefined, State} when ToIdx < FirstIdx ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
             % and processing a snapshot before the written event comes in.
-            % ensure last_written_index_term does not go backwards
-            % TODO: mt: this also feels a bit shonky, should it not just be
-            % left as is given 
-            LastWrittenIdx = max(LastWrittenIdx0, ToIdx),
-            LastWrittenIdxTerm = {LastWrittenIdx,
-                                  max(LastWrittenTerm0, Term)},
-            ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastWrittenIdx),
-            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
+            {State, []};
         {OtherTerm, State} ->
+            %% term mismatch, let's reduce the range and try again to see
+            %% if any entries in the range are valid
             case ra_range:new(FromIdx, ToIdx-1) of
                 undefined ->
-                    %% TODO: mt: there may be valid indexes in the range so need to
-                    %% last written is {5, 1} we wrote 6 and 7 in one then overwrote
-                    %% 7 with term two,
-                    %% we receive {1, {6,7}} which will end up in this clause
-                    %% in this case we should reduce the range by one and try again?
                     ?DEBUG("~ts: written event did not find term ~b for index ~b "
                            "found ~w",
                            [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),

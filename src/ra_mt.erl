@@ -268,7 +268,6 @@ range_overlap(ReqRange, #?MODULE{} = State) ->
                       end}
     end.
 
-
 -spec range(state()) ->
     undefined | {ra:index(), ra:index()}.
 range(#?MODULE{range = Range,
