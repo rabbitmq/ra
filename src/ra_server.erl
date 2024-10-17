@@ -3,7 +3,7 @@
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
 %% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
-%%
+%% @hidden
 -module(ra_server).
 
 -include("ra.hrl").
@@ -565,9 +565,11 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
     end;
 handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                                               log_id = LogId} = Cfg,
-                                  cluster := Cluster} =  State00) ->
+                                  cluster := Cluster,
+                                  log := Log0} = State000) ->
     %% TODO: refactor to use wal batch API?
     Num = length(Cmds),
+    State00 = State000#{log => ra_log:begin_tx(Log0)},
     case catch  lists:foldl(fun(C, {S0, E0}) ->
                             case append_log_leader(C, S0, E0) of
                                 {ok, I, T, S, E} ->
@@ -579,8 +581,11 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
         {State0, Effects0} ->
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
             ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-            {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
-            {leader, State, Effects};
+            {#{log := Log1} = State, _, Effects} =
+                make_pipelined_rpc_effects(State0, Effects0),
+            %% TODO: we need to detect wal down here instaed!!!
+            Log = ra_log:commit_tx(Log1),
+            {leader, State#{log => Log}, Effects};
         {not_appended, wal_down, State0, Effects} ->
             ?WARN("~ts ~b commands NOT appended to Raft log. Reason: wal_down",
                   [LogId, length(Cmds)]),
@@ -600,7 +605,7 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
 
             {await_condition, State, Effects}
     end;
-handle_leader({ra_log_event, {written, _} = Evt},
+handle_leader({ra_log_event, {written, _, _} = Evt},
               #{log := Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
@@ -1085,8 +1090,7 @@ handle_follower(#append_entries_rpc{term = Term,
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
                                                                Effects0),
-                                {NextState, State,
-                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
+                                {NextState, State, Effects};
                         {error, wal_down} ->
                             %% at this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
@@ -1101,7 +1105,13 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% application as applied index could be higher
                             %% than written (if consensus has already been acheived from
                             %% other members)
-                            Log = ra_log:reset_to_last_known_written(Log1),
+                            %% TODO: mt: we cannot do this anymore as the WAL does
+                            %% not write the mem tables. We could implement something
+                            %% alternative where the WAL writes the last index, term
+                            %% it wrote for each UID into an ETS table and query
+                            %% this.
+                            % Log = ra_log:reset_to_last_known_written(Log1),
+                            Log = Log1,
                             {await_condition,
                              State1#{log => Log,
                                      condition =>
@@ -1180,7 +1190,7 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
                 #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, {written, _} = Evt},
+handle_follower({ra_log_event, {written, _, _} = Evt},
                 State0 = #{log := Log0,
                            cfg := #cfg{id = Id},
                            leader_id := LeaderId,
@@ -1915,15 +1925,7 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               end;
           (_, _, Acc) ->
               Acc
-      end, {State0, false, add_flush_event(State0, Effects0)}, Cluster).
-
-add_flush_event(#{log := Log}, Effects) ->
-    case ra_log:needs_cache_flush(Log) of
-        true ->
-            [{next_event, {ra_log_event, flush_cache}} | Effects];
-        false ->
-            Effects
-    end.
+      end, {State0, false, Effects0}, Cluster).
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),
