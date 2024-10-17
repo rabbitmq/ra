@@ -251,6 +251,8 @@ delete(Spec, #?MODULE{prev =  #?MODULE{} = Prev}) ->
     %% no match on tid try prev
     delete(Spec, Prev).
 
+-spec range_overlap(ra:range(), state()) ->
+    {Overlap :: ra:range(), Remainder :: ra:range()}.
 range_overlap(ReqRange, #?MODULE{} = State) ->
     %% TODO: assert the ReqReange never goes above Range?
     Range = range(State),
