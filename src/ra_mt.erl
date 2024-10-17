@@ -28,7 +28,8 @@
          prev/1,
          info/1,
          range/1,
-         delete/1
+         delete/1,
+         range_overlap/2
         ]).
 
 -define(IN_RANGE(Idx, Range),
@@ -249,6 +250,22 @@ delete({delete, Tid}, #?MODULE{tid = Tid}) ->
 delete(Spec, #?MODULE{prev =  #?MODULE{} = Prev}) ->
     %% no match on tid try prev
     delete(Spec, Prev).
+
+range_overlap(ReqRange, #?MODULE{} = State) ->
+    %% TODO: assert the ReqReange never goes above Range?
+    Range = range(State),
+    case ra_range:overlap(ReqRange, Range) of
+        undefined ->
+            {undefined, ReqRange};
+        Overlap ->
+            {Overlap, case ra_range:subtract(Overlap, ReqRange) of
+                          [] ->
+                              undefined;
+                          [R] ->
+                              R
+                      end}
+    end.
+
 
 -spec range(state()) ->
     undefined | {ra:index(), ra:index()}.

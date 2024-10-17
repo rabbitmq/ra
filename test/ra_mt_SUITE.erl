@@ -32,6 +32,7 @@ all_tests() ->
      successor,
      successor_below,
      stage_commit,
+     range_overlap,
      perf
     ].
 
@@ -364,6 +365,24 @@ stage_commit(_Config) ->
     ?assertMatch([{1, 1, _} | _], Entries),
     [{I, _, _} = ra_mt:lookup(I, Mt2)
     || I <- lists:seq(1, 10)],
+    ok.
+
+range_overlap(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(20, 30)),
+    {undefined, {1, 10}} = ra_mt:range_overlap({1, 10}, Mt1),
+    {undefined, {31, 40}} = ra_mt:range_overlap({31, 40}, Mt1),
+    {{30, 30}, {31, 50}} = ra_mt:range_overlap({30, 50}, Mt1),
+    {{20, 30}, {10, 19}} = ra_mt:range_overlap({10, 30}, Mt1),
+    {{20, 30}, undefined} = ra_mt:range_overlap({20, 30}, Mt1),
+    {{20, 30}, {31, 40}} = ra_mt:range_overlap({20, 40}, Mt1),
+    %% TODO: mt: realistically this test will never happen as we will never
+    %% request to read entries larger then the last written
+    % {{20, 30}, {31, 40}} = ra_mt:range_overlap({10, 40}, Mt1),
     ok.
 
 perf(_Config) ->

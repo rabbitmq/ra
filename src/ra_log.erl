@@ -387,23 +387,22 @@ fold(From0, To0, Fun, Acc0,
     To = min(To0, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
 
-    MtOverlap = case ra_mt:range(Mt) of
-                    {MtStart, MtEnd} ->
-                        ra_log_reader:range_overlap(From, To,
-                                                    MtStart, MtEnd);
-                    _ ->
-                        {undefined, From, To}
-                end,
+    MtOverlap = ra_mt:range_overlap({From, To}, Mt),
     case MtOverlap of
-        {undefined, F, T} ->
-            {Reader, Acc} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
+        {undefined, {RemStart, RemEnd}} ->
+            {Reader, Acc} = ra_log_reader:fold(RemStart, RemEnd, Fun, Acc0, Reader0),
             {Acc, State#?MODULE{reader = Reader}};
-        {CF, CT, F, T} ->
-            {Reader, Acc1} = ra_log_reader:fold(F, T, Fun, Acc0, Reader0),
-            Acc = ra_mt:fold(CF, CT, Fun, Acc1, Mt),
-            NumRead = CT - CF + 1,
+        {{MtStart, MtEnd}, {RemStart, RemEnd}} ->
+            {Reader, Acc1} = ra_log_reader:fold(RemStart, RemEnd, Fun, Acc0, Reader0),
+            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc1, Mt),
+            NumRead = MtEnd - MtStart + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
-            {Acc, State#?MODULE{reader = Reader}}
+            {Acc, State#?MODULE{reader = Reader}};
+        {{MtStart, MtEnd}, undefined} ->
+            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc0, Mt),
+            NumRead = MtEnd - MtStart + 1,
+            ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
+            {Acc, State}
     end;
 fold(_From, _To, _Fun, Acc, State) ->
     {Acc, State}.
