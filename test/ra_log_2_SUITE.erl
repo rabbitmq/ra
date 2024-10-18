@@ -21,6 +21,7 @@ all_tests() ->
      resend_write_lost_in_wal_crash,
      resend_write_after_tick,
      handle_overwrite,
+     handle_overwrite_append,
      receive_segment,
      read_one,
      take_after_overwrite_and_init,
@@ -139,6 +140,40 @@ handle_overwrite(Config) ->
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
                element(1, ra_log:handle_event({written, 2, {1, 2}}, Log))),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    _ = deliver_all_log_events(Log, 100),
+    ra_log:close(Log),
+    flush(),
+    ok.
+
+handle_overwrite_append(Config) ->
+    %% this is a theoretical case where a follower has written some entries
+    %% then another leader advised to reset last index backwards, _then_
+    %% somehow the current follower become leader
+    Log0 = ra_log_init(Config),
+    {ok, Log1} = ra_log:write([{1, 1, "value"},
+                               {2, 1, "value"}], Log0),
+    receive
+        {ra_log_event, {written, 1, {1, 2}}} -> ok
+    after 2000 ->
+              flush(),
+              exit(written_timeout)
+    end,
+    {ok, Log2} = ra_log:set_last_index(1, Log1),
+    {0, 0} = ra_log:last_written(Log2),
+    {1, 1} = ra_log:last_index_term(Log2),
+    Log3 = ra_log:append({2, 3, "value"}, Log2),
+    {2, 3} = ra_log:last_index_term(Log3),
+    % ensure immediate truncation
+    Log4 = ra_log:append({3, 3, "value"}, Log3),
+    {3, 3} = ra_log:last_index_term(Log4),
+    % simulate the first written event coming after index has already
+    % been written in a new term
+    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
+    % ensure last written has not been incremented
+    {1, 1} = ra_log:last_written(Log),
+    {3, 3} = ra_log:last_written(
+               element(1, ra_log:handle_event({written, 3, {2, 3}}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),

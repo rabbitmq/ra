@@ -589,6 +589,8 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
         {not_appended, wal_down, State0, Effects} ->
             ?WARN("~ts ~b commands NOT appended to Raft log. Reason: wal_down",
                   [LogId, length(Cmds)]),
+            %% TODO: abort transaction here?
+            %% TODO: select the peer with the higest match index?
             CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
                            [] -> [];
                            [{PeerId, _} | _] ->
