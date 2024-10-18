@@ -88,7 +88,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
       index := <a href="#type-ra_index">ra_index()</a>,
       term := <a href="#type-ra_term">ra_term()</a>,
       machine_version =&gt; <a href="#type-version">version()</a>,
-      from =&gt; <a href="#type-from">from()</a>}</pre></p>
+      from =&gt; <a href="#type-from">from()</a>,
+      reply_mode =&gt; <a href="ra_server.html#type-command_reply_mode">ra_server:command_reply_mode()</a>}</pre></p>
 <p>  extensible command meta data map</p>
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
@@ -112,6 +113,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
      fun(([<a href="#type-user_command">user_command()</a>]) -&gt; <a href="#type-effects">effects()</a>),
      {local, node()}} |
     {release_cursor, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
+    {release_cursor, <a href="#type-ra_index">ra_index()</a>} |
+    {checkpoint, <a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>} |
     {aux, term()} |
     garbage_collection</pre></p>
 
@@ -171,6 +174,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
   from.</td></tr>
 <tr><td valign="top"><a href="#apply-4">apply/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#tick-3">tick/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#snapshot_installed-5">snapshot_installed/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#state_enter-3">state_enter/3</a></td><td>called when the ra_server_proc enters a new state.</td></tr>
 <tr><td valign="top"><a href="#overview-2">overview/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#version-1">version/1</a></td><td>used to discover the latest machine version supported by the current
@@ -179,6 +183,8 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <tr><td valign="top"><a href="#which_module-2">which_module/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init_aux-2">init_aux/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#handle_aux-7">handle_aux/7</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-6">handle_aux/6</a></td><td></td></tr>
+<tr><td valign="top"><a href="#which_aux_fun-1">which_aux_fun/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#snapshot_module-1">snapshot_module/1</a></td><td></td></tr>
@@ -211,6 +217,14 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <p> </p>
 </div>
 
+<h3 class="function"><a name="snapshot_installed-5">snapshot_installed/5</a></h3>
+<div class="spec">
+<p><pre>snapshot_installed(Module, Meta, State, OldMeta, OldState) -&gt;
+                      <a href="#type-effects">effects()</a></pre>
+<ul class="definitions"><li><pre>Module = module()</pre></li><li><pre>Meta = <a href="ra_snapshot.html#type-meta">ra_snapshot:meta()</a></pre></li><li><pre>State = <a href="#type-state">state()</a></pre></li><li><pre>OldMeta = <a href="ra_snapshot.html#type-meta">ra_snapshot:meta()</a></pre></li><li><pre>OldState = <a href="#type-state">state()</a></pre></li></ul></p>
+<p> </p>
+</div>
+
 <h3 class="function"><a name="state_enter-3">state_enter/3</a></h3>
 <div class="spec">
 <p><pre>state_enter(Mod :: module(),
@@ -235,7 +249,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="is_versioned-1">is_versioned/1</a></h3>
 <div class="spec">
-<p><pre>is_versioned(Machine :: <a href="#type-machine">machine()</a>) -&gt; boolean()</pre></p>
+<p><pre>is_versioned(X1 :: <a href="#type-machine">machine()</a>) -&gt; boolean()</pre></p>
 <p> </p>
 </div>
 
@@ -269,6 +283,31 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
               {no_reply, AuxState, LogState,
                [{monitor, process, aux, pid()}]}</pre>
 <ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>LogState = <a href="ra_log.html#type-state">ra_log:state()</a></pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_aux-6">handle_aux/6</a></h3>
+<div class="spec">
+<p><pre>handle_aux(Mod :: module(),
+           RaftState :: <a href="ra_server.html#type-ra_state">ra_server:ra_state()</a>,
+           Type :: {call, From :: <a href="#type-from">from()</a>} | cast,
+           Command :: term(),
+           AuxState, State) -&gt;
+              {reply, Reply :: term(), AuxState, State} |
+              {reply,
+               Reply :: term(),
+               AuxState, State,
+               [{monitor, process, aux, pid()}]} |
+              {no_reply, AuxState, State} |
+              {no_reply, AuxState, State,
+               [{monitor, process, aux, pid()}]}</pre>
+<ul class="definitions"><li><pre>AuxState = term()</pre></li><li><pre>State = <a href="ra_server.html#type-state">ra_server:state()</a></pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="which_aux_fun-1">which_aux_fun/1</a></h3>
+<div class="spec">
+<p><pre>which_aux_fun(Mod :: module()) -&gt; undefined | {atom(), arity()}</pre></p>
 <p> </p>
 </div>
 
