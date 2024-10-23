@@ -626,7 +626,7 @@ handle_event({segments, TidRanges, NewSegs},
                       reader = Reader0,
                       mem_table = Mt0,
                       %% TODO: re-enable external log readers or drop unused feature?
-                      readers = _Readers
+                      readers = Readers
                      } = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
     Mt = lists:foldl(
@@ -637,24 +637,16 @@ handle_event({segments, TidRanges, NewSegs},
            end, Mt0, TidRanges),
     State = State0#?MODULE{reader = Reader,
                            mem_table = Mt},
-    {State, []};
-
-    % case Readers of
-    %     [] ->
-    %         %% delete immediately
-    %         DeleteFun(),
-    %         {State, []};
-    %     _ ->
-    %         %% HACK
-    %         %% TODO: replace with reader coordination
-    %         %% delay deletion until all readers confirmed they have received
-    %         %% the update
-    %         Pid = spawn(fun () ->
-    %                             ok = log_update_wait_n(length(Readers)),
-    %                             DeleteFun()
-    %                     end),
-    %         {State, log_update_effects(Readers, Pid, State)}
-    % end;
+    case Readers of
+        [] ->
+            %% delete immediately
+            {State, []};
+        _ ->
+            %% HACK
+            %% Dummy pid to swallup update notifications
+            Pid = spawn(fun () -> ok end),
+            {State, log_update_effects(Readers, Pid, State)}
+    end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = #cfg{names = Names} = Cfg,
                       first_index = FstIdx,

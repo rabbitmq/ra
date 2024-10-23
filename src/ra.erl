@@ -90,6 +90,7 @@
 -deprecated({restart_server, 1}).
 -deprecated({stop_server, 1}).
 -deprecated({overview, 0}).
+-deprecated({register_external_log_reader, 1}).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
@@ -1182,6 +1183,8 @@ cast_aux_command(ServerRef, Cmd) ->
 
 %% @doc Registers an external log reader. ServerId needs to be local to the node.
 %% Returns an initiated ra_log_reader:state() state.
+%% Deprecated. Now only reads log data stored in segments, not log data
+%% in mem tables.
 %% @end
 -spec register_external_log_reader(ra_server_id()) ->
     ra_log_reader:state().
