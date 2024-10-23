@@ -28,6 +28,7 @@ all_tests() ->
      accept_mem_tables_overwrite,
      accept_mem_tables_overwrite_same_wal,
      accept_mem_tables_multi_segment,
+     accept_mem_tables_multi_segment_overwrite,
      accept_mem_tables_for_down_server,
      accept_mem_tables_with_deleted_server,
      accept_mem_tables_with_corrupt_segment,
@@ -256,6 +257,52 @@ accept_mem_tables_multi_segment(Config) ->
               flush(),
               throw(ra_log_event_timeout)
     end,
+    ok = gen_server:stop(Pid),
+    ok.
+accept_mem_tables_multi_segment_overwrite(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    % configure max segment size
+    Conf = #{data_dir => Dir,
+             system => default,
+             name => ?SEGWR,
+             segment_conf => #{max_count => 8}},
+    {ok, Pid} = ra_log_segment_writer:start_link(Conf),
+    % more entries than fit a single segment
+    Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w.wal")),
+    LastFile =
+    receive
+        {ra_log_event, {segments, TidRanges, [{9, 10, Seg2}, {1, 8, _Seg1}]}} ->
+            Seg2
+            % ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+
+    Entries2 = [{I, 3, x} || I <- lists:seq(7, 15)],
+    Mt2 = make_mem_table(UId, Entries2),
+    Tid2 = ra_mt:tid(Mt2),
+    TidRanges2 = [{Tid2, ra_mt:range(Mt2)}],
+    Ranges2 = #{UId => TidRanges2},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
+    receive
+        {ra_log_event, {segments, TidRanges2,
+                        [{13, 15, _}, {7, 12, LastFile}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    MySegments = ra_log_segment_writer:my_segments(?SEGWR, UId),
+    ct:pal("segrefs ~p", [[ra_log_segment:segref(F) || F <- MySegments]]),
     ok = gen_server:stop(Pid),
     ok.
 

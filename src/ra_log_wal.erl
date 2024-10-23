@@ -9,15 +9,17 @@
 -behaviour(gen_batch_server).
 
 -export([start_link/1,
-         write/6,
-         write_batch/2,
-         truncate_write/5,
-         force_roll_over/1,
          init/1,
          handle_batch/2,
          terminate/2,
          format_status/1
         ]).
+
+-export([
+         write/6,
+         write_batch/2,
+         last_writer_seq/2,
+         force_roll_over/1]).
 
 -export([wal2list/1]).
 
@@ -165,11 +167,6 @@ write(Wal, {_, _} = From, MtTid, Idx, Term, Cmd)
        is_integer(Term) ->
     named_cast(Wal, {append, From, MtTid, Idx, Term, Cmd}).
 
--spec truncate_write(writer_id(), atom(), ra_index(), ra_term(), term()) ->
-    {ok, pid()} | {error, wal_down}.
-truncate_write(From, Wal, Idx, Term, Cmd) ->
-   named_cast(Wal, {truncate, From, Idx, Term, Cmd}).
-
 -spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
     {ok, pid()} | {error, wal_down}.
 write_batch(Wal, WalCommands) when is_pid(Wal) ->
@@ -188,15 +185,21 @@ write_batch(Wal, WalCommands) when is_atom(Wal) ->
             write_batch(Pid, WalCommands)
     end.
 
-named_cast(To, Msg) when is_pid(To) ->
-    gen_batch_server:cast(To, Msg),
-    {ok, To};
-named_cast(Wal, Msg) ->
+-spec last_writer_seq(Wal :: atom() | pid(), ra:uid()) ->
+    {ok, undefined | ra:index()} | {error, wal_down}.
+last_writer_seq(Wal, UId) when is_pid(Wal) ->
+    case is_process_alive(Wal) of
+        true ->
+            {ok, gen_batch_server:call(Wal, {?FUNCTION_NAME, UId}, infinity)};
+        false ->
+            {error, wal_down}
+    end;
+last_writer_seq(Wal, UId) when is_atom(Wal) ->
     case whereis(Wal) of
         undefined ->
             {error, wal_down};
         Pid ->
-            named_cast(Pid, Msg)
+            last_writer_seq(Pid, UId)
     end.
 
 % force a wal file to roll over to a new file
@@ -303,12 +306,15 @@ init(#{dir := Dir} = Conf0) ->
 -spec handle_batch([wal_op()], state()) ->
     {ok, [gen_batch_server:action()], state()}.
 handle_batch(Ops, #state{conf = #conf{explicit_gc = Gc}} = State0) ->
-    State = lists:foldr(fun handle_op/2, start_batch(State0), Ops),
+    Actions0 = case Gc of
+                   true ->
+                       [garbage_collect];
+                   false ->
+                       []
+               end,
+    {State, Actions} = lists:foldr(fun handle_op/2,
+                                   {start_batch(State0), Actions0}, Ops),
     %% process all ops
-    Actions = case Gc of
-                  true -> [garbage_collect];
-                  false -> []
-              end,
     {ok, Actions, complete_batch(State)}.
 
 terminate(Reason, State) ->
@@ -336,9 +342,14 @@ format_status(#state{conf = #conf{write_strategy = Strat,
 
 %% Internal
 
-handle_op({cast, WalCmd}, State) ->
-    handle_msg(WalCmd, State);
+handle_op({cast, WalCmd}, {State, Actions}) ->
+    {handle_msg(WalCmd, State), Actions};
+handle_op({call, From, {last_writer_seq, UId}},
+           {#state{writers = Writers} = State, Actions}) ->
+    {_, Res} = maps:get(UId, Writers, {undefined, undefined}),
+    {State, [{reply, From, Res} | Actions]};
 handle_op({info, {'EXIT', _, Reason}}, _State) ->
+    %% this is here for testing purposes only
     throw({stop, Reason}).
 
 recover_wal(Dir, #conf{segment_writer = SegWriter,
@@ -504,6 +515,7 @@ handle_msg({truncate, Id, MtTid, Idx, Term, Entry},
     SnapIdx = snap_idx(Conf, Id),
     write_data(Id, MtTid, Idx, Term, Entry, true, SnapIdx, State0);
 handle_msg({query, Fun}, State) ->
+    %% for testing
     _ = catch Fun(State),
     State;
 handle_msg(rollover, State) ->
@@ -1042,3 +1054,15 @@ handle_trunc(true, UId, Idx, #recovery{mode = Mode,
         _ ->
             State
     end.
+
+named_cast(To, Msg) when is_pid(To) ->
+    gen_batch_server:cast(To, Msg),
+    {ok, To};
+named_cast(Wal, Msg) ->
+    case whereis(Wal) of
+        undefined ->
+            {error, wal_down};
+        Pid ->
+            named_cast(Pid, Msg)
+    end.
+

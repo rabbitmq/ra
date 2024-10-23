@@ -314,13 +314,13 @@ retry(_Func, 0, _Sleep) ->
     exhausted;
 retry(Func, Attempt, Sleep) ->
     % do not retry immediately
-    timer:sleep(Sleep),
     case catch Func() of
         ok ->
             ok;
         true ->
             ok;
         _ ->
+            timer:sleep(Sleep),
             retry(Func, Attempt - 1)
     end.
 

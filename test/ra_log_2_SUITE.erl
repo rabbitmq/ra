@@ -38,6 +38,7 @@ all_tests() ->
      recovery_with_missing_checkpoints_directory,
      recovery_with_missing_config_file,
      wal_crash_recover,
+     wal_crash_with_lost_message_and_log_init,
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
@@ -778,7 +779,7 @@ resend_write_lost_in_wal_crash(Config) ->
     erlang:suspend_process(WalPid),
     Log2b = append_n(10, 11, 2, Log2),
     exit(WalPid, kill),
-    ra_lib:retry(fun () -> is_pid(whereis(ra_log_wal)) end, 100),
+    wait_for_wal(WalPid),
     %% write 11..12 which should trigger resend
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
@@ -835,11 +836,6 @@ wal_crash_recover(Config) ->
     Log3 = write_n(75, 100, 2, Log2),
     % wait long enough for the resend window to pass
     timer:sleep(1000),
-    % debugger:start(),
-    % int:i(ra_log_memtbl),
-    % int:i(?MODULE),
-    % % int:break(ra_log_memtbl, 228),
-    % int:break(?MODULE, 788),
     Log4 = write_n(100, 101, 2, Log3),
     {true, _} = ra_log:exists({100, 2}, Log4),
     Log = assert_log_events(Log4,
@@ -850,6 +846,32 @@ wal_crash_recover(Config) ->
                             end, 2000000),
     {100, 2} = ra_log:last_written(Log),
     validate_fold(1, 99, 2, Log),
+    ok.
+
+wal_crash_with_lost_message_and_log_init(Config) ->
+    Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    % write some entries
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
+    % simulate wal outage
+    WalPid = whereis(ra_log_wal),
+    true = ra_log_wal_SUITE:suspend_process(WalPid),
+
+    % append some messages that will be lost
+    Log3 = append_n(10, 15, 2, Log2),
+    ra_log:close(Log3),
+    % kill WAL to ensure lose the transient state keeping track of
+    % each writer's last written index
+    exit(WalPid, kill),
+
+    wait_for_wal(WalPid),
+
+    Log = ra_log_init(Config, #{wal => ra_log_wal}),
+    ?assertEqual({9, 2}, ra_log:last_written(Log)),
+
     ok.
 
 wal_down_read_availability(Config) ->
@@ -887,7 +909,7 @@ detect_lost_written_range(Config) ->
     Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
     {0, 0} = ra_log:last_index_term(Log0),
     % write some entries
-    Log1 = append_and_roll_no_deliver(1, 10, 2, Log0),
+    Log1 = append_n(1, 10, 2, Log0),
     Log2 = assert_log_events(Log1, fun (L) ->
                                            {9, 2} == ra_log:last_written(L)
                                    end),
@@ -902,7 +924,7 @@ detect_lost_written_range(Config) ->
     % each writer's last written index
     exit(WalPid, kill),
 
-    ra_lib:retry(fun () -> whereis(ra_log_wal) /= undefined end, 1000),
+    wait_for_wal(WalPid),
 
     % append some more stuff
     Log4 = append_n(15, 20, 2, Log3),
@@ -1159,7 +1181,6 @@ update_release_cursor(Config) ->
                              fun (L) ->
                                      {127, 2} == ra_log:snapshot_index_term(L)
                              end),
-    % Log3 = deliver_all_log_events(Log2, 500),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
     [{UId, 127}] = ets:lookup(ra_log_snapshot_state, ?config(uid, Config)),
@@ -1177,7 +1198,6 @@ update_release_cursor(Config) ->
                              fun (L) ->
                                      {149, 2} == ra_log:snapshot_index_term(L)
                              end),
-    % Log5 = deliver_all_log_events(Log4, 500),
 
     [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
 
@@ -1192,11 +1212,10 @@ update_release_cursor(Config) ->
                              fun (L) ->
                                      {154, 2} == ra_log:last_written(L)
                              end),
-    % Log6 = append_and_roll(150, 155, 2, Log5),
-    % Log = deliver_all_log_events(Log6, 500),
     validate_fold(150, 154, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
+    ra_log_segment_writer:await(ra_log_segment_writer),
     [_] = find_segments(Config),
 
     ok.
@@ -1689,3 +1708,9 @@ start_ra(Config) ->
     {ok, _} = ra:start([{data_dir, ?config(work_dir, Config)},
                         {segment_max_entries, 128}]),
     ok.
+
+wait_for_wal(OldPid) ->
+    ok = ra_lib:retry(fun () ->
+                              P = whereis(ra_log_wal),
+                              is_pid(P) andalso P =/= OldPid
+                      end, 100, 100).

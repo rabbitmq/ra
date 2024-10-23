@@ -62,7 +62,7 @@
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
-                        File :: string()}.
+                        File :: file:filename_all()}.
 -type event_body() :: {written, ra_term(), ra:range()} |
                       {segments, [{ets:tid(), ra:range()}], [segment_ref()]} |
                       {resend_write, ra_index()} |
@@ -237,7 +237,7 @@ init(#{uid := UId,
                snapshot_module = SnapModule,
                counter = Counter,
                names = Names},
-    State000 = #?MODULE{cfg = Cfg,
+    State0 = #?MODULE{cfg = Cfg,
                         first_index = max(SnapIdx + 1, FirstIdx),
                         last_index = max(SnapIdx, LastIdx0),
                         reader = Reader,
@@ -246,7 +246,7 @@ init(#{uid := UId,
                         last_wal_write = {whereis(Wal), now_ms()}
                        },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-    LastIdx = State000#?MODULE.last_index,
+    LastIdx = State0#?MODULE.last_index,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
     case ra_snapshot:latest_checkpoint(SnapshotState) of
@@ -257,21 +257,41 @@ init(#{uid := UId,
     end,
 
     % recover the last term
-    {LastTerm0, State00} = case LastIdx of
+    {LastTerm0, State2} = case LastIdx of
                                SnapIdx ->
-                                   {SnapTerm, State000};
+                                   {SnapTerm, State0};
                                -1 ->
-                                   {0, State000};
+                                   {0, State0};
                                LI ->
-                                   fetch_term(LI, State000)
+                                   fetch_term(LI, State0)
                            end,
+    LastSegRefIdx = case SegRefs of
+                        [] ->
+                            -1;
+                        [{_, L, _} | _] ->
+                            L
+                    end,
+    LastWrittenIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
+                         {ok, undefined} ->
+                             %% take last segref index
+                             LastSegRefIdx;
+                         {ok, Idx} ->
+                             max(Idx, LastSegRefIdx);
+                         {error, wal_down} ->
+                             ?ERROR("~ts: ra_log:init/1 cannot complete as wal process is down.",
+                                    [State2#?MODULE.cfg#cfg.log_id]),
+                             exit(wal_down)
+                     end,
+    {LastWrittenTerm, State3} = fetch_term(LastWrittenIdx, State2),
+
     LastTerm = ra_lib:default(LastTerm0, -1),
-    State0 = State00#?MODULE{last_term = LastTerm,
-                             last_written_index_term = {LastIdx, LastTerm}},
+    State4 = State3#?MODULE{last_term = LastTerm,
+                            last_written_index_term =
+                                {LastWrittenIdx, LastWrittenTerm}},
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
-    State = maybe_append_first_entry(State0),
+    State = maybe_append_first_entry(State4),
     ?DEBUG("~ts: ra_log:init recovered last_index_term ~w"
            " first index ~b",
            [State#?MODULE.cfg#cfg.log_id,
@@ -1244,24 +1264,20 @@ write_snapshot(Meta, MacRef, SnapKind,
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
 recover_ranges(UId, MtRange, SegWriter) ->
-    % 0. check open mem_tables (this assumes wal has finished recovering
+    % 1. check mem_tables (this assumes wal has finished recovering
     % which means it is essential that ra_servers are part of the same
     % supervision tree
-    % 1. check closed mem_tables to extend
     % 2. check segments
     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
     SegRefs = lists:foldl(
-                fun (S, Acc) ->
-                        {ok, Seg} = ra_log_segment:open(S, #{mode => read}),
+                fun (File, Acc) ->
                         %% if a server recovered when a segment had been opened
                         %% but never had any entries written the segref would be
                         %% undefined
-                        case ra_log_segment:segref(Seg) of
+                        case ra_log_segment:segref(File) of
                             undefined ->
-                                ok = ra_log_segment:close(Seg),
                                 Acc;
                             SegRef ->
-                                ok = ra_log_segment:close(Seg),
                                 [SegRef | Acc]
                         end
                 end, [], SegFiles),
