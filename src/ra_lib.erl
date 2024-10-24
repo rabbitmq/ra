@@ -14,6 +14,8 @@
          dump/1,
          dump/2,
          id/1,
+         ignore/1,
+         ignore/2,
          % maybe
          iter_maybe/2,
          % cohercion
@@ -48,8 +50,7 @@
          is_file/1,
          ensure_dir/1,
          consult/1,
-         maps_foreach/2,
-         maps_merge_with/3
+         ets_lookup_element_fun/0
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
@@ -86,6 +87,9 @@ dump(Prefix, Term) ->
     Term.
 
 id(X) -> X.
+
+ignore(_X) -> ok.
+ignore(_X, _Y) -> ok.
 
 
 -spec iter_maybe(undefined | term(), fun()) -> ok.
@@ -310,13 +314,13 @@ retry(_Func, 0, _Sleep) ->
     exhausted;
 retry(Func, Attempt, Sleep) ->
     % do not retry immediately
-    timer:sleep(Sleep),
     case catch Func() of
         ok ->
             ok;
         true ->
             ok;
         _ ->
+            timer:sleep(Sleep),
             retry(Func, Attempt - 1)
     end.
 
@@ -486,45 +490,21 @@ ensure_dir(F) ->
             end
     end.
 
-%% because OTP 23 support
-maps_foreach(Fun, {K, V, I}) ->
-    Fun(K, V),
-    maps_foreach(Fun, maps:next(I));
-maps_foreach(_Fun, none) ->
-    ok;
-maps_foreach(Fun, Map) when is_map(Map) ->
-    maps_foreach(Fun, maps:next(maps:iterator(Map))).
-
-%% copied from OTP to provide 23 compat, can be removed when we drop
-%% support for 23
-maps_merge_with(Combiner, Map1, Map2) when is_map(Map1),
-                                           is_map(Map2),
-                                           is_function(Combiner, 3) ->
-    case map_size(Map1) > map_size(Map2) of
+ets_lookup_element_fun() ->
+    case erlang:function_exported(ets, lookup_element, 4) of
         true ->
-            Iterator = maps:iterator(Map2),
-            merge_with_1(maps:next(Iterator),
-                         Map1,
-                         Map2,
-                         Combiner);
+            fun (Tid, Id, Pos, Default) ->
+                    ets:lookup_element(Tid, Id, Pos, Default)
+            end;
         false ->
-            Iterator = maps:iterator(Map1),
-            merge_with_1(maps:next(Iterator),
-                         Map2,
-                         Map1,
-                         fun(K, V1, V2) -> Combiner(K, V2, V1) end)
+            fun (Tid, Id, Pos, Default) ->
+                    try ets:lookup_element(Tid, Id, Pos)
+            catch
+                _:badarg ->
+                    Default
+            end
+            end
     end.
-
-merge_with_1({K, V2, Iterator}, Map1, Map2, Combiner) ->
-    case Map1 of
-        #{ K := V1 } ->
-            NewMap1 = Map1#{ K := Combiner(K, V1, V2) },
-            merge_with_1(maps:next(Iterator), NewMap1, Map2, Combiner);
-        #{ } ->
-            merge_with_1(maps:next(Iterator), maps:put(K, V2, Map1), Map2, Combiner)
-    end;
-merge_with_1(none, Result, _, _) ->
-    Result.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

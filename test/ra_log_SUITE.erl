@@ -114,7 +114,7 @@ append_then_fetch_no_wait(Config) ->
     % if we get async written notification check that handling that
     % results in the last written being updated
     receive
-        {ra_log_event, {written, _} = Evt} ->
+        {ra_log_event, {written, _, _} = Evt} ->
             {Log, _} = ra_log:handle_event(Evt, Log3),
             {Idx, Term} = ra_log:last_written(Log)
     after 0 ->
@@ -129,9 +129,10 @@ write_then_overwrite(Config) ->
     Idx = ra_log:next_index(Log0),
     Log1 = write_two(Idx, Term, Log0),
     % overwrite Idx
-    Entry2 = {Idx, Term, "entry0_2"},
+    Term2 = Term+1,
+    Entry2 = {Idx, Term2, "entry0_2"},
     {ok, Log2} = ra_log:write_sync([Entry2], Log1),
-    {{Idx, Term, "entry0_2"}, Log} = ra_log:fetch(Idx, Log2),
+    {{Idx, Term2, "entry0_2"}, Log} = ra_log:fetch(Idx, Log2),
     ExpectedNextIndex = Idx + 1,
     % ensure last index is updated after overwrite
     ExpectedNextIndex = ra_log:next_index(Log),

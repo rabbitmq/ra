@@ -3,7 +3,7 @@
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
 %% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
-%%
+%% @hidden
 -module(ra_server).
 
 -include("ra.hrl").
@@ -93,7 +93,8 @@
                                   effects => [effect()]}},
       pre_vote_token => reference(),
       query_index := non_neg_integer(),
-      queries_waiting_heartbeats := queue:queue({non_neg_integer(), consistent_query_ref()}),
+      queries_waiting_heartbeats := queue:queue({non_neg_integer(),
+                                                 consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => option(non_neg_integer())
      }.
@@ -565,25 +566,31 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
     end;
 handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                                               log_id = LogId} = Cfg,
-                                  cluster := Cluster} =  State00) ->
-    %% TODO: refactor to use wal batch API?
+                                  cluster := Cluster,
+                                  log := Log0} = State000) ->
     Num = length(Cmds),
-    case catch  lists:foldl(fun(C, {S0, E0}) ->
-                            case append_log_leader(C, S0, E0) of
-                                {ok, I, T, S, E} ->
-                                    {S, after_log_append_reply(C, I, T, E)};
-                                {not_appended, wal_down, _S, _E} = Result ->
-                                    throw(Result)
-                            end
-                    end, {State00, []}, Cmds) of
-        {State0, Effects0} ->
-            ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
-            ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-            {State, _, Effects} = make_pipelined_rpc_effects(State0, Effects0),
+    State00 = State000#{log => ra_log:begin_tx(Log0)},
+    %% only user commands are appended in a {commands, Cmds} batch
+    {State0, Effects0} = lists:foldl(
+                           fun(C, {S0, E0}) ->
+                                   {ok, I, T, S, E} = append_log_leader(C, S0, E0),
+                                   {S, after_log_append_reply(C, I, T, E)}
+                           end, {State00, []}, Cmds),
+    ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
+    ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
+    #{log := Log1} = State0,
+    case ra_log:commit_tx(Log1) of
+        {ok, Log} ->
+            {State, _, Effects} = make_pipelined_rpc_effects(State0#{log => Log},
+                                                             Effects0),
             {leader, State, Effects};
-        {not_appended, wal_down, State0, Effects} ->
+        {error, wal_down, Log} ->
             ?WARN("~ts ~b commands NOT appended to Raft log. Reason: wal_down",
                   [LogId, length(Cmds)]),
+            % at this point the entries are committed to the mem table
+            % but didn't make it fully or at all to the the wal
+
+            %% TODO: select the peer with the higest match index?
             CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
                            [] -> [];
                            [{PeerId, _} | _] ->
@@ -596,11 +603,12 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                               %% TODO: make duration configurable?
                               timeout => #{duration => 5000,
                                            effects => CondEffs,
-                                           transition_to => leader}}},
+                                           transition_to => leader}},
+                           log => Log},
 
-            {await_condition, State, Effects}
+            {await_condition, State, Effects0}
     end;
-handle_leader({ra_log_event, {written, _} = Evt},
+handle_leader({ra_log_event, {written, _, _} = Evt},
               #{log := Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
@@ -1085,23 +1093,19 @@ handle_follower(#append_entries_rpc{term = Term,
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State1#{log => Log2},
                                                                Effects0),
-                                {NextState, State,
-                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
+                                {NextState, State, Effects};
                         {error, wal_down} ->
                             %% at this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
                             %% made it to the wal before it crashed.
-                            %% we can check which entries actually made it to the
-                            %% wal / mem_tables and revert the last_index and last written
-                            %% index that should avoid the need to resend entries
-                            %% after writing a gap into the log
-                            %% Note that the wal writes and syncs to disk _before_
-                            %% updating the ETS tables so this is perfectly ok
-                            %% TODO: check this doesn't affect state machine
-                            %% application as applied index could be higher
-                            %% than written (if consensus has already been acheived from
-                            %% other members)
-                            Log = ra_log:reset_to_last_known_written(Log1),
+                            %% TODO: we cannot discover what the last index
+                            %% the WAL wrote was anymore as the WAL does
+                            %% not write the mem tables. We could implement something
+                            %% alternative where the WAL writes the last index, term
+                            %% it wrote for each UID into an ETS table and query
+                            %% this.
+                            % Log = ra_log:reset_to_last_known_written(Log1),
+                            Log = Log1,
                             {await_condition,
                              State1#{log => Log,
                                      condition =>
@@ -1180,7 +1184,7 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
                 #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, {written, _} = Evt},
+handle_follower({ra_log_event, {written, _, _} = Evt},
                 State0 = #{log := Log0,
                            cfg := #cfg{id = Id},
                            leader_id := LeaderId,
@@ -1901,8 +1905,8 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                       BatchSize = min(MaxBatchSize,
                                       MaxPipelineCount - NumInFlight),
                       {NewNextIdx, Eff, S} =
-                      make_rpc_effect(PeerId, Peer0, BatchSize, S0,
-                                      EntryCache),
+                          make_rpc_effect(PeerId, Peer0, BatchSize, S0,
+                                          EntryCache),
                       Peer = Peer0#{next_index => NewNextIdx,
                                     commit_index_sent => CommitIndex},
                       NewNumInFlight = NewNextIdx - MatchIdx - 1,
@@ -1915,15 +1919,7 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               end;
           (_, _, Acc) ->
               Acc
-      end, {State0, false, add_flush_event(State0, Effects0)}, Cluster).
-
-add_flush_event(#{log := Log}, Effects) ->
-    case ra_log:needs_cache_flush(Log) of
-        true ->
-            [{next_event, {ra_log_event, flush_cache}} | Effects];
-        false ->
-            Effects
-    end.
+      end, {State0, false, Effects0}, Cluster).
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),

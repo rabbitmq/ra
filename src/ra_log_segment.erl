@@ -378,12 +378,18 @@ max_count(#state{cfg = #cfg{max_count = Max}}) ->
 filename(#state{cfg = #cfg{filename = Fn}}) ->
     Fn.
 
--spec segref(state()) -> option(ra_log:segment_ref()).
+-spec segref(state() | file:filename_all()) ->
+    option(ra_log:segment_ref()).
 segref(#state{range = undefined}) ->
     undefined;
 segref(#state{range = {Start, End},
               cfg = #cfg{filename = Fn}}) ->
-    {Start, End, ra_lib:to_string(filename:basename(Fn))}.
+    {Start, End, filename:basename(Fn)};
+segref(Filename) ->
+    {ok, Seg} = open(Filename, #{mode => read}),
+    SegRef = segref(Seg),
+    close(Seg),
+    SegRef.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->

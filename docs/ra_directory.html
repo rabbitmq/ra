@@ -27,6 +27,7 @@
 <tr><td valign="top"><a href="#uid_of-2">uid_of/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#list_registered-1">list_registered/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_registered_uid-2">is_registered_uid/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -54,7 +55,7 @@
 <p><pre>register_name(System :: <a href="ra_system.html#type-names">ra_system:names()</a> | atom(),
               UId :: <a href="#type-ra_uid">ra_uid()</a>,
               Pid :: pid(),
-              ParentPid :: <a href="#type-maybe">maybe</a>(pid()),
+              ParentPid :: <a href="#type-option">option</a>(pid()),
               ServerName :: atom(),
               ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>) -&gt;
                  ok</pre></p>
@@ -89,7 +90,7 @@
 <div class="spec">
 <p><pre>name_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
         UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-           <a href="#type-maybe">maybe</a>(atom())</pre></p>
+           <a href="#type-option">option</a>(atom())</pre></p>
 <p> </p>
 </div>
 
@@ -97,7 +98,7 @@
 <div class="spec">
 <p><pre>cluster_name_of(SystemOrNames :: <a href="ra_system.html#type-names">ra_system:names()</a> | atom(),
                 UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-                   <a href="#type-maybe">maybe</a>(<a href="#type-ra_cluster_name">ra_cluster_name()</a>)</pre></p>
+                   <a href="#type-option">option</a>(<a href="#type-ra_cluster_name">ra_cluster_name()</a>)</pre></p>
 <p> </p>
 </div>
 
@@ -105,25 +106,33 @@
 <div class="spec">
 <p><pre>pid_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
        UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-          <a href="#type-maybe">maybe</a>(pid())</pre></p>
+          <a href="#type-option">option</a>(pid())</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="uid_of-2">uid_of/2</a></h3>
 <div class="spec">
-<p><tt>uid_of(System, ServerName) -&gt; any()</tt></p>
+<p><code>uid_of(System, ServerName) -&gt; any()</code></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(System) -&gt; any()</tt></p>
+<p><code>overview(System) -&gt; any()</code></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="list_registered-1">list_registered/1</a></h3>
 <div class="spec">
 <p><pre>list_registered(System :: atom()) -&gt; [{atom(), <a href="#type-ra_uid">ra_uid()</a>}]</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_registered_uid-2">is_registered_uid/2</a></h3>
+<div class="spec">
+<p><pre>is_registered_uid(SystemOrNames :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
+                  UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
+                     boolean()</pre></p>
 <p> </p>
 </div>
 <hr>
