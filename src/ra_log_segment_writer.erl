@@ -180,9 +180,11 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
           [System, length(RangesList), WalFile, Diff]),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
-            #state{segment_conf = SegConf} = State0) ->
+            #state{segment_conf = SegConf,
+                   system = System} = State0) ->
     %% remove all segments below the provided SegRef
     %% Also delete the segref if the file hasn't changed
+    T1 = erlang:monotonic_time(),
     Files = segments_for(Who, State0),
     {_Keep, Discard} = lists:splitwith(
                          fun (F) ->
@@ -204,6 +206,10 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
                     _ = prim_file:delete(Pivot),
                     %% as we are deleting the last segment - create an empty
                     %% successor
+                    T2 = erlang:monotonic_time(),
+                    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+                    ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
+                           [System, ?FUNCTION_NAME, Who, Diff]),
                     case open_successor_segment(Seg, SegConf) of
                         undefined ->
                             %% directory must have been deleted after the pivot
@@ -215,6 +221,10 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
                     end;
                 _ ->
                     %% the segment has changed - leave it in place
+                    T2 = erlang:monotonic_time(),
+                    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+                    ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
+                           [System, ?FUNCTION_NAME, Who, Diff]),
                     _ = ra_log_segment:close(Seg),
                     {noreply, State0}
             end
