@@ -898,22 +898,22 @@ segment_writer_or_wal_crash_follower(Config) ->
     FollowerPid = ct_rpc:call(FollowerNode, erlang, whereis, [FollowerName]),
     ?assert(is_pid(FollowerPid)),
 
-    AwaitReplicated = fun () ->
-                              LastIdxs =
-                              [begin
-                                   {ok, #{current_term := T,
-                                          log := #{last_index := L,
-                                                   cache_size := 0}}, _} =
-                                   ra:member_overview(S),
-                                   {T, L}
-                               end || {_, _N} = S <- ServerIds],
-                              1 == length(lists:usort(LastIdxs))
-                      end,
+    AwaitReplicated =
+        fun () -> LastIdxs =
+                  [begin
+                       {ok, #{current_term := T,
+                              log := #{last_index := L,
+                                       last_written_index_term := {L, _}}}, _} =
+                           ra:member_overview(S),
+                       {T, L}
+                   end || {_, _N} = S <- ServerIds],
+                  1 == length(lists:usort(LastIdxs))
+        end,
     [begin
          ct:pal("running iteration ~b", [I]),
 
          WriterPid = spawn(WriterFun),
-         timer:sleep(rand:uniform(500) + 5_000),
+         timer:sleep(rand:uniform(500) + 1_000),
 
          case I rem 2 == 0 of
              true ->
@@ -1009,21 +1009,20 @@ segment_writer_or_wal_crash_leader(Config) ->
 
     AwaitReplicated = fun () ->
                               LastIdxs =
-                              [begin
-                                   {ok, #{current_term := T,
-                                          log := #{last_index := L,
-                                                   last_written_index_term := {L, _}}},
-                                    _} =
-                                   ra:member_overview(S),
-                                   {T, L}
-                               end || {_, _N} = S <- ServerIds],
+                                  [begin
+                                       {ok, #{current_term := T,
+                                              log := #{last_index := L,
+                                                       last_written_index_term := {L, _}}},
+                                        _} = ra:member_overview(S),
+                                       {T, L}
+                                   end || S <- ServerIds],
                               1 == length(lists:usort(LastIdxs))
                       end,
     [begin
          ct:pal("running iteration ~b", [I]),
 
          WriterPid = spawn_link(fun () -> WriterFun(Leader) end),
-         timer:sleep(rand:uniform(500) + 5_000),
+         timer:sleep(rand:uniform(500) + 1_000),
 
          case I rem 2 == 0 of
              true ->
@@ -1038,21 +1037,20 @@ segment_writer_or_wal_crash_leader(Config) ->
                  true = ct_rpc:call(LeaderNode, erlang, exit, [Pid, kill])
          end,
 
-
-         timer:sleep(1000),
+         timer:sleep(rand:uniform(500) + 500),
          WriterPid ! stop,
          await_condition(fun () -> not is_process_alive(WriterPid) end, 1000),
 
          %% assert stuff
          await_condition(AwaitReplicated, 100),
-         ?assertMatch({ok, #{log := #{cache_size := 0}}, _},
-                      ra:member_overview(Leader)),
-         %% follower hasn't crashed
+         ct:pal("overview after replicated ~p",
+                [ra:member_overview(Leader)]),
+         %% leader hasn't crashed
          ?assertEqual(LeaderPid, ct_rpc:call(LeaderNode, erlang, whereis,
-                                               [LeaderName]))
+                                             [LeaderName]))
      end || I <- lists:seq(1, 10)],
 
-    %% stop and restart the follower
+    %% stop and restart the leader
     ok = ra:stop_server(Leader),
     ok = ra:restart_server(Leader),
 
@@ -1370,8 +1368,11 @@ await_condition(_Fun, 0) ->
 await_condition(Fun, Attempts) ->
     case catch Fun() of
         true -> ok;
+        false ->
+            timer:sleep(100),
+            await_condition(Fun, Attempts - 1);
         _Reason ->
-            % ct:pal("await_condition retry with ~p", [Reason]),
+            % ct:pal("await_condition retry with ~p", [_Reason]),
             timer:sleep(100),
             await_condition(Fun, Attempts - 1)
     end.

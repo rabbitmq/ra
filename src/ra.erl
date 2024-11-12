@@ -90,6 +90,7 @@
 -deprecated({restart_server, 1}).
 -deprecated({stop_server, 1}).
 -deprecated({overview, 0}).
+-deprecated({register_external_log_reader, 1}).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
@@ -111,6 +112,8 @@
 -type idxterm() :: ra_idxterm().
 -type server_id() :: ra_server_id().
 -type cluster_name() :: ra_cluster_name().
+-type range() :: ra_range:range().
+-type uid() :: ra_uid().
 
 -type query_condition() :: {applied, idxterm()}.
 %% A condition that a query will wait for it to become true before it is
@@ -128,9 +131,11 @@
               idxterm/0,
               server_id/0,
               cluster_name/0,
+              range/0,
               query_fun/0,
               query_condition/0,
-              from/0]).
+              from/0,
+              uid/0]).
 
 %% @doc Starts the ra application.
 %% @end
@@ -738,7 +743,7 @@ new_uid(Source) when is_binary(Source) ->
 
 %% @doc Returns a map of overview data of the default Ra system on the current Erlang
 %% node.
-%% DEPRECATED: user overview/1
+%% DEPRECATED: use overview/1
 %% @end
 -spec overview() -> map() | system_not_started.
 overview() ->
@@ -755,15 +760,14 @@ overview(System) ->
         Config ->
             #{names := #{segment_writer := SegWriter,
                          open_mem_tbls := OpenTbls,
-                         closed_mem_tbls := ClosedTbls,
                          wal := Wal}} = Config,
             #{node => node(),
               servers => ra_directory:overview(System),
               %% TODO:filter counter keys by system
               counters => ra_counters:overview(),
               wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
-                       open_mem_tables => ets:info(OpenTbls, size),
-                       closed_mem_tables => ets:info(ClosedTbls, size)},
+                       open_mem_tables => ets:info(OpenTbls, size)
+                      },
               segment_writer => ra_log_segment_writer:overview(SegWriter)
              }
     end.
@@ -1178,6 +1182,8 @@ cast_aux_command(ServerRef, Cmd) ->
 
 %% @doc Registers an external log reader. ServerId needs to be local to the node.
 %% Returns an initiated ra_log_reader:state() state.
+%% Deprecated. Now only reads log data stored in segments, not log data
+%% in mem tables.
 %% @end
 -spec register_external_log_reader(ra_server_id()) ->
     ra_log_reader:state().

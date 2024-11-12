@@ -18,21 +18,36 @@
 <h3 class="typedecl"><a name="type-config">config()</a></h3>
 <p><pre>config() = 
     #{name := atom(),
-      names := <a href="#type-names">names()</a>,
-      data_dir := <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
-      wal_data_dir =&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
-      segment_max_entries =&gt; non_neg_integer(),
+      names := <a href="#type-names" docgen-rel="seetype" docgen-href="#names/0">names()</a>,
+      data_dir := <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+      wal_data_dir =&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
       wal_max_size_bytes =&gt; non_neg_integer(),
       wal_compute_checksums =&gt; boolean(),
       wal_max_batch_size =&gt; non_neg_integer(),
-      wal_max_entries =&gt; non_neg_integer(),
+      wal_max_entries =&gt; undefined | non_neg_integer(),
       wal_write_strategy =&gt; default | o_sync | sync_after_notify,
       wal_sync_method =&gt; datasync | sync | none,
       wal_hibernate_after =&gt; non_neg_integer(),
       wal_garbage_collect =&gt; boolean(),
       wal_pre_allocate =&gt; boolean(),
+      segment_max_entries =&gt; non_neg_integer(),
+      segment_max_pending =&gt; non_neg_integer(),
+      segment_compute_checksums =&gt; boolean(),
       snapshot_chunk_size =&gt; non_neg_integer(),
-      receive_snapshot_timeout =&gt; non_neg_integer()}</pre></p>
+      receive_snapshot_timeout =&gt; non_neg_integer(),
+      default_max_pipeline_count =&gt; non_neg_integer(),
+      default_max_append_entries_rpc_batch_size =&gt;
+          non_neg_integer(),
+      message_queue_data =&gt; on_heap | off_heap,
+      wal_min_heap_size =&gt; non_neg_integer(),
+      wal_min_bin_vheap_size =&gt; non_neg_integer(),
+      server_min_bin_vheap_size =&gt; non_neg_integer(),
+      server_min_heap_size =&gt; non_neg_integer(),
+      compress_mem_tables =&gt; boolean(),
+      low_priority_commands_flush_size =&gt; non_neg_integer(),
+      low_priority_commands_in_memory_size =&gt; non_neg_integer(),
+      server_recovery_strategy =&gt;
+          undefined | registered | {module(), atom(), list()}}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-names">names()</a></h3>
@@ -43,7 +58,6 @@
       log_ets := atom(),
       log_meta := atom(),
       open_mem_tbls := atom(),
-      closed_mem_tbls := atom(),
       segment_writer := atom(),
       server_sup := atom(),
       directory := atom(),
@@ -59,50 +73,52 @@
 <tr><td valign="top"><a href="#fetch-1">fetch/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#lookup_name-2">lookup_name/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#stop_default-0">stop_default/0</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
 <h3 class="function"><a name="start-1">start/1</a></h3>
 <div class="spec">
-<p><pre>start(Config :: <a href="ra_system.html#type-config">ra_system:config()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a></pre></p>
+<p><pre>start(Config :: <a href="ra_system.html#type-config" docgen-rel="seetype" docgen-href="ra_system#config/0">ra_system:config()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret" docgen-rel="seetype" docgen-href="stdlib:supervisor#startchild_ret/0">supervisor:startchild_ret()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="start_default-0">start_default/0</a></h3>
 <div class="spec">
-<p><pre>start_default() -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret">supervisor:startchild_ret()</a></pre></p>
+<p><pre>start_default() -&gt; <a href="/Users/nkarl/code/rabbitmq/stdlib/doc/supervisor.html#type-startchild_ret" docgen-rel="seetype" docgen-href="stdlib:supervisor#startchild_ret/0">supervisor:startchild_ret()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="default_config-0">default_config/0</a></h3>
 <div class="spec">
-<p><pre>default_config() -&gt; <a href="ra_system.html#type-config">ra_system:config()</a></pre></p>
+<p><pre>default_config() -&gt; <a href="ra_system.html#type-config" docgen-rel="seetype" docgen-href="ra_system#config/0">ra_system:config()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="derive_names-1">derive_names/1</a></h3>
 <div class="spec">
-<p><tt>derive_names(SysName) -&gt; any()</tt></p>
+<p><code>derive_names(SysName) -&gt; any()</code></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="store-1">store/1</a></h3>
 <div class="spec">
-<p><pre>store(Config :: <a href="#type-config">config()</a>) -&gt; ok</pre></p>
+<p><pre>store(Config :: <a href="#type-config" docgen-rel="seetype" docgen-href="#config/0">config()</a>) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="fetch-1">fetch/1</a></h3>
 <div class="spec">
-<p><pre>fetch(Name :: atom()) -&gt; <a href="#type-config">config()</a> | undefined</pre></p>
+<p><pre>fetch(Name :: atom()) -&gt; <a href="#type-config" docgen-rel="seetype" docgen-href="#config/0">config()</a> | undefined</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="fetch-2">fetch/2</a></h3>
 <div class="spec">
 <p><pre>fetch(Name :: atom(), Node :: atom()) -&gt;
-         <a href="#type-config">config()</a> | undefined | {badrpc, term()}</pre></p>
+         <a href="#type-config" docgen-rel="seetype" docgen-href="#config/0">config()</a> | undefined | {badrpc, term()}</pre></p>
 <p> </p>
 </div>
 
@@ -110,6 +126,18 @@
 <div class="spec">
 <p><pre>lookup_name(System :: atom(), Key :: atom()) -&gt;
                {ok, atom()} | {error, system_not_started}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="stop-1">stop/1</a></h3>
+<div class="spec">
+<p><pre>stop(System :: <a href="ra_system.html#type-config" docgen-rel="seetype" docgen-href="ra_system#config/0">ra_system:config()</a> | atom()) -&gt; ok | {error, any()}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="stop_default-0">stop_default/0</a></h3>
+<div class="spec">
+<p><pre>stop_default() -&gt; ok | {error, any()}</pre></p>
 <p> </p>
 </div>
 <hr>

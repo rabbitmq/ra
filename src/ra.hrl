@@ -241,11 +241,11 @@
          {read_ops, ?C_RA_LOG_READ_OPS, counter,
           "Total number of read ops"},
          {read_cache, ?C_RA_LOG_READ_CACHE, counter,
-          "Total number of cache reads"},
-         {read_open_mem_tbl, ?C_RA_LOG_READ_OPEN_MEM_TBL, counter,
-          "Total number of opened memory tables"},
+          "Unused. Total number of cache reads"},
+         {read_mem_table, ?C_RA_LOG_READ_MEM_TBL, counter,
+          "Total number of reads from mem tables"},
          {read_closed_mem_tbl, ?C_RA_LOG_READ_CLOSED_MEM_TBL, counter,
-          "Total number of closed memory tables"},
+          "Unused. Total number of closed memory tables"},
          {read_segment, ?C_RA_LOG_READ_SEGMENT, counter,
           "Total number of read segments"},
          {fetch_term, ?C_RA_LOG_FETCH_TERM, counter,
@@ -269,7 +269,7 @@
 -define(C_RA_LOG_WRITE_RESENDS, 2).
 -define(C_RA_LOG_READ_OPS, 3).
 -define(C_RA_LOG_READ_CACHE, 4).
--define(C_RA_LOG_READ_OPEN_MEM_TBL, 5).
+-define(C_RA_LOG_READ_MEM_TBL, 5).
 -define(C_RA_LOG_READ_CLOSED_MEM_TBL, 6).
 -define(C_RA_LOG_READ_SEGMENT, 7).
 -define(C_RA_LOG_FETCH_TERM, 8).

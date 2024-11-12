@@ -27,6 +27,7 @@
 <tr><td valign="top"><a href="#uid_of-2">uid_of/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#list_registered-1">list_registered/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_registered_uid-2">is_registered_uid/2</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -39,91 +40,99 @@
 
 <h3 class="function"><a name="init-2">init/2</a></h3>
 <div class="spec">
-<p><pre>init(Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>, X2 :: <a href="ra_system.html#type-names">ra_system:names()</a>) -&gt; ok</pre></p>
+<p><pre>init(Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>, X2 :: <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="deinit-1">deinit/1</a></h3>
 <div class="spec">
-<p><pre>deinit(System :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>) -&gt; ok</pre></p>
+<p><pre>deinit(System :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="register_name-6">register_name/6</a></h3>
 <div class="spec">
-<p><pre>register_name(System :: <a href="ra_system.html#type-names">ra_system:names()</a> | atom(),
-              UId :: <a href="#type-ra_uid">ra_uid()</a>,
+<p><pre>register_name(System :: <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a> | atom(),
+              UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
               Pid :: pid(),
-              ParentPid :: <a href="#type-maybe">maybe</a>(pid()),
+              ParentPid :: <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(pid()),
               ServerName :: atom(),
-              ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>) -&gt;
+              ClusterName :: <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a>) -&gt;
                  ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="unregister_name-2">unregister_name/2</a></h3>
 <div class="spec">
-<p><pre>unregister_name(System :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
-                UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-                   <a href="#type-ra_uid">ra_uid()</a></pre></p>
+<p><pre>unregister_name(System :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+                UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>) -&gt;
+                   <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="where_is-2">where_is/2</a></h3>
 <div class="spec">
-<p><pre>where_is(System :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
-         ServerName :: <a href="#type-ra_uid">ra_uid()</a> | atom()) -&gt;
+<p><pre>where_is(System :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+         ServerName :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a> | atom()) -&gt;
             pid() | undefined</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="where_is_parent-2">where_is_parent/2</a></h3>
 <div class="spec">
-<p><pre>where_is_parent(System :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
-                ServerName :: <a href="#type-ra_uid">ra_uid()</a> | atom()) -&gt;
+<p><pre>where_is_parent(System :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+                ServerName :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a> | atom()) -&gt;
                    pid() | undefined</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="name_of-2">name_of/2</a></h3>
 <div class="spec">
-<p><pre>name_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
-        UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-           <a href="#type-maybe">maybe</a>(atom())</pre></p>
+<p><pre>name_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+        UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>) -&gt;
+           <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(atom())</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="cluster_name_of-2">cluster_name_of/2</a></h3>
 <div class="spec">
-<p><pre>cluster_name_of(SystemOrNames :: <a href="ra_system.html#type-names">ra_system:names()</a> | atom(),
-                UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-                   <a href="#type-maybe">maybe</a>(<a href="#type-ra_cluster_name">ra_cluster_name()</a>)</pre></p>
+<p><pre>cluster_name_of(SystemOrNames :: <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a> | atom(),
+                UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>) -&gt;
+                   <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a>)</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="pid_of-2">pid_of/2</a></h3>
 <div class="spec">
-<p><pre>pid_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names">ra_system:names()</a>,
-       UId :: <a href="#type-ra_uid">ra_uid()</a>) -&gt;
-          <a href="#type-maybe">maybe</a>(pid())</pre></p>
+<p><pre>pid_of(SystemOrNames :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+       UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>) -&gt;
+          <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(pid())</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="uid_of-2">uid_of/2</a></h3>
 <div class="spec">
-<p><tt>uid_of(System, ServerName) -&gt; any()</tt></p>
+<p><code>uid_of(System, ServerName) -&gt; any()</code></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
-<p><tt>overview(System) -&gt; any()</tt></p>
+<p><code>overview(System) -&gt; any()</code></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="list_registered-1">list_registered/1</a></h3>
 <div class="spec">
-<p><pre>list_registered(System :: atom()) -&gt; [{atom(), <a href="#type-ra_uid">ra_uid()</a>}]</pre></p>
+<p><pre>list_registered(System :: atom()) -&gt; [{atom(), <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>}]</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_registered_uid-2">is_registered_uid/2</a></h3>
+<div class="spec">
+<p><pre>is_registered_uid(SystemOrNames :: atom() | <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+                  UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>) -&gt;
+                     boolean()</pre></p>
 <p> </p>
 </div>
 <hr>

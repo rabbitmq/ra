@@ -164,7 +164,7 @@ setup_log() ->
     meck:expect(ra_log, append_sync,
                 fun({Idx, Term, _} = E, L) ->
                         L1 = ra_log_memory:append(E, L),
-                        {LX, _} = ra_log_memory:handle_event({written, {Idx, Idx, Term}}, L1),
+                        {LX, _} = ra_log_memory:handle_event({written, Term, {Idx, Idx}}, L1),
                         LX
                 end),
     meck:expect(ra_log, write_config, fun ra_log_memory:write_config/2),
@@ -176,7 +176,6 @@ setup_log() ->
     meck:expect(ra_log, last_index_term, fun ra_log_memory:last_index_term/1),
     meck:expect(ra_log, set_last_index, fun ra_log_memory:set_last_index/2),
     meck:expect(ra_log, fetch_term, fun ra_log_memory:fetch_term/2),
-    meck:expect(ra_log, needs_cache_flush, fun (_) -> false end),
     meck:expect(ra_log, exists,
                 fun ({Idx, Term}, L) ->
                         case ra_log_memory:fetch_term(Idx, L) of
@@ -245,8 +244,9 @@ recover_restores_cluster_changes(_Config) ->
                         current_term := 1}, _} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
     ?assert(maps:size(Cluster0) =:= 1),
-    {leader, State, _} = ra_server:handle_leader(written_evt({1, 1, 1}), State0),
-    ?assertMatch(#{current_term := 1}, State),
+    {leader, State, _} = ra_server:handle_leader(written_evt(1, {1, 1}), State0),
+    ?assertMatch(#{current_term := 1,
+                   last_applied := 1}, State),
     ?assertMatch(#{cluster_change_permitted := true}, State),
 
     % n2 joins
@@ -349,7 +349,7 @@ follower_aer_1(_Config) ->
      [{cast, N1, {Self, #append_entries_reply{next_index = 3,
                                               last_term = 1,
                                               last_index = 1}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State2),
+        = ra_server:handle_follower(written_evt(1, {1, 1}), State2),
 
     % AER with index [3], commit = 3 -> commit_index = 3
     AER3 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 2,
@@ -367,7 +367,7 @@ follower_aer_1(_Config) ->
      [{cast, N1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {2, 2, 1}}}, State4),
+        = ra_server:handle_follower(written_evt(1, {2, 2}), State4),
 
     ok = logger:set_primary_config(level, all),
     % AER with index [] -> last_applied: 2 - replies with last_index = 2,
@@ -391,7 +391,7 @@ follower_aer_1(_Config) ->
      [{cast, N1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 3}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {3, 3, 1}}}, State6),
+        = ra_server:handle_follower(written_evt(1, {3, 3}), State6),
     ok.
 
 follower_aer_2(_Config) ->
@@ -414,7 +414,7 @@ follower_aer_2(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State1),
+        = ra_server:handle_follower(written_evt(1, {l, 1}), State1),
 
     % AER with index [], leader_commit = 1 -> last_applied: 1, reply: last_index = 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 1,
@@ -444,7 +444,7 @@ follower_aer_3(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {1, 1, 1}}}, State1),
+        = ra_server:handle_follower(written_evt(1, {1, 1}), State1),
     % AER with index [3] -> last_applied = 1 - reply(false):
     % last_index, 1, next_index = 2
     AER2 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 2,
@@ -477,7 +477,7 @@ follower_aer_3(_Config) ->
                                             success = true,
                                             last_term = 1,
                                             last_index = 4}}} | _]}
-    = ra_server:handle_follower({ra_log_event, {written, {4, 4, 1}}}, State4),
+    = ra_server:handle_follower(written_evt(1, {4, 4}), State4),
 
     % AER with index [2,3,4], commit_index = 4
     % async failed AER reverted back leader's next_index for follower
@@ -521,7 +521,7 @@ follower_aer_4(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
                                             last_index = 4}}}]}
-        = ra_server:handle_follower({ra_log_event, {written, {4, 4, 1}}}, State1),
+        = ra_server:handle_follower(written_evt(1, {4, 4}), State1),
     % AER with index [5], commit_index = 10 -> last_applied = 4, commit_index = 5
     ok.
 
@@ -543,8 +543,8 @@ follower_aer_5(_Config) ->
     %% set up follower state
     {follower, State00, _} = ra_server:handle_follower(AER1, Init),
     %% TODO also test when written even occurs after
-    {follower, State0, _} = ra_server:handle_follower(
-                              {ra_log_event, {written, {4, 4, 1}}}, State00),
+    {follower, State0, _} =
+    ra_server:handle_follower(written_evt(1, {4, 4}), State00),
     % now an AER from another leader in a higher term is received
     % This is what the leader sends immediately before committing it;s noop
     AER2 = #append_entries_rpc{term = 2, leader_id = N5, prev_log_index = 3,
@@ -557,7 +557,6 @@ follower_aer_5(_Config) ->
                                        last_index = 3}, M),
     % ct:pal("Effects ~p~n State: ~p", [Effects, State1]),
     ok.
-
 
 
 follower_aer_term_mismatch(_Config) ->
@@ -651,7 +650,7 @@ follower_handles_append_entries_rpc(_Config) ->
     {await_condition, _, [{cast, N1, {N1, #append_entries_reply{term = 5, success = false}}},
                           {record_leader_msg, _}]}
         = ra_server:handle_follower(EmptyAE#append_entries_rpc{prev_log_term = 4},
-                                  State),
+                                    State),
 
     % truncate/overwrite if a existing entry conflicts (diff term) with
     % a new one (5.3)
@@ -668,7 +667,7 @@ follower_handles_append_entries_rpc(_Config) ->
     = begin
           {follower, Inter3, _} =
               ra_server:handle_follower(AE, State#{last_applied => 1}),
-          ra_server:handle_follower({ra_log_event, {written, {2, 2, 4}}}, Inter3)
+          ra_server:handle_follower(written_evt(4, {2, 2}), Inter3)
       end,
     [{0, 0, undefined},
      {1, 1, _}, {2, 4, _}] = ra_log_memory:to_list(Log),
@@ -689,7 +688,7 @@ follower_handles_append_entries_rpc(_Config) ->
                                        leader_commit = 5},
             State#{commit_index => 1, last_applied => 1,
                    machine_state => <<"hi1">>}),
-          ra_server:handle_follower(written_evt({4, 4, 5}), Inter4)
+          ra_server:handle_follower(written_evt(5, {4, 4}), Inter4)
       end,
     ok.
 
@@ -747,7 +746,7 @@ follower_catchup_condition(_Config) ->
         ra_server:handle_await_condition(ISRpc, State),
 
     {await_condition, _, []} =
-        ra_server:handle_await_condition({ra_log_event, {written, {99, 99, 99}}},
+        ra_server:handle_await_condition(written_evt(99, {99, 99}),
                                          State),
 
     Msg = #request_vote_rpc{candidate_id = ?N2, term = 6, last_log_index = 3,
@@ -775,7 +774,6 @@ wal_down_condition_follower(_Config) ->
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, write, fun (_Es, _L) -> {error, wal_down} end),
     meck:expect(ra_log, can_write, fun (_L) -> false end),
-    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
 
     % ra log fails
     {await_condition, State1 = #{condition := _}, [{record_leader_msg, _}]}
@@ -803,7 +801,6 @@ wal_down_condition_leader(_Config) ->
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
     meck:expect(ra_log, can_write, fun (_L) -> false end),
-    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
 
     %% when the wal is down the leader should transition to await_condition,
     %% on timeout a leader change effect should be emitted
@@ -842,7 +839,6 @@ wal_down_condition_leader_commands(_Config) ->
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
     meck:expect(ra_log, can_write, fun (_L) -> false end),
-    meck:expect(ra_log, reset_to_last_known_written, fun (L) -> L end),
 
     %% when the wal is down the leader should transition to awai_condition,
     %% on timeout it should attempt a leader change effect should be emitted
@@ -855,7 +851,7 @@ wal_down_condition_leader_commands(_Config) ->
                                    effects := [{next_event, cast,
                                                 {transfer_leadership, _}}],
                                    transition_to := leader}}} = _State1, _}
-        = ra_server:handle_leader({commands, [Cmd]}, State0),
+        = ra_server:handle_leader({command, Cmd}, State0),
     ok.
 
 update_release_cursor(_Config) ->
@@ -1369,7 +1365,7 @@ leader_noop_operation_enables_cluster_change(_Config) ->
     State00 = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => false},
     {leader, #{cluster_change_permitted := false} = State0, _Effects} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
-    {leader, State, _} = ra_server:handle_leader({ra_log_event, {written, {4, 4, 5}}}, State0),
+    {leader, State, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State0),
     AEReply = {N2, #append_entries_reply{term = 5, success = true,
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
@@ -1400,7 +1396,7 @@ leader_noop_increments_machine_version(_Config) ->
                                          State00),
     %% new machine version is applied
     {leader, State1, _} =
-        ra_server:handle_leader({ra_log_event, {written, {4, 4, 5}}}, State0),
+        ra_server:handle_leader(written_evt(5, {4, 4}), State0),
 
     meck:expect(ModV2, apply,
                 fun (_, {machine_version, 1, 2}, State) ->
@@ -1446,7 +1442,7 @@ follower_machine_version(_Config) ->
                  last_applied := 3,
                  commit_index := 5,
                  log := _Log} = _State1, _Effects} =
-    ra_server:handle_follower({ra_log_event, {written, {4, 5, 5}}}, State0),
+    ra_server:handle_follower(written_evt(5, {4, 5}), State0),
     ok.
 
 follower_install_snapshot_machine_version(_Config) ->
@@ -1618,9 +1614,9 @@ leader_is_removed(_Config) ->
 
     {leader, State1, _} =
         ra_server:handle_leader({command, {'$ra_leave', meta(), ?N1, await_consensus}},
-                              State),
+                                State),
     {leader, State1b, _} =
-        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+        ra_server:handle_leader(written_evt(5, {4, 4}), State1),
 
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true, next_index = 5,
@@ -1657,13 +1653,13 @@ follower_cluster_change(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AE, State),
-            ra_server:handle_follower(written_evt({4, 4, 5}), Int)
+            ra_server:handle_follower(written_evt(4, {4, 5}), Int)
         end,
 
     ok.
 
-written_evt(E) ->
-    {ra_log_event, {written, E}}.
+written_evt(Term, Range) ->
+    {ra_log_event, {written, Term, Range}}.
 
 leader_applies_new_cluster(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
@@ -1680,7 +1676,7 @@ leader_applies_new_cluster(_Config) ->
                             N3 := _, N4 := _} } = State1, _} =
         ra_server:handle_leader(Command, State),
     {leader, State2, _} =
-        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+        ra_server:handle_leader(written_evt(5, {4, 4}), State1),
 
     ?assert(not maps:get(cluster_change_permitted, State2)),
     % replies coming in
@@ -1720,7 +1716,7 @@ leader_applies_new_cluster_nonvoter(_Config) ->
                                                                uid := <<"uid">>}}}} = State1, _} =
         ra_server:handle_leader(Command, State),
     {leader, State2, _} =
-        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+        ra_server:handle_leader(written_evt(5, {4, 4}), State1),
 
     ?assert(not maps:get(cluster_change_permitted, State2)),
 
@@ -1835,7 +1831,7 @@ command_notify(_Config) ->
         ra_server:handle_leader({command, Cmd}, State0),
 
     {leader, State, _} =
-        ra_server:handle_leader(written_evt({4, 4, 5}), State1),
+        ra_server:handle_leader(written_evt(5, {4, 4}), State1),
     AER = #append_entries_reply{success = true,
                                 term = 5,
                                 next_index = 5,
@@ -2178,7 +2174,7 @@ snapshotted_follower_received_append_entries(_Config) ->
     {follower, _FState, [{cast, N1, {N3, #append_entries_reply{success = true}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AER, FState1),
-            ra_server:handle_follower(written_evt({4, 4, 2}), Int)
+            ra_server:handle_follower(written_evt(2, {4, 4}), Int)
         end,
     ok.
 
@@ -2727,7 +2723,7 @@ leader_consistent_query(_Config) ->
 enable_cluster_change(State0) ->
     {leader, #{cluster_change_permitted := false} = State1, _Effects} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State0),
-    {leader, State, _} = ra_server:handle_leader({ra_log_event, {written, {4, 4, 5}}}, State1),
+    {leader, State, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
     AEReply = {?N2, #append_entries_reply{term = 5, success = true,
                                           next_index = 5,
                                           last_index = 4, last_term = 5}},
@@ -2909,7 +2905,7 @@ base_state(NumServers, MacMod) ->
                        [{1, 1, usr(<<"hi1">>)},
                         {2, 3, usr(<<"hi2">>)},
                         {3, 5, usr(<<"hi3">>)}]),
-    {Log, _} = ra_log:handle_event({written, {1, 3, 5}}, Log0),
+    {Log, _} = ra_log:handle_event({written, 5, {1, 3}}, Log0),
 
     Servers = lists:foldl(fun(N, Acc) ->
                                 Name = {list_to_atom("n" ++ integer_to_list(N)), node()},

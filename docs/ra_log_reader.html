@@ -21,11 +21,11 @@
 
 <h3 class="typedecl"><a name="type-segment_ref">segment_ref()</a></h3>
 <p><pre>segment_ref() = 
-    {From :: <a href="#type-ra_index">ra_index()</a>, To :: <a href="#type-ra_index">ra_index()</a>, File :: string()}</pre></p>
+    {From :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, To :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, File :: string()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
-<p><b>abstract datatype</b>: <tt>state()</tt></p>
+<p><b>abstract datatype</b>: <code>state()</code></p>
 
 
 <h2><a name="index">Function Index</a></h2>
@@ -37,54 +37,50 @@
 <tr><td valign="top"><a href="#update_first_index-2">update_first_index/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#segment_refs-1">segment_refs/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#num_open_segments-1">num_open_segments/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read-3">read/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read-4">read/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#fold-5">fold/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#sparse_read-3">sparse_read/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#fetch_term-2">fetch_term/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#delete_closed_mem_table_object-2">delete_closed_mem_table_object/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#closed_mem_tables-1">closed_mem_tables/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#open_mem_table_lookup-1">open_mem_table_lookup/1</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
 
 <h3 class="function"><a name="init-6">init/6</a></h3>
 <div class="spec">
-<p><pre>init(UId :: <a href="#type-ra_uid">ra_uid()</a>,
-     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
-     FirstIdx :: <a href="#type-ra_index">ra_index()</a>,
+<p><pre>init(UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
+     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>,
+     FirstIdx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
      MaxOpen :: non_neg_integer(),
-     SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
-     Names :: <a href="ra_system.html#type-names">ra_system:names()</a>) -&gt;
-        <a href="#type-state">state()</a></pre></p>
+     SegRefs :: [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>],
+     Names :: <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>) -&gt;
+        <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="init-8">init/8</a></h3>
 <div class="spec">
-<p><pre>init(UId :: <a href="#type-ra_uid">ra_uid()</a>,
-     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>,
-     FirstIdx :: <a href="#type-ra_index">ra_index()</a>,
+<p><pre>init(UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
+     Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>,
+     FirstIdx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
      MaxOpen :: non_neg_integer(),
-     AccessPattern :: <a href="#type-access_pattern">access_pattern()</a>,
-     SegRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
-     X7 :: <a href="ra_system.html#type-names">ra_system:names()</a>,
-     Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref">counters:counters_ref()</a>) -&gt;
-        <a href="#type-state">state()</a></pre></p>
+     AccessPattern :: <a href="#type-access_pattern" docgen-rel="seetype" docgen-href="#access_pattern/0">access_pattern()</a>,
+     SegRefs :: [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>],
+     X7 :: <a href="ra_system.html#type-names" docgen-rel="seetype" docgen-href="ra_system#names/0">ra_system:names()</a>,
+     Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a>) -&gt;
+        <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="close-1">close/1</a></h3>
 <div class="spec">
-<p><pre>close(X1 :: <a href="#type-state">state()</a>) -&gt; ok</pre></p>
+<p><pre>close(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; ok</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="update_segments-2">update_segments/2</a></h3>
 <div class="spec">
-<p><pre>update_segments(NewSegmentRefs :: [<a href="#type-segment_ref">segment_ref()</a>],
-                State :: <a href="#type-state">state()</a>) -&gt;
-                   <a href="#type-state">state()</a></pre></p>
+<p><pre>update_segments(NewSegmentRefs :: [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>],
+                State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                   <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
@@ -93,81 +89,56 @@
 <p><pre>handle_log_update(X1 ::
                       {ra_log_update,
                        undefined | pid(),
-                       <a href="#type-ra_index">ra_index()</a>,
-                       [<a href="#type-segment_ref">segment_ref()</a>]},
-                  State :: <a href="#type-state">state()</a>) -&gt;
-                     <a href="#type-state">state()</a></pre></p>
+                       <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
+                       [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>]},
+                  State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                     <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="update_first_index-2">update_first_index/2</a></h3>
 <div class="spec">
-<p><pre>update_first_index(Idx :: <a href="#type-ra_index">ra_index()</a>, State :: <a href="#type-state">state()</a>) -&gt;
-                      {<a href="#type-state">state()</a>, [<a href="#type-segment_ref">segment_ref()</a>]}</pre></p>
+<p><pre>update_first_index(FstIdx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                      {<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>]}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="segment_refs-1">segment_refs/1</a></h3>
 <div class="spec">
-<p><pre>segment_refs(X1 :: <a href="#type-state">state()</a>) -&gt; [<a href="#type-segment_ref">segment_ref()</a>]</pre></p>
+<p><pre>segment_refs(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; [<a href="#type-segment_ref" docgen-rel="seetype" docgen-href="#segment_ref/0">segment_ref()</a>]</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="num_open_segments-1">num_open_segments/1</a></h3>
 <div class="spec">
-<p><pre>num_open_segments(X1 :: <a href="#type-state">state()</a>) -&gt; non_neg_integer()</pre></p>
+<p><pre>num_open_segments(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; non_neg_integer()</pre></p>
 <p> </p>
 </div>
 
-<h3 class="function"><a name="read-3">read/3</a></h3>
+<h3 class="function"><a name="fold-5">fold/5</a></h3>
 <div class="spec">
-<p><pre>read(From :: <a href="#type-ra_index">ra_index()</a>, To :: <a href="#type-ra_index">ra_index()</a>, State :: <a href="#type-state">state()</a>) -&gt;
-        {[<a href="#type-log_entry">log_entry()</a>], NumRead :: non_neg_integer(), <a href="#type-state">state()</a>}</pre></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="read-4">read/4</a></h3>
-<div class="spec">
-<p><pre>read(From :: <a href="#type-ra_index">ra_index()</a>,
-     To :: <a href="#type-ra_index">ra_index()</a>,
-     State :: <a href="#type-state">state()</a>,
-     Entries :: [<a href="#type-log_entry">log_entry()</a>]) -&gt;
-        {[<a href="#type-log_entry">log_entry()</a>], NumRead :: non_neg_integer(), <a href="#type-state">state()</a>}</pre></p>
+<p><pre>fold(FromIdx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
+     ToIdx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>,
+     Fun :: function(),
+     Acc :: term(),
+     State0 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+        {<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, term()}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="sparse_read-3">sparse_read/3</a></h3>
 <div class="spec">
-<p><pre>sparse_read(State :: <a href="#type-state">state()</a>,
-            Indexes0 :: [<a href="#type-ra_index">ra_index()</a>],
-            Entries0 :: [<a href="#type-log_entry">log_entry()</a>]) -&gt;
-               {[<a href="#type-log_entry">log_entry()</a>], <a href="#type-state">state()</a>}</pre></p>
+<p><pre>sparse_read(State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>,
+            Indexes :: [<a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>],
+            Entries0 :: [<a href="#type-log_entry" docgen-rel="seetype" docgen-href="#log_entry/0">log_entry()</a>]) -&gt;
+               {[<a href="#type-log_entry" docgen-rel="seetype" docgen-href="#log_entry/0">log_entry()</a>], <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>}</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="fetch_term-2">fetch_term/2</a></h3>
 <div class="spec">
-<p><pre>fetch_term(Idx :: <a href="#type-ra_index">ra_index()</a>, State0 :: <a href="#type-state">state()</a>) -&gt;
-              {<a href="#type-ra_index">ra_index()</a>, <a href="#type-state">state()</a>}</pre></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="delete_closed_mem_table_object-2">delete_closed_mem_table_object/2</a></h3>
-<div class="spec">
-<p><pre>delete_closed_mem_table_object(X1 :: <a href="#type-state">state()</a>, Id :: term()) -&gt;
-                                  true</pre></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="closed_mem_tables-1">closed_mem_tables/1</a></h3>
-<div class="spec">
-<p><pre>closed_mem_tables(X1 :: <a href="#type-state">state()</a>) -&gt; list()</pre></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="open_mem_table_lookup-1">open_mem_table_lookup/1</a></h3>
-<div class="spec">
-<p><pre>open_mem_table_lookup(X1 :: <a href="#type-state">state()</a>) -&gt; list()</pre></p>
+<p><pre>fetch_term(Idx :: <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>, State0 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+              {<a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a>), <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>}</pre></p>
 <p> </p>
 </div>
 <hr>

@@ -169,7 +169,6 @@ write_prop(TestCase) ->
                           Entries,
                           ra_log_init(#{uid => TestCase})),
            {LogEntries, Log} = ra_log_take(1, length(Entries), Log0),
-           reset(Log),
            ?WHENFAIL(io:format("Entries taken from the log: ~p~nRa log state: ~p",
                                [LogEntries, Log]),
                      Entries == LogEntries)
@@ -792,7 +791,7 @@ deliver_log_events(Log0, Timeout) ->
 
 consume_events(Log0, Last) ->
     receive
-        {ra_log_event, {written, {_, To, Term}} = Evt} ->
+        {ra_log_event, {written, Term, {_, To}} = Evt} ->
             {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 0 ->
@@ -801,7 +800,7 @@ consume_events(Log0, Last) ->
 
 consume_all_events(Log0, Last) ->
     receive
-        {ra_log_event, {written, {_, To, Term}} = Evt} ->
+        {ra_log_event, {written, Term, {_, To}} = Evt} ->
             {Log, _} = ra_log:handle_event(Evt, Log0),
             consume_events(Log, {To, Term})
     after 15000 ->
@@ -834,7 +833,7 @@ run_proper_noshrink(Fun, Args, NumTests) ->
 basic_reset(Log) ->
     ra_log:write([{0, 0, empty}], Log),
     receive
-        {ra_log_event, {written, {_, 0, 0}}} ->
+        {ra_log_event, {written, _, {0, 0}}} ->
             ok
     end,
     ra_log:close(Log).

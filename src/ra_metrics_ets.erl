@@ -38,8 +38,8 @@ init([]) ->
                    {write_concurrency, true},
                    public],
     _ = ets:new(ra_log_metrics, [set | TableFlags]),
-    _ = ra_counters:init(),
-    _ = ra_leaderboard:init(),
+    ok = ra_counters:init(),
+    ok = ra_leaderboard:init(),
 
     %% Table for ra processes to record their current snapshot index so that
     %% other processes such as the segment writer can use this value to skip

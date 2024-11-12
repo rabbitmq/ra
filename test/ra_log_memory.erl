@@ -168,7 +168,7 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     {ra_log_memory_state(), list()}.
-handle_event({written, {_From, Idx, Term}}, State0) ->
+handle_event({written, Term, {_From, Idx}}, State0) ->
     case fetch_term(Idx, State0) of
         {Term, State} ->
             {State#state{last_written = {Idx, Term}}, []};

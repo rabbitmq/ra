@@ -17,22 +17,39 @@
 <h2><a name="types">Data Types</a></h2>
 
 <h3 class="typedecl"><a name="type-cluster_name">cluster_name()</a></h3>
-<p><pre>cluster_name() = <a href="#type-ra_cluster_name">ra_cluster_name()</a></pre></p>
+<p><pre>cluster_name() = <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-environment_param">environment_param()</a></h3>
 <p><pre>environment_param() = 
-    {data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>} |
-    {wal_data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>} |
+    {data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>} |
+    {wal_data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()} |
     {wal_write_strategy, default | o_sync}</pre></p>
 
 
-<h3 class="typedecl"><a name="type-index">index()</a></h3>
-<p><pre>index() = <a href="#type-ra_index">ra_index()</a></pre></p>
+<h3 class="typedecl"><a name="type-idxterm">idxterm()</a></h3>
+<p><pre>idxterm() = <a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a></pre></p>
 
+
+<h3 class="typedecl"><a name="type-index">index()</a></h3>
+<p><pre>index() = <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a></pre></p>
+
+
+<h3 class="typedecl"><a name="type-query_condition">query_condition()</a></h3>
+<p><pre>query_condition() = {applied, <a href="#type-idxterm" docgen-rel="seetype" docgen-href="#idxterm/0">idxterm()</a>}</pre></p>
+<p><p>  A condition that a query will wait for it to become true before it is  
+evaluated.</p>
+ 
+  <p>The condition is evaluated on the node that would then execute the query.</p>
+ 
+  Supported conditions are:
+  <ul>
+  <li><code>{applied, {Index, Term}}</code>: the query is executed after <code>Index</code> is
+  applied on the node that will execute the query.</li>
+  </ul></p>
 
 <h3 class="typedecl"><a name="type-query_fun">query_fun()</a></h3>
 <p><pre>query_fun() = 
@@ -41,11 +58,19 @@
 
 
 <h3 class="typedecl"><a name="type-ra_cmd_ret">ra_cmd_ret()</a></h3>
-<p><pre>ra_cmd_ret() = <a href="ra_server_proc.html#type-ra_cmd_ret">ra_server_proc:ra_cmd_ret()</a></pre></p>
+<p><pre>ra_cmd_ret() = <a href="ra_server_proc.html#type-ra_cmd_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_cmd_ret/0">ra_server_proc:ra_cmd_ret()</a></pre></p>
+
+
+<h3 class="typedecl"><a name="type-range">range()</a></h3>
+<p><pre>range() = <a href="ra_range.html#type-range" docgen-rel="seetype" docgen-href="ra_range#range/0">ra_range:range()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-server_id">server_id()</a></h3>
-<p><pre>server_id() = <a href="#type-ra_server_id">ra_server_id()</a></pre></p>
+<p><pre>server_id() = <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a></pre></p>
+
+
+<h3 class="typedecl"><a name="type-uid">uid()</a></h3>
+<p><pre>uid() = <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a></pre></p>
 
 
 <h2><a name="index">Function Index</a></h2>
@@ -62,9 +87,10 @@
 <tr><td valign="top"><a href="#start_or_restart_cluster-4">start_or_restart_cluster/4</a></td><td>Starts or restarts a ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_or_restart_cluster-5">start_or_restart_cluster/5</a></td><td>Same as <code>start_or_restart_cluster/4</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-4">start_cluster/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-1">start_cluster/1</a></td><td>Same as <code>start_cluster/2</code> but uses the default Ra system.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Same as <code>start_cluster/1</code> but accepts a custom timeout.</td></tr>
-<tr><td valign="top"><a href="#start_server-5">start_server/5</a></td><td>Starts a new distributed ra cluster.</td></tr>
+<tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Same as <code>start_cluster/2</code> but accepts a custom timeout.</td></tr>
+<tr><td valign="top"><a href="#start_server-5">start_server/5</a></td><td>Starts an individual ra server of a cluster.</td></tr>
 <tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server in the default system.</td></tr>
 <tr><td valign="top"><a href="#start_server-2">start_server/2</a></td><td>Starts a ra server.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion.</td></tr>
@@ -73,12 +99,12 @@
 <tr><td valign="top"><a href="#add_member-3">add_member/3</a></td><td>Same as <code>add_member/2</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#remove_member-2">remove_member/2</a></td><td>Removes a server from the cluster's membership configuration.</td></tr>
 <tr><td valign="top"><a href="#remove_member-3">remove_member/3</a></td><td>Same as <code>remove_member/2</code> but also accepts a timeout.</td></tr>
-<tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Makes the server to enter a pre-vote state and attempt to become the leader.</td></tr>
+<tr><td valign="top"><a href="#trigger_election-1">trigger_election/1</a></td><td>Makes the server enter a pre-vote state and attempt to become the leader.</td></tr>
 <tr><td valign="top"><a href="#trigger_election-2">trigger_election/2</a></td><td>Same as <code>trigger_election/2</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#leave_and_terminate-3">leave_and_terminate/3</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_terminate-4">leave_and_terminate/4</a></td><td>Same as <code>leave_and_terminate/2</code> but also accepts a timeout.</td></tr>
+<tr><td valign="top"><a href="#leave_and_terminate-4">leave_and_terminate/4</a></td><td>Same as <code>leave_and_terminate/3</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#leave_and_delete_server-3">leave_and_delete_server/3</a></td><td>A safe way to remove an active server from its cluster.</td></tr>
-<tr><td valign="top"><a href="#leave_and_delete_server-4">leave_and_delete_server/4</a></td><td>Same as <code>leave_and_delete_server/2</code> but also accepts a timeout.</td></tr>
+<tr><td valign="top"><a href="#leave_and_delete_server-4">leave_and_delete_server/4</a></td><td>Same as <code>leave_and_delete_server/3</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#new_uid-1">new_uid/1</a></td><td>generates a random uid using the provided source material for the first
   6 characters.</td></tr>
 <tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>Returns a map of overview data of the default Ra system on the current Erlang
@@ -94,19 +120,27 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#pipeline_command-2">pipeline_command/2</a></td><td>Sends a command to the ra server using a gen_statem:cast without
   any correlation identifier.</td></tr>
 <tr><td valign="top"><a href="#local_query-2">local_query/2</a></td><td>Query the machine state on any available server.</td></tr>
-<tr><td valign="top"><a href="#local_query-3">local_query/3</a></td><td>Same as <code>local_query/2</code> but accepts a custom timeout.</td></tr>
+<tr><td valign="top"><a href="#local_query-3">local_query/3</a></td><td>Same as <code>local_query/2</code> but accepts a custom timeout or a map of  
+options.</td></tr>
 <tr><td valign="top"><a href="#leader_query-2">leader_query/2</a></td><td>Query the machine state on the current leader node.</td></tr>
-<tr><td valign="top"><a href="#leader_query-3">leader_query/3</a></td><td>Same as <code>leader_query/2</code> but accepts a custom timeout.</td></tr>
+<tr><td valign="top"><a href="#leader_query-3">leader_query/3</a></td><td>Same as <code>leader_query/2</code> but accepts a custom timeout or a map of  
+options.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine with a consistency guarantee.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td>Same as <code>consistent_query/2</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Returns a list of cluster members.</td></tr>
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td>Returns a list of cluster members.</td></tr>
+<tr><td valign="top"><a href="#members_info-1">members_info/1</a></td><td>Returns a list of cluster members and their Raft metrics.</td></tr>
+<tr><td valign="top"><a href="#members_info-2">members_info/2</a></td><td>Returns a list of cluster members and their Raft metrics.</td></tr>
 <tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td>Returns a list of initial (seed) cluster members.</td></tr>
 <tr><td valign="top"><a href="#initial_members-2">initial_members/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a follower.</td></tr>
 <tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td>Executes (using a cast) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#register_external_log_reader-1">register_external_log_reader/1</a></td><td>Registers an external log reader.</td></tr>
+<tr><td valign="top"><a href="#member_overview-1">member_overview/1</a></td><td>Returns a overview map of the internal server state.</td></tr>
+<tr><td valign="top"><a href="#member_overview-2">member_overview/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#key_metrics-1">key_metrics/1</a></td><td>Returns a map of key metrics about a Ra member.</td></tr>
+<tr><td valign="top"><a href="#key_metrics-2">key_metrics/2</a></td><td>Returns a map of key metrics about a Ra member.</td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -119,7 +153,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start-1">start/1</a></h3>
 <div class="spec">
-<p><pre>start(Params :: [<a href="#type-environment_param">environment_param()</a>]) -&gt;
+<p><pre>start(Params :: [<a href="#type-environment_param" docgen-rel="seetype" docgen-href="#environment_param/0">environment_param()</a>]) -&gt;
          {ok, [Started]} | {error, term()}</pre>
 <ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
 <p> </p>
@@ -128,7 +162,7 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="start_in-1">start_in/1</a></h3>
 <div class="spec">
-<p><pre>start_in(DataDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename">file:filename()</a>) -&gt;
+<p><pre>start_in(DataDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>) -&gt;
             {ok, [Started]} | {error, term()}</pre>
 <ul class="definitions"><li><pre>Started = term()</pre></li></ul></p>
 <p> </p>
@@ -138,8 +172,8 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="restart_server-1">restart_server/1</a></h3>
 <div class="spec">
-<p><pre>restart_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt; ok | {error, term()}</pre></p>
-<p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><pre>restart_server(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt; ok | {error, term()}</pre></p>
+<p><code>ServerId</code>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code> where error can be
   <code>not_found</code>, <code>system_not_started</code> or <code>name_not_registered</code> when the
@@ -149,10 +183,10 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="restart_server-2">restart_server/2</a></h3>
 <div class="spec">
-<p><pre>restart_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>restart_server(System :: atom(), ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                   ok | {error, term()}</pre></p>
-<p><tt>System</tt>: the system identifier<br>
-<tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><code>System</code>: the system identifier<br>
+<code>ServerId</code>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code> where error can be
   <code>not_found</code> or <code>name_not_registered</code> when the ra server has never before
@@ -162,12 +196,12 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="restart_server-3">restart_server/3</a></h3>
 <div class="spec">
 <p><pre>restart_server(System :: atom(),
-               ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
-               AddConfig :: <a href="ra_server.html#type-mutable_config">ra_server:mutable_config()</a>) -&gt;
+               ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+               AddConfig :: <a href="ra_server.html#type-mutable_config" docgen-rel="seetype" docgen-href="ra_server#mutable_config/0">ra_server:mutable_config()</a>) -&gt;
                   ok | {error, term()}</pre></p>
-<p><tt>System</tt>: the system identifier<br>
-<tt>ServerId</tt>: the ra_server_id() of the server<br>
-<tt>AddConfig</tt>: additional config parameters to be merged into the
+<p><code>System</code>: the system identifier<br>
+<code>ServerId</code>: the ra_server_id() of the server<br>
+<code>AddConfig</code>: additional config parameters to be merged into the
   original config.<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code> where error can be
@@ -177,9 +211,9 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="stop_server-1">stop_server/1</a></h3>
 <div class="spec">
-<p><pre>stop_server(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>stop_server(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                ok | {error, nodedown | system_not_started}</pre></p>
-<p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><code>ServerId</code>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, nodedown}</code>
   DEPRECATED: use stop_server/2</p>
@@ -187,19 +221,19 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="stop_server-2">stop_server/2</a></h3>
 <div class="spec">
-<p><pre>stop_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>stop_server(System :: atom(), ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                ok | {error, nodedown | system_not_started}</pre></p>
-<p><tt>System</tt>: the system name<br>
-<tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><code>System</code>: the system name<br>
+<code>ServerId</code>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>{ok | error, nodedown}</code></p>
 </div><p>Stops a ra server</p>
 
 <h3 class="function"><a name="force_delete_server-2">force_delete_server/2</a></h3>
 <div class="spec">
-<p><pre>force_delete_server(System :: atom(), ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>force_delete_server(System :: atom(), ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                        ok | {error, term()} | {badrpc, term()}</pre></p>
-<p><tt>ServerId</tt>: the ra_server_id() of the server<br>
+<p><code>ServerId</code>: the ra_server_id() of the server<br>
 </p>
 <p>returns: <code>ok | {error, nodedown} | {badrpc, Reason}</code></p>
 </div><p>Deletes a ra server
@@ -208,16 +242,16 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="start_or_restart_cluster-4">start_or_restart_cluster/4</a></h3>
 <div class="spec">
 <p><pre>start_or_restart_cluster(System :: atom(),
-                         ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
-                         Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-                         ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
+                         ClusterName :: <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a>,
+                         Machine :: <a href="ra_server.html#type-machine_conf" docgen-rel="seetype" docgen-href="ra_server#machine_conf/0">ra_server:machine_conf()</a>,
+                         ServerIds :: [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]) -&gt;
                             {ok,
-                             [<a href="#type-ra_server_id">ra_server_id()</a>],
-                             [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                             [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                             [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-<tt>ServerIds</tt>: The list of ra server ids.<br>
+<p><code>ClusterName</code>: the name of the cluster.<br>
+<code>Machine</code>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<code>ServerIds</code>: The list of ra server ids.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -236,17 +270,17 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="start_or_restart_cluster-5">start_or_restart_cluster/5</a></h3>
 <div class="spec">
 <p><pre>start_or_restart_cluster(System :: atom(),
-                         ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
-                         Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-                         RemServers :: [<a href="#type-ra_server_id">ra_server_id()</a>],
+                         ClusterName :: <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a>,
+                         Machine :: <a href="ra_server.html#type-machine_conf" docgen-rel="seetype" docgen-href="ra_server#machine_conf/0">ra_server:machine_conf()</a>,
+                         RemServers :: [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
                          Timeout :: non_neg_integer()) -&gt;
                             {ok,
-                             [<a href="#type-ra_server_id">ra_server_id()</a>],
-                             [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+                             [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                             [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
                             {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-<tt>Timeout</tt>: The time to wait for any server to restart or start<br>
+<p><code>ClusterName</code>: the name of the cluster.<br>
+<code>Machine</code>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<code>Timeout</code>: The time to wait for any server to restart or start<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -260,19 +294,19 @@ an optional process-scoped term as correlation identifier.</td></tr>
   any servers that did manage to start are
   forcefully deleted.</p>
 </div><p>Same as <code>start_or_restart_cluster/4</code> but accepts a custom timeout.</p>
-<p><b>See also:</b> <a href="#start_or_restart_cluster-3">start_or_restart_cluster/3</a>.</p>
+<p><b>See also:</b> <a href="#start_or_restart_cluster-4" docgen-rel="seemfa" docgen-href="#start_or_restart_cluster/4">start_or_restart_cluster/4</a>.</p>
 
 <h3 class="function"><a name="start_cluster-4">start_cluster/4</a></h3>
 <div class="spec">
 <p><pre>start_cluster(System :: atom(),
-              ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
-              Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-              ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
-                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+              ClusterName :: <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a>,
+              Machine :: <a href="ra_server.html#type-machine_conf" docgen-rel="seetype" docgen-href="ra_server#machine_conf/0">ra_server:machine_conf()</a>,
+              ServerIds :: [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]) -&gt;
+                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
                  {error, cluster_not_formed}</pre></p>
-<p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-<tt>ServerIds</tt>: The list of ra server ids.<br>
+<p><code>ClusterName</code>: the name of the cluster.<br>
+<code>Machine</code>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
+<code>ServerIds</code>: The list of ra server ids.<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -286,52 +320,25 @@ an optional process-scoped term as correlation identifier.</td></tr>
   forcefully deleted.</p>
 </div><p>Starts a new distributed ra cluster.
  </p>
+
+<h3 class="function"><a name="start_cluster-1">start_cluster/1</a></h3>
+<div class="spec">
+<p><pre>start_cluster(ServerConfigs :: [<a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>]) -&gt;
+                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+<p><code>ServerConfigs</code>: a list of initial server configurations
+  DEPRECATED: use start_cluster/2<br>
+</p>
+</div><p>Same as <code>start_cluster/2</code> but uses the default Ra system.</p>
 
 <h3 class="function"><a name="start_cluster-2">start_cluster/2</a></h3>
 <div class="spec">
 <p><pre>start_cluster(System :: atom(),
-              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>]) -&gt;
-                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
+              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>]) -&gt;
+                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
                  {error, cluster_not_formed}</pre></p>
-<p><tt>ServerConfigs</tt>: a list of initial server configurations<br>
-</p>
-<p>returns: <p>
-  <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
-  started. A cluster can be successfully started if more than half of the
-  servers provided could be started. Servers that could not be started need to
-  be retried periodically using <a docgen-rel="seemfa" docgen-href="#start_server/1" href="#start_server-1"><code>start_server/1</code></a></p>
- 
-  <p><code>{error, cluster_not_formed}</code> if a cluster could not be started.</p>
- 
-  If a cluster could not be formed any servers that did manage to start are
-  forcefully deleted.</p>
-</div><p>Starts a new distributed ra cluster.
- </p>
-
-<h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
-<div class="spec">
-<p><pre>start_cluster(System :: atom(),
-              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>],
-              Timeout :: non_neg_integer()) -&gt;
-                 {ok, [<a href="#type-ra_server_id">ra_server_id()</a>], [<a href="#type-ra_server_id">ra_server_id()</a>]} |
-                 {error, cluster_not_formed}</pre></p>
-<p><tt>ServerConfigs</tt>: a list of initial server configurations<br>
-<tt>Timeout</tt>: the timeout to use<br>
-</p>
-</div><p>Same as <code>start_cluster/1</code> but accepts a custom timeout.</p>
-
-<h3 class="function"><a name="start_server-5">start_server/5</a></h3>
-<div class="spec">
-<p><pre>start_server(System :: atom(),
-             ClusterName :: <a href="#type-ra_cluster_name">ra_cluster_name()</a>,
-             ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
-             Machine :: <a href="ra_server.html#type-machine_conf">ra_server:machine_conf()</a>,
-             ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
-                ok | {error, term()}</pre></p>
-<p><tt>ClusterName</tt>: the name of the cluster.<br>
-<tt>ServerId</tt>: the ra_server_id() of the server<br>
-<tt>Machine</tt>: The <a docgen-rel="seemfa" docgen-href="ra_machine#machine/0" href="ra_machine.html#machine-0"><code>ra_machine:machine/0</code></a> configuration.<br>
-<tt>ServerIds</tt>: a list of initial (seed) server configurations<br>
+<p><code>System</code>: the system name<br>
+<code>ServerConfigs</code>: a list of initial server configurations<br>
 </p>
 <p>returns: <p>
   <code>{ok, Started, NotStarted}</code>  if a cluster could be successfully
@@ -344,13 +351,41 @@ an optional process-scoped term as correlation identifier.</td></tr>
   If a cluster could not be formed any servers that did manage to start are
   forcefully deleted.</p>
 </div><p>Starts a new distributed ra cluster.</p>
-<p><b>See also:</b> <a href="#start_server-1">start_server/1</a>.</p>
+
+<h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
+<div class="spec">
+<p><pre>start_cluster(System :: atom(),
+              ServerConfigs :: [<a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>],
+              Timeout :: non_neg_integer()) -&gt;
+                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+<p><code>System</code>: the system name<br>
+<code>ServerConfigs</code>: a list of initial server configurations<br>
+<code>Timeout</code>: the timeout to use<br>
+</p>
+</div><p>Same as <code>start_cluster/2</code> but accepts a custom timeout.</p>
+
+<h3 class="function"><a name="start_server-5">start_server/5</a></h3>
+<div class="spec">
+<p><pre>start_server(System, ClusterName, ServerIdOrConf, Machine,
+             ServerIds) -&gt;
+                Ret</pre>
+<ul class="definitions"><li><pre>System = atom()</pre></li><li><pre>ClusterName = <a href="#type-ra_cluster_name" docgen-rel="seetype" docgen-href="#ra_cluster_name/0">ra_cluster_name()</a></pre></li><li><pre>ServerIdOrConf = ServerId | ServerConf</pre></li><li><pre>ServerId = <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a></pre></li><li><pre>ServerConf = <a href="#type-ra_new_server" docgen-rel="seetype" docgen-href="#ra_new_server/0">ra_new_server()</a></pre></li><li><pre>Machine = <a href="ra_server.html#type-machine_conf" docgen-rel="seetype" docgen-href="ra_server#machine_conf/0">ra_server:machine_conf()</a></pre></li><li><pre>ServerIds = [<a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>]</pre></li><li><pre>Ret = ok | {error, Reason :: term()}</pre></li></ul></p>
+<p><code>System</code>: the system name.<br>
+<code>ClusterName</code>: the name of the cluster the server belongs to.<br>
+<code>ServerIdOrConf</code>: the <code>ra_server_id()</code> of the server, or a map with server id and settings.<br>
+<code>Machine</code>: The <a docgen-rel="seetype" docgen-href="ra_server#machine_conf/0" href="ra_server.html#type-machine_conf"><code>ra_server:machine_conf()</code></a> configuration.<br>
+<code>ServerIds</code>: a list of initial (seed) server configurations for the cluster.<br>
+</p>
+<p>returns: <code>ok</code>  if the server could be successfully started or <code>{error, Reason}</code> otherwise.</p>
+</div><p>Starts an individual ra server of a cluster.</p>
+<p><b>See also:</b> <a href="#start_server-2" docgen-rel="seemfa" docgen-href="#start_server/2">start_server/2</a>.</p>
 
 <h3 class="function"><a name="start_server-1">start_server/1</a></h3>
 <div class="spec">
-<p><pre>start_server(Conf :: <a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>) -&gt;
+<p><pre>start_server(Conf :: <a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>) -&gt;
                 ok | {error, term()}</pre></p>
-<p><tt>Conf</tt>: a ra_server_config() configuration map.<br>
+<p><code>Conf</code>: a ra_server_config() configuration map.<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code>
   DEPRECATED: use start_server/2</p>
@@ -359,18 +394,19 @@ an optional process-scoped term as correlation identifier.</td></tr>
 <h3 class="function"><a name="start_server-2">start_server/2</a></h3>
 <div class="spec">
 <p><pre>start_server(System :: atom(),
-             Conf :: <a href="ra_server.html#type-ra_server_config">ra_server:ra_server_config()</a>) -&gt;
+             Conf :: <a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>) -&gt;
                 ok | {error, term()}</pre></p>
-<p><tt>Conf</tt>: a ra_server_config() configuration map.<br>
+<p><code>System</code>: the system name<br>
+<code>Conf</code>: a ra_server_config() configuration map.<br>
 </p>
 <p>returns: <code>{ok | error, Error}</code></p>
 </div><p>Starts a ra server</p>
 
 <h3 class="function"><a name="delete_cluster-1">delete_cluster/1</a></h3>
 <div class="spec">
-<p><pre>delete_cluster(ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
-                  {ok, <a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()}</pre></p>
-<p><tt>ServerIds</tt>: the ra_server_ids of the cluster<br>
+<p><pre>delete_cluster(ServerIds :: [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]) -&gt;
+                  {ok, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>} | {error, term()}</pre></p>
+<p><code>ServerIds</code>: the ra_server_ids of the cluster<br>
 </p>
 <p>returns: <code>{{ok, Leader} | error, nodedown}</code></p>
 </div><p>Deletes a ra cluster in an orderly fashion.
@@ -382,22 +418,22 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="delete_cluster-2">delete_cluster/2</a></h3>
 <div class="spec">
-<p><pre>delete_cluster(ServerIds :: [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>delete_cluster(ServerIds :: [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
                Timeout :: timeout()) -&gt;
-                  {ok, Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} | {error, term()}</pre></p>
+                  {ok, Leader :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>} | {error, term()}</pre></p>
 <p> </p>
 </div><p>Same as <code>delete_cluster/1</code> but also accepts a timeout.</p>
-<p><b>See also:</b> <a href="#delete_cluster-1">delete_cluster/1</a>.</p>
+<p><b>See also:</b> <a href="#delete_cluster-1" docgen-rel="seemfa" docgen-href="#delete_cluster/1">delete_cluster/1</a>.</p>
 
 <h3 class="function"><a name="add_member-2">add_member/2</a></h3>
 <div class="spec">
-<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-           ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+           ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | <a href="#type-ra_new_server" docgen-rel="seetype" docgen-href="#ra_new_server/0">ra_new_server()</a>) -&gt;
+              <a href="#type-ra_cmd_ret" docgen-rel="seetype" docgen-href="#ra_cmd_ret/0">ra_cmd_ret()</a> |
               {error, already_member} |
               {error, cluster_change_not_permitted}</pre></p>
-<p><tt>ServerLoc</tt>: the ra server or servers to try to send the command to<br>
-<tt>ServerId</tt>: the ra server id of the new server.<br>
+<p><code>ServerLoc</code>: the ra server or servers to try to send the command to<br>
+<code>ServerId</code>: the ra server id of the new server, or a map with server id and settings.<br>
 </p>
 </div><p>Add a ra server id to a ra cluster's membership configuration.
   This commits a join command to the leader log. After this has been replicated
@@ -411,25 +447,25 @@ an optional process-scoped term as correlation identifier.</td></tr>
 
 <h3 class="function"><a name="add_member-3">add_member/3</a></h3>
 <div class="spec">
-<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-           ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>add_member(ServerLoc :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+           ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | <a href="#type-ra_new_server" docgen-rel="seetype" docgen-href="#ra_new_server/0">ra_new_server()</a>,
            Timeout :: timeout()) -&gt;
-              <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+              <a href="#type-ra_cmd_ret" docgen-rel="seetype" docgen-href="#ra_cmd_ret/0">ra_cmd_ret()</a> |
               {error, already_member} |
               {error, cluster_change_not_permitted}</pre></p>
 <p> </p>
 </div><p>Same as <code>add_member/2</code> but also accepts a timeout.</p>
-<p><b>See also:</b> <a href="#add_member-2">add_member/2</a>.</p>
+<p><b>See also:</b> <a href="#add_member-2" docgen-rel="seemfa" docgen-href="#add_member/2">add_member/2</a>.</p>
 
 <h3 class="function"><a name="remove_member-2">remove_member/2</a></h3>
 <div class="spec">
-<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-              ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+              ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
+                 <a href="#type-ra_cmd_ret" docgen-rel="seetype" docgen-href="#ra_cmd_ret/0">ra_cmd_ret()</a> |
                  {error, not_member} |
                  {error, cluster_change_not_permitted}</pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to<br>
-<tt>ServerId</tt>: the ra server id of the server to remove<br>
+<p><code>ServerRef</code>: the ra server to send the command to<br>
+<code>ServerId</code>: the ra server id of the server to remove<br>
 </p>
 </div><p><p>Removes a server from the cluster's membership configuration.  
 This function returns after appending a cluster membership change  
@@ -438,26 +474,26 @@ command to the log.</p>
   After a server is removed from its cluster and the membership change is replicated,
   it would reject any commands it's asked to process.
  </p>
-<p><b>See also:</b> <a href="#add_member-2">add_member/2</a>, <a href="#leave_and_delete_server-2">leave_and_delete_server/2</a>, <a href="#leave_and_terminate-2">leave_and_terminate/2</a>, <a href="#remove_member-3">remove_member/3</a>.</p>
+<p><b>See also:</b> <a href="#add_member-2" docgen-rel="seemfa" docgen-href="#add_member/2">add_member/2</a>, <a href="#leave_and_delete_server-4" docgen-rel="seemfa" docgen-href="#leave_and_delete_server/4">leave_and_delete_server/4</a>, <a href="#leave_and_terminate-4" docgen-rel="seemfa" docgen-href="#leave_and_terminate/4">leave_and_terminate/4</a>, <a href="#remove_member-3" docgen-rel="seemfa" docgen-href="#remove_member/3">remove_member/3</a>.</p>
 
 <h3 class="function"><a name="remove_member-3">remove_member/3</a></h3>
 <div class="spec">
-<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-              ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>remove_member(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+              ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
               Timeout :: timeout()) -&gt;
-                 <a href="#type-ra_cmd_ret">ra_cmd_ret()</a> |
+                 <a href="#type-ra_cmd_ret" docgen-rel="seetype" docgen-href="#ra_cmd_ret/0">ra_cmd_ret()</a> |
                  {error, not_member} |
                  {error, cluster_change_not_permitted}</pre></p>
 <p> </p>
 </div><p>Same as <code>remove_member/2</code> but also accepts a timeout.</p>
-<p><b>See also:</b> <a href="#remove_member-2">remove_member/2</a>.</p>
+<p><b>See also:</b> <a href="#remove_member-2" docgen-rel="seemfa" docgen-href="#remove_member/2">remove_member/2</a>.</p>
 
 <h3 class="function"><a name="trigger_election-1">trigger_election/1</a></h3>
 <div class="spec">
-<p><pre>trigger_election(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt; ok</pre></p>
-<p><tt>ServerId</tt>: the ra server id of the server to trigger the election on.<br>
+<p><pre>trigger_election(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt; ok</pre></p>
+<p><code>ServerId</code>: the ra server id of the server to trigger the election on.<br>
 </p>
-</div><p>Makes the server to enter a pre-vote state and attempt to become the leader.
+</div><p>Makes the server enter a pre-vote state and attempt to become the leader.
   It is necessary to call this function when starting a new cluster as a
   brand new Ra server (node) will not automatically enter the pre-vote state.
   This does not apply to recovering (previously started) servers: they will
@@ -466,7 +502,7 @@ command to the log.</p>
 
 <h3 class="function"><a name="trigger_election-2">trigger_election/2</a></h3>
 <div class="spec">
-<p><pre>trigger_election(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Timeout :: timeout()) -&gt;
+<p><pre>trigger_election(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Timeout :: timeout()) -&gt;
                     ok</pre></p>
 <p> </p>
 </div><p>Same as <code>trigger_election/2</code> but also accepts a timeout.</p>
@@ -474,44 +510,44 @@ command to the log.</p>
 <h3 class="function"><a name="leave_and_terminate-3">leave_and_terminate/3</a></h3>
 <div class="spec">
 <p><pre>leave_and_terminate(System :: atom(),
-                    ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                    ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+                    ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                    ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                        ok | timeout |
                        {error, noproc | system_not_started}</pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
-<tt>ServerId</tt>: the ra server to remove<br>
+<p><code>ServerRef</code>: the ra server to send the command to and to remove<br>
+<code>ServerId</code>: the ra server to remove<br>
 </p>
 </div><p>A safe way to remove an active server from its cluster.
   The command is added to the log by the <code>ServerRef</code> node.
   Use this to decommission a node that's unable to start
   or is permanently lost.</p>
-<p><b>See also:</b> <a href="#leave_and_terminate-3">leave_and_terminate/3</a>.</p>
+<p><b>See also:</b> <a href="#leave_and_terminate-4" docgen-rel="seemfa" docgen-href="#leave_and_terminate/4">leave_and_terminate/4</a>.</p>
 
 <h3 class="function"><a name="leave_and_terminate-4">leave_and_terminate/4</a></h3>
 <div class="spec">
 <p><pre>leave_and_terminate(System :: atom(),
-                    ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                    ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+                    ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                    ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
                     Timeout :: timeout()) -&gt;
                        ok | timeout |
                        {error, noproc | system_not_started}</pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
-<tt>ServerId</tt>: the ra server to remove<br>
-<tt>Timeout</tt>: timeout to use<br>
+<p><code>ServerRef</code>: the ra server to send the command to and to remove<br>
+<code>ServerId</code>: the ra server to remove<br>
+<code>Timeout</code>: timeout to use<br>
 </p>
-</div><p>Same as <code>leave_and_terminate/2</code> but also accepts a timeout.</p>
-<p><b>See also:</b> <a href="#leave_and_terminate-2">leave_and_terminate/2</a>.</p>
+</div><p>Same as <code>leave_and_terminate/3</code> but also accepts a timeout.</p>
+<p><b>See also:</b> <a href="#leave_and_terminate-3" docgen-rel="seemfa" docgen-href="#leave_and_terminate/3">leave_and_terminate/3</a>.</p>
 
 <h3 class="function"><a name="leave_and_delete_server-3">leave_and_delete_server/3</a></h3>
 <div class="spec">
 <p><pre>leave_and_delete_server(System :: atom(),
                         ServerRef ::
-                            <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                        ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+                            <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                        ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                            ok | timeout | {error, noproc}</pre></p>
-<p><tt>System</tt>: the system identifier<br>
-<tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
-<tt>ServerId</tt>: the ra server to force remove<br>
+<p><code>System</code>: the system identifier<br>
+<code>ServerRef</code>: the ra server to send the command to and to remove<br>
+<code>ServerId</code>: the ra server to force remove<br>
 </p>
 </div><p>A safe way to remove an active server from its cluster.
   The server will be force removed after a membership transition command was
@@ -519,26 +555,26 @@ command to the log.</p>
   The command is added to the log by the <code>ServerRef</code> node.
   Use this to decommission a node that's unable to start
   or is permanently lost.</p>
-<p><b>See also:</b> <a href="#leave_and_delete_server-3">leave_and_delete_server/3</a>.</p>
+<p><b>See also:</b> <a href="#leave_and_delete_server-4" docgen-rel="seemfa" docgen-href="#leave_and_delete_server/4">leave_and_delete_server/4</a>.</p>
 
 <h3 class="function"><a name="leave_and_delete_server-4">leave_and_delete_server/4</a></h3>
 <div class="spec">
 <p><pre>leave_and_delete_server(System :: atom(),
                         ServerRef ::
-                            <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                        ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+                            <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                        ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
                         Timeout :: timeout()) -&gt;
                            ok | timeout | {error, noproc}</pre></p>
-<p><tt>ServerRef</tt>: the ra server to send the command to and to remove<br>
-<tt>ServerId</tt>: the ra server to force remove<br>
-<tt>Timeout</tt>: timeout to use<br>
+<p><code>ServerRef</code>: the ra server to send the command to and to remove<br>
+<code>ServerId</code>: the ra server to force remove<br>
+<code>Timeout</code>: timeout to use<br>
 </p>
-</div><p>Same as <code>leave_and_delete_server/2</code> but also accepts a timeout.</p>
-<p><b>See also:</b> <a href="#leave_and_delete_server-2">leave_and_delete_server/2</a>.</p>
+</div><p>Same as <code>leave_and_delete_server/3</code> but also accepts a timeout.</p>
+<p><b>See also:</b> <a href="#leave_and_delete_server-3" docgen-rel="seemfa" docgen-href="#leave_and_delete_server/3">leave_and_delete_server/3</a>.</p>
 
 <h3 class="function"><a name="new_uid-1">new_uid/1</a></h3>
 <div class="spec">
-<p><tt>new_uid(Source) -&gt; any()</tt></p>
+<p><code>new_uid(Source) -&gt; any()</code></p>
 <p> </p>
 </div><p>generates a random uid using the provided source material for the first
   6 characters.</p>
@@ -549,7 +585,7 @@ command to the log.</p>
 <p> </p>
 </div><p>Returns a map of overview data of the default Ra system on the current Erlang
   node.
-  DEPRECATED: user overview/1</p>
+  DEPRECATED: use overview/1</p>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
@@ -560,15 +596,17 @@ command to the log.</p>
 
 <h3 class="function"><a name="process_command-3">process_command/3</a></h3>
 <div class="spec">
-<p><pre>process_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                Command :: term(),
-                Timeout :: timeout()) -&gt;
-                   {ok, Reply :: term(), Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} |
+<p><pre>process_command(ServerId, Command, TimeoutOrOptions) -&gt;
+                   {ok, Reply, Leader} |
                    {error, term()} |
-                   {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
-<p><tt>ServerId</tt>: the server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
-<tt>Timeout</tt>: the time to wait before returning {timeout, ServerId}<br>
+                   {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre>
+<ul class="definitions"><li><pre>ServerId = <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]</pre></li><li><pre>Command = term()</pre></li><li><pre>TimeoutOrOptions = timeout() | Options</pre></li><li><pre>Options = 
+    #{timeout =&gt; timeout(),
+      reply_from =&gt; leader | local | {member, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}}</pre></li><li><pre>Reply = term()</pre></li><li><pre>Leader = <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a></pre></li></ul></p>
+<p><code>ServerId</code>: the server id to send the command to<br>
+<code>Command</code>: an arbitrary term that the state machine can handle<br>
+<code>TimeoutOrOptions</code>: the time to wait before returning
+         <code>{timeout, ServerId}</code>, or a map of options.<br>
 </p>
 </div><p><p>Submits a command to a ra server. Returns after the command has
   been applied to the Raft state machine. If the state machine returned a
@@ -579,37 +617,53 @@ redirect the call to the leader (if known) or hold on to the command until
 a leader is known. The leader's server id is returned as the 3rd element  
 of the success reply tuple.</p>
  
-  If there is no majority of Ra servers online, this function will return
-  a timeout.
+  <p>If there is no majority of Ra servers online, this function will return  
+a timeout.</p>
+ 
+  When <code>TimeoutOrOptions</code> is a map, it supports the following option keys:
+  <ul>
+  <li><code>timeout</code>: the time to wait before returning <code>{timeout, ServerId}</code></li>
+  <li><code>reply_from</code>: the node which should reply to the command call. The
+  default value is <code>leader</code>. If the option is <code>local</code> or a <code>member</code> and a
+  local node or the given member is not available, the command may be
+  processed successfully but the caller may not receive a response, timing out
+  instead. The following values are supported for <code>reply_from</code>:
+  <ul>
+  <li><code>leader</code>: the cluster leader replies.</li>
+  <li><code>local</code>: a member on the some node as the caller replies.</li>
+  <li><code>{member, ServerId}</code>: the member for the given <a docgen-rel="seetype" docgen-href="#ra_server_id/0" href="#type-ra_server_id"><code>ra_server_id()</code></a>
+  replies.</li>
+  </ul></li>
+  </ul>
  </p>
 
 <h3 class="function"><a name="process_command-2">process_command/2</a></h3>
 <div class="spec">
-<p><pre>process_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>process_command(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
                 Command :: term()) -&gt;
-                   {ok, Reply :: term(), Leader :: <a href="#type-ra_server_id">ra_server_id()</a>} |
+                   {ok, Reply :: term(), Leader :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>} |
                    {error, term()} |
-                   {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
-<p><tt>ServerId</tt>: the server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
+                   {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
+<p><code>ServerId</code>: the server id to send the command to<br>
+<code>Command</code>: an arbitrary term that the state machine can handle<br>
 </p>
 </div><p>Same as <code>process_command/3</code> with the default timeout of 5000 ms.</p>
 
 <h3 class="function"><a name="pipeline_command-4">pipeline_command/4</a></h3>
 <div class="spec">
-<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
                  Command :: term(),
                  Correlation ::
-                     <a href="ra_server.html#type-command_correlation">ra_server:command_correlation()</a> |
+                     <a href="ra_server.html#type-command_correlation" docgen-rel="seetype" docgen-href="ra_server#command_correlation/0">ra_server:command_correlation()</a> |
                      no_correlation,
-                 Priority :: <a href="ra_server.html#type-command_priority">ra_server:command_priority()</a>) -&gt;
+                 Priority :: <a href="ra_server.html#type-command_priority" docgen-rel="seetype" docgen-href="ra_server#command_priority/0">ra_server:command_priority()</a>) -&gt;
                     ok</pre></p>
-<p><tt>ServerId</tt>: the ra server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
-<tt>Correlation</tt>: a correlation identifier to be included to receive an
+<p><code>ServerId</code>: the ra server id to send the command to<br>
+<code>Command</code>: an arbitrary term that the state machine can handle<br>
+<code>Correlation</code>: a correlation identifier to be included to receive an
          async notification after the command is applied to the state machine. If the
          Correlation is set to <code>no_correlation</code> then no notifications will be sent.<br>
-<tt>Priority</tt>: command priority. <code>low</code> priority commands will be held back
+<code>Priority</code>: command priority. <code>low</code> priority commands will be held back
          and appended to the Raft log in batches. NB: A <code>normal</code> priority command sent
          from the same process can overtake a low priority command that was
          sent before. There is no high priority.
@@ -650,33 +704,33 @@ success or otherwise.</p>
 
 <h3 class="function"><a name="pipeline_command-3">pipeline_command/3</a></h3>
 <div class="spec">
-<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
+<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
                  Command :: term(),
                  Correlation ::
-                     <a href="ra_server.html#type-command_correlation">ra_server:command_correlation()</a> |
+                     <a href="ra_server.html#type-command_correlation" docgen-rel="seetype" docgen-href="ra_server#command_correlation/0">ra_server:command_correlation()</a> |
                      no_correlation) -&gt;
                     ok</pre></p>
-<p><tt>ServerId</tt>: the ra server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
-<tt>Correlation</tt>: a correlation identifier to be included to receive an
+<p><code>ServerId</code>: the ra server id to send the command to<br>
+<code>Command</code>: an arbitrary term that the state machine can handle<br>
+<code>Correlation</code>: a correlation identifier to be included to receive an
          async notification after the command is applied to the state machine.<br>
 </p>
 </div><p>Same as <code>pipeline_command/4</code> but uses a hardcoded priority of <code>low</code>.</p>
-<p><b>See also:</b> <a href="#pipeline_command-4">pipeline_command/4</a>.</p>
+<p><b>See also:</b> <a href="#pipeline_command-4" docgen-rel="seemfa" docgen-href="#pipeline_command/4">pipeline_command/4</a>.</p>
 
 <h3 class="function"><a name="ping-2">ping/2</a></h3>
 <div class="spec">
-<p><pre>ping(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Timeout :: timeout()) -&gt;
-        <a href="#type-safe_call_ret">safe_call_ret</a>({pong, <a href="#type-states">states()</a>})</pre></p>
+<p><pre>ping(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Timeout :: timeout()) -&gt;
+        <a href="#type-safe_call_ret" docgen-rel="seetype" docgen-href="#safe_call_ret/0">safe_call_ret</a>({pong, <a href="#type-states" docgen-rel="seetype" docgen-href="#states/0">states()</a>})</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="pipeline_command-2">pipeline_command/2</a></h3>
 <div class="spec">
-<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, Command :: term()) -&gt;
+<p><pre>pipeline_command(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Command :: term()) -&gt;
                     ok</pre></p>
-<p><tt>ServerId</tt>: the ra server id to send the command to<br>
-<tt>Command</tt>: an arbitrary term that the state machine can handle<br>
+<p><code>ServerId</code>: the ra server id to send the command to<br>
+<code>Command</code>: an arbitrary term that the state machine can handle<br>
 </p>
 </div><p>Sends a command to the ra server using a gen_statem:cast without
   any correlation identifier.
@@ -685,15 +739,15 @@ success or otherwise.</p>
   This is the least reliable way to interact with a ra system ("fire and forget")
   and should only be used for commands that are of little importance
   and/or where waiting for a response is prohibitively slow.</p>
-<p><b>See also:</b> <a href="#pipeline_command-4">pipeline_command/4</a>.</p>
+<p><b>See also:</b> <a href="#pipeline_command-4" docgen-rel="seemfa" docgen-href="#pipeline_command/4">pipeline_command/4</a>.</p>
 
 <h3 class="function"><a name="local_query-2">local_query/2</a></h3>
 <div class="spec">
-<p><pre>local_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>, QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
-               <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+<p><pre>local_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>) -&gt;
+               <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                   Reply :: term()})</pre></p>
-<p><tt>ServerId</tt>: the ra server id to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
+<p><code>ServerId</code>: the ra server id to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
 </p>
 </div><p>Query the machine state on any available server.
   This allows you to run the QueryFun over the server machine state and
@@ -703,28 +757,39 @@ success or otherwise.</p>
 
 <h3 class="function"><a name="local_query-3">local_query/3</a></h3>
 <div class="spec">
-<p><pre>local_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
-            QueryFun :: <a href="#type-query_fun">query_fun()</a>,
-            Timeout :: timeout()) -&gt;
-               <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+<p><pre>local_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+            QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>,
+            TimeoutOrOptions) -&gt;
+               <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                   Reply :: term()}) |
-               {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
-<p><tt>ServerId</tt>: the ra server id to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
-<tt>Timeout</tt>: the timeout to use<br>
+               {ok, {<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, Reply :: term()}, not_known}</pre>
+<ul class="definitions"><li><pre>TimeoutOrOptions = Timeout | Options</pre></li><li><pre>Timeout = timeout()</pre></li><li><pre>Options = 
+    #{condition =&gt; <a href="#type-query_condition" docgen-rel="seetype" docgen-href="#query_condition/0">query_condition()</a>, timeout =&gt; timeout()}</pre></li></ul></p>
+<p><code>ServerId</code>: the ra server id to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
+<code>TimeoutOrOptions</code>: the timeout to use or a map of options<br>
 </p>
-</div><p>Same as <code>local_query/2</code> but accepts a custom timeout.</p>
-<p><b>See also:</b> <a href="#local_query-2">local_query/2</a>.</p>
+</div><p><p>Same as <code>local_query/2</code> but accepts a custom timeout or a map of  
+options.</p>
+ 
+  The supported options are:
+  <ul>
+  <li><code>condition</code>: the query will be evaluated only once the specified
+  condition is true.</li>
+  <li><code>timeout</code>: the maximum time to wait for the query to be evaluated.</li>
+  </ul>
+ </p>
+<p><b>See also:</b> <a href="#local_query-2" docgen-rel="seemfa" docgen-href="#local_query/2">local_query/2</a>.</p>
 
 <h3 class="function"><a name="leader_query-2">leader_query/2</a></h3>
 <div class="spec">
-<p><pre>leader_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-             QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
-                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+<p><pre>leader_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+             QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>) -&gt;
+                <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                    Reply :: term()}) |
-                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
-<p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
+                {ok, {<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
+<p><code>ServerId</code>: the ra server id(s) to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
 </p>
 </div><p>Query the machine state on the current leader node.
   This function works like local_query, but redirects to the current
@@ -735,27 +800,38 @@ success or otherwise.</p>
 
 <h3 class="function"><a name="leader_query-3">leader_query/3</a></h3>
 <div class="spec">
-<p><pre>leader_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-             QueryFun :: <a href="#type-query_fun">query_fun()</a>,
-             Timeout :: timeout()) -&gt;
-                <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm">ra_idxterm()</a>,
+<p><pre>leader_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+             QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>,
+             TimeoutOrOptions) -&gt;
+                <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                    Reply :: term()}) |
-                {ok, {<a href="#type-ra_idxterm">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
-<p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
-<tt>Timeout</tt>: the timeout to use<br>
+                {ok, {<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, Reply :: term()}, not_known}</pre>
+<ul class="definitions"><li><pre>TimeoutOrOptions = Timeout | Options</pre></li><li><pre>Timeout = timeout()</pre></li><li><pre>Options = 
+    #{condition =&gt; <a href="#type-query_condition" docgen-rel="seetype" docgen-href="#query_condition/0">query_condition()</a>, timeout =&gt; timeout()}</pre></li></ul></p>
+<p><code>ServerId</code>: the ra server id(s) to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
+<code>TimeoutOrOptions</code>: the timeout to use or a map of options<br>
 </p>
-</div><p>Same as <code>leader_query/2</code> but accepts a custom timeout.</p>
-<p><b>See also:</b> <a href="#leader_query-2">leader_query/2</a>.</p>
+</div><p><p>Same as <code>leader_query/2</code> but accepts a custom timeout or a map of  
+options.</p>
+ 
+  The supported options are:
+  <ul>
+  <li><code>condition</code>: the query will be evaluated only once the specified
+  condition is true.</li>
+  <li><code>timeout</code>: the maximum time to wait for the query to be evaluated.</li>
+  </ul>
+ </p>
+<p><b>See also:</b> <a href="#leader_query-2" docgen-rel="seemfa" docgen-href="#leader_query/2">leader_query/2</a>.</p>
 
 <h3 class="function"><a name="consistent_query-2">consistent_query/2</a></h3>
 <div class="spec">
-<p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                 QueryFun :: <a href="#type-query_fun">query_fun()</a>) -&gt;
-                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(Reply ::
+<p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                 QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>) -&gt;
+                    <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(Reply ::
                                                           term())</pre></p>
-<p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
+<p><code>ServerId</code>: the ra server id(s) to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
 </p>
 </div><p>Query the state machine with a consistency guarantee.
   This allows the caller to query the state machine on the leader node with
@@ -766,26 +842,26 @@ success or otherwise.</p>
 
 <h3 class="function"><a name="consistent_query-3">consistent_query/3</a></h3>
 <div class="spec">
-<p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
-                 QueryFun :: <a href="#type-query_fun">query_fun()</a>,
+<p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+                 QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>,
                  Timeout :: timeout()) -&gt;
-                    <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>(Reply ::
+                    <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(Reply ::
                                                           term())</pre></p>
-<p><tt>ServerId</tt>: the ra server id(s) to send the query to<br>
-<tt>QueryFun</tt>: the query function to run<br>
-<tt>Timeout</tt>: the timeout to use<br>
+<p><code>ServerId</code>: the ra server id(s) to send the query to<br>
+<code>QueryFun</code>: the query function to run<br>
+<code>Timeout</code>: the timeout to use<br>
 </p>
 </div><p>Same as <code>consistent_query/2</code> but accepts a custom timeout.</p>
-<p><b>See also:</b> <a href="#consistent_query-2">consistent_query/2</a>.</p>
+<p><b>See also:</b> <a href="#consistent_query-2" docgen-rel="seemfa" docgen-href="#consistent_query/2">consistent_query/2</a>.</p>
 
 <h3 class="function"><a name="members-1">members/1</a></h3>
 <div class="spec">
 <p><pre>members(ServerId ::
-            <a href="#type-ra_server_id">ra_server_id()</a> |
-            [<a href="#type-ra_server_id">ra_server_id()</a>] |
-            {local, <a href="#type-ra_server_id">ra_server_id()</a>}) -&gt;
-           <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>])</pre></p>
-<p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
+            <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> |
+            [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
+            {local, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}) -&gt;
+           <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>])</pre></p>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
 </p>
 </div><p><p>Returns a list of cluster members</p>
  
@@ -801,13 +877,13 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
 <h3 class="function"><a name="members-2">members/2</a></h3>
 <div class="spec">
 <p><pre>members(ServerId ::
-            <a href="#type-ra_server_id">ra_server_id()</a> |
-            [<a href="#type-ra_server_id">ra_server_id()</a>] |
-            {local, <a href="#type-ra_server_id">ra_server_id()</a>},
+            <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> |
+            [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
+            {local, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>},
         Timeout :: timeout()) -&gt;
-           <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>])</pre></p>
-<p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
-<tt>Timeout</tt>: the timeout to use<br>
+           <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>])</pre></p>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
+<code>Timeout</code>: the timeout to use<br>
 </p>
 </div><p><p>Returns a list of cluster members</p>
  
@@ -820,12 +896,54 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
   leader would have returned.
  </p>
 
+<h3 class="function"><a name="members_info-1">members_info/1</a></h3>
+<div class="spec">
+<p><pre>members_info(ServerId ::
+                 <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> |
+                 [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
+                 {local, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}) -&gt;
+                <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(<a href="#type-ra_cluster" docgen-rel="seetype" docgen-href="#ra_cluster/0">ra_cluster()</a>)</pre></p>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
+</p>
+</div><p><p>Returns a list of cluster members and their Raft metrics</p>
+ 
+  <p>Except if <code>{local, ServerId}</code> is passed, the query is sent to the specified  
+server which may redirect it to the leader if it is a follower. It may  
+timeout if there is currently no leader (i.e. an election is in progress).</p>
+ 
+  With <code>{local, ServerId}</code>, the query is always handled by the specified
+  server. It means the returned list might be out-of-date compared to what the
+  leader would have returned.
+ </p>
+
+<h3 class="function"><a name="members_info-2">members_info/2</a></h3>
+<div class="spec">
+<p><pre>members_info(ServerId ::
+                 <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> |
+                 [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
+                 {local, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>},
+             Timeout :: timeout()) -&gt;
+                <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(<a href="#type-ra_cluster" docgen-rel="seetype" docgen-href="#ra_cluster/0">ra_cluster()</a>)</pre></p>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
+<code>Timeout</code>: the timeout to use<br>
+</p>
+</div><p><p>Returns a list of cluster members and their Raft metrics</p>
+ 
+  <p>Except if <code>{local, ServerId}</code> is passed, the query is sent to the specified  
+server which may redirect it to the leader if it is a follower. It may  
+timeout if there is currently no leader (i.e. an election is in progress).</p>
+ 
+  With <code>{local, ServerId}</code>, the query is always handled by the specified
+  server. It means the returned list might be out-of-date compared to what the
+  leader would have returned.
+ </p>
+
 <h3 class="function"><a name="initial_members-1">initial_members/1</a></h3>
 <div class="spec">
-<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>]) -&gt;
-                   <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
+<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]) -&gt;
+                   <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
                                                      error)</pre></p>
-<p><tt>ServerId</tt>: the Ra server(s) to send the query to<br>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
 </p>
 </div><p><p>Returns a list of initial (seed) cluster members.</p>
  
@@ -836,45 +954,90 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
 
 <h3 class="function"><a name="initial_members-2">initial_members/2</a></h3>
 <div class="spec">
-<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a> | [<a href="#type-ra_server_id">ra_server_id()</a>],
+<p><pre>initial_members(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
                 Timeout :: timeout()) -&gt;
-                   <a href="ra_server_proc.html#type-ra_leader_call_ret">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id">ra_server_id()</a>] |
+                   <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>([<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>] |
                                                      error)</pre></p>
 <p> </p>
 </div>
 
 <h3 class="function"><a name="transfer_leadership-2">transfer_leadership/2</a></h3>
 <div class="spec">
-<p><pre>transfer_leadership(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>,
-                    TargetServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
+<p><pre>transfer_leadership(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+                    TargetServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
                        ok | already_leader |
                        {error, term()} |
-                       {timeout, <a href="#type-ra_server_id">ra_server_id()</a>}</pre></p>
+                       {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
 <p> </p>
 </div><p>Transfers leadership from the leader to a follower.
   Returns <code>already_leader</code> if the transfer target is already the leader.</p>
 
 <h3 class="function"><a name="aux_command-2">aux_command/2</a></h3>
 <div class="spec">
-<p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; term()</pre></p>
+<p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Cmd :: term()) -&gt; term()</pre></p>
 <p> </p>
 </div><p>Executes (using a call) an auxiliary command that the state machine can handle.
  </p>
 
 <h3 class="function"><a name="cast_aux_command-2">cast_aux_command/2</a></h3>
 <div class="spec">
-<p><pre>cast_aux_command(ServerRef :: <a href="#type-ra_server_id">ra_server_id()</a>, Cmd :: term()) -&gt; ok</pre></p>
+<p><pre>cast_aux_command(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Cmd :: term()) -&gt; ok</pre></p>
 <p> </p>
 </div><p>Executes (using a cast) an auxiliary command that the state machine can handle.
  </p>
 
 <h3 class="function"><a name="register_external_log_reader-1">register_external_log_reader/1</a></h3>
 <div class="spec">
-<p><pre>register_external_log_reader(ServerId :: <a href="#type-ra_server_id">ra_server_id()</a>) -&gt;
-                                <a href="ra_log_reader.html#type-state">ra_log_reader:state()</a></pre></p>
+<p><pre>register_external_log_reader(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
+                                <a href="ra_log_reader.html#type-state" docgen-rel="seetype" docgen-href="ra_log_reader#state/0">ra_log_reader:state()</a></pre></p>
 <p> </p>
 </div><p>Registers an external log reader. ServerId needs to be local to the node.
-  Returns an initiated ra_log_reader:state() state.</p>
+  Returns an initiated ra_log_reader:state() state.
+  Deprecated. Now only reads log data stored in segments, not log data
+  in mem tables.</p>
+
+<h3 class="function"><a name="member_overview-1">member_overview/1</a></h3>
+<div class="spec">
+<p><pre>member_overview(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
+                   <a href="ra_server_proc.html#type-ra_local_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_local_call_ret/0">ra_server_proc:ra_local_call_ret</a>(map())</pre></p>
+<p><code>ServerId</code>: the Ra server(s) to send the query to<br>
+</p>
+</div><p><p>Returns a overview map of the internal server state</p>
+ 
+  The keys and values will typically remain stable but may
+  change overtime and no guarantees are provided.
+ </p>
+
+<h3 class="function"><a name="member_overview-2">member_overview/2</a></h3>
+<div class="spec">
+<p><pre>member_overview(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Timeout :: timeout()) -&gt;
+                   <a href="ra_server_proc.html#type-ra_local_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_local_call_ret/0">ra_server_proc:ra_local_call_ret</a>(map())</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="key_metrics-1">key_metrics/1</a></h3>
+<div class="spec">
+<p><code>key_metrics(ServerId) -&gt; any()</code></p>
+<p> </p>
+</div><p><p>Returns a map of key metrics about a Ra member</p>
+ 
+  The keys and values may vary depending on what state
+  the member is in. This function will never call into the
+  Ra process itself so is likely to return swiftly even
+  when the Ra process is busy (such as when it is recovering)
+ </p>
+
+<h3 class="function"><a name="key_metrics-2">key_metrics/2</a></h3>
+<div class="spec">
+<p><code>key_metrics(ServerId, Timeout) -&gt; any()</code></p>
+<p> </p>
+</div><p><p>Returns a map of key metrics about a Ra member</p>
+ 
+  The keys and values may vary depending on what state
+  the member is in. This function will never call into the
+  Ra process itself so is likely to return swiftly even
+  when the Ra process is busy (such as when it is recovering)
+ </p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
