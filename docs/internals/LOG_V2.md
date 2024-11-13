@@ -77,6 +77,11 @@ memtable needs to be created when this situation occurs.
 When a new memtable is created the old ones will not be written to any further
 and will be deleted as soon as they are emptied.
 
+There is one additional condition at which a new memtable will be created and
+that is the case where the size of memtable exceed 1M entries. This is done
+to avoid very large tables which can still use substantial amounts of memory even
+after all entries have been individually deleted.
+
 ## WAL
 
 Module: `ra_log_wal`
