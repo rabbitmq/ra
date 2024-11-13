@@ -1262,7 +1262,6 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
 key_metrics({_, N} = ServerId, Timeout) ->
     erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
 
-
 %% internal
 
 -spec usr(UserCommand, ReplyMode) -> Command when

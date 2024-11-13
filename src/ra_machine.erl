@@ -119,26 +119,31 @@
 -type version() :: non_neg_integer().
 
 -type effect() ::
+    %% These effects are only executed on the leader
     {send_msg, To :: locator(), Msg :: term()} |
-    %% @TODO: with local deliveries is it theoretically possible for a follower
-    %%        to apply entries but not know who the current leader is?
-    %%        If so, `To' must also include undefined
-    {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {mod_call, module(), Function :: atom(), [term()]} |
     %% appends a user command to the raft log
-    {append, term()} |
-    {append, term(), ra_server:command_reply_mode()} |
+    {append, Cmd :: term()} |
+    {append, Cmd :: term(), ra_server:command_reply_mode()} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
+
+    %% these are either conditional on the local configuration or
+    %% will always be evaluated when seen by members in any raft state
+    {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
+    {log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
     {release_cursor, ra_index()} |
     {checkpoint, ra_index(), state()} |
     {aux, term()} |
+    %% like append/3 but a special backwards compatible function
+    %% that tries to execute in any raft state
+    {try_append, term(), ra_server:command_reply_mode()} |
     garbage_collection.
 
 %% Effects are data structures that can be returned by {@link apply/3} to ask

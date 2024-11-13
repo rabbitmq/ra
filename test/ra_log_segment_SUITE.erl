@@ -412,5 +412,8 @@ make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
 
 read_sparse(R, Idxs) ->
-    {_, Entries} = ra_log_segment:read_sparse(R, Idxs, fun ra_lib:id/1, []),
+    {_, Entries} = ra_log_segment:read_sparse(R, Idxs,
+                                              fun (I, T, B, Acc) ->
+                                                      [{I, T, B} | Acc]
+                                              end, []),
     lists:reverse(Entries).

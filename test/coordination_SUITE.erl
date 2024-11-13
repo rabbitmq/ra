@@ -487,16 +487,16 @@ disconnected_node_catches_up(Config) ->
 
     Self = self(),
     SPid = erlang:spawn(DownNode,
-                     fun () ->
-                             erlang:register(snapshot_installed_proc, self()),
-                             receive
-                                 {snapshot_installed, _Meta} = Evt ->
-                                     Self ! Evt,
-                                     ok
-                             after 10000 ->
-                                       ok
-                             end
-                     end),
+                        fun () ->
+                                erlang:register(snapshot_installed_proc, self()),
+                                receive
+                                    {snapshot_installed, _Meta} = Evt ->
+                                        Self ! Evt,
+                                        ok
+                                after 10000 ->
+                                          ok
+                                end
+                        end),
     await_condition(
       fun () ->
               ok == ra:restart_server(?SYS, DownServerId)
@@ -512,10 +512,11 @@ disconnected_node_catches_up(Config) ->
 
     receive
         {snapshot_installed, Meta} ->
-            ct:pal("snapshot installed receive ~p", [Meta]),
+            ct:pal("snapshot installed received ~p", [Meta]),
             ok
     after 10000 ->
               erlang:exit(SPid, kill),
+              flush(),
               ct:fail("snapshot_installed not received"),
               ok
     end,
@@ -1344,7 +1345,7 @@ snapshot_installed(#{machine_version := _,
         undefined ->
             [];
         Pid ->
-            [{send_msg, Pid, {snapshot_installed, Meta}}]
+            [{send_msg, Pid, {snapshot_installed, Meta}, local}]
     end.
 
 node_setup(DataDir) ->

@@ -58,11 +58,13 @@
          terminate/2,
          log_fold/3,
          log_read/2,
+         log_partial_read/2,
          get_membership/1,
          get_condition_timeout/2,
          recover/1,
          state_query/2,
-         fetch_term/2
+         fetch_term/2,
+         transform_for_partial_read/3
         ]).
 
 -type ra_await_condition_fun() ::
@@ -155,8 +157,12 @@
 -type effect() ::
     ra_machine:effect() |
     ra_log:effect() |
+    %% this is used for replies for immedate requests
     {reply, ra_reply_body()} |
-    {reply, term(), ra_reply_body()} |
+    %% this is used by the leader only
+    {reply, from(), ra_reply_body()} |
+    {reply, from(), ra_reply_body(),
+     Replier :: leader | local | {member, ra_server_id()}} |
     {cast, ra_server_id(), term()} |
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
@@ -1801,10 +1807,8 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
         {delete_and_terminate, State1, Effects} ->
             Reply = append_entries_reply(Term, true, State1),
             {delete_and_terminate, State1,
-             [cast_reply(Id, LeaderId, Reply) |
-              filter_follower_effects(Effects)]};
-        {#{last_applied := LastApplied} = State, Effects1} ->
-            Effects = filter_follower_effects(Effects1),
+             [cast_reply(Id, LeaderId, Reply) | Effects]};
+        {#{last_applied := LastApplied} = State, Effects} ->
             case LastApplied > LastApplied0 of
                 true ->
                     %% entries were applied, append eval_aux effect
@@ -1817,51 +1821,6 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
 evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
     {follower, State, Effects}.
-
-filter_follower_effects(Effects) ->
-    lists:foldr(fun ({release_cursor, _, _} = C, Acc) ->
-                        [C | Acc];
-                    ({release_cursor, _} = C, Acc) ->
-                        [C | Acc];
-                    ({checkpoint, _, _} = C, Acc) ->
-                        [C | Acc];
-                    ({record_leader_msg, _} = C, Acc) ->
-                        [C | Acc];
-                    ({aux, _} = C, Acc) ->
-                        [C | Acc];
-                    (garbage_collection = C, Acc) ->
-                        [C | Acc];
-                    ({delete_snapshot, _} = C, Acc) ->
-                        [C | Acc];
-                    ({send_msg, _, _, _Opts} = C, Acc) ->
-                        %% send_msg effects _may_ have the local option
-                        %% and will be evaluated properly during
-                        %% effect processing
-                        [C | Acc];
-                    ({log, _, _, _Opts} = C, Acc) ->
-                        [C | Acc];
-                    ({reply, _, _, leader}, Acc) ->
-                        Acc;
-                    ({reply, _, _, _} = C, Acc) ->
-                        %% If the reply-from is not `leader', the follower
-                        %% might be the replier.
-                        [C | Acc];
-                    ({monitor, _ProcOrNode, Comp, _} = C, Acc)
-                      when Comp =/= machine ->
-                        %% only machine monitors should not be emitted
-                        %% by followers
-                        [C | Acc];
-                    (L, Acc) when is_list(L) ->
-                        %% nested case - recurse
-                        case filter_follower_effects(L) of
-                            [] -> Acc;
-                            Filtered ->
-                                [Filtered | Acc]
-                        end;
-                    (_, Acc) ->
-                        Acc
-                end, [], Effects).
-
 
 make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                          max_append_entries_rpc_batch_size =
@@ -2200,6 +2159,13 @@ log_read(Indexes, #{log := Log0} = State) ->
           || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
      State#{log => Log}}.
 
+%% reads user commands at the specified index
+-spec log_partial_read([ra_index()], ra_server_state()) ->
+    ra_log:read_plan().
+log_partial_read(Indexes, #{log := Log0}) ->
+    ra_log:partial_read(Indexes, Log0,
+                        fun transform_for_partial_read/3).
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -2518,6 +2484,19 @@ fetch_term(Idx, #{log := Log0} = State) ->
             {Term, State#{log => Log}}
     end.
 
+
+%% @doc Strips the Ra internal command wrapper away for user commands
+%% to return the original machine command written
+%% @end
+transform_for_partial_read(_Idx, _Term, {'$usr', _, Cmd, _}) ->
+    Cmd;
+transform_for_partial_read(_Idx, _Term, Cmd) ->
+    %% Other commands leave as is.
+    %% It would be quite unusual for these to be read externally
+    %% but you never know.
+    Cmd.
+
+
 -spec make_cluster(ra_server_id(), ra_cluster_snapshot() | [ra_server_id()]) ->
     ra_cluster().
 make_cluster(Self, Nodes0) when is_list(Nodes0) ->
@@ -2596,11 +2575,11 @@ make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
 make_notify_effects(_Nots, Prior) ->
       Prior.
 
-append_app_effects([], Effs) ->
+append_machine_effects([], Effs) ->
     Effs;
-append_app_effects([AppEff], Effs) ->
+append_machine_effects([AppEff], Effs) ->
     [AppEff | Effs];
-append_app_effects(AppEffs, Effs) ->
+append_machine_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
 cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
@@ -2631,9 +2610,9 @@ apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyMode}},
     Meta = augment_command_meta(Idx, Term, MacVer, ReplyMode, CmdMeta),
     Ts = maps:get(ts, CmdMeta, LastTs),
     case ra_machine:apply(Module, Meta, Cmd, MacSt) of
-        {NextMacSt, Reply, AppEffs} ->
+        {NextMacSt, Reply, MacEffs} ->
             {Effects, Notifys} = add_reply(CmdMeta, Reply, ReplyMode,
-                                           append_app_effects(AppEffs, Effects0),
+                                           append_machine_effects(MacEffs, Effects0),
                                            Notifys0),
             {Module, Idx, State, NextMacSt,
              Effects, Notifys, Ts};

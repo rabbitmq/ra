@@ -440,14 +440,17 @@ logger:set_primary_config(level, debug).
 Ra attempts to follow [Semantic Versioning](https://semver.org/).
 
 The modules that form part of the public API are:
+
 * `ra`
 * `ra_machine` (behaviour callbacks only)
 * `ra_aux`
 * `ra_system`
-* `ra_counters`
+* `ra_counters` (counter keys may vary between minors)
 * `ra_leaderboard`
 * `ra_env`
 * `ra_directory`
+* `ra_flru`
+* `ra_log_read_plan`
 
 ## Copyright and License
 

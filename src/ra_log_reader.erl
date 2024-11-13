@@ -19,6 +19,8 @@
          update_first_index/2,
          fold/5,
          sparse_read/3,
+         read_plan/2,
+         exec_read_plan/5,
          fetch_term/2
          ]).
 
@@ -44,10 +46,12 @@
                 }).
 
 -opaque state() :: #?STATE{}.
+-type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
 
 
 -export_type([
-              state/0
+              state/0,
+              read_plan/0
               ]).
 
 %% PUBLIC
@@ -170,12 +174,54 @@ sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes, Entries0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
     {Entries, State#?MODULE{open_segments = Open}}.
 
+-spec read_plan(state(), [ra_index()]) -> read_plan().
+read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
+    %% TODO: add counter for number of read plans requested
+    segment_read_plan(SegRefs, Indexes, []).
+
+-spec exec_read_plan(file:filename_all(), read_plan(), undefined | ra_flru:state(),
+                     TransformFun :: fun(),
+                     #{ra_index() => Command :: term()}) ->
+    {#{ra_index() => Command :: term()}, ra_flru:state()}.
+exec_read_plan(Dir, Plan, undefined, TransformFun, Acc0) ->
+    Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
+    exec_read_plan(Dir, Plan, Open, TransformFun, Acc0);
+exec_read_plan(Dir, Plan, Open0, TransformFun, Acc0)
+  when is_list(Plan) ->
+    Fun = fun (I, T, B, Acc) ->
+                  E = TransformFun(I, T, binary_to_term(B)),
+                  Acc#{I => E}
+          end,
+    lists:foldl(
+      fun ({Idxs, BaseName}, {Acc1, Open1}) ->
+              {Seg, Open} = get_segment_ext(Dir, Open1, BaseName),
+              {_, Acc} = ra_log_segment:read_sparse(Seg, Idxs, Fun, Acc1),
+              {Acc, Open}
+      end, {Acc0, Open0}, Plan).
+
 -spec fetch_term(ra_index(), state()) -> {option(ra_index()), state()}.
 fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
     incr_counter(Cfg, ?C_RA_LOG_FETCH_TERM, 1),
     segment_term_query(Idx, State0).
 
 %% LOCAL
+
+segment_read_plan(_RegRefs, [], Acc) ->
+    lists:reverse(Acc);
+segment_read_plan([], _Indexes, Acc) ->
+    %% not all indexes were found
+    lists:reverse(Acc);
+segment_read_plan([{To, From, Fn} | SegRefs], Indexes, Acc) ->
+    %% TODO: address unnecessary allocation here
+    Range = {To, From},
+    case sparse_read_split(fun (I) ->
+                                   ra_range:in(I, Range)
+                           end, Indexes, []) of
+        {[], _} ->
+            segment_read_plan(SegRefs, Indexes, Acc);
+        {Idxs, Rem} ->
+            segment_read_plan(SegRefs, Rem, [{Idxs, Fn} | Acc])
+    end.
 
 segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
                                  cfg = Cfg,
@@ -255,7 +301,10 @@ segment_sparse_read(#?STATE{segment_refs = SegRefs,
                                     end, Idxs, []),
               {ReadSparseCount, Entries} =
                   ra_log_segment:read_sparse(Seg, ReadIdxs,
-                                             fun binary_to_term/1, []),
+                                             fun (I, T, B, Acc) ->
+                                                     [{I, T, binary_to_term(B)} | Acc]
+                                             end,
+                                             []),
               {Open, RemIdxs, C +  ReadSparseCount,
                lists:reverse(Entries, En0)};
          (_Segref, Acc) ->
@@ -287,6 +336,24 @@ get_segment(#cfg{directory = Dir,
             of
                 {ok, S} ->
                     incr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1),
+                    {S, ra_flru:insert(Fn, S, Open0)};
+                {error, Err} ->
+                    exit({ra_log_failed_to_open_segment, Err,
+                          AbsFn})
+            end
+    end.
+
+get_segment_ext(Dir, Open0, Fn) ->
+    case ra_flru:fetch(Fn, Open0) of
+        {ok, S, Open1} ->
+            {S, Open1};
+        error ->
+            AbsFn = filename:join(Dir, Fn),
+            case ra_log_segment:open(AbsFn,
+                                     #{mode => read,
+                                       access_pattern => random})
+            of
+                {ok, S} ->
                     {S, ra_flru:insert(Fn, S, Open0)};
                 {error, Err} ->
                     exit({ra_log_failed_to_open_segment, Err,

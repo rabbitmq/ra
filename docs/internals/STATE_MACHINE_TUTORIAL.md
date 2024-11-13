@@ -181,6 +181,23 @@ Only the leader that first applies an entry will attempt the effect.
 Followers process the same set of commands but simply throw away any effects
 returned by the state machine unless specific effect provide the `local` option.
 
+### Machine Effects table
+
+| Spec | Executed on |
+| -----| ----------- |
+| `{send_msg, pid(), Msg :: term()}` | leader |
+| `{send_msg, pid(), Msg :: term(), [local]}` | on member local to `pid()` else leader |
+| `{monitor \| demonitor, process \| node, pid() \| node()}` | leader |
+| `{mod_call, mfa()}` | leader |
+| `{timer, Name :: term(), Time :: non_neg_integer() \| infinity}` | leader |
+| `{append, term()}` | leader |
+| `{append, term(), ra_server:command_reply_mode()}` | leader |
+| `{log, [ra_index()], fun(([user_command()]) -> effects())}` | leader |
+| `{log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}}` | on member local to `node()` else leader |
+| `{log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}}` | on member local to `node()` else leader |
+| `{release_cursor \| checkpoint, ra_index(), term()}` | all members |
+| `{aux, term()}` | every member |
+
 
 ### Send a message
 
