@@ -59,6 +59,7 @@ all_tests() ->
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
      writes_lower_than_snapshot_index_are_dropped,
+     recover_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
      %% TODO mt: do or deprecate in current minor
@@ -474,6 +475,26 @@ written_event_after_snapshot(Config) ->
     %% this will no longer be false as the snapshot deletion is an effect
     %% and not done by the log itself
     % false = filelib:is_file(Snap1),
+    ok.
+
+
+recover_after_snapshot(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
+    Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
+    Log2 = ra_log:append({2, 1, <<"two">>}, Log1),
+    {Log3, _} = ra_log:update_release_cursor(2, #{}, 1,
+                                             <<"one+two">>, Log2),
+    Log4 = deliver_all_log_events(Log3, 100),
+    ra_log:close(Log4),
+    restart_wal(),
+    timer:sleep(1000),
+    Log = ra_log_init(Config, #{min_snapshot_interval => 1}),
+    Overview = ra_log:overview(Log),
+    ra_log:close(Log),
+    ?assertMatch(#{last_index := 2,
+                   last_term := 1,
+                   snapshot_index := 2,
+                   last_written_index_term := {2, 1}}, Overview),
     ok.
 
 writes_lower_than_snapshot_index_are_dropped(Config) ->

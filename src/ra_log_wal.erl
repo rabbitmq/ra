@@ -824,7 +824,16 @@ recover_records(#conf{names = Names} = Conf, Fd,
                             recover_records(Conf, Fd, Chunk, Cache, State)
                     end;
                 ok ->
-                    recover_records(Conf, Fd, Rest, Cache, State0);
+                    %% best the the snapshot index as the last
+                    %% writer index
+                    Writers = case State0#recovery.writers of
+                                  #{UId := {in_seq, SnapIdx}} = W ->
+                                      W;
+                                  W ->
+                                      W#{UId => {in_seq, SnapIdx}}
+                              end,
+                    recover_records(Conf, Fd, Rest, Cache,
+                                    State0#recovery{writers = Writers});
                 error ->
                     ?DEBUG("WAL: record failed CRC check. If this is the last record"
                            " recovery can resume", []),
