@@ -9,8 +9,8 @@
 -compile(inline_list_funcs).
 
 -export([
-         init/6,
-         init/8,
+         init/5,
+         init/7,
          close/1,
          update_segments/2,
          handle_log_update/2,
@@ -37,7 +37,7 @@
 -type segment_ref() :: {From :: ra_index(), To :: ra_index(),
                         File :: string()}.
 -record(?STATE, {cfg :: #cfg{},
-                 first_index = 0 :: ra_index(),
+                 % first_index = 0 :: ra_index(),
                  last_index = 0 :: ra:index(),
                  segment_refs = [] :: [segment_ref()],
                  open_segments :: ra_flru:state()
@@ -52,16 +52,16 @@
 
 %% PUBLIC
 
--spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+-spec init(ra_uid(), file:filename(), non_neg_integer(),
            [segment_ref()], ra_system:names()) -> state().
-init(UId, Dir, FirstIdx, MaxOpen, SegRefs, Names) ->
-    init(UId, Dir, FirstIdx, MaxOpen, random, SegRefs, Names, undefined).
+init(UId, Dir, MaxOpen, SegRefs, Names) ->
+    init(UId, Dir, MaxOpen, random, SegRefs, Names, undefined).
 
--spec init(ra_uid(), file:filename(), ra_index(), non_neg_integer(),
+-spec init(ra_uid(), file:filename(), non_neg_integer(),
            access_pattern(),
            [segment_ref()], ra_system:names(),
            undefined | counters:counters_ref()) -> state().
-init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs, #{}, Counter)
+init(UId, Dir, MaxOpen, AccessPattern, SegRefs, #{}, Counter)
   when is_binary(UId) ->
     Cfg = #cfg{uid = UId,
                counter = Counter,
@@ -79,7 +79,7 @@ init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs, #{}, Counter)
               end,
     #?STATE{cfg = Cfg,
             open_segments = ra_flru:new(MaxOpen, FlruHandler),
-            first_index = FirstIdx,
+            % first_index = FirstIdx,
             last_index = LastIdx,
             segment_refs = SegRefs}.
 
@@ -107,7 +107,7 @@ update_segments(NewSegmentRefs,
 
 -spec handle_log_update({ra_log_update, undefined | pid(), ra_index(),
                          [segment_ref()]}, state()) -> state().
-handle_log_update({ra_log_update, From, FstIdx, SegRefs},
+handle_log_update({ra_log_update, From, _FstIdx, SegRefs},
                   #?STATE{open_segments = Open0} = State) ->
     Open = ra_flru:evict_all(Open0),
     case From of
@@ -117,7 +117,7 @@ handle_log_update({ra_log_update, From, FstIdx, SegRefs},
             From ! ra_log_update_processed
     end,
     State#?MODULE{segment_refs = SegRefs,
-                  first_index = FstIdx,
+                  % first_index = FstIdx,
                   open_segments = Open}.
 
 -spec update_first_index(ra_index(), state()) ->
@@ -140,7 +140,7 @@ update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                            end
                                    end, OpenSegs0, ObsoleteKeys),
             {State#?STATE{open_segments = OpenSegs,
-                          first_index = FstIdx,
+                          % first_index = FstIdx,
                           segment_refs = Active},
              Obsolete}
     end.

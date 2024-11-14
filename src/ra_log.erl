@@ -133,11 +133,13 @@
 -type overview() ::
     #{type := ra_log,
       last_index := ra_index(),
+      last_term := ra_term(),
       first_index := ra_index(),
       last_written_index_term := ra_idxterm(),
       num_segments := non_neg_integer(),
       open_segments => non_neg_integer(),
       snapshot_index => undefined | ra_index(),
+      snapshot_term => undefined | ra_index(),
       mem_table_size => non_neg_integer(),
       latest_checkpoint_index => undefined | ra_index(),
       atom() => term()}.
@@ -213,10 +215,8 @@ init(#{uid := UId,
     {DeleteSpecs, Mt} = ra_mt:set_first(FirstIdx, Mt0),
 
     ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
-    Reader0 = ra_log_reader:init(UId, Dir, FirstIdx, MaxOpen, AccessPattern, SegRefs,
-                                 Names, Counter),
-    %% TODO: can there be obsolete segments returned here?
-    {Reader, []} = ra_log_reader:update_first_index(FirstIdx, Reader0),
+    Reader = ra_log_reader:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
+                                Names, Counter),
     %% assert there is no gap between the snapshot
     %% and the first index in the log
     case (FirstIdx - SnapIdx) > 1 of
@@ -237,13 +237,13 @@ init(#{uid := UId,
                counter = Counter,
                names = Names},
     State0 = #?MODULE{cfg = Cfg,
-                        first_index = max(SnapIdx + 1, FirstIdx),
-                        last_index = max(SnapIdx, LastIdx0),
-                        reader = Reader,
-                        mem_table = Mt,
-                        snapshot_state = SnapshotState,
-                        last_wal_write = {whereis(Wal), now_ms()}
-                       },
+                      first_index = max(SnapIdx + 1, FirstIdx),
+                      last_index = max(SnapIdx, LastIdx0),
+                      reader = Reader,
+                      mem_table = Mt,
+                      snapshot_state = SnapshotState,
+                      last_wal_write = {whereis(Wal), now_ms()}
+                     },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     LastIdx = State0#?MODULE.last_index,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
@@ -273,7 +273,7 @@ init(#{uid := UId,
     LastWrittenIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
                          {ok, undefined} ->
                              %% take last segref index
-                             LastSegRefIdx;
+                             max(SnapIdx, LastSegRefIdx);
                          {ok, Idx} ->
                              max(Idx, LastSegRefIdx);
                          {error, wal_down} ->
@@ -281,7 +281,12 @@ init(#{uid := UId,
                                     [State2#?MODULE.cfg#cfg.log_id]),
                              exit(wal_down)
                      end,
-    {LastWrittenTerm, State3} = fetch_term(LastWrittenIdx, State2),
+    {LastWrittenTerm, State3} = case LastWrittenIdx of
+                                    SnapIdx ->
+                                        {SnapTerm, State2};
+                                    _ ->
+                                        fetch_term(LastWrittenIdx, State2)
+                                end,
 
     LastTerm = ra_lib:default(LastTerm0, -1),
     State4 = State3#?MODULE{last_term = LastTerm,
@@ -292,10 +297,13 @@ init(#{uid := UId,
     % and an empty meta data map
     State = maybe_append_first_entry(State4),
     ?DEBUG("~ts: ra_log:init recovered last_index_term ~w"
-           " first index ~b",
+           " snapshot_index_term ~w, last_written_index_term ~w",
            [State#?MODULE.cfg#cfg.log_id,
             last_index_term(State),
-            State#?MODULE.first_index]),
+            {SnapIdx, SnapTerm},
+            State#?MODULE.last_written_index_term
+           ]),
+    ?DEBUG("~ts: ra_log:init overview ~p", [overview(State)]),
     element(1, delete_segments(SnapIdx, State)).
 
 -spec close(state()) -> ok.
@@ -936,6 +944,7 @@ exists({Idx, Term}, Log0) ->
 
 -spec overview(state()) -> overview().
 overview(#?MODULE{last_index = LastIndex,
+                  last_term = LastTerm,
                   first_index = FirstIndex,
                   last_written_index_term = LWIT,
                   snapshot_state = SnapshotState,
@@ -943,15 +952,21 @@ overview(#?MODULE{last_index = LastIndex,
                   last_wal_write = {_LastPid, LastMs},
                   mem_table = Mt
                  }) ->
+    CurrSnap = ra_snapshot:current(SnapshotState),
     #{type => ?MODULE,
       last_index => LastIndex,
+      last_term => LastTerm,
       first_index => FirstIndex,
       last_written_index_term => LWIT,
       num_segments => length(ra_log_reader:segment_refs(Reader)),
       open_segments => ra_log_reader:num_open_segments(Reader),
-      snapshot_index => case ra_snapshot:current(SnapshotState) of
+      snapshot_index => case CurrSnap of
                             undefined -> undefined;
                             {I, _} -> I
+                        end,
+      snapshot_term => case CurrSnap of
+                            undefined -> undefined;
+                            {_, T} -> T
                         end,
       latest_checkpoint_index =>
           case ra_snapshot:latest_checkpoint(SnapshotState) of
@@ -1026,14 +1041,13 @@ release_resources(MaxOpenSegments,
                                       directory = Dir,
                                       counter = Counter,
                                       names = Names},
-                           first_index = FstIdx,
                            reader = Reader} = State) ->
     ActiveSegs = ra_log_reader:segment_refs(Reader),
     % close all open segments
     % deliberately ignoring return value
     _ = ra_log_reader:close(Reader),
     %% open a new segment with the new max open segment value
-    State#?MODULE{reader = ra_log_reader:init(UId, Dir, FstIdx, MaxOpenSegments,
+    State#?MODULE{reader = ra_log_reader:init(UId, Dir, MaxOpenSegments,
                                               AccessPattern,
                                               ActiveSegs, Names, Counter)}.
 
@@ -1042,11 +1056,10 @@ release_resources(MaxOpenSegments,
 register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId,
                                          directory = Dir,
                                          names = Names},
-                              first_index = Idx,
                               reader = Reader,
                               readers = Readers} = State) ->
     SegRefs = ra_log_reader:segment_refs(Reader),
-    NewReader = ra_log_reader:init(UId, Dir, Idx, 1, SegRefs, Names),
+    NewReader = ra_log_reader:init(UId, Dir, 1, SegRefs, Names),
     {State#?MODULE{readers = [Pid | Readers]},
      [{reply, {ok, NewReader}},
       {monitor, process, log, Pid}]}.
