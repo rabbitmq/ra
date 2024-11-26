@@ -272,16 +272,18 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
     fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc).
 
 -spec read_sparse(state(), [ra_index()],
-                  fun((binary()) -> term()), term()) ->
-    {non_neg_integer(), term()}.
+                  fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
+                  Acc) ->
+    {NumRead :: non_neg_integer(), Acc}
+      when Acc :: term().
 read_sparse(#state{index = Index,
-                   cfg = Cfg}, Indexes, Fun, Acc) ->
+                   cfg = Cfg}, Indexes, AccFun, Acc) ->
     Cache0 = prepare_cache(Cfg, Indexes, Index),
-    read_sparse0(Cfg, Indexes, Index, Cache0, Fun, Acc, 0).
+    read_sparse0(Cfg, Indexes, Index, Cache0, Acc, AccFun, 0).
 
-read_sparse0(_Cfg, [], _Index, _Cache, _Fun, Acc, Num) ->
+read_sparse0(_Cfg, [], _Index, _Cache, Acc, _AccFun, Num) ->
     {Num, Acc};
-read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc, Num)
+read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
  when is_map_key(NextIdx, Index) ->
     {Term, Offset, Length, _} = map_get(NextIdx, Index),
     case cache_read(Cache0, Offset, Length) of
@@ -289,16 +291,18 @@ read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Fun, Acc, Num)
             case prepare_cache(Cfg, Indexes, Index) of
                 undefined ->
                     {ok, Data, _} = pread(Cfg, undefined, Offset, Length),
-                    read_sparse0(Cfg, Rem, Index, undefined, Fun,
-                                 [{NextIdx, Term, Fun(Data)} | Acc], Num+1);
+                    read_sparse0(Cfg, Rem, Index, undefined,
+                                 AccFun(NextIdx, Term, Data, Acc),
+                                 AccFun, Num+1);
                 Cache ->
-                    read_sparse0(Cfg, Indexes, Index, Cache, Fun, Acc, Num+1)
+                    read_sparse0(Cfg, Indexes, Index, Cache,
+                                 Acc, AccFun, Num+1)
             end;
         Data ->
-            read_sparse0(Cfg, Rem, Index, Cache0, Fun,
-                         [{NextIdx, Term, Fun(Data)} | Acc], Num+1)
+            read_sparse0(Cfg, Rem, Index, Cache0,
+                         AccFun(NextIdx, Term, Data, Acc), AccFun, Num+1)
     end;
-read_sparse0(_Cfg, [NextIdx | _], _Index, _Cache, _Fun, _Acc, _Num) ->
+read_sparse0(_Cfg, [NextIdx | _], _Index, _Cache, _Acc, _AccFun, _Num) ->
     exit({missing_key, NextIdx}).
 
 cache_read({CPos, CLen, Bin}, Pos, Length)

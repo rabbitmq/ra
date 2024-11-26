@@ -374,8 +374,8 @@ machine_state_enter_effects(Config) ->
                 end),
     meck:expect(Mod, state_enter,
                 fun (RaftState, _State) ->
-                        [{mod_call, erlang, send,
-                          [Self, {state_enter, RaftState}]}]
+                        Self ! {state_enter, RaftState},
+                        []
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     ra:delete_cluster([ServerId]),
@@ -471,8 +471,12 @@ append_effect_with_notify(Config) ->
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
-    {ok, _, ServerId} = ra:process_command(ServerId, cmd),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+
+    ok = start_cluster(ClusterName, {module, Mod, #{}},
+                       [ServerId, ServerId2, ServerId3]),
+    {ok, _, _Leader} = ra:process_command(ServerId, cmd),
     receive
         {ra_event, _, {applied, [{42, ok}]}} = Evt ->
             ct:pal("Got ~p", [Evt])
@@ -487,6 +491,7 @@ append_effect_with_notify(Config) ->
               flush(),
               exit(cmd2_timeout)
     end,
+    flush(),
     ok.
 
 append_effect_follower(Config) ->
@@ -499,10 +504,12 @@ append_effect_follower(Config) ->
                                 (_, {cmd2, "yo"}, State) ->
                                     {State, ok, [{send_msg, Self, got_cmd2}]}
                             end),
+    %% have to use the special try_append here as {append, should only be
+    %% applied to the leader
     meck:expect(Mod, handle_aux, fun
                                      (_, _, {cmd, ReplyMode}, Aux, Log, _MacState) ->
                                          {no_reply, Aux, Log,
-                                          [{append, {cmd2, "yo"}, ReplyMode}]};
+                                          [{try_append, {cmd2, "yo"}, ReplyMode}]};
                                      (_, _, _Evt, Aux, Log, _MacState) ->
                                          {no_reply, Aux, Log}
                                  end),

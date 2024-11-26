@@ -55,6 +55,7 @@ all_tests() ->
      transient_writer_is_handled,
      read_opt,
      sparse_read,
+     read_plan,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
@@ -441,6 +442,33 @@ sparse_read(Config) ->
     {[{1000, _, _},
       {5, _, _},
       {99, _, _}], _LogO3} = ra_log:sparse_read([1000,5,99], LogO2),
+    ok.
+
+read_plan(Config) ->
+    Num = 256 * 2,
+    Div = 2,
+    Log0 = write_and_roll(1, Num div Div, 1, ra_log_init(Config), 50),
+    Log1 = wait_for_segments(Log0, 5000),
+    Log2 = write_no_roll(Num div Div, Num, 1, Log1, 50),
+    %% read small batch of the latest entries
+    {_, Log3} = ra_log_take(Num - 5, Num, Log2),
+    %% ensure cache is empty as this indicates all enties have at least
+    %% been written to the WAL and thus will be available in mem tables.
+    Log4 = deliver_log_events_cond(Log3,
+                                   fun (L) ->
+                                           ra_log:last_written(L) ==
+                                           ra_log:last_index_term(L)
+                                   end, 100),
+    %% create a list of indexes with some consecutive and some gaps
+    Indexes = lists:usort(lists:seq(1, Num, 2) ++ lists:seq(1, Num, 5)),
+    %% make sure that the ETS deletes have been finished before we re-init
+    gen_server:call(ra_log_ets, ok),
+    ReadPlan = ra_log:partial_read(Indexes, Log4, fun (_, _, Cmd) -> Cmd end),
+    ?assert(is_map(ra_log_read_plan:info(ReadPlan))),
+    {EntriesOut, _} = ra_log_read_plan:execute(ReadPlan, undefined),
+    ?assertEqual(length(Indexes), maps:size(EntriesOut)),
+    %% assert the indexes requestd were all returned in order
+    [] = Indexes -- [I || I <- maps:keys(EntriesOut)],
     ok.
 
 written_event_after_snapshot(Config) ->
@@ -1384,7 +1412,6 @@ external_reader(Config) ->
                             {Es, R2} = ra_log_reader:sparse_read(
                                          R1, lists:seq(0, 220), []),
                             Len1 = length(Es),
-                            ct:pal("Es ~w", [Len1]),
                             Self ! {got, Evt, Es},
                             receive
                                 {ra_log_update, _, F, _} = Evt2 ->

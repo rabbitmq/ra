@@ -49,7 +49,8 @@
          is_dir/1,
          is_file/1,
          ensure_dir/1,
-         consult/1
+         consult/1,
+         cons/2
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
@@ -453,6 +454,10 @@ consult(Path) ->
         Err ->
             Err
     end.
+
+cons(Item, List)
+  when is_list(List) ->
+    [Item | List].
 
 tokens(Str) ->
     case erl_scan:string(Str) of

@@ -1318,7 +1318,7 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
                          end, {State0, Actions0}, Effects0),
     {State, lists:reverse(Actions)}.
 
-handle_effect(_, {send_rpc, To, Rpc}, _,
+handle_effect(leader, {send_rpc, To, Rpc}, _,
               #state{conf = Conf} = State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
@@ -1347,7 +1347,7 @@ handle_effect(_, {next_event, Evt}, EvtType, State, Actions) ->
     {State, [{next_event, EvtType, Evt} |  Actions]};
 handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
-handle_effect(_, {send_msg, To, Msg}, _, State, Actions) ->
+handle_effect(leader, {send_msg, To, Msg}, _, State, Actions) ->
     %% default is to send without any wrapping
     %% TODO: handle send failure? how?
     _ = send(To, Msg, State#state.conf),
@@ -1370,18 +1370,26 @@ handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
             ok
     end,
     {State, Actions};
-handle_effect(RaftState, {log, Idxs, Fun, {local, Node}}, EvtType,
-              State, Actions) ->
+handle_effect(RaftState, {LogOrLogExt, Idxs, Fun, {local, Node}}, EvtType,
+              State, Actions)
+  when LogOrLogExt == log orelse LogOrLogExt == log_ext ->
     case can_execute_locally(RaftState, Node, State) of
         true ->
-            handle_effect(RaftState, {log, Idxs, Fun}, EvtType, State, Actions);
+            handle_effect(RaftState, {LogOrLogExt, Idxs, Fun}, EvtType,
+                          State, Actions);
         false ->
             {State, Actions}
     end;
-handle_effect(_RaftState, {append, Cmd}, _EvtType, State, Actions) ->
+handle_effect(leader, {append, Cmd}, _EvtType, State, Actions) ->
     Evt = {command, normal, {'$usr', Cmd, noreply}},
     {State, [{next_event, cast, Evt} | Actions]};
-handle_effect(_RaftState, {append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
+handle_effect(leader, {append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
+    Evt = {command, normal, {'$usr', Cmd, ReplyMode}},
+    {State, [{next_event, cast, Evt} | Actions]};
+handle_effect(_RaftState, {try_append, Cmd, ReplyMode}, _EvtType, State, Actions) ->
+    %% this is a special mode to retain the backwards compatibility of
+    %% certain prior uses of {append, when it wasn't (accidentally)
+    %% limited to the leader
     Evt = {command, normal, {'$usr', Cmd, ReplyMode}},
     {State, [{next_event, cast, Evt} | Actions]};
 handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
@@ -1399,6 +1407,18 @@ handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
             handle_effects(RaftState, Effects, EvtType,
                            State#state{server_state = SS}, Actions)
     end;
+handle_effect(RaftState, {log_ext, Idxs, Fun}, EvtType,
+              State = #state{server_state = SS0}, Actions)
+  when is_list(Idxs) ->
+    ReadState = ra_server:log_partial_read(Idxs, SS0),
+    case Fun(ReadState) of
+        [] ->
+            {State, Actions};
+        Effects ->
+            %% recurse with the new effects
+            handle_effects(RaftState, Effects, EvtType,
+                           State, Actions)
+    end;
 handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
                                                      State0#state.server_state),
@@ -1406,19 +1426,21 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
         handle_effects(RaftState, Effects, EventType,
                        State0#state{server_state = ServerState}),
     {State, Actions0 ++ Actions};
-handle_effect(_, {notify, Nots}, _, #state{} = State0, Actions) ->
+handle_effect(leader, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
     State = send_applied_notifications(State0, Nots),
     {State, Actions};
-handle_effect(_, {cast, To, Msg}, _, State, Actions) ->
+handle_effect(_AnyState, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
     _ = gen_cast(To, Msg, State),
     {State, Actions};
 handle_effect(RaftState, {reply, {Pid, _Tag} = From, Reply, Replier}, _,
               State, Actions) ->
     case Replier of
-        leader ->
+        leader when RaftState == leader ->
             ok = gen_statem:reply(From, Reply);
+        leader ->
+            ok;
         local ->
             case can_execute_locally(RaftState, node(Pid), State) of
                 true ->
@@ -1437,15 +1459,17 @@ handle_effect(RaftState, {reply, {Pid, _Tag} = From, Reply, Replier}, _,
             ok
     end,
     {State, Actions};
-handle_effect(_, {reply, From, Reply}, _, State, Actions) ->
-    % reply directly
+handle_effect(leader, {reply, From, Reply}, _, State, Actions) ->
+    % reply directly, this is only done from the leader
+    % this is like reply/4 above with the Replier=leader
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect(_, {reply, Reply}, {call, From}, State, Actions) ->
-    % reply directly
+handle_effect(_RaftState, {reply, Reply}, {call, From}, State, Actions) ->
+    % this is the reply effect for replying to the current call, any state
+    % can use this
     ok = gen_statem:reply(From, Reply),
     {State, Actions};
-handle_effect(_, {reply, _Reply}, _EvtType, State, Actions) ->
+handle_effect(_RaftState, {reply, _From, _Reply}, _EvtType, State, Actions) ->
     {State, Actions};
 handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, _,
               #state{server_state = SS0,
@@ -1534,10 +1558,21 @@ handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     {State, Actions};
-handle_effect(_, {monitor, _ProcOrNode, PidOrNode}, _,
+handle_effect(leader, {monitor, _ProcOrNode, PidOrNode}, _,
+              #state{monitors = Monitors} = State, Actions0) ->
+    %% this effect type is only emitted by state machines and thus will
+    %% only be monitored from the leader
+    {State#state{monitors = ra_monitors:add(PidOrNode, machine, Monitors)},
+     Actions0};
+handle_effect(leader, {monitor, _ProcOrNode, machine, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->
     {State#state{monitors = ra_monitors:add(PidOrNode, machine, Monitors)},
      Actions0};
+handle_effect(_RaftState, {monitor, _ProcOrNode, machine, _PidOrNode}, _,
+              #state{} = State, Actions0) ->
+    %% AFAIK: there is nothing emitting this effect type but we have to
+    %% guard against it being actioned on the follower anyway
+    {State, Actions0};
 handle_effect(_, {monitor, _ProcOrNode, Component, PidOrNode}, _,
               #state{monitors = Monitors} = State, Actions0) ->
     {State#state{monitors = ra_monitors:add(PidOrNode, Component, Monitors)},
@@ -1550,9 +1585,9 @@ handle_effect(_, {demonitor, _ProcOrNode, Component, PidOrNode}, _,
               #state{monitors = Monitors0} = State, Actions) ->
     Monitors = ra_monitors:remove(PidOrNode, Component, Monitors0),
     {State#state{monitors = Monitors}, Actions};
-handle_effect(_, {timer, Name, T}, _, State, Actions) ->
+handle_effect(leader, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
-handle_effect(_, {mod_call, Mod, Fun, Args}, _,
+handle_effect(leader, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     %% TODO: catch and log failures or rely on calling function never crashing
     _ = erlang:apply(Mod, Fun, Args),
@@ -1569,6 +1604,8 @@ handle_effect(follower, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     {State, [{state_timeout, infinity, undefined} | Actions]};
 handle_effect(_, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     %% non follower states don't need to reset state timeout after an effect
+    {State0, Actions};
+handle_effect(_, _, _, State0, Actions) ->
     {State0, Actions}.
 
 send_rpcs(State0) ->
@@ -1941,7 +1978,8 @@ can_execute_locally(RaftState, TargetNode,
                     #state{server_state = ServerState} = State) ->
     Membership = ra_server:get_membership(ServerState),
     case RaftState of
-        follower when Membership == voter ->
+        _ when RaftState =/= leader andalso
+               Membership == voter ->
             TargetNode == node();
         leader when TargetNode =/= node() ->
             %% We need to evaluate whether to send the message.

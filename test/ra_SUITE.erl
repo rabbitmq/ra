@@ -102,8 +102,18 @@ restart_ra(DataDir) ->
 init_per_group(_G, Config) ->
     PrivDir = ?config(priv_dir, Config),
     DataDir = filename:join([PrivDir, "data"]),
+    ra_env:configure_logger(logger),
+    ok = logger:set_primary_config(level, debug),
+    LogFile = filename:join(?config(priv_dir, Config), "ra.log"),
+    SaslFile = filename:join(?config(priv_dir, Config), "ra_sasl.log"),
+    logger:add_handler(ra_handler, logger_std_h, #{config => #{file => LogFile}}),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
+    _ = error_logger:tty(false),
     ok = restart_ra(DataDir),
-    % ok = logger:set_application_level(ra, all),
+    ok = logger:set_application_level(ra, all),
     Config.
 
 end_per_group(_, Config) ->
@@ -297,6 +307,7 @@ start_servers(Config) ->
     ra:overview(?SYS),
     % issue command to confirm n3 joined the cluster successfully
     {ok, _, _} = ra:process_command(N3, 5, ?PROCESS_COMMAND_TIMEOUT),
+    flush(),
     terminate_cluster([N1, N2, N3] -- [element(1, Target)]).
 
 
@@ -894,16 +905,6 @@ server_catches_up(Config) ->
     terminate_cluster([N3 | InitialNodes]).
 
 snapshot_installation(Config) ->
-    ra_env:configure_logger(logger),
-    ok = logger:set_primary_config(level, debug),
-    LogFile = filename:join(?config(priv_dir, Config), "ra.log"),
-    SaslFile = filename:join(?config(priv_dir, Config), "ra_sasl.log"),
-    logger:add_handler(ra_handler, logger_std_h, #{config => #{file => LogFile}}),
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
-    application:stop(sasl),
-    application:start(sasl),
-    _ = error_logger:tty(false),
     N1 = nth_server_name(Config, 1),
     N2 = nth_server_name(Config, 2),
     N3 = nth_server_name(Config, 3),
