@@ -76,7 +76,7 @@
 -type transform_fun() :: fun ((ra_index(), ra_term(), ra_server:command()) -> term()).
 
 -type effect() ::
-    {delete_snapshot, Dir :: file:filename(), ra_idxterm()} |
+    {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
     {monitor, process, log, pid()} |
     ra_snapshot:effect() |
     ra_server:effect().
@@ -163,13 +163,16 @@
               overview/0
              ]).
 
+-define(SNAPSHOTS_DIR, <<"snapshots">>).
+-define(CHECKPOINTS_DIR, <<"checkpoints">>).
+
 pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
-    SnapshotsDir = filename:join(Dir, "snapshots"),
-    CheckpointsDir = filename:join(Dir, "checkpoints"),
+    SnapshotsDir = filename:join(Dir, ?SNAPSHOTS_DIR),
+    CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                          CheckpointsDir, undefined, MaxCheckpoints),
     ok.
@@ -192,8 +195,8 @@ init(#{uid := UId,
     CPInterval = maps:get(min_checkpoint_interval, Conf,
                           ?MIN_CHECKPOINT_INTERVAL),
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
-    SnapshotsDir = filename:join(Dir, "snapshots"),
-    CheckpointsDir = filename:join(Dir, "checkpoints"),
+    SnapshotsDir = filename:join(Dir, ?SNAPSHOTS_DIR),
+    CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
     Counter = maps:get(counter, Conf, undefined),
 
     %% ensure directories are there
@@ -1048,8 +1051,8 @@ overview(#?MODULE{last_index = LastIndex,
 
 -spec write_config(ra_server:config(), state()) -> ok.
 write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
-    ConfigPath = filename:join(Dir, "config"),
-    TmpConfigPath = filename:join(Dir, "config.tmp"),
+    ConfigPath = filename:join(Dir, <<"config">>),
+    TmpConfigPath = filename:join(Dir, <<"config.tmp">>),
     % clean config of potentially unserialisable data
     Config = maps:without([parent,
                            counter,
@@ -1062,12 +1065,12 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ok = prim_file:rename(TmpConfigPath, ConfigPath),
     ok.
 
--spec read_config(state() | file:filename()) ->
+-spec read_config(state() | file:filename_all()) ->
     {ok, ra_server:config()} | {error, term()}.
 read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
-    ConfigPath = filename:join(Dir, "config"),
+    ConfigPath = filename:join(Dir, <<"config">>),
     ra_lib:consult(ConfigPath).
 
 -spec delete_everything(state()) -> ok.

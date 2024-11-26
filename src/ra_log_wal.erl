@@ -80,7 +80,7 @@
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
 
--record(conf, {dir :: string(),
+-record(conf, {dir :: file:filename_all(),
                segment_writer = ra_log_segment_writer :: atom() | pid(),
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
@@ -370,21 +370,22 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
                    ok = ra_log_segment_writer:await(SegWriter),
                    post_boot
            end,
-    WalFiles = lists:sort(filelib:wildcard(filename:join(Dir, "*.wal"))),
+    {ok, Files} = file:list_dir(Dir),
+    WalFiles = lists:sort([F || F <- Files,
+                                filename:extension(F) == ".wal"]),
     AllWriters =
     [begin
-         FBase = filename:basename(F),
-         ?DEBUG("wal: recovering ~ts, Mode ~s", [FBase, Mode]),
-         Fd = open_at_first_record(F),
+         ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
+         Fd = open_at_first_record(filename:join(Dir, F)),
          {Time, #recovery{ranges = Ranges,
                           writers = Writers}} =
              timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
-         ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, FBase),
+         ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, F),
 
          close_existing(Fd),
          ?DEBUG("wal: recovered ~ts time taken ~bms - Writer state recovered ~p",
-                [FBase, Time div 1000, Writers]),
+                [F, Time div 1000, Writers]),
          Writers
      end || F <- WalFiles],
 

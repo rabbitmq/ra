@@ -74,11 +74,11 @@
          %% typically <data_dir>/snapshots
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
-         snapshot_directory :: file:filename(),
+         snapshot_directory :: file:filename_all(),
          %% <data_dir>/checkpoints
          %% like snapshots, these are also stored in subdirs
          %% as <data_dir>/checkpoints/Term_Index
-         checkpoint_directory :: file:filename(),
+         checkpoint_directory :: file:filename_all(),
          pending :: option({pid(), ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
          current :: option(ra_idxterm()),
@@ -103,7 +103,7 @@
 %% Runs in a separate process.
 %% External storage should be available to read
 %% `Sync' suggests whether the file should be synchronized with `fsync(1)'.
--callback write(Location :: file:filename(),
+-callback write(Location :: file:filename_all(),
                 Meta :: meta(),
                 Ref :: term(),
                 Sync :: boolean()) ->
@@ -112,7 +112,7 @@
     {error, file_err() | term()}.
 
 %% Synchronizes the snapshot to disk.
--callback sync(Location :: file:filename()) ->
+-callback sync(Location :: file:filename_all()) ->
     ok |
     {error, file_err() | term()}.
 
@@ -121,7 +121,7 @@
 %% The read state should contain all the information required to read a chunk
 %% The Context is the map returned by the context/0 callback
 %% This can be used to inform the sender of receive capabilities.
--callback begin_read(Location :: file:filename(), Context :: map()) ->
+-callback begin_read(Location :: file:filename_all(), Context :: map()) ->
     {ok, Meta :: meta(), ReadState :: term()}
     | {error, term()}.
 
@@ -129,11 +129,11 @@
 %% Returns a binary chunk of data and a continuation state
 -callback read_chunk(ReadState,
                      ChunkSizeBytes :: non_neg_integer(),
-                     Location :: file:filename()) ->
+                     Location :: file:filename_all()) ->
     {ok, Chunk :: term(), {next, ReadState} | last} | {error, term()}.
 
 %% begin a stateful snapshot acceptance process
--callback begin_accept(SnapDir :: file:filename(),
+-callback begin_accept(SnapDir :: file:filename_all(),
                        Meta :: meta()) ->
     {ok, AcceptState :: term()} | {error, term()}.
 
@@ -149,15 +149,15 @@
 
 %% Side-effect function
 %% Recover machine state from file
--callback recover(Location :: file:filename()) ->
+-callback recover(Location :: file:filename_all()) ->
     {ok, Meta :: meta(), State :: term()} | {error, term()}.
 
 %% validate the integrity of the snapshot
--callback validate(Location :: file:filename()) ->
+-callback validate(Location :: file:filename_all()) ->
     ok | {error, term()}.
 
 %% Only read meta data from snapshot
--callback read_meta(Location :: file:filename()) ->
+-callback read_meta(Location :: file:filename_all()) ->
     {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
@@ -167,7 +167,7 @@
 
 -callback context() -> map().
 
--spec init(ra_uid(), module(), file:filename(), file:filename(),
+-spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
            undefined | counters:counters_ref(), pos_integer()) ->
     state().
 init(UId, Module, SnapshotsDir, CheckpointDir, Counter, MaxCheckpoints) ->
@@ -339,7 +339,7 @@ accepting(#?MODULE{accepting = undefined}) ->
 accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
     Accepting.
 
--spec directory(state(), kind()) -> file:filename().
+-spec directory(state(), kind()) -> file:filename_all().
 directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
 directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 
@@ -602,7 +602,7 @@ recover(#?MODULE{module = Mod,
           end,
     Mod:recover(Dir).
 
--spec read_meta(Module :: module(), Location :: file:filename()) ->
+-spec read_meta(Module :: module(), Location :: file:filename_all()) ->
     {ok, meta()} |
     {error, invalid_format |
             {invalid_version, integer()} |
@@ -613,7 +613,7 @@ read_meta(Module, Location) ->
     Module:read_meta(Location).
 
 -spec current_snapshot_dir(state()) ->
-    option(file:filename()).
+    option(file:filename_all()).
 current_snapshot_dir(#?MODULE{snapshot_directory = Dir,
                               current = {Idx, Term}}) ->
     make_snapshot_dir(Dir, Idx, Term);
