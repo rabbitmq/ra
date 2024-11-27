@@ -11,7 +11,7 @@
          info/1]).
 
 -spec execute(ra_log:read_plan(), undefined | ra_flru:state()) ->
-    {#{ra:index() => Command :: ra_server:command()}, ra_flru:state()}.
+    {#{ra:index() => Command :: term()}, ra_flru:state()}.
 execute(Plan, Flru) ->
     ra_log:execute_read_plan(Plan, Flru, fun ra_server:transform_for_partial_read/3).
 
