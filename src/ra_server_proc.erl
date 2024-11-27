@@ -1761,7 +1761,9 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
          exit:{{nodedown, _}, _} ->
             {error, nodedown};
          exit:{shutdown, _} ->
-            {error, shutdown}
+            {error, shutdown};
+         exit:{Reason, _} ->
+            {error, Reason}
     end.
 
 do_state_query(QueryName, #state{server_state = State}) ->

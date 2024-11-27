@@ -23,6 +23,7 @@ all_tests() ->
      handle_overwrite,
      handle_overwrite_append,
      receive_segment,
+     delete_during_segment_flush,
      read_one,
      take_after_overwrite_and_init,
      validate_sequential_fold,
@@ -210,6 +211,42 @@ receive_segment(Config) ->
     {Entries, FinalLog} = ra_log_take(1, 3, Log3),
     ?assertEqual(length(Entries), 3),
     ra_log:close(FinalLog),
+    ok.
+
+delete_during_segment_flush(Config) ->
+    %% this test doesn't necessarily trigger the potential issue but is
+    %% worth keeping around
+    Log0 = ra_log_init(Config),
+    Data = crypto:strong_rand_bytes(4000),
+    % write a few entries
+    Entries = [{I, 1, Data} || I <- lists:seq(1, 100000)],
+
+    {PreWritten, _} = ra_log:last_written(Log0),
+    Log1 = lists:foldl(fun(E, Acc0) ->
+                               ra_log:append(E, Acc0)
+                       end, Log0, Entries),
+    Log2 = deliver_log_events_cond(
+             Log1, fun (L) ->
+                           {PostWritten, _} = ra_log:last_written(L),
+                           PostWritten >= (PreWritten + 10000)
+                   end, 100),
+    Ref = monitor(process, ra_log_segment_writer),
+    % force wal roll over
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+
+    timer:sleep(0),
+    ra_log:delete_everything(Log2),
+
+
+    receive
+        {'DOWN', Ref, _, _, _} ->
+            flush(),
+            ct:fail("segment writer unexpectedly exited")
+    after 100 ->
+              ok
+    end,
+    flush(),
+
     ok.
 
 read_one(Config) ->
