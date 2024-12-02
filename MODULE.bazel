@@ -1,11 +1,11 @@
 module(
     name = "rabbitmq_ra",
-    version = "2.15.0",
+    version = "2.16.0",
 )
 
 bazel_dep(
     name = "rules_erlang",
-    version = "3.11.4",
+    version = "3.16.0",
 )
 
 bazel_dep(
