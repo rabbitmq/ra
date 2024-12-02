@@ -683,8 +683,8 @@ handle_event({segments, TidRanges, NewSegs},
                       readers = Readers
                      } = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
-    %% the tid ranges arrive in the order they were written so we need to
-    %% foldr here to process the oldest first
+    %% the tid ranges arrive in the reverse order they were written
+    %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
            fun ({Tid, Range}, Acc0) ->
                    {Spec, Acc} = ra_mt:record_flushed(Tid, Range, Acc0),

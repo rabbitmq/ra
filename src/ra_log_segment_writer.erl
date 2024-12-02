@@ -158,8 +158,8 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
     T1 = erlang:monotonic_time(),
     _ = [begin
              {_, Failures} = ra_lib:partition_parallel(
-                               fun (E) ->
-                                       ok = flush_mem_table_ranges(E, State),
+                               fun (TidRange) ->
+                                       ok = flush_mem_table_ranges(TidRange, State),
                                        true
                                end, Tabs, infinity),
              case Failures of
@@ -253,34 +253,46 @@ get_overview(#state{data_dir = Dir,
 flush_mem_table_ranges({ServerUId, TidRanges0},
                        #state{system = System} = State) ->
     SnapIdx = snap_idx(ServerUId),
+    %% TidRanges arrive here sorted new -> old.
 
     %% truncate and limit all ranges to create a contiguous non-overlapping
     %% list of tid ranges to flush to disk
-    TidRanges =
-        lists:foldl(fun ({T, Range}, []) ->
-                            [{T, ra_range:truncate(SnapIdx, Range)}];
-                        ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
-                            Range1 = ra_range:truncate(SnapIdx, Range0),
-                            case ra_range:limit(Start, Range1) of
-                                undefined ->
-                                    Acc;
-                                Range ->
-                                    [{T, Range} | Acc]
-                            end
-                    end, [], TidRanges0),
+    %% now TidRanges are sorted old -> new, i.e the correct order of
+    %% processing
+    TidRanges = lists:foldl(
+                  fun ({T, Range0}, []) ->
+                          case ra_range:truncate(SnapIdx, Range0) of
+                              undefined ->
+                                  [];
+                              Range ->
+                                  [{T, Range}]
+                          end;
+                      ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
+                          Range1 = ra_range:truncate(SnapIdx, Range0),
+                          case ra_range:limit(Start, Range1) of
+                              undefined ->
+                                  Acc;
+                              Range ->
+                                  [{T, Range} | Acc]
+                          end
+                  end, [], TidRanges0),
 
     SegRefs0 = lists:append(
-                [flush_mem_table_range(ServerUId, TidRange, State)
-                 || {_Tid, Range} = TidRange <- TidRanges,
-                    Range =/= undefined]),
+                 lists:reverse(
+                   %% segrefs are returned in appended order so new -> old
+                   %% so we need to reverse them so that the final appended list
+                   %% of segrefs is in the old -> new order
+                   [flush_mem_table_range(ServerUId, TidRange, State)
+                    || TidRange <- TidRanges])),
 
     %% compact cases where a segment was appended in a subsequent call to
     %% flush_mem_table_range
+    %% the list of segrefs is returned in new -> old order which is the same
+    %% order they are kept by the ra_log
     SegRefs = lists:reverse(
                 lists:foldl(
-                  fun ({_, _, FILE} = New, [{_, _, FILE} | Rem]) ->
-                          %% same
-                          [New | Rem];
+                  fun ({_, _, FILE}, [{_, _, FILE} | _] = Acc) ->
+                          Acc;
                       (Seg, Acc) ->
                           [Seg | Acc]
                   end, [], SegRefs0)),
@@ -350,25 +362,13 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                    [ServerUId, "No Pid"]),
             %% delete from the memtable on the non-running server's behalf
             [begin
-                 %% this looks a bit weird but
-                 %% we dont need full init to run a delete
-                 _  = ra_mt:delete({range, Tid, Range})
+                 _  = catch ra_mt:delete({range, Tid, Range})
              end || {Tid, Range} <- TidRanges],
             ok;
         Pid ->
             Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},
             ok
     end.
-
-clean_closed_mem_tables(System, UId, Tid) ->
-    {ok, ClosedTbl} = ra_system:lookup_name(System, closed_mem_tbls),
-    Tables = ets:lookup(ClosedTbl, UId),
-    [begin
-         ?DEBUG("~w: cleaning closed table for '~ts' range: ~b-~b",
-                [?MODULE, UId, From, To]),
-         %% delete the entry in the closed table lookup
-         true = ets:delete_object(ClosedTbl, O)
-     end || {_, _, From, To, T} = O <- Tables, T == Tid].
 
 append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
     StartIdx = start_index(UId, StartIdx0),
@@ -379,13 +379,13 @@ append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
   when StartIdx >= EndIdx ->
     {Seg, Closed};
 append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
-    case ets:lookup(Tid, Idx) of
+    try ets:lookup(Tid, Idx) of
         [] ->
             StartIdx = start_index(UId, Idx),
             case Idx < StartIdx of
                 true ->
-                    %% TODO: we could combine registered check with this
-                    %% although registered check could be slow
+                    %% a snapshot must have been completed after we last checked
+                    %% the start idx, continue flush from new start index.
                     append_to_segment(UId, Tid, StartIdx, EndIdx, Seg0,
                                       Closed, State);
                 false ->
@@ -395,11 +395,11 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                           [Idx, UId, StartIdx]),
                     case ra_directory:is_registered_uid(State#state.system, UId) of
                         true ->
-                            ?ERROR("segment_writer: uid ~s is registered, exiting...",
+                            ?ERROR("segment_writer: uid ~ts is registered, exiting...",
                                    [UId]),
                             exit({missing_index, UId, Idx});
                         false ->
-                            ?INFO("segment_writer: UId ~s was not registered, skipping",
+                            ?INFO("segment_writer: uid ~ts was not registered, skipping",
                                   [UId]),
                             undefined
                     end
@@ -422,8 +422,6 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                         undefined ->
                             %% a successor cannot be opened - this is most likely due
                             %% to the directory having been deleted.
-                            %% clear close mem tables here
-                            _ = clean_closed_mem_tables(State#state.system, UId, Tid),
                             undefined;
                         Seg ->
                             ok = counters:add(State#state.counter, ?C_SEGMENTS, 1),
@@ -437,6 +435,16 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                     FileName = ra_log_segment:filename(Seg0),
                     exit({segment_writer_append_error, FileName, Posix})
             end
+    catch _:badarg ->
+              ?ERROR("segment_writer: uid ~s ets table deleted", [UId]),
+              %% ets table has been deleted.
+              %% this could be due to two reasons
+              %% 1. the ra server has been deleted.
+              %% 2. an old mem table has been deleted due to snapshotting
+              %% but the member is still active
+              %% skipping this table
+              undefined
+
     end.
 
 find_segment_files(Dir) ->

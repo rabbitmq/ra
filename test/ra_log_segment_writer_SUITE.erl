@@ -32,6 +32,8 @@ all_tests() ->
      accept_mem_tables_for_down_server,
      accept_mem_tables_with_deleted_server,
      accept_mem_tables_with_corrupt_segment,
+     accept_mem_tables_multiple_ranges,
+     accept_mem_tables_multiple_ranges_snapshot,
      truncate_segments,
      truncate_segments_with_pending_update,
      truncate_segments_with_pending_overwrite,
@@ -259,6 +261,7 @@ accept_mem_tables_multi_segment(Config) ->
     end,
     ok = gen_server:stop(Pid),
     ok.
+
 accept_mem_tables_multi_segment_overwrite(Config) ->
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
@@ -459,6 +462,71 @@ accept_mem_tables_with_corrupt_segment(Config) ->
                               false = filelib:is_file(WalFile),
                               ok
                       end, 5, 100),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_multiple_ranges(Config)->
+    Dir = ?config(wal_dir, Config),
+    SegConf = #{max_count => 16},
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir,
+                                                            segment_conf => SegConf}),
+    UId = ?config(uid, Config),
+    Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
+    Mt = make_mem_table(UId, Entries),
+    Entries2 = [{N, 42, N} || N <- lists:seq(33, 64)],
+    Mt2 = make_mem_table(UId, Entries2),
+    Ranges = #{UId => [
+                       {ra_mt:tid(Mt2), ra_mt:range(Mt2)},
+                       {ra_mt:tid(Mt), ra_mt:range(Mt)}
+                      ]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    receive
+        {ra_log_event, {segments, _TidRanges, SegRefs}} ->
+            ?assertMatch([
+                          {49, 64, _},
+                          {33, 48, _},
+                          {17, 32, _},
+                          {1, 16, _}
+                         ], SegRefs),
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+accept_mem_tables_multiple_ranges_snapshot(Config)->
+    Dir = ?config(wal_dir, Config),
+    SegConf = #{max_count => 16},
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir,
+                                                            segment_conf => SegConf}),
+    UId = ?config(uid, Config),
+    Entries = [{N, 42, N} || N <- lists:seq(1, 32)],
+    Mt = make_mem_table(UId, Entries),
+    Entries2 = [{N, 42, N} || N <- lists:seq(33, 64)],
+    Mt2 = make_mem_table(UId, Entries2),
+    Ranges = #{UId => [
+                       {ra_mt:tid(Mt2), ra_mt:range(Mt2)},
+                       {ra_mt:tid(Mt), ra_mt:range(Mt)}
+                      ]},
+    ets:insert(ra_log_snapshot_state, {UId, 64}),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+
+    receive
+        {ra_log_event, {segments, _TidRanges, SegRefs}} ->
+            ?assertMatch([], SegRefs),
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
     ok = gen_server:stop(TblWriterPid),
     ok.
 
