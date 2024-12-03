@@ -1226,7 +1226,15 @@ transfer_leadership(Config) ->
     ?assertEqual(NewLeader, NextInLine),
     ?assertEqual(already_leader, ra:transfer_leadership(NewLeader, NewLeader)),
     ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
-    terminate_cluster(Members).
+    NonVoterMember =
+        #{id => NonVoterMemberId = {n4, node()},
+          uid => ra:new_uid(ra_lib:to_binary(Name)),
+          membership => non_voter},
+    {ok, _, _} = ra:add_member(NewLeader, NonVoterMember),
+    ok = ra:start_server(default, Name, NonVoterMember, add_machine(), Members),
+    ct:pal("Transferring leadership from ~p to ~p", [NewLeader, NonVoterMemberId]),
+    ?assertEqual({error, non_voter_member}, ra:transfer_leadership(NewLeader, NonVoterMemberId)),
+    terminate_cluster([NonVoterMemberId | Members]).
 
 transfer_leadership_two_node(Config) ->
     Name = ?config(test_name, Config),

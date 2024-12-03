@@ -827,17 +827,22 @@ handle_leader({transfer_leadership, Member},
            [LogId, Member]),
     {leader, State, [{reply, {error, unknown_member}}]};
 handle_leader({transfer_leadership, ServerId},
-              #{cfg := #cfg{log_id = LogId}} = State) ->
-    ?DEBUG("~ts: transfer leadership to ~w requested",
-           [LogId, ServerId]),
-    %% TODO find a timeout
-    gen_statem:cast(ServerId, try_become_leader),
-    {await_condition,
-     State#{condition =>
-            #{predicate_fun => fun transfer_leadership_condition/2,
-              timeout => #{effects => [],
-                           transition_to => leader}}},
-     [{reply, ok}]};
+              #{cfg := #cfg{log_id = LogId},
+                cluster := Cluster} = State) ->
+    case Cluster of
+        #{ServerId := #{voter_status := #{membership := Membership}}} when Membership =/= voter ->
+            ?DEBUG("~ts: transfer leadership requested but non-voter member ~w", [LogId, ServerId]),
+            {leader, State, [{reply, {error, non_voter_member}}]};
+        _ ->
+            ?DEBUG("~ts: transfer leadership to ~w requested", [LogId, ServerId]),
+            %% TODO find a timeout
+            gen_statem:cast(ServerId, try_become_leader),
+            {await_condition,
+             State#{condition =>
+                        #{predicate_fun => fun transfer_leadership_condition/2,
+                          timeout => #{effects => [], transition_to => leader}}},
+             [{reply, ok}]}
+    end;
 handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {leader, State#{log => Log}, Effs};
