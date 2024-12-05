@@ -771,7 +771,8 @@ handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
     end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
+                cfg := #cfg{log_id = LogId}} = State0)
+  when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~ts: leader saw request_vote_rpc for unknown peer ~w",
@@ -789,7 +790,8 @@ handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
     {leader, State, [{reply, Reply}]};
 handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
               #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
+                cfg := #cfg{log_id = LogId}} = State0)
+  when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~ts: leader saw pre_vote_rpc for unknown peer ~w",
@@ -882,7 +884,8 @@ handle_candidate(#request_vote_result{term = Term},
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
+                 #{current_term := CurTerm} = State0)
+  when Term >= CurTerm ->
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{leader_id = LeaderId},
@@ -891,7 +894,8 @@ handle_candidate(#append_entries_rpc{leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
 handle_candidate(#heartbeat_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
+                 #{current_term := CurTerm} = State0)
+  when Term >= CurTerm ->
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#heartbeat_rpc{leader_id = LeaderId}, State) ->
@@ -900,7 +904,8 @@ handle_candidate(#heartbeat_rpc{leader_id = LeaderId}, State) ->
     {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_candidate({_PeerId, #heartbeat_reply{term = Term}},
                  #{cfg := #cfg{log_id = LogId},
-                   current_term := CurTerm} = State0) when Term > CurTerm ->
+                   current_term := CurTerm} = State0)
+  when Term > CurTerm ->
     ?INFO("~ts: candidate heartbeat_reply with higher"
           " term received ~b -> ~b",
           [LogId, CurTerm, Term]),
@@ -935,7 +940,7 @@ handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
-    %% unlike request_vote_rpc, a candidate cannot simply reject 
+    %% unlike request_vote_rpc, a candidate cannot simply reject
     %% a pre_vote_rpc that does not have a higher term
     %% (see https://github.com/rabbitmq/ra/issues/439 for the detail)
     process_pre_vote(candidate, PreVote, State);
@@ -979,7 +984,8 @@ handle_pre_vote(#heartbeat_rpc{leader_id = LeaderId}, State) ->
     Reply = heartbeat_reply(State),
     {pre_vote, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_pre_vote({_PeerId, #heartbeat_reply{term = Term}},
-                #{current_term := CurTerm} = State) when Term > CurTerm ->
+                #{current_term := CurTerm} = State)
+  when Term > CurTerm ->
     {follower, update_term(Term, State#{votes => 0}), []};
 handle_pre_vote(#request_vote_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
@@ -1007,6 +1013,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
     ?DEBUG("~ts: pre_vote granted ~w for term ~b votes ~b",
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
+    %% TODO: this is redundant
     State = update_term(Term, State0),
     case required_quorum(Nodes) of
         NewVotes ->
@@ -1067,9 +1074,9 @@ handle_follower(#append_entries_rpc{term = Term,
             case Entries of
                 [] ->
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
-                    LastIdx = ra_log:last_index_term(Log1),
+                    LastIdxTerm = ra_log:last_index_term(Log1),
                     Log2 = case Entries0 of
-                               [] when element(1, LastIdx) > PLIdx ->
+                               [] when element(1, LastIdxTerm) > PLIdx ->
                                    %% if no entries were sent we need to reset
                                    %% last index to match the leader
                                    ?DEBUG("~ts: resetting last index to ~b",
@@ -2381,8 +2388,11 @@ state_query(leader, State) ->
     maps:get(leader_id, State, undefined);
 state_query(members, #{cluster := Cluster}) ->
     maps:keys(Cluster);
-state_query(members_info, #{cfg := #cfg{id = Self}, cluster := Cluster,
-                            leader_id := Self, query_index := QI, commit_index := CI,
+state_query(members_info, #{cfg := #cfg{id = Self},
+                            cluster := Cluster,
+                            leader_id := Self,
+                            query_index := QI,
+                            commit_index := CI,
                             membership := Membership}) ->
     maps:map(fun(Id, Peer) ->
                      case {Id, Peer} of
@@ -2454,18 +2464,18 @@ is_candidate_log_up_to_date(Idx, Term, {LastIdx, Term})
 is_candidate_log_up_to_date(_, _, {_, _}) ->
     false.
 
-has_log_entry_or_snapshot(Idx, Term, Log0) ->
-    case ra_log:fetch_term(Idx, Log0) of
+has_log_entry_or_snapshot(IDX, TERM, Log0) ->
+    case ra_log:fetch_term(IDX, Log0) of
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
-                {Idx, Term} ->
+                {IDX, TERM} ->
                     {entry_ok, Log};
-                {Idx, OtherTerm} ->
+                {IDX, OtherTerm} ->
                     {term_mismatch, OtherTerm, Log};
                 _ ->
                     {missing, Log}
             end;
-        {Term, Log} ->
+        {TERM, Log} ->
             {entry_ok, Log};
         {OtherTerm, Log} ->
             {term_mismatch, OtherTerm, Log}
@@ -2943,7 +2953,8 @@ query_indexes(#{cfg := #cfg{id = Id},
                 query_index := QueryIndex}) ->
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
-                  (_K, #{voter_status := #{membership := Membership}}, Acc) when Membership =/= voter ->
+                  (_K, #{voter_status := #{membership := Membership}}, Acc)
+                    when Membership =/= voter ->
                       Acc;
                   (_K, #{query_index := Idx}, Acc) ->
                       [Idx | Acc]
@@ -2955,7 +2966,8 @@ match_indexes(#{cfg := #cfg{id = Id},
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
-                  (_K, #{voter_status := #{membership := Membership}}, Acc) when Membership =/= voter ->
+                  (_K, #{voter_status := #{membership := Membership}}, Acc)
+                    when Membership =/= voter ->
                       Acc;
                   (_K, #{match_index := Idx}, Acc) ->
                       [Idx | Acc]
@@ -2979,8 +2991,8 @@ fold_log_from(From, Folder, {St, Log0}) ->
 
 drop_existing({Log0, []}) ->
     {Log0, []};
-drop_existing({Log0, [{Idx, Trm, _} | Tail] = Entries}) ->
-    case ra_log:exists({Idx, Trm}, Log0) of
+drop_existing({Log0, [{Idx, Term, _} | Tail] = Entries}) ->
+    case ra_log:exists({Idx, Term}, Log0) of
         {true, Log} ->
             drop_existing({Log, Tail});
         {false, Log} ->

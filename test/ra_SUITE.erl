@@ -54,6 +54,7 @@ all_tests() ->
      consistent_query,
      consistent_query_after_restart,
      consistent_query_minority,
+     consistent_query_minority_5,
      consistent_query_leader_change,
      consistent_query_stale,
      server_catches_up,
@@ -786,8 +787,9 @@ consistent_query_after_restart(Config) ->
 consistent_query_minority(Config) ->
     [A, _, _]  = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                add_machine()),
-    {ok, _, Leader} = ra:process_command(A, 9,
+    {ok, Res, Leader} = ra:process_command(A, 9,
                                          ?PROCESS_COMMAND_TIMEOUT),
+    {ok, Res, Leader} = ra:consistent_query(Leader, fun(S) -> S end),
     [F1, F2] = Cluster -- [Leader],
     ra:stop_server(F1),
     ra:stop_server(F2),
@@ -805,6 +807,29 @@ consistent_query_minority(Config) ->
     _ = terminate_cluster(Cluster),
     ok.
 
+consistent_query_minority_5(Config) ->
+    [A | _]  = Cluster = start_local_cluster(5, ?config(test_name, Config),
+                                               add_machine()),
+    {ok, Res, Leader} = ra:process_command(A, 9,
+                                         ?PROCESS_COMMAND_TIMEOUT),
+    {ok, Res, Leader} = ra:consistent_query(Leader, fun(S) -> S end),
+    [F1, F2, F3, _F4] = Cluster -- [Leader],
+    ra:stop_server(F1),
+    ra:stop_server(F2),
+    ra:stop_server(F3),
+
+    {timeout, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    %% restart after a short sleep so that quorum is restored whilst the next
+    %% query is executing
+    _ = spawn(fun() ->
+                      timer:sleep(1000),
+                      ra:restart_server(F1),
+                      ok
+              end),
+    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end, 10000),
+    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    _ = terminate_cluster(Cluster),
+    ok.
 
 consistent_query_leader_change(Config) ->
     %% this test reproduces a scenario that could cause a stale
