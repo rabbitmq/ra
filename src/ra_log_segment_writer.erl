@@ -198,38 +198,45 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             %% remove all old files
             _ = [_ = prim_file:delete(F) || F <- Remove],
             %% check if the pivot has changed
-            {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
-            case ra_log_segment:segref(Seg) of
-                SegRef ->
-                    _ = ra_log_segment:close(Seg),
-                    %% it has not changed - we can delete that too
-                    _ = prim_file:delete(Pivot),
-                    %% as we are deleting the last segment - create an empty
-                    %% successor
-                    T2 = erlang:monotonic_time(),
-                    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-                    ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
-                           [System, ?FUNCTION_NAME, Who, Diff]),
-                    case open_successor_segment(Seg, SegConf) of
-                        undefined ->
-                            %% directory must have been deleted after the pivot
-                            %% segment was opened
-                            {noreply, State0};
-                        Succ ->
-                            _ = ra_log_segment:close(Succ),
+            case ra_log_segment:open(Pivot, #{mode => read}) of
+                {ok, Seg} ->
+                    case ra_log_segment:segref(Seg) of
+                        SegRef ->
+                            _ = ra_log_segment:close(Seg),
+                            %% it has not changed - we can delete that too
+                            _ = prim_file:delete(Pivot),
+                            %% as we are deleting the last segment - create an empty
+                            %% successor
+                            T2 = erlang:monotonic_time(),
+                            Diff = erlang:convert_time_unit(T2 - T1, native,
+                                                            millisecond),
+                            ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
+                                   [System, ?FUNCTION_NAME, Who, Diff]),
+                            case open_successor_segment(Seg, SegConf) of
+                                undefined ->
+                                    %% directory must have been deleted after the pivot
+                                    %% segment was opened
+                                    {noreply, State0};
+                                Succ ->
+                                    _ = ra_log_segment:close(Succ),
+                                    {noreply, State0}
+                            end;
+                        _ ->
+                            %% the segment has changed - leave it in place
+                            T2 = erlang:monotonic_time(),
+                            Diff = erlang:convert_time_unit(T2 - T1, native,
+                                                            millisecond),
+                            ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
+                                   [System, ?FUNCTION_NAME, Who, Diff]),
+                            _ = ra_log_segment:close(Seg),
                             {noreply, State0}
                     end;
-                _ ->
-                    %% the segment has changed - leave it in place
-                    T2 = erlang:monotonic_time(),
-                    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-                    ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
-                           [System, ?FUNCTION_NAME, Who, Diff]),
-                    _ = ra_log_segment:close(Seg),
+                {error, enoent} ->
+                    %% concurrent deletion of segment - assume this ra server
+                    %% is gone
                     {noreply, State0}
             end
     end.
-
 
 handle_info(_Info, State) ->
     {noreply, State}.
