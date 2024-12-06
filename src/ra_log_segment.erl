@@ -302,8 +302,8 @@ read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
             read_sparse0(Cfg, Rem, Index, Cache0,
                          AccFun(NextIdx, Term, Data, Acc), AccFun, Num+1)
     end;
-read_sparse0(_Cfg, [NextIdx | _], _Index, _Cache, _Acc, _AccFun, _Num) ->
-    exit({missing_key, NextIdx}).
+read_sparse0(Cfg, [NextIdx | Rem], Index, _Cache, _Acc, _AccFun, _Num) ->
+    exit({missing_key, NextIdx, Rem, Index, Cfg#cfg.filename}).
 
 cache_read({CPos, CLen, Bin}, Pos, Length)
   when Pos >= CPos andalso
