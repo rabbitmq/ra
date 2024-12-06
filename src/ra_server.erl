@@ -830,11 +830,14 @@ handle_leader({transfer_leadership, ServerId},
               #{cfg := #cfg{log_id = LogId},
                 cluster := Cluster} = State) ->
     case Cluster of
-        #{ServerId := #{voter_status := #{membership := Membership}}} when Membership =/= voter ->
-            ?DEBUG("~ts: transfer leadership requested but non-voter member ~w", [LogId, ServerId]),
-            {leader, State, [{reply, {error, non_voter_member}}]};
+        #{ServerId := #{voter_status := #{membership := Membership}}}
+          when Membership =/= voter ->
+            ?INFO("~ts: transfer leadership requested but non-voter member ~w",
+                  [LogId, ServerId]),
+            {leader, State, [{reply, {error, non_voter}}]};
         _ ->
-            ?DEBUG("~ts: transfer leadership to ~w requested", [LogId, ServerId]),
+            ?DEBUG("~ts: transfer leadership to ~w requested",
+                   [LogId, ServerId]),
             %% TODO find a timeout
             gen_statem:cast(ServerId, try_become_leader),
             {await_condition,

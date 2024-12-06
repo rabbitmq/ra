@@ -1233,7 +1233,7 @@ transfer_leadership(Config) ->
     {ok, _, _} = ra:add_member(NewLeader, NonVoterMember),
     ok = ra:start_server(default, Name, NonVoterMember, add_machine(), Members),
     ct:pal("Transferring leadership from ~p to ~p", [NewLeader, NonVoterMemberId]),
-    ?assertEqual({error, non_voter_member}, ra:transfer_leadership(NewLeader, NonVoterMemberId)),
+    ?assertEqual({error, non_voter}, ra:transfer_leadership(NewLeader, NonVoterMemberId)),
     terminate_cluster([NonVoterMemberId | Members]).
 
 transfer_leadership_two_node(Config) ->
