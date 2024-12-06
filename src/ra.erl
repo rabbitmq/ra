@@ -1154,8 +1154,9 @@ initial_members(ServerId) ->
 initial_members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, initial_members, Timeout).
 
-%% @doc Transfers leadership from the leader to a follower.
+%% @doc Transfers leadership from the leader to a voter follower.
 %% Returns `already_leader' if the transfer target is already the leader.
+%% Leadership cannot be transferred to non-voters.
 %% @end
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
     ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
