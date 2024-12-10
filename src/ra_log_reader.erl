@@ -15,6 +15,8 @@
          update_segments/2,
          handle_log_update/2,
          segment_refs/1,
+         segment_ref_count/1,
+         range/1,
          num_open_segments/1,
          update_first_index/2,
          fold/5,
@@ -36,12 +38,10 @@
               access_pattern = random :: access_pattern()
              }).
 
--type segment_ref() :: {From :: ra_index(), To :: ra_index(),
-                        File :: string()}.
+-type segment_ref() :: ra_log:segment_ref().
 -record(?STATE, {cfg :: #cfg{},
-                 % first_index = 0 :: ra_index(),
-                 last_index = 0 :: ra:index(),
-                 segment_refs = [] :: [segment_ref()],
+                 range :: ra_range:range(),
+                 segment_refs :: ra_lol:state(),
                  open_segments :: ra_flru:state()
                 }).
 
@@ -52,7 +52,7 @@
 -export_type([
               state/0,
               read_plan/0
-              ]).
+             ]).
 
 %% PUBLIC
 
@@ -65,7 +65,7 @@ init(UId, Dir, MaxOpen, SegRefs, Names) ->
            access_pattern(),
            [segment_ref()], ra_system:names(),
            undefined | counters:counters_ref()) -> state().
-init(UId, Dir, MaxOpen, AccessPattern, SegRefs, #{}, Counter)
+init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, #{}, Counter)
   when is_binary(UId) ->
     Cfg = #cfg{uid = UId,
                counter = Counter,
@@ -75,17 +75,23 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs, #{}, Counter)
                           _ = ra_log_segment:close(Seg),
                           decr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1)
                   end,
-    LastIdx = case SegRefs of
-                  [{_, L, _} | _] ->
-                      L;
+    SegRefs = compact_segrefs(SegRefs0, []),
+    Range = case SegRefs of
+                  [{{_, L}, _} | _] ->
+                      {{F, _}, _} = lists:last(SegRefs),
+                      ra_range:new(F, L);
                   _ ->
-                      0
+                      undefined
               end,
+    SegRefsRev = lists:reverse(SegRefs),
     #?STATE{cfg = Cfg,
             open_segments = ra_flru:new(MaxOpen, FlruHandler),
-            % first_index = FirstIdx,
-            last_index = LastIdx,
-            segment_refs = SegRefs}.
+            range = Range,
+            segment_refs =
+                ra_lol:from_list(fun seg_ref_gt/2, SegRefsRev)}.
+
+seg_ref_gt({{Start, _}, Fn1}, {{_, End}, Fn2}) ->
+    Start > End andalso Fn1 > Fn2.
 
 -spec close(state()) -> ok.
 close(#?STATE{open_segments = Open}) ->
@@ -95,18 +101,30 @@ close(#?STATE{open_segments = Open}) ->
 -spec update_segments([segment_ref()], state()) -> state().
 update_segments(NewSegmentRefs,
                 #?STATE{open_segments = Open0,
-                        segment_refs = SegmentRefs0} = State) ->
-    SegmentRefs = compact_seg_refs(NewSegmentRefs, SegmentRefs0),
+                        segment_refs = SegRefs0} = State) ->
+
+    SegmentRefs0 = ra_lol:to_list(SegRefs0),
+    SegmentRefsComp = compact_segrefs(NewSegmentRefs, SegmentRefs0),
+    SegmentRefsCompRev = lists:reverse(SegmentRefsComp ),
+    SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
+    Range = case SegmentRefsComp of
+                [{{_, L}, _} | _] ->
+                    [{{F, _}, _} | _] = SegmentRefsCompRev,
+                    ra_range:new(F, L);
+                _ ->
+                    undefined
+            end,
     %% check if any of the updated segrefs refer to open segments
     %% we close these segments so that they can be re-opened with updated
     %% indexes if needed
-    Open = lists:foldl(fun ({_, _, F}, Acc0) ->
-                               case ra_flru:evict(F, Acc0) of
+    Open = lists:foldl(fun ({_, Fn}, Acc0) ->
+                               case ra_flru:evict(Fn, Acc0) of
                                    {_, Acc} -> Acc;
                                    error -> Acc0
                                end
-                       end, Open0, SegmentRefs),
-    State#?MODULE{segment_refs = SegmentRefs,
+                       end, Open0, NewSegmentRefs),
+    State#?MODULE{segment_refs = SegRefs,
+                  range = Range,
                   open_segments = Open}.
 
 -spec handle_log_update({ra_log_update, undefined | pid(), ra_index(),
@@ -120,38 +138,50 @@ handle_log_update({ra_log_update, From, _FstIdx, SegRefs},
             %% reply to the updater process
             From ! ra_log_update_processed
     end,
-    State#?MODULE{segment_refs = SegRefs,
-                  % first_index = FstIdx,
+    State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                  lists:reverse(SegRefs)),
                   open_segments = Open}.
 
 -spec update_first_index(ra_index(), state()) ->
     {state(), [segment_ref()]}.
 update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                    open_segments = OpenSegs0} = State) ->
-    case lists:partition(fun({_, To, _})
-                               when To >= FstIdx -> true;
-                            (_) -> false
-                         end, SegRefs0) of
-        {_, []} ->
-            {State, []};
-        {Active, Obsolete} ->
-            ObsoleteKeys = [element(3, O) || O <- Obsolete],
-            % close any open segments
-            OpenSegs = lists:foldl(fun (K, OS0) ->
-                                           case ra_flru:evict(K, OS0) of
-                                               {_, OS} -> OS;
-                                               error -> OS0
-                                           end
-                                   end, OpenSegs0, ObsoleteKeys),
-            {State#?STATE{open_segments = OpenSegs,
-                          % first_index = FstIdx,
-                          segment_refs = Active},
-             Obsolete}
+    %% TODO: refactor this so that ra_lol just returns plain lists on both sides?
+    case ra_lol:takewhile(fun({{_, To}, _}) ->
+                                  To >= FstIdx
+                          end, SegRefs0) of
+        {Active, Obsolete0} ->
+            case ra_lol:len(Obsolete0) of
+                0 ->
+                    {State, []};
+                _ ->
+                    Obsolete = ra_lol:to_list(Obsolete0),
+                    ObsoleteKeys = [K || {_, K} <- Obsolete],
+                    % close any open segments
+                    OpenSegs = lists:foldl(fun (K, OS0) ->
+                                                   case ra_flru:evict(K, OS0) of
+                                                       {_, OS} -> OS;
+                                                       error -> OS0
+                                                   end
+                                           end, OpenSegs0, ObsoleteKeys),
+                    {State#?STATE{open_segments = OpenSegs,
+                                  segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                                  lists:reverse(Active))},
+                     Obsolete}
+            end
     end.
 
 -spec segment_refs(state()) -> [segment_ref()].
 segment_refs(#?STATE{segment_refs = SegmentRefs}) ->
-    SegmentRefs.
+    ra_lol:to_list(SegmentRefs).
+
+-spec segment_ref_count(state()) -> non_neg_integer().
+segment_ref_count(#?STATE{segment_refs = SegmentRefs}) ->
+    ra_lol:len(SegmentRefs).
+
+-spec range(state()) -> ra_range:range().
+range(#?STATE{range = Range}) ->
+    Range.
 
 -spec num_open_segments(state()) -> non_neg_integer().
 num_open_segments(#?STATE{open_segments = Open}) ->
@@ -170,7 +200,7 @@ fold(_FromIdx, _ToIdx, _Fun, Acc, #?STATE{} = State) ->
 -spec sparse_read(state(), [ra_index()], [log_entry()]) ->
     {[log_entry()], state()}.
 sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes, Entries0) ->
-    {Open, _, SegC, Entries} = (catch segment_sparse_read(State, Indexes, Entries0)),
+    {Open, SegC, Entries} = (catch segment_sparse_read(State, Indexes, Entries0)),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
     {Entries, State#?MODULE{open_segments = Open}}.
 
@@ -206,21 +236,30 @@ fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
 
 %% LOCAL
 
-segment_read_plan(_RegRefs, [], Acc) ->
+segment_read_plan(_SegRefs, [], Acc) ->
     lists:reverse(Acc);
-segment_read_plan([], _Indexes, Acc) ->
-    %% not all indexes were found
-    lists:reverse(Acc);
-segment_read_plan([{To, From, Fn} | SegRefs], Indexes, Acc) ->
-    %% TODO: address unnecessary allocation here
-    Range = {To, From},
-    case sparse_read_split(fun (I) ->
-                                   ra_range:in(I, Range)
-                           end, Indexes, []) of
-        {[], _} ->
-            segment_read_plan(SegRefs, Indexes, Acc);
-        {Idxs, Rem} ->
-            segment_read_plan(SegRefs, Rem, [{Idxs, Fn} | Acc])
+segment_read_plan(SegRefs, [Idx | _] = Indexes, Acc) ->
+    case ra_lol:search(seg_ref_search_fun(Idx), SegRefs) of
+        {{Range, Fn}, Cont} ->
+            case sparse_read_split(fun (I) ->
+                                           ra_range:in(I, Range)
+                                   end, Indexes, []) of
+                {[], _} ->
+                    segment_read_plan(Cont, Indexes, Acc);
+                {Idxs, Rem} ->
+                    segment_read_plan(Cont, Rem, [{Idxs, Fn} | Acc])
+            end;
+        undefined ->
+            %% not found
+            lists:reverse(Acc)
+    end.
+
+seg_ref_search_fun(Idx) ->
+    fun({{Start, End}, _}) ->
+            if Idx > End -> higher;
+               Idx < Start -> lower;
+               true -> equal
+            end
     end.
 
 segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
@@ -229,87 +268,80 @@ segment_term_query(Idx, #?MODULE{segment_refs = SegRefs,
     {Result, Open} = segment_term_query0(Idx, SegRefs, OpenSegs, Cfg),
     {Result, State#?MODULE{open_segments = Open}}.
 
-segment_term_query0(Idx, [{From, To, Filename} | _], Open0,
+segment_term_query0(Idx, SegRefs, Open0,
                     #cfg{directory = Dir,
-                         access_pattern = AccessPattern} = Cfg)
-  when Idx >= From andalso Idx =< To ->
-    case ra_flru:fetch(Filename, Open0) of
-        {ok, Seg, Open} ->
-            Term = ra_log_segment:term_query(Seg, Idx),
-            {Term, Open};
-        error ->
-            AbsFn = filename:join(Dir, Filename),
-            {ok, Seg} = ra_log_segment:open(AbsFn,
-                                            #{mode => read,
-                                              access_pattern => AccessPattern}),
+                         access_pattern = AccessPattern} = Cfg) ->
+    case ra_lol:search(seg_ref_search_fun(Idx), SegRefs) of
+        {{_Range, Fn}, _Cont} ->
+            case ra_flru:fetch(Fn, Open0) of
+                {ok, Seg, Open} ->
+                    Term = ra_log_segment:term_query(Seg, Idx),
+                    {Term, Open};
+                error ->
+                    AbsFn = filename:join(Dir, Fn),
+                    {ok, Seg} = ra_log_segment:open(AbsFn,
+                                                    #{mode => read,
+                                                      access_pattern => AccessPattern}),
 
-            incr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1),
-            Term = ra_log_segment:term_query(Seg, Idx),
-            {Term, ra_flru:insert(Filename, Seg, Open0)}
-    end;
-segment_term_query0(Idx, [_ | Tail], Open, Cfg) ->
-    segment_term_query0(Idx, Tail, Open, Cfg);
-segment_term_query0(_Idx, [], Open, _) ->
-    {undefined, Open}.
+                    incr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1),
+                    Term = ra_log_segment:term_query(Seg, Idx),
+                    {Term, ra_flru:insert(Fn, Seg, Open0)}
+            end;
+        undefined ->
+            {undefined, Open0}
+    end.
 
-segrefs_to_read(From0, To0, _SegRefs, Acc)
-  when To0 < From0 ->
+segment_fold_plan(_SegRefs, undefined, Acc) ->
     Acc;
-segrefs_to_read(From0, To0, [{SStart, SEnd, FileName} | SegRefs], Acc)
-  when SStart =< To0 andalso
-       SEnd >= From0 ->
-    %% TODO: use ra_range:range_overlap/2 here?
-    From = max(From0, SStart),
-    To = min(To0, SEnd),
-    Spec = {From, To, FileName},
-    segrefs_to_read(From0, SStart - 1, SegRefs, [Spec | Acc]);
-segrefs_to_read(From0, To0, [_ | SegRefs], Acc) ->
-    segrefs_to_read(From0, To0, SegRefs, Acc).
+segment_fold_plan(SegRefs, {_ReqStart, ReqEnd} = ReqRange, Acc) ->
+    case ra_lol:search(seg_ref_search_fun(ReqEnd), SegRefs) of
+        {{Range, Fn}, Cont} ->
+            This = ra_range:overlap(ReqRange, Range),
+            ReqRem = case ra_range:subtract(This, ReqRange) of
+                         [] ->
+                             undefined;
+                         [Rem] ->
+                             Rem
+                     end,
+            segment_fold_plan(Cont, ReqRem, [{This, Fn} | Acc]);
+        undefined ->
+            %% not found
+            Acc
+    end.
 
 segment_fold(#?STATE{segment_refs = SegRefs,
                      open_segments = OpenSegs,
                      cfg = Cfg} = State,
              RStart, REnd, Fun, Acc) ->
-    SegRefsToReadFrom = segrefs_to_read(RStart, REnd, SegRefs, []),
+    Plan = segment_fold_plan(SegRefs, {RStart, REnd}, []),
     {Op, A} =
         lists:foldl(
-          fun ({From, To, Fn}, {Open0, Ac0}) ->
+          fun ({{Start, End}, Fn}, {Open0, Ac0}) ->
                   {Seg, Open} = get_segment(Cfg, Open0, Fn),
-                  {Open, ra_log_segment:fold(Seg, From, To,
+                  {Open, ra_log_segment:fold(Seg, Start, End,
                                              fun binary_to_term/1,
                                              Fun,
                                              Ac0)}
-          end, {OpenSegs, Acc}, SegRefsToReadFrom),
+          end, {OpenSegs, Acc}, Plan),
     {State#?MODULE{open_segments = Op}, A}.
 
 
 segment_sparse_read(#?STATE{open_segments = Open}, [], Entries0) ->
-    {Open, [], 0, Entries0};
+    {Open, 0, Entries0};
 segment_sparse_read(#?STATE{segment_refs = SegRefs,
                             open_segments = OpenSegs,
                             cfg = Cfg}, Indexes, Entries0) ->
+    Plan = segment_read_plan(SegRefs, Indexes, []),
     lists:foldl(
-      fun(_, {_, [], _, _} = Acc) ->
-              %% we're done reading
-              throw(Acc);
-         ({From, To, Fn}, {Open0, [NextIdx | _] = Idxs, C, En0})
-           when NextIdx >= From andalso NextIdx =< To ->
+      fun ({Idxs, Fn}, {Open0, C, En0}) ->
               {Seg, Open} = get_segment(Cfg, Open0, Fn),
-              {ReadIdxs, RemIdxs} =
-                  sparse_read_split(fun (I) ->
-                                            I >= From andalso I =< To
-                                    end, Idxs, []),
               {ReadSparseCount, Entries} =
-                  ra_log_segment:read_sparse(Seg, ReadIdxs,
+                  ra_log_segment:read_sparse(Seg, Idxs,
                                              fun (I, T, B, Acc) ->
                                                      [{I, T, binary_to_term(B)} | Acc]
-                                             end,
-                                             []),
-              {Open, RemIdxs, C +  ReadSparseCount,
-               lists:reverse(Entries, En0)};
-         (_Segref, Acc) ->
-              Acc
-      end, {OpenSegs, Indexes, 0, Entries0}, SegRefs).
+                                             end, []),
+              {Open, C +  ReadSparseCount, lists:reverse(Entries, En0)}
+      end, {OpenSegs, 0, Entries0}, Plan).
 
 %% like lists:splitwith but without reversing the accumulator
 sparse_read_split(Fun, [E | Rem] = All, Acc) ->
@@ -361,18 +393,24 @@ get_segment_ext(Dir, Open0, Fn) ->
             end
     end.
 
-compact_seg_refs([], PreviousSegRefs) ->
-    PreviousSegRefs;
-compact_seg_refs(NewSegRefs, []) ->
-    NewSegRefs;
-compact_seg_refs(NewSegRefs,
-                 [{_, _, SegFile} | RemSegRefs] = PreviousSegRefs) ->
-    case lists:last(NewSegRefs) of
-        {_, _, SegFile} ->
-            % update information about the last previously seen segment
-            NewSegRefs ++ RemSegRefs;
-        _ ->
-            NewSegRefs ++ PreviousSegRefs
+compact_segrefs(New, Cur) ->
+    %% all are in descending order
+    lists:foldr(
+      fun
+          (S, []) ->
+              [S];
+          ({{Start, _}, _} = SegRef, Prev) ->
+              [SegRef | limit(Start, Prev)]
+      end, Cur, New).
+
+limit(_LimitIdx, []) ->
+    [];
+limit(LimitIdx, [{PrevRange, PrevFn} | PrevRem]) ->
+    case ra_range:limit(LimitIdx, PrevRange) of
+        undefined ->
+            limit(LimitIdx, PrevRem);
+        NewPrevRange ->
+            [{NewPrevRange, PrevFn} | PrevRem]
     end.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
@@ -389,24 +427,100 @@ decr_counter(#cfg{counter = undefined}, _, _) ->
 -include_lib("eunit/include/eunit.hrl").
 
 compact_seg_refs_test() ->
-    % {From, To, File}
-    NewRefs = [{10, 100, "2"}],
-    PrevRefs = [{10, 75, "2"}, {1, 9, "1"}],
-    ?assertEqual([{10, 100, "2"}, {1, 9, "1"}], compact_seg_refs(NewRefs, PrevRefs)).
+    NewRefs = [{{10, 100}, "2"}],
+    PrevRefs = [{{10, 75}, "2"}, {{1, 9}, "1"}],
+    ?assertEqual([{{10, 100}, "2"}, {{1, 9}, "1"}],
+                 compact_segrefs(NewRefs, PrevRefs)).
+
+compact_segref_3_test() ->
+    Data = [
+            {{2, 7}, "B"},
+            %% this entry has overwritten the prior two
+            {{5, 10}, "B"},
+            {{1, 4}, "A"}
+           ],
+    Res = compact_segrefs(Data, []),
+    ?assertMatch([{{2, 7}, "B"},
+                  {{1, 1}, "A"}], Res),
+    ok.
+
+compact_segref_2_test() ->
+    Data = [
+            {{80, 89}, "80"},
+            %% this entry has overwritten the prior two
+            {{56, 79}, "71"},
+            {{70, 85}, "70"},
+            {{60, 69}, "60"},
+            {{50, 59}, "50"}
+           ],
+    Res = compact_segrefs(Data, []),
+    ?assertMatch([{{80, 89}, "80"},
+                  {{56, 79}, "71"},
+                  {{50, 55}, "50"}
+                 ], Res),
+    ok.
+
+compact_segref_1_test() ->
+    Data = [
+            {{80, 89}, "80"},
+            %% this entry has overwritten the prior one
+            {{70, 79}, "71"},
+            {{70, 85}, "70"},
+            %% partial overwrite
+            {{65, 69}, "65"},
+            {{60, 69}, "60"},
+            {{50, 59}, "50"},
+            {{40, 49}, "40"}
+           ],
+
+    Res = compact_segrefs(Data, [
+                                 {{30, 39}, "30"},
+                                 {{20, 29}, "20"}
+                                ]),
+
+    %% overwritten entry is no longer there
+    %% and the segment prior to the partial overwrite has been limited
+    %% to provide a continuous range
+    ?assertMatch([{{80, 89}, "80"},
+                  {{70, 79}, "71"},
+                  {{65, 69}, "65"},
+                  {{60, 64}, "60"},
+                  {{50, 59}, "50"},
+                  {{40, 49}, "40"},
+                  {{30, 39}, "30"},
+                  {{20, 29}, "20"}
+                 ], Res),
+    ok.
+
 
 segrefs_to_read_test() ->
-    SegRefs = [{412,499,"00000005.segment"},
-               {284,411,"00000004.segment"},
-               {284,310,"00000004b.segment"},
-               {200,285,"00000003.segment"},
-               {128,255,"00000002.segment"},
-               {0,127,"00000001.segment"}],
 
-    ?assertEqual([{199,199,"00000002.segment"},
-                  {200,283,"00000003.segment"},
-                  {284,411,"00000004.segment"},
-                  {412,499,"00000005.segment"}],
-                 segrefs_to_read(199, 499, SegRefs, [])),
+    SegRefs = ra_lol:from_list(
+                fun seg_ref_gt/2,
+                lists:reverse(
+                  compact_segrefs(
+                    [{{412,499},"00000006.segment"},
+                     {{284,411},"00000005.segment"},
+                     %% this segment got overwritten
+                     {{284,500},"00000004.segment"},
+                     {{200,285},"00000003.segment"},
+                     {{128,255},"00000002.segment"},
+                     {{0,127},"00000001.segment"}], []))),
+
+
+    ?assertEqual([{{199, 199}, "00000002.segment"},
+                  {{200, 283}, "00000003.segment"},
+                  {{284, 411}, "00000005.segment"},
+                  {{412, 499}, "00000006.segment"}],
+                 segment_fold_plan(SegRefs, {199, 499}, [])),
+
+    %% out of range
+    ?assertEqual([], segment_fold_plan(SegRefs, {500, 500}, [])),
+    ?assertEqual([
+                  {{127,127},"00000001.segment"},
+                  {{128,128},"00000002.segment"}
+                 ],
+                 segment_fold_plan(SegRefs, {127, 128}, [])),
     ok.
 
 -endif.

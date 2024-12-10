@@ -386,9 +386,9 @@ filename(#state{cfg = #cfg{filename = Fn}}) ->
     option(ra_log:segment_ref()).
 segref(#state{range = undefined}) ->
     undefined;
-segref(#state{range = {Start, End},
+segref(#state{range = Range,
               cfg = #cfg{filename = Fn}}) ->
-    {Start, End, filename:basename(Fn)};
+    {Range, filename:basename(Fn)};
 segref(Filename) ->
     {ok, Seg} = open(Filename, #{mode => read}),
     SegRef = segref(Seg),

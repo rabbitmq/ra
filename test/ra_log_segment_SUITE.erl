@@ -92,8 +92,6 @@ corrupted_segment(Config) ->
     % write_trunc_until_full(Fn),
 
     {ok, SegR} = ra_log_segment:open(Fn, #{mode => read}),
-    %% ct:pal("Range ~p", [ra_log_segment:segref(SegR)]),
-    %% ct:pal("SegR ~p", [SegR]),
     [{1, 2, Data}] =
           ra_log_segment:fold(SegR, 1, 1,
                               fun ra_lib:id/1,
@@ -205,7 +203,7 @@ segref(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
     undefined = ra_log_segment:segref(Seg0),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
-    {1, 1, "seg1.seg"} = ra_log_segment:segref(Seg1),
+    {{1, 1}, "seg1.seg"} = ra_log_segment:segref(Seg1),
     ok.
 
 
@@ -330,7 +328,7 @@ overwrite(Config) ->
     Fn = filename:join(Dir, "seg1.seg"),
     Data = make_data(1024),
     {ok, Seg0} = ra_log_segment:open(Fn),
-    {ok, Seg1} = ra_log_segment:append(Seg0, 5, 2, Data),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 5, 1, Data),
     % overwrite - simulates follower receiving entries from new leader
     {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, Data),
     {2, 2} = ra_log_segment:range(Seg2),
