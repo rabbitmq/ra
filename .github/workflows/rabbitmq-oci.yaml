@@ -66,9 +66,7 @@ jobs:
           RA_ABBREV=ra-${RA_SHA:0:7}
 
           TAG_1=rabbitmq-${RABBIT_REF}-${RA_ABBREV}-${OTP}
-          TAG_2=rabbitmq-${RABBIT_REF}-${RA_ABBREV}-otp-max-bazel
           TAG_3=rabbitmq-${RABBIT_SHA:0:7}-${RA_ABBREV}-${OTP}
-          TAG_4=rabbitmq-${RABBIT_SHA:0:7}-${RA_ABBREV}-otp-max-bazel
 
           echo "TAG_1=$TAG_1" | tee -a $GITHUB_OUTPUT
           echo "TAG_2=$TAG_2" | tee -a $GITHUB_OUTPUT
