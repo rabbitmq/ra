@@ -331,12 +331,11 @@ validate_reads_for_overlapped_writes(Config) ->
     Log4 = write_and_roll(350, 500, 2, Log3),
     Log5 = write_n(500, 551, 2, Log4),
     % Log6 = deliver_all_log_events(Log5, 200),
-    % ct:pal("LAST ~p", [ra_log:last_written(Log6)]),
     Log6 = deliver_log_events_cond(
-          Log5, fun (L) ->
-                        {W, _} = ra_log:last_written(L),
-                        W >= 550
-                end, 100),
+             Log5, fun (L) ->
+                           {W, _} = ra_log:last_written(L),
+                           W >= 550
+                   end, 100),
 
     Log7 = validate_fold(1, 199, 1, Log6),
     Log8 = validate_fold(200, 550, 2, Log7),
@@ -345,6 +344,9 @@ validate_reads_for_overlapped_writes(Config) ->
                           read_segment := M2}} = ra_counters:overview(),
     ?assertEqual(550, M1 + M2),
     ra_log:close(Log8),
+    %% re open to test init with overlapping segments
+    Log = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
+    ra_log:close(Log),
     ok.
 
 read_opt(Config) ->
@@ -394,7 +396,6 @@ sparse_read_out_of_range_2(Config) ->
     %% but only process events for 9
     Log1 = deliver_all_log_events(write_n(10, 20, 2,
                                           write_and_roll(1, 10, 2, Log0)), 50),
-    ct:pal("log1 ~p", [ra_log:overview(Log1)]),
     SnapIdx = 10,
     %% do snapshot in
     {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
@@ -409,7 +410,6 @@ sparse_read_out_of_range_2(Config) ->
                 end,
     Log4 = deliver_all_log_events(Log3, 100),
 
-    ct:pal("log ~p", [ra_log:overview(Log4)]),
     {SnapIdx, 2} = ra_log:snapshot_index_term(Log4),
 
     ?assertMatch({[{11, _, _}], _},
