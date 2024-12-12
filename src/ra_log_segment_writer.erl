@@ -179,7 +179,7 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
     ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file ~s in ~bms",
           [System, length(RangesList), WalFile, Diff]),
     {noreply, State};
-handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
+handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
             #state{segment_conf = SegConf,
                    system = System} = State0) ->
     %% remove all segments below the provided SegRef
@@ -298,7 +298,7 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
     %% order they are kept by the ra_log
     SegRefs = lists:reverse(
                 lists:foldl(
-                  fun ({_, _, FILE}, [{_, _, FILE} | _] = Acc) ->
+                  fun ({_, FILE}, [{_, FILE} | _] = Acc) ->
                           Acc;
                       (Seg, Acc) ->
                           [Seg | Acc]
@@ -443,7 +443,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                     exit({segment_writer_append_error, FileName, Posix})
             end
     catch _:badarg ->
-              ?ERROR("segment_writer: uid ~s ets table deleted", [UId]),
+              ?INFO("segment_writer: uid ~s ets table deleted", [UId]),
               %% ets table has been deleted.
               %% this could be due to two reasons
               %% 1. the ra server has been deleted.
@@ -460,7 +460,8 @@ find_segment_files(Dir) ->
 segment_files(Dir) ->
     case prim_file:list_dir(Dir) of
         {ok, Files0} ->
-            Files = [filename:join(Dir, F) || F <- Files0, filename:extension(F) == ".segment"],
+            Files = [filename:join(Dir, F) || F <- Files0,
+                                              filename:extension(F) == ".segment"],
             lists:sort(Files);
         {error, enoent} ->
             []
