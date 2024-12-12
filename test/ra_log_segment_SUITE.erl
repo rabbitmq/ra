@@ -32,6 +32,7 @@ all_tests() ->
      overwrite,
      term_query,
      write_many,
+     read_sparse_append_read,
      open_invalid,
      corrupted_segment,
      large_segment,
@@ -81,6 +82,7 @@ corrupted_segment(Config) ->
     %% ct:pal("DUMP PRE ~p", [ra_log_segment:dump_index(Fn)]),
     %% check that the current state throws a missing key
     {ok, SegR0} = ra_log_segment:open(Fn, #{mode => read}),
+    ?assertNot(ra_log_segment:is_modified(SegR0)),
     ?assertExit({missing_key, 2},
                 read_sparse(SegR0, [1, 2])),
 
@@ -210,11 +212,13 @@ segref(Config) ->
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
     Fn = filename:join(Dir, "seg1.seg"),
-    Data = make_data(1024),
-    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 2}),
+    Data = make_data(10),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 2,
+                                           max_pending => 1}),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, Data),
     {ok, Seg} = ra_log_segment:append(Seg1, 2, 2, Data),
     {error, full} = ra_log_segment:append(Seg, 3, 2, Data),
+    ?assertNot(ra_log_segment:is_modified(Seg)),
     {1,2} = ra_log_segment:range(Seg),
     ok = ra_log_segment:close(Seg),
     ok.
@@ -396,6 +400,39 @@ write_many(Config) ->
     ct:pal("~p", [Result]),
     ok.
 
+
+read_sparse_append_read(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, <<"0000000.segment">>),
+    {ok, W0} = ra_log_segment:open(Fn, #{}),
+    Data = <<"banana">>,
+    Term = 1,
+    %% write two entries in term 1
+    {ok, W1} = ra_log_segment:append(W0, 1, Term, Data),
+    {ok, W2} = ra_log_segment:append(W1, 2, Term, Data),
+    {ok, W3} = ra_log_segment:flush(W2),
+
+
+    {ok, R0} = ra_log_segment:open(Fn, #{mode => read}),
+    {ok, 2, [_, _]}  = ra_log_segment:read_sparse(R0, [1, 2],
+                                                  fun (I, _, _, Acc) ->
+                                                          [I | Acc]
+                                                  end, []),
+
+    ?assertNot(ra_log_segment:is_modified(R0)),
+    %% overwrite in term 2
+    {ok, W4} = ra_log_segment:append(W3, 2, 2, <<"apple">>),
+    {ok, W5} = ra_log_segment:append(W4, 3, 2, <<"apple">>),
+    {ok, W} = ra_log_segment:flush(W5),
+    ?assert(ra_log_segment:is_modified(R0)),
+    {error, modified} = ra_log_segment:read_sparse(R0, [2],
+                                                   fun (_I, _, B, Acc) ->
+                                                           [B | Acc]
+                                                   end, []),
+    ra_log_segment:close(W),
+    ra_log_segment:close(R0),
+    ok.
+
 write_until_full(Idx, Term, Data, Seg0) ->
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
@@ -410,8 +447,8 @@ make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
 
 read_sparse(R, Idxs) ->
-    {_, Entries} = ra_log_segment:read_sparse(R, Idxs,
-                                              fun (I, T, B, Acc) ->
-                                                      [{I, T, B} | Acc]
-                                              end, []),
+    {ok, _, Entries} = ra_log_segment:read_sparse(R, Idxs,
+                                                  fun (I, T, B, Acc) ->
+                                                          [{I, T, B} | Acc]
+                                                  end, []),
     lists:reverse(Entries).

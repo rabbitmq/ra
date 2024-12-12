@@ -56,6 +56,7 @@ all_tests() ->
      transient_writer_is_handled,
      read_opt,
      sparse_read,
+     read_plan_modified,
      read_plan,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
@@ -479,6 +480,21 @@ sparse_read(Config) ->
     {[{1000, _, _},
       {5, _, _},
       {99, _, _}], _LogO3} = ra_log:sparse_read([1000,5,99], LogO2),
+    ok.
+
+read_plan_modified(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 2, 1, Log0, 50),
+    Log2 = deliver_all_log_events(Log1, 100),
+    Plan = ra_log:partial_read([1], Log2, fun (_, _, Cmd) -> Cmd end),
+    {#{1 := _}, Flru} = ra_log_read_plan:execute(Plan, undefined),
+
+    Log = deliver_all_log_events(write_and_roll(2, 3, 1, Log2, 50), 100),
+    Plan2 = ra_log:partial_read([1,2], Log, fun (_, _, Cmd) -> Cmd end),
+    %% assert we can read the newly appended item with the cached
+    %% segment
+    {#{1 := _, 2 := _}, _} = ra_log_read_plan:execute(Plan2, Flru),
+    ra_log:close(Log),
     ok.
 
 read_plan(Config) ->

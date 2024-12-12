@@ -800,10 +800,10 @@ segments_for(UId, DataDir) ->
     SegFiles.
 
 read_sparse(R, Idxs) ->
-    {_, Entries} = ra_log_segment:read_sparse(R, Idxs,
-                                              fun(I, T, B, Acc) ->
-                                                      [{I, T, B} | Acc]
-                                              end, []),
+    {ok, _, Entries} = ra_log_segment:read_sparse(R, Idxs,
+                                                  fun(I, T, B, Acc) ->
+                                                          [{I, T, B} | Acc]
+                                                  end, []),
     lists:reverse(Entries).
 
 get_names(System) when is_atom(System) ->
