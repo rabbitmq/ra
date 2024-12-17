@@ -12,6 +12,7 @@
          append/4,
          sync/1,
          fold/6,
+         is_modified/1,
          read_sparse/4,
          term_query/2,
          close/1,
@@ -26,6 +27,8 @@
          dump_index/1]).
 
 -include("ra.hrl").
+
+-include_lib("kernel/include/file.hrl").
 
 -define(VERSION, 2).
 -define(MAGIC, "RASG").
@@ -112,6 +115,7 @@ open(Filename, Options) ->
     end.
 
 process_file(true, Mode, Filename, Fd, Options) ->
+    AccessPattern = maps:get(access_pattern, Options, random),
     case read_header(Fd) of
         {ok, Version, MaxCount} ->
             MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
@@ -120,7 +124,6 @@ process_file(true, Mode, Filename, Fd, Options) ->
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
-            AccessPattern = maps:get(access_pattern, Options, random),
             Mode = maps:get(mode, Options, append),
             ComputeChecksums = maps:get(compute_checksums, Options, true),
             {ok, #state{cfg = #cfg{version = Version,
@@ -184,16 +187,15 @@ append(#state{cfg = #cfg{max_pending = PendingCount},
 append(#state{cfg = #cfg{version = Version,
                          mode = append} = Cfg,
               index_offset = IndexOffset,
-              data_start = DataStart,
               data_offset = DataOffset,
               range = Range0,
               pending_count = PendCnt,
               pending_index = IdxPend0,
               pending_data = DataPend0} = State,
        Index, Term, {Length, Data}) ->
-    % check if file is full
-    case IndexOffset < DataStart of
-        true ->
+
+    case is_full(State) of
+        false ->
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = compute_checksum(Cfg, Data),
             OSize = offset_size(Version),
@@ -209,7 +211,7 @@ append(#state{cfg = #cfg{version = Version,
                              pending_data = [DataPend0, Data],
                              pending_count = PendCnt + 1}
             };
-        false ->
+        true ->
             {error, full}
      end;
 append(State, Index, Term, Data)
@@ -271,38 +273,58 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
     fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc).
 
+-spec is_modified(state()) -> boolean().
+is_modified(#state{cfg = #cfg{fd = Fd},
+                   data_offset = DataOffset} = State) ->
+    case is_full(State) of
+        true ->
+            %% a full segment cannot be appended to.
+            false;
+        false ->
+            %% get info and compare to data_offset
+            {ok, #file_info{size = Size}} =  prim_file:read_handle_info(Fd),
+            Size > DataOffset
+    end.
+
 -spec read_sparse(state(), [ra_index()],
                   fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
                   Acc) ->
-    {NumRead :: non_neg_integer(), Acc}
+    {ok, NumRead :: non_neg_integer(), Acc} | {error, modified}
       when Acc :: term().
 read_sparse(#state{index = Index,
-                   cfg = Cfg}, Indexes, AccFun, Acc) ->
-    Cache0 = prepare_cache(Cfg, Indexes, Index),
-    read_sparse0(Cfg, Indexes, Index, Cache0, Acc, AccFun, 0).
-
-read_sparse0(_Cfg, [], _Index, _Cache, Acc, _AccFun, Num) ->
-    {Num, Acc};
-read_sparse0(Cfg, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
- when is_map_key(NextIdx, Index) ->
-    {Term, Offset, Length, _} = map_get(NextIdx, Index),
-    case cache_read(Cache0, Offset, Length) of
+                   cfg = #cfg{fd = Fd}} = State,
+            Indexes, AccFun, Acc) ->
+    case is_modified(State) of
+        true ->
+            {error, modified};
         false ->
-            case prepare_cache(Cfg, Indexes, Index) of
+            Cache0 = prepare_cache(Fd, Indexes, Index),
+            read_sparse0(Fd, Indexes, Index, Cache0, Acc, AccFun, 0)
+    end.
+
+read_sparse0(_Fd, [], _Index, _Cache, Acc, _AccFun, Num) ->
+    {ok, Num, Acc};
+read_sparse0(Fd, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
+ when is_map_key(NextIdx, Index) ->
+    {Term, Pos, Length, _} = map_get(NextIdx, Index),
+    case cache_read(Cache0, Pos, Length) of
+        false ->
+            case prepare_cache(Fd, Indexes, Index) of
                 undefined ->
-                    {ok, Data, _} = pread(Cfg, undefined, Offset, Length),
-                    read_sparse0(Cfg, Rem, Index, undefined,
+                    %% TODO: check for partial data?
+                    {ok, Data} = file:pread(Fd, Pos, Length),
+                    read_sparse0(Fd, Rem, Index, undefined,
                                  AccFun(NextIdx, Term, Data, Acc),
                                  AccFun, Num+1);
                 Cache ->
-                    read_sparse0(Cfg, Indexes, Index, Cache,
-                                 Acc, AccFun, Num+1)
+                    read_sparse0(Fd, Indexes, Index, Cache,
+                                 Acc, AccFun, Num)
             end;
         Data ->
-            read_sparse0(Cfg, Rem, Index, Cache0,
+            read_sparse0(Fd, Rem, Index, Cache0,
                          AccFun(NextIdx, Term, Data, Acc), AccFun, Num+1)
     end;
-read_sparse0(_Cfg, [NextIdx | _], _Index, _Cache, _Acc, _AccFun, _Num) ->
+read_sparse0(_Fd, [NextIdx | _], _Index, _Cache, _Acc, _AccFun, _Num) ->
     exit({missing_key, NextIdx}).
 
 cache_read({CPos, CLen, Bin}, Pos, Length)
@@ -313,9 +335,9 @@ cache_read({CPos, CLen, Bin}, Pos, Length)
 cache_read(_, _, _) ->
     false.
 
-prepare_cache(#cfg{} = _Cfg, [_], _SegIndex) ->
+prepare_cache(_Fd, [_], _SegIndex) ->
     undefined;
-prepare_cache(#cfg{fd = Fd} = _Cfg, [FirstIdx | Rem], SegIndex) ->
+prepare_cache(Fd, [FirstIdx | Rem], SegIndex) ->
     case consec_run(FirstIdx, FirstIdx, Rem) of
         {Idx, Idx} ->
             %% no run, no cache;
@@ -621,6 +643,10 @@ validate_checksum(0, _) ->
     true;
 validate_checksum(Crc, Data) ->
     Crc == erlang:crc32(Data).
+
+is_full(#state{index_offset = IndexOffset,
+               data_start = DataStart}) ->
+    IndexOffset >= DataStart.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

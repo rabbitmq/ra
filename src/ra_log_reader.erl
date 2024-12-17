@@ -224,9 +224,16 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Acc0)
           end,
     lists:foldl(
       fun ({Idxs, BaseName}, {Acc1, Open1}) ->
-              {Seg, Open} = get_segment_ext(Dir, Open1, BaseName),
-              {_, Acc} = ra_log_segment:read_sparse(Seg, Idxs, Fun, Acc1),
-              {Acc, Open}
+              {Seg, Open2} = get_segment_ext(Dir, Open1, BaseName),
+              case ra_log_segment:read_sparse(Seg, Idxs, Fun, Acc1) of
+                  {ok, _, Acc} ->
+                      {Acc, Open2};
+                  {error, modified} ->
+                      {_, Open3} = ra_flru:evict(BaseName, Open2),
+                      {SegNew, Open} = get_segment_ext(Dir, Open3, BaseName),
+                      {ok, _, Acc} = ra_log_segment:read_sparse(SegNew, Idxs, Fun, Acc1),
+                      {Acc, Open}
+              end
       end, {Acc0, Open0}, Plan).
 
 -spec fetch_term(ra_index(), state()) -> {option(ra_index()), state()}.
@@ -335,7 +342,7 @@ segment_sparse_read(#?STATE{segment_refs = SegRefs,
     lists:foldl(
       fun ({Idxs, Fn}, {Open0, C, En0}) ->
               {Seg, Open} = get_segment(Cfg, Open0, Fn),
-              {ReadSparseCount, Entries} =
+              {ok, ReadSparseCount, Entries} =
                   ra_log_segment:read_sparse(Seg, Idxs,
                                              fun (I, T, B, Acc) ->
                                                      [{I, T, binary_to_term(B)} | Acc]

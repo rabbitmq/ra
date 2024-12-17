@@ -1728,7 +1728,7 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
 become(leader, OldRaftState, #{cluster := Cluster,
                                cluster_change_permitted := CCP0,
                                log := Log0} = State) ->
-    Log = ra_log:release_resources(maps:size(Cluster) + 2, random, Log0),
+    Log = ra_log:release_resources(maps:size(Cluster), sequential, Log0),
     CCP = case OldRaftState of
               await_condition ->
                   CCP0;
