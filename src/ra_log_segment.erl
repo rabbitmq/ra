@@ -52,6 +52,7 @@
               fd :: option(file:io_device()),
               index_size :: pos_integer(),
               access_pattern :: sequential | random,
+              file_advise = normal ::  posix_file_advise(),
               mode = append :: read | append,
               compute_checksums = true :: boolean()}).
 
@@ -70,14 +71,19 @@
          cache :: undefined | {non_neg_integer(), non_neg_integer(), binary()}
         }).
 
+-type posix_file_advise() :: 'normal' | 'sequential' | 'random'
+                           | 'no_reuse' | 'will_need' | 'dont_need'.
+
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
                                     max_pending => non_neg_integer(),
                                     compute_checksums => boolean(),
                                     mode => append | read,
-                                    access_pattern => sequential | random}.
+                                    access_pattern => sequential | random,
+                                    file_advise => posix_file_advise()}.
 -opaque state() :: #state{}.
 
 -export_type([state/0,
+              posix_file_advise/0,
               ra_log_segment_options/0]).
 
 -spec open(Filename :: file:filename_all()) ->
@@ -116,6 +122,15 @@ open(Filename, Options) ->
 
 process_file(true, Mode, Filename, Fd, Options) ->
     AccessPattern = maps:get(access_pattern, Options, random),
+    FileAdvise = maps:get(file_advise, Options, normal),
+    if FileAdvise == random andalso
+       Mode == read ->
+           Offs = maps:get(max_count, Options, ?SEGMENT_MAX_ENTRIES) * ?INDEX_RECORD_SIZE_V2,
+           _ = file:advise(Fd, Offs, 0, random),
+           ok;
+       true ->
+           ok
+    end,
     case read_header(Fd) of
         {ok, Version, MaxCount} ->
             MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
@@ -124,7 +139,6 @@ process_file(true, Mode, Filename, Fd, Options) ->
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
-            Mode = maps:get(mode, Options, append),
             ComputeChecksums = maps:get(compute_checksums, Options, true),
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
@@ -133,6 +147,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
                                    mode = Mode,
                                    index_size = IndexSize,
                                    access_pattern = AccessPattern,
+                                   file_advise = FileAdvise,
                                    compute_checksums = ComputeChecksums,
                                    fd = Fd},
                     data_start = ?HEADER_SIZE + IndexSize,
@@ -156,6 +171,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
     ComputeChecksums = maps:get(compute_checksums, Options, true),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
+    FileAdvise = maps:get(file_advise, Options, dont_need),
     {ok, #state{cfg = #cfg{version = ?VERSION,
                            max_count = MaxCount,
                            max_pending = MaxPending,
@@ -164,6 +180,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
                            index_size = IndexSize,
                            fd = Fd,
                            compute_checksums = ComputeChecksums,
+                           file_advise = FileAdvise,
                            access_pattern = random},
                 index_write_offset = ?HEADER_SIZE,
                 index_offset = ?HEADER_SIZE,
@@ -422,13 +439,15 @@ is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
 -spec close(state()) -> ok.
-close(#state{cfg = #cfg{fd = Fd, mode = append}} = State) ->
+close(#state{cfg = #cfg{fd = Fd,
+                        mode = append,
+                        file_advise = FileAdvise}} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
     case is_full(State) of
         true ->
-            _ = file:advise(Fd, 0, 0, dont_need);
+            _ = file:advise(Fd, 0, 0, FileAdvise);
         false ->
             ok
     end,
@@ -674,4 +693,5 @@ cache_length_test() ->
     ok.
 
 -endif.
+
 

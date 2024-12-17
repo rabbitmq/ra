@@ -21,7 +21,7 @@
          fold/5,
          sparse_read/2,
          partial_read/3,
-         execute_read_plan/3,
+         execute_read_plan/4,
          read_plan_info/1,
          last_index_term/1,
          set_last_index/2,
@@ -210,7 +210,7 @@ init(#{uid := UId,
                               Curr -> Curr
                           end,
 
-    AccessPattern = maps:get(initial_access_pattern, Conf, random),
+    AccessPattern = maps:get(initial_access_pattern, Conf, sequential),
     {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
     % recover current range and any references to segments
     % this queries the segment writer and thus blocks until any
@@ -558,12 +558,15 @@ partial_read(Indexes0, #?MODULE{cfg = Cfg,
 
 
 -spec execute_read_plan(read_plan(), undefined | ra_flru:state(),
-                        TransformFun :: transform_fun()) ->
+                        TransformFun :: transform_fun(),
+                        ra_log_reader:read_plan_options()) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
 execute_read_plan(#read_plan{dir = Dir,
                              read = Read,
-                             plan = Plan}, Flru0, TransformFun) ->
-    ra_log_reader:exec_read_plan(Dir, Plan, Flru0, TransformFun, Read).
+                             plan = Plan}, Flru0, TransformFun,
+                  Options) ->
+    ra_log_reader:exec_read_plan(Dir, Plan, Flru0, TransformFun,
+                                 Options, Read).
 
 -spec read_plan_info(read_plan()) -> map().
 read_plan_info(#read_plan{read = Read,

@@ -519,6 +519,10 @@ read_plan(Config) ->
     ReadPlan = ra_log:partial_read(Indexes, Log4, fun (_, _, Cmd) -> Cmd end),
     ?assert(is_map(ra_log_read_plan:info(ReadPlan))),
     {EntriesOut, _} = ra_log_read_plan:execute(ReadPlan, undefined),
+    %% try again with different read plan options
+    {EntriesOut, _} = ra_log_read_plan:execute(ReadPlan, undefined,
+                                               #{access_pattern => sequential,
+                                                 file_advise => random}),
     ?assertEqual(length(Indexes), maps:size(EntriesOut)),
     %% assert the indexes requestd were all returned in order
     [] = Indexes -- [I || I <- maps:keys(EntriesOut)],
