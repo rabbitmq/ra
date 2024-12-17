@@ -426,6 +426,12 @@ close(#state{cfg = #cfg{fd = Fd, mode = append}} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
+    case is_full(State) of
+        true ->
+            _ = file:advise(Fd, 0, 0, dont_need);
+        false ->
+            ok
+    end,
     _ = file:close(Fd),
     ok;
 close(#state{cfg = #cfg{fd = Fd}}) ->
