@@ -22,7 +22,7 @@
          fold/5,
          sparse_read/3,
          read_plan/2,
-         exec_read_plan/5,
+         exec_read_plan/6,
          fetch_term/2
          ]).
 
@@ -47,11 +47,14 @@
 
 -opaque state() :: #?STATE{}.
 -type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
+-type read_plan_options() :: #{access_pattern => random | sequential,
+                               file_advise => ra_log_segment:posix_file_advise()}.
 
 
 -export_type([
               state/0,
-              read_plan/0
+              read_plan/0,
+              read_plan_options/0
              ]).
 
 %% PUBLIC
@@ -209,14 +212,17 @@ read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
     %% TODO: add counter for number of read plans requested
     segment_read_plan(SegRefs, Indexes, []).
 
--spec exec_read_plan(file:filename_all(), read_plan(), undefined | ra_flru:state(),
-                     TransformFun :: fun(),
+-spec exec_read_plan(file:filename_all(),
+                     read_plan(),
+                     undefined | ra_flru:state(),
+                     TransformFun :: fun((ra_index(), ra_term(), binary()) -> term()),
+                     read_plan_options(),
                      #{ra_index() => Command :: term()}) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
-exec_read_plan(Dir, Plan, undefined, TransformFun, Acc0) ->
+exec_read_plan(Dir, Plan, undefined, TransformFun, Options, Acc0) ->
     Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
-    exec_read_plan(Dir, Plan, Open, TransformFun, Acc0);
-exec_read_plan(Dir, Plan, Open0, TransformFun, Acc0)
+    exec_read_plan(Dir, Plan, Open, TransformFun, Options, Acc0);
+exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
   when is_list(Plan) ->
     Fun = fun (I, T, B, Acc) ->
                   E = TransformFun(I, T, binary_to_term(B)),
@@ -224,13 +230,13 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Acc0)
           end,
     lists:foldl(
       fun ({Idxs, BaseName}, {Acc1, Open1}) ->
-              {Seg, Open2} = get_segment_ext(Dir, Open1, BaseName),
+              {Seg, Open2} = get_segment_ext(Dir, Open1, BaseName, Options),
               case ra_log_segment:read_sparse(Seg, Idxs, Fun, Acc1) of
                   {ok, _, Acc} ->
                       {Acc, Open2};
                   {error, modified} ->
                       {_, Open3} = ra_flru:evict(BaseName, Open2),
-                      {SegNew, Open} = get_segment_ext(Dir, Open3, BaseName),
+                      {SegNew, Open} = get_segment_ext(Dir, Open3, BaseName, Options),
                       {ok, _, Acc} = ra_log_segment:read_sparse(SegNew, Idxs, Fun, Acc1),
                       {Acc, Open}
               end
@@ -382,15 +388,14 @@ get_segment(#cfg{directory = Dir,
             end
     end.
 
-get_segment_ext(Dir, Open0, Fn) ->
+get_segment_ext(Dir, Open0, Fn, Options) ->
     case ra_flru:fetch(Fn, Open0) of
         {ok, S, Open1} ->
             {S, Open1};
         error ->
             AbsFn = filename:join(Dir, Fn),
             case ra_log_segment:open(AbsFn,
-                                     #{mode => read,
-                                       access_pattern => random})
+                                     Options#{mode => read})
             of
                 {ok, S} ->
                     {S, ra_flru:insert(Fn, S, Open0)};

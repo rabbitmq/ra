@@ -8,12 +8,22 @@
 
 
 -export([execute/2,
+         execute/3,
          info/1]).
 
 -spec execute(ra_log:read_plan(), undefined | ra_flru:state()) ->
     {#{ra:index() => Command :: term()}, ra_flru:state()}.
 execute(Plan, Flru) ->
-    ra_log:execute_read_plan(Plan, Flru, fun ra_server:transform_for_partial_read/3).
+    execute(Plan, Flru, #{access_pattern => random,
+                          file_advise => normal}).
+
+-spec execute(ra_log:read_plan(), undefined | ra_flru:state(),
+              ra_log_reader:read_plan_options()) ->
+    {#{ra:index() => Command :: term()}, ra_flru:state()}.
+execute(Plan, Flru, Options) ->
+    ra_log:execute_read_plan(Plan, Flru,
+                             fun ra_server:transform_for_partial_read/3,
+                             Options).
 
 -spec info(ra_log:read_plan()) -> map().
 info(Plan) ->

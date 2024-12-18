@@ -409,12 +409,10 @@ recover(#{cfg := #cfg{log_id = LogId,
     FromScan = CommitIndex + 1,
     {ToScan, _} = ra_log:last_index_term(Log0),
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
-    {State, Log1} = ra_log:fold(FromScan, ToScan,
-                                fun cluster_scan_fun/2,
-                                State1, Log0),
+    {State, Log} = ra_log:fold(FromScan, ToScan,
+                               fun cluster_scan_fun/2,
+                               State1, Log0),
 
-    %% disable segment read cache by setting random access pattern
-    Log = ra_log:release_resources(1, random, Log1),
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value

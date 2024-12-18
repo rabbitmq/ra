@@ -577,6 +577,7 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                            Half + rand:uniform(Half);
                        #wal{ranges = Ranges,
                             filename = Filename} ->
+                           _ = file:advise(Wal0#wal.fd, 0, 0, dont_need),
                            ok = close_file(Wal0#wal.fd),
                            MemTables = Ranges,
                            %% TODO: only keep base name in state
