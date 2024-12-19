@@ -70,7 +70,8 @@
                            voter_status => ra_voter_status(),
                            %% indicates that a snapshot is being sent
                            %% to the peer
-                           status := ra_peer_status()}.
+                           status := ra_peer_status(),
+                           machine_version => ra_machine:version()}.
 
 -type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
 
@@ -186,6 +187,17 @@
 -record(heartbeat_reply,
         {query_index :: integer(),
          term :: ra_term()}).
+
+-record(info_rpc,
+        {from :: ra_server_id(),
+         term :: ra_term(),
+         keys :: [ra_server:ra_server_info_key()]}).
+
+-record(info_reply,
+        {from :: ra_server_id(),
+         term :: ra_term(),
+         keys :: [ra_server:ra_server_info_key()],
+         info = #{} :: ra_server:ra_server_info()}).
 
 %% WAL defaults
 -define(WAL_DEFAULT_MAX_SIZE_BYTES, 256 * 1000 * 1000).
