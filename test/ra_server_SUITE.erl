@@ -1861,7 +1861,8 @@ candidate_election(_Config) ->
     {follower, #{current_term := 7}, []}
         = ra_server:handle_candidate(HighTermResult, State1),
 
-    MacVer = 1,
+    EffectiveMacVer = 0,
+    MacVer = EffectiveMacVer + 1,
     meck:expect(ra_machine, version, fun (_) -> MacVer end),
 
     % quorum has been achieved - candidate becomes leader
@@ -1875,7 +1876,12 @@ candidate_election(_Config) ->
                             N4 := PeerState,
                             N5 := PeerState}},
      [
-      {next_event, cast, {command, {noop, _, MacVer}}},
+      {next_event, cast, {command, {noop, _, EffectiveMacVer}}},
+      {send_rpc, N2, {info_rpc, _, _, _}},
+      {send_rpc, N3, {info_rpc, _, _, _}},
+      {send_rpc, N4, {info_rpc, _, _, _}},
+      {send_rpc, N5, {info_rpc, _, _, _}},
+
       {send_rpc, _, _},
       {send_rpc, _, _},
       {send_rpc, _, _},
