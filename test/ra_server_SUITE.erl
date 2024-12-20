@@ -2332,12 +2332,12 @@ follower_heartbeat(_Config) ->
     {follower,
      State,
      [{cast, LeaderId, {Id, #heartbeat_reply{term = Term,
-                                             query_index = QIndex}}}]}
+                                             query_index = NewQueryIndex}}}]}
         = ra_server:handle_follower(Heartbeat#heartbeat_rpc{term = LowerTerm}, State),
 
-    %% Reply to the same term. Update query index
+    %% Reply to the same term
     {follower,
-     #{query_index := NewQueryIndex},
+     State,
      [{cast,
        LeaderId,
        {Id, #heartbeat_reply{term = Term,
@@ -2347,8 +2347,7 @@ follower_heartbeat(_Config) ->
     %% Reply to a higher term. Update follower term.
     NewTerm = Term + 1,
     {follower,
-     #{query_index := NewQueryIndex,
-       current_term := NewTerm,
+     #{current_term := NewTerm,
        voted_for := undefined},
      [{cast,
        LeaderId,
@@ -2405,7 +2404,7 @@ candidate_heartbeat(_Config) ->
      [{cast,
        LeaderId,
        {Id, #heartbeat_reply{term = Term,
-                             query_index = QueryIndex}}}]}
+                             query_index = NewQueryIndex}}}]}
         = ra_server:handle_candidate(HeartbeatLowTerm, State).
 
 candidate_heartbeat_reply(_Config) ->
@@ -2457,7 +2456,7 @@ pre_vote_heartbeat(_Config) ->
     {pre_vote, State,
      [{cast, LeaderId,
        {Id, #heartbeat_reply{term = Term,
-                             query_index = QueryIndex}}}]}
+                             query_index = NewQueryIndex}}}]}
         = ra_server:handle_pre_vote(Heartbeat#heartbeat_rpc{term = LowTerm},
                                     State).
 
@@ -2510,10 +2509,10 @@ leader_heartbeat(_Config) ->
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
     StateWithHigherTerm = set_peer_query_index(
-                                State#{current_term => NewTerm,
-                                       leader_id => undefined,
-                                       voted_for => undefined},
-                                Id, 0),
+                            State#{current_term => NewTerm,
+                                   leader_id => undefined,
+                                   voted_for => undefined},
+                            Id, 0),
     {follower, StateWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_leader(HeartbeatHigherTerm, State),
 
@@ -2524,7 +2523,7 @@ leader_heartbeat(_Config) ->
      [{cast,
        LeaderId,
        {Id, #heartbeat_reply{term = Term,
-                             query_index = QueryIndex}}}]}
+                             query_index = NewQueryIndex}}}]}
         = ra_server:handle_leader(HeartbeatLowTerm, State).
 
 leader_heartbeat_reply_node_size_5(_Config) ->
