@@ -215,15 +215,19 @@ read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
 -spec exec_read_plan(file:filename_all(),
                      read_plan(),
                      undefined | ra_flru:state(),
-                     TransformFun :: fun((ra_index(), ra_term(), binary()) -> term()),
+                     TransformFun :: fun((ra_index(), ra_term(), term()) -> term()),
                      read_plan_options(),
                      #{ra_index() => Command :: term()}) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
 exec_read_plan(Dir, Plan, undefined, TransformFun, Options, Acc0) ->
     Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
     exec_read_plan(Dir, Plan, Open, TransformFun, Options, Acc0);
+exec_read_plan(_Dir, [], Open0, _TransformFun, _Options, Acc0) ->
+    %% if there is no plan to read, then we can close all cached segments
+    {Acc0, ra_flru:evict_all(Open0)};
 exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
   when is_list(Plan) ->
+
     Fun = fun (I, T, B, Acc) ->
                   E = TransformFun(I, T, binary_to_term(B)),
                   Acc#{I => E}
