@@ -30,3 +30,4 @@ config
 doc/*
 
 /.vscode/
+.DS_store
