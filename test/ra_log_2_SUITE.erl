@@ -1452,69 +1452,6 @@ open_segments_limit(Config) ->
     ?assert(Open =< Max),
     ok.
 
-external_reader(Config) ->
-    %% external readers should be notified of all new segments
-    %% and the lower bound of the log
-    %% The upper bound needs to be discovered by querying
-    logger:set_primary_config(level, all),
-    Log0 = ra_log_init(Config),
-    {0, 0} = ra_log:last_index_term(Log0),
-
-    Log1 = write_n(200, 220, 2,
-                   write_and_roll(1, 200, 2, Log0)),
-
-    Self = self(),
-    Pid = spawn(
-            fun () ->
-                    receive
-                        {ra_log_reader_state, R1} = Evt ->
-                            {Es, R2} = ra_log_reader:sparse_read(
-                                         R1, lists:seq(0, 220), []),
-                            Len1 = length(Es),
-                            Self ! {got, Evt, Es},
-                            receive
-                                {ra_log_update, _, F, _} = Evt2 ->
-                                    %% reader before update has been processed
-                                    %% should work
-                                    Indexes = lists:seq(F, 220),
-                                    {Stale, _} = ra_log_reader:sparse_read(R2, Indexes, []),
-                                    ?assertEqual(Len1, length(Stale)),
-                                    R3 = ra_log_reader:handle_log_update(Evt2, R2),
-                                    {Es2, _R4} = ra_log_reader:sparse_read(R3, Indexes, []),
-                                    ct:pal("Es2 ~w", [length(Es2)]),
-                                    ?assertEqual(Len1, length(Es2)),
-                                    Self ! {got, Evt2, Es2}
-                            end
-                    end
-            end),
-    {Log2, [{reply, {ok, Reader}} | _]} =
-        ra_log:register_reader(Pid, Log1),
-    Pid ! {ra_log_reader_state, Reader},
-    %% TODO: validate there is monitor effect
-    receive
-        {got, Evt, Entries} ->
-            ct:pal("got segs: ~w ~w", [Evt, length(Entries)]),
-            ok
-    after 2000 ->
-              flush(),
-              exit(got_timeout)
-    end,
-    ra_log_wal:force_roll_over(ra_log_wal),
-
-    deliver_log_events_cond(
-      Log2, fun (_L) ->
-                    %% this should result in a segment update
-                    receive
-                        {got, Evt2, Entries1} ->
-                            ct:pal("got segs: ~p ~p", [Evt2, length(Entries1)]),
-                            true
-                    after 10 ->
-                              false
-                    end
-            end, 100),
-    flush(),
-    ok.
-
 write_config(Config) ->
 
     C = #{cluster_name => ?MODULE,
@@ -1604,7 +1541,6 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                        (_, Acc) ->
                             Acc
                     end, Log1, Effs),
-            [P ! E || {send_msg, P, E, _} <- Effs],
             case CondFun(Log2) of
                 {false, Log} ->
                     deliver_log_events_cond(Log, CondFun, N-1);
@@ -1647,7 +1583,6 @@ deliver_all_log_events(Log0, Timeout) ->
                        (_, Acc) ->
                             Acc
                     end, Log1, Effs),
-            [P ! E || {send_msg, P, E, _} <- Effs],
             % ct:pal("log evt effs: ~p", [Effs]),
             deliver_all_log_events(Log, Timeout)
     after Timeout ->

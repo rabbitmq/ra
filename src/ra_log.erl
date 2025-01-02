@@ -49,9 +49,6 @@
          delete_everything/1,
          release_resources/3,
 
-         % external reader
-         register_reader/2,
-         readers/1,
          tick/2
         ]).
 
@@ -108,7 +105,6 @@
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
          last_wal_write :: {pid(), Ms :: integer()},
          reader :: ra_log_reader:state(),
-         readers = [] :: [pid()],
          mem_table :: ra_mt:state(),
          tx = false :: boolean()
         }).
@@ -691,9 +687,7 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
-                      mem_table = Mt0,
-                      readers = Readers
-                     } = State0) ->
+                      mem_table = Mt0} = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
                 ra_log_reader:segment_ref_count(Reader)),
@@ -707,15 +701,7 @@ handle_event({segments, TidRanges, NewSegs},
            end, Mt0, TidRanges),
     State = State0#?MODULE{reader = Reader,
                            mem_table = Mt},
-    case Readers of
-        [] ->
-            {State, []};
-        _ ->
-            %% HACK: but this feature is deprecated anyway
-            %% Dummy pid to swallow update notifications
-            Pid = spawn(fun () -> ok end),
-            {State, log_update_effects(Readers, Pid, State)}
-    end;
+    {State, []};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
@@ -787,15 +773,13 @@ handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
                 Snap}],
     {State0, Effects};
 handle_event({resend_write, Idx},
-             #?MODULE{cfg =#cfg{log_id = LogId}} = State) ->
+             #?MODULE{cfg = #cfg{log_id = LogId}} = State) ->
     % resend missing entries from mem tables.
     ?INFO("~ts: ra_log: wal requested resend from ~b",
           [LogId, Idx]),
     {resend_from(Idx, State), []};
-handle_event({down, Pid, _Info},
-             #?MODULE{readers = Readers} =
-             State) ->
-    {State#?MODULE{readers = lists:delete(Pid, Readers)}, []}.
+handle_event({down, _Pid, _Info}, #?MODULE{} = State) ->
+    {State, []}.
 
 -spec next_index(state()) -> ra_index().
 next_index(#?MODULE{last_index = LastIdx}) ->
@@ -1143,56 +1127,28 @@ release_resources(MaxOpenSegments,
                                               AccessPattern,
                                               ActiveSegs, Names, Counter)}.
 
--spec register_reader(pid(), state()) ->
-    {state(), effects()}.
-register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId,
-                                         directory = Dir,
-                                         names = Names},
-                              reader = Reader,
-                              readers = Readers} = State) ->
-    SegRefs = ra_log_reader:segment_refs(Reader),
-    NewReader = ra_log_reader:init(UId, Dir, 1, SegRefs, Names),
-    {State#?MODULE{readers = [Pid | Readers]},
-     [{reply, {ok, NewReader}},
-      {monitor, process, log, Pid}]}.
-
-readers(#?MODULE{readers = Readers}) ->
-    Readers.
-
 
 %%% Local functions
-
-log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
-                                            reader = Reader}) ->
-    SegRefs = ra_log_reader:segment_refs(Reader),
-    [{send_msg, P, {ra_log_update, ReplyPid, Idx, SegRefs},
-      [ra_event, local]} || P <- Pids].
-
 
 %% deletes all segments where the last index is lower than
 %% the Idx argument
 delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
                                              segment_writer = SegWriter,
                                              uid = UId} = Cfg,
-                                  readers = Readers,
                                   reader = Reader0} = State0) ->
     case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
         {Reader, []} ->
             State = State0#?MODULE{reader = Reader},
-            {State, log_update_effects(Readers, undefined, State)};
+            {State, []};
         {Reader, [Pivot | _] = Obsolete} ->
-            Pid = spawn(
-                    fun () ->
-                            ok = log_update_wait_n(length(Readers)),
-                            ok = ra_log_segment_writer:truncate_segments(SegWriter,
-                                                                         UId, Pivot)
-                    end),
+            ok = ra_log_segment_writer:truncate_segments(SegWriter,
+                                                         UId, Pivot),
             NumActive = ra_log_reader:segment_ref_count(Reader),
             ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
                    [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
             put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
             State = State0#?MODULE{reader = Reader},
-            {State, log_update_effects(Readers, Pid, State)}
+            {State, []}
     end.
 
 %% unly used by resend to wal functionality and doesn't update the mem table
@@ -1380,16 +1336,16 @@ await_written_idx(Idx, Term, Log0) ->
               throw(ra_log_append_timeout)
     end.
 
-log_update_wait_n(0) ->
-    ok;
-log_update_wait_n(N) ->
-    receive
-        ra_log_update_processed ->
-            log_update_wait_n(N - 1)
-    after 1500 ->
-              %% just go ahead anyway
-              ok
-    end.
+% log_update_wait_n(0) ->
+%     ok;
+% log_update_wait_n(N) ->
+%     receive
+%         ra_log_update_processed ->
+%             log_update_wait_n(N - 1)
+%     after 1500 ->
+%               %% just go ahead anyway
+%               ok
+%     end.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

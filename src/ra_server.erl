@@ -51,7 +51,6 @@
          checkpoint/3,
          persist_last_applied/1,
          update_peer/3,
-         register_external_log_reader/2,
          update_disconnected_peers/3,
          handle_down/5,
          handle_node_status/6,
@@ -929,9 +928,6 @@ handle_leader({transfer_leadership, ServerId},
                                        transition_to => leader}}},
              [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]}
     end;
-handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {leader, State#{log => Log}, Effs};
 handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
@@ -1040,9 +1036,6 @@ handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
-handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {candidate, State#{log => Log}, Effs};
 handle_candidate(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_candidate(#info_rpc{term = Term} = Msg,
@@ -1141,9 +1134,6 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {pre_vote, State#{log => Log}, Effects};
-handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {pre_vote, State#{log => Log}, Effs};
 handle_pre_vote(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_pre_vote(#info_rpc{term = Term} = Msg,
@@ -1493,9 +1483,6 @@ handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(try_become_leader, State) ->
     handle_follower(election_timeout, State);
-handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {follower, State#{log => Log}, Effs};
 handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               uid = Uid,
@@ -1635,9 +1622,6 @@ handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
     {follower, State#{log => Log}, []};
-handle_receive_snapshot({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {receive_snapshot, State#{log => Log}, Effs};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId},
@@ -1709,9 +1693,6 @@ handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {await_condition, State#{log => Log}, Effects};
-handle_await_condition({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {await_condition, State#{log => Log}, Effs};
 handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
     case Pred(Msg, State0) of
         {true, State1} ->
@@ -2247,12 +2228,6 @@ update_peer(PeerId, Update, #{cluster := Peers} = State)
   when is_map(Update) ->
     Peer = maps:merge(maps:get(PeerId, Peers), Update),
     put_peer(PeerId, Peer, State).
-
--spec register_external_log_reader(pid(), ra_server_state()) ->
-    {ra_server_state(), effects()}.
-register_external_log_reader(Pid, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {State#{log => Log}, Effs}.
 
 -spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
     ra_server_state().
