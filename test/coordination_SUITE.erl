@@ -1004,15 +1004,15 @@ segment_writer_or_wal_crash_follower(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the follower
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(FollowerNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
@@ -1114,15 +1114,15 @@ segment_writer_or_wal_crash_leader(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the leader
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(LeaderNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
