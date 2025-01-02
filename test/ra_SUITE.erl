@@ -789,8 +789,8 @@ consistent_query_after_restart(Config) ->
          {ok, _, _} = ra:process_command(A, N, ?PROCESS_COMMAND_TIMEOUT),
          application:stop(ra),
          restart_ra(DataDir),
-         ok = ra:restart_server(A),
-         ok = ra:restart_server(B),
+         ok = ra:restart_server(?SYS, A),
+         ok = ra:restart_server(?SYS, B),
          ?assertMatch({ok, N, _}, ra:consistent_query(A, fun(S) -> S end))
      end || N <- lists:seq(1, 30)],
 
@@ -803,15 +803,15 @@ consistent_query_minority(Config) ->
     {ok, _, Leader} = ra:process_command(A, 9,
                                          ?PROCESS_COMMAND_TIMEOUT),
     [F1, F2] = Cluster -- [Leader],
-    ra:stop_server(F1),
-    ra:stop_server(F2),
+    ra:stop_server(?SYS, F1),
+    ra:stop_server(?SYS, F2),
 
     {timeout, _} = ra:consistent_query(Leader, fun(S) -> S end),
     %% restart after a short sleep so that quorum is restored whilst the next
     %% query is executing
     _ = spawn(fun() ->
                       timer:sleep(1000),
-                      ra:restart_server(F1),
+                      ra:restart_server(?SYS, F1),
                       ok
               end),
     {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end, 10000),
@@ -830,11 +830,11 @@ consistent_query_leader_change(Config) ->
     {ok, _, A} = ra:process_command(A, 9, ?PROCESS_COMMAND_TIMEOUT),
     %% do two consistent queries, this will put query_index == 2 everywhere
     {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
-    ok = ra:stop_server(E),
+    ok = ra:stop_server(?SYS, E),
     {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
     %% restart B
-    ok = ra:stop_server(B),
-    ok = ra:restart_server(B),
+    ok = ra:stop_server(?SYS, B),
+    ok = ra:restart_server(?SYS, B),
     %% Wait for B to recover and catch up.
     {ok, #{log := #{last_written_index_term := CurrentIdxTerm}}, _} =
       ra:member_overview(A),
@@ -852,12 +852,12 @@ consistent_query_leader_change(Config) ->
               ra_leaderboard:lookup_leader(ClusterName) =:= B
       end, 20),
     %% restart E
-    ok = ra:restart_server(E),
+    ok = ra:restart_server(?SYS, E),
     {ok, 9, B} = ra:consistent_query(B, fun(S) -> S end),
 
-    ok = ra:stop_server(A),
-    ok = ra:stop_server(C),
-    ok = ra:stop_server(D),
+    ok = ra:stop_server(?SYS, A),
+    ok = ra:stop_server(?SYS, C),
+    ok = ra:stop_server(?SYS, D),
 
     %% there is no quorum now so this should time out
     case ra:consistent_query(B, fun(S) -> S end, 500) of
@@ -867,9 +867,9 @@ consistent_query_leader_change(Config) ->
             ct:fail("consistent query should time out"),
             ok
     end,
-    ok = ra:restart_server(A),
-    ok = ra:restart_server(C),
-    ok = ra:restart_server(D),
+    ok = ra:restart_server(?SYS, A),
+    ok = ra:restart_server(?SYS, C),
+    ok = ra:restart_server(?SYS, D),
     {ok, 9, _} = ra:consistent_query(A, fun(S) -> S end),
     {ok, 9, _} = ra:consistent_query(B, fun(S) -> S end),
     {ok, 9, _} = ra:consistent_query(C, fun(S) -> S end),

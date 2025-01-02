@@ -44,16 +44,10 @@
          delete_cluster/1,
          delete_cluster/2,
          % server management
-         % deprecated
-         start_server/1,
          start_server/2,
          start_server/5,
-         % deprecated
-         restart_server/1,
          restart_server/2,
          restart_server/3,
-         % deprecated
-         stop_server/1,
          stop_server/2,
          force_delete_server/2,
          trigger_election/1,
@@ -68,8 +62,6 @@
          leave_and_delete_server/3,
          leave_and_delete_server/4,
          %% troubleshooting
-         % deprecated
-         overview/0,
          overview/1,
          %% helpers
          new_uid/1,
@@ -79,19 +71,11 @@
          aux_command/2,
          aux_command/3,
          cast_aux_command/2,
-         register_external_log_reader/1,
          member_overview/1,
          member_overview/2,
          key_metrics/1,
          key_metrics/2
         ]).
-
-%% xref should pick these up
--deprecated({start_server, 1}).
--deprecated({restart_server, 1}).
--deprecated({stop_server, 1}).
--deprecated({overview, 0}).
--deprecated({register_external_log_reader, 1}).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
@@ -171,19 +155,6 @@ start(Params) when is_list(Params) ->
 start_in(DataDir) ->
     start([{data_dir, DataDir}]).
 
-%% @doc Restarts a previously successfully started ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, Error}' where error can be
-%% `not_found', `system_not_started' or `name_not_registered' when the
-%% ra server has never before been started on the Erlang node.
-%% DEPRECATED: use restart_server/2
-%% @end
--spec restart_server(ra_server_id()) ->
-    ok | {error, term()}.
-restart_server(ServerId) ->
-    %% TODO: this is a bad overload
-    restart_server(default, ServerId).
-
 %% @doc Restarts a previously successfully started ra server
 %% @param System the system identifier
 %% @param ServerId the ra_server_id() of the server
@@ -226,16 +197,6 @@ restart_server(System, ServerId, AddConfig)
         {badrpc, Reason} -> {error, Reason};
         {'EXIT', Err} -> {error, Err}
     end.
-
-%% @doc Stops a ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, nodedown}'
-%% DEPRECATED: use stop_server/2
-%% @end
--spec stop_server(ra_server_id()) ->
-    ok | {error, nodedown | system_not_started}.
-stop_server(ServerId) ->
-    stop_server(default, ServerId).
 
 %% @doc Stops a ra server
 %% @param System the system name
@@ -515,16 +476,6 @@ start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
              machine => Machine},
     start_server(System, maps:merge(Conf0, Conf)).
 
-%% @doc Starts a ra server in the default system
-%% @param Conf a ra_server_config() configuration map.
-%% @returns `{ok | error, Error}'
-%% DEPRECATED: use start_server/2
-%% @end
--spec start_server(ra_server:ra_server_config()) ->
-    ok | {error, term()}.
-start_server(Conf) ->
-    start_server(default, Conf).
-
 %% @doc Starts a ra server
 %% @param System the system name
 %% @param Conf a ra_server_config() configuration map.
@@ -747,14 +698,6 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 new_uid(Source) when is_binary(Source) ->
     Prefix = ra_lib:derive_safe_string(Source, 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
-
-%% @doc Returns a map of overview data of the default Ra system on the current Erlang
-%% node.
-%% DEPRECATED: use overview/1
-%% @end
--spec overview() -> map() | system_not_started.
-overview() ->
-    overview(default).
 
 %% @doc Returns a map of overview data of the Ra system on the current Erlang
 %% node.
@@ -1196,18 +1139,6 @@ aux_command(ServerRef, Cmd, Timeout) ->
 -spec cast_aux_command(ra_server_id(), term()) -> ok.
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).
-
-%% @doc Registers an external log reader. ServerId needs to be local to the node.
-%% Returns an initiated ra_log_reader:state() state.
-%% Deprecated. Now only reads log data stored in segments, not log data
-%% in mem tables.
-%% @end
--spec register_external_log_reader(ra_server_id()) ->
-    ra_log_reader:state().
-register_external_log_reader({_, Node} = ServerId)
- when Node =:= node() ->
-    {ok, Reader} = gen_statem:call(ServerId, {register_external_log_reader, self()}),
-    Reader.
 
 %% @doc Returns a overview map of the internal server state
 %%
