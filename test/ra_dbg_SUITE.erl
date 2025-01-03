@@ -95,7 +95,7 @@ execute_state_machine() ->
 
 wal_file() ->
   {ok, RaDataDir} = application:get_env(ra, data_dir),
-  filename:join([RaDataDir, node(), "00000001.wal"]).
+  filename:join([RaDataDir, node(), "0000000000000001.wal"]).
 
 report(Pid, Count) ->
   receive

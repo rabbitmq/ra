@@ -105,7 +105,9 @@ await(SegWriter)  ->
             ok
     end.
 
-%%%===================================================================
+-define(UPGRADE_MARKER, "segment_name_upgrade_marker").
+
+%%%==================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
@@ -115,6 +117,7 @@ init([#{data_dir := DataDir,
     process_flag(trap_exit, true),
     CRef = ra_counters:new(SegWriterName, ?COUNTER_FIELDS),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
+    maybe_upgrade_segment_file_names(System, DataDir),
     {ok, #state{system = System,
                 data_dir = DataDir,
                 counter = CRef,
@@ -460,8 +463,8 @@ find_segment_files(Dir) ->
 segment_files(Dir) ->
     case prim_file:list_dir(Dir) of
         {ok, Files0} ->
-            Files = [filename:join(Dir, F) || F <- Files0,
-                                              filename:extension(F) == ".segment"],
+            Files = [filename:join(Dir, F)
+                     || F <- Files0, filename:extension(F) =:= ".segment"],
             lists:sort(Files);
         {error, enoent} ->
             []
@@ -528,4 +531,27 @@ maybe_wait_for_segment_writer(SegWriter, TimeRemaining)
     end;
 maybe_wait_for_segment_writer(_SegWriter, _TimeRemaining) ->
     ok.
+
+maybe_upgrade_segment_file_names(System, DataDir) ->
+    Marker = filename:join(DataDir, ?UPGRADE_MARKER),
+    case ra_lib:is_file(Marker) of
+        false ->
+            ?INFO("segment_writer: upgrading segment file names to "
+                  "new format in dirctory ~ts",
+                  [DataDir]),
+            [begin
+                 Dir = filename:join(DataDir, UId),
+                 case prim_file:list_dir(Dir) of
+                     {ok, Files} ->
+                         [ra_lib:zpad_upgrade(Dir, F, ".segment")
+                          || F <- Files, filename:extension(F) =:= ".segment"];
+                     {error, enoent} ->
+                         ok
+                 end
+             end || {_, UId} <- ra_directory:list_registered(System)],
+
+            ok = ra_lib:write_file(Marker, <<>>);
+        true ->
+            ok
+    end.
 

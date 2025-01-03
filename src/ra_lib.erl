@@ -30,6 +30,7 @@
          zpad_filename/3,
          zpad_filename_incr/1,
          zpad_extract_num/1,
+         zpad_upgrade/3,
          recursive_delete/1,
          make_uid/0,
          make_uid/1,
@@ -146,28 +147,43 @@ zpad_hex(Num) ->
     lists:flatten(io_lib:format("~16.16.0B", [Num])).
 
 zpad_filename("", Ext, Num) ->
-    lists:flatten(io_lib:format("~8..0B.~ts", [Num, Ext]));
+    lists:flatten(io_lib:format("~16..0B.~ts", [Num, Ext]));
 zpad_filename(Prefix, Ext, Num) ->
-    lists:flatten(io_lib:format("~ts_~8..0B.~ts", [Prefix, Num, Ext])).
+    lists:flatten(io_lib:format("~ts_~16..0B.~ts", [Prefix, Num, Ext])).
 
 zpad_filename_incr(Fn) ->
     Base = filename:basename(Fn),
     Dir = filename:dirname(Fn),
-    case re:run(Base, "(.*)([0-9]{8})(.*)",
+    case re:run(Base, "(.*)([0-9]{16})(.*)",
                 [{capture, all_but_first, list}]) of
         {match, [Prefix, NumStr, Ext]} ->
             Num = list_to_integer(NumStr),
-            filename:join(Dir,
-                          lists:flatten(
-                            io_lib:format("~ts~8..0B~ts", [Prefix, Num+1, Ext])));
+            NewFn = lists:flatten(io_lib:format("~ts~16..0B~ts",
+                                                [Prefix, Num + 1, Ext])),
+            filename:join(Dir, NewFn);
         _ ->
             undefined
     end.
 
 zpad_extract_num(Fn) ->
-    {match, [_, NumStr, _]} = re:run(Fn, "(.*)([0-9]{8})(.*)",
+    {match, [_, NumStr, _]} = re:run(Fn, "(.*)([0-9]{16})(.*)",
                                      [{capture, all_but_first, list}]),
     list_to_integer(NumStr).
+
+zpad_upgrade(Dir, File, Ext) ->
+    B = filename:basename(File, Ext),
+    case length(B) of
+        8 ->
+            %% old format, convert and rename
+            F = "00000000" ++ B ++ Ext,
+            New = filename:join(Dir, F),
+            Old = filename:join(Dir, File),
+            ok = file:rename(Old, New),
+            F;
+        16 ->
+            File
+    end.
+
 
 recursive_delete(Dir) ->
     case is_dir(Dir) of
@@ -427,7 +443,7 @@ lists_shuffle(List0) ->
 
 is_dir(Dir) ->
     case prim_file:read_file_info(Dir) of
-        {ok, #file_info{type=directory}} ->
+        {ok, #file_info{type = directory}} ->
             true;
         _ ->
             false
@@ -435,8 +451,6 @@ is_dir(Dir) ->
 
 is_file(File) ->
     case prim_file:read_file_info(File) of
-        {ok, #file_info{type = directory}} ->
-            true;
         {ok, #file_info{type = regular}} ->
             true;
         _ ->
@@ -516,17 +530,17 @@ make_uid_test() ->
     ok.
 
 zpad_filename_incr_test() ->
-    Fn = "/lib/blah/prefix_00000001.segment",
-    Ex = "/lib/blah/prefix_00000002.segment",
+    Fn = "/lib/blah/prefix_0000000000000001.segment",
+    Ex = "/lib/blah/prefix_0000000000000002.segment",
     Ex = zpad_filename_incr(Fn),
-    undefined = zpad_filename_incr("0000001"),
+    undefined = zpad_filename_incr("000000000000001"),
     ok.
 
 zpad_filename_incr_utf8_test() ->
-    Fn = "/lib/🐰/prefix/00000001.segment",
-    Ex = "/lib/🐰/prefix/00000002.segment",
+    Fn = "/lib/🐰/prefix/0000000000000001.segment",
+    Ex = "/lib/🐰/prefix/0000000000000002.segment",
     Ex = zpad_filename_incr(Fn),
-    undefined = zpad_filename_incr("0000001"),
+    undefined = zpad_filename_incr("000000000000001"),
     ok.
 
 derive_safe_string_test() ->

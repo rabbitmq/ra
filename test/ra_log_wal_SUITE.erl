@@ -26,6 +26,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     wal_filename_upgrade,
      same_uid_different_process,
      consecutive_terms_in_batch_should_result_in_two_written_events,
      overwrite_in_same_batch,
@@ -143,13 +144,46 @@ basic_log_writes(Config) ->
     ra_log_wal:force_roll_over(Pid),
     receive
         {'$gen_cast',
-         {mem_tables, #{UId := [{Tid, {12, 13}}]}, "00000001.wal"}} ->
+         {mem_tables, #{UId := [{Tid, {12, 13}}]}, "0000000000000001.wal"}} ->
             ok
     after 5000 ->
               flush(),
               ct:fail("receiving mem tables timed out")
     end,
     proc_lib:stop(Pid),
+    meck:unload(),
+    ok.
+
+wal_filename_upgrade(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    #{dir := Dir} = Conf,
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
+    ok = await_written(WriterId, 1, {12, 12}),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 13, 1, "value2"),
+    ok = await_written(WriterId, 1, {13, 13}),
+    proc_lib:stop(Pid),
+    %% rename file to old 8 character format
+    Fn = filename:join(Dir, "0000000000000001.wal"),
+    FnOld = filename:join(Dir, "00000001.wal"),
+    ok = file:rename(Fn, FnOld),
+    % debugger:start(),
+    % int:i(ra_log_wal),
+    % int:break(ra_log_wal, 373),
+    {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    receive
+        {'$gen_cast',
+         {mem_tables, #{UId := [{_Tid, {12, 13}}]}, "0000000000000001.wal"}} ->
+            ok
+    after 5000 ->
+              flush(),
+              ct:fail("receiving mem tables timed out")
+    end,
+    proc_lib:stop(Pid2),
     meck:unload(),
     ok.
 
