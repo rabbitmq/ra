@@ -370,9 +370,12 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
                    ok = ra_log_segment_writer:await(SegWriter),
                    post_boot
            end,
-    {ok, Files} = file:list_dir(Dir),
-    WalFiles = lists:sort([F || F <- Files,
-                                filename:extension(F) == ".wal"]),
+    {ok, Files0} = file:list_dir(Dir),
+    Files = [begin
+                 ra_lib:zpad_upgrade(Dir, File, ".wal")
+             end || File <- Files0,
+                    filename:extension(File) == ".wal"],
+    WalFiles = lists:sort(Files),
     AllWriters =
     [begin
          ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),

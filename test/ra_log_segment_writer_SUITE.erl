@@ -38,6 +38,7 @@ all_tests() ->
      truncate_segments_with_pending_update,
      truncate_segments_with_pending_overwrite,
      my_segments,
+     upgrade_segment_name_format,
      skip_entries_lower_than_snapshot_index,
      skip_all_entries_lower_than_snapshot_index
     ].
@@ -61,7 +62,6 @@ init_per_testcase(TestCase, Config) ->
     SysCfg = ra_system:default_config(),
     ra_system:store(SysCfg),
     _ = ra_log_ets:start_link(SysCfg),
-    % ra_directory:init(default),
     ra_counters:init(),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
@@ -314,23 +314,23 @@ accept_mem_tables_for_down_server(Config) ->
     ets:new(ra_log_closed_mem_tables, [named_table, bag, public]),
     Dir = ?config(wal_dir, Config),
     UId = ?config(uid, Config),
-    FakeUId = <<"down-uid">>,
+    DownUId = <<"down-uid">>,
     %% only insert into dets so that the server is shown as registered
     %% but not running
     ok = dets:insert(maps:get(directory_rev, get_names(default)),
-                     {down_uid, FakeUId}),
-    ok = ra_lib:make_dir(filename:join(Dir, FakeUId)),
+                     {down_uid, DownUId}),
+    ok = ra_lib:make_dir(filename:join(Dir, DownUId)),
     application:start(sasl),
     {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
                                                             name => ?SEGWR,
                                                             data_dir => Dir}),
     % fake up a mem segment for Self
     Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
-    Mt = make_mem_table(FakeUId, Entries),
+    Mt = make_mem_table(DownUId, Entries),
     Mt2 = make_mem_table(UId, Entries),
     Tid = ra_mt:tid(Mt),
     Tid2 = ra_mt:tid(Mt2),
-    Ranges = #{FakeUId => [{Tid, {1, 3}}],
+    Ranges = #{DownUId => [{Tid, {1, 3}}],
                UId => [{Tid2, {1, 3}}]},
     WalFile = filename:join(Dir, "00001.wal"),
     ok = file:write_file(WalFile, <<"waldata">>),
@@ -348,10 +348,11 @@ accept_mem_tables_for_down_server(Config) ->
     end,
     %% validate fake uid entries were written
     ra_log_segment_writer:await(?SEGWR),
-    FakeSegmentFile = filename:join([?config(wal_dir, Config),
-                                     FakeUId,
-                                     "00000001.segment"]),
-    {ok, FakeSeg} = ra_log_segment:open(FakeSegmentFile, #{mode => read}),
+    DownFn = ra_lib:zpad_filename("", "segment", 1),
+    ct:pal("FakeFn ~s", [DownFn]),
+    DownSegmentFile = filename:join([?config(wal_dir, Config),
+                                     DownUId, DownFn]),
+    {ok, FakeSeg} = ra_log_segment:open(DownSegmentFile, #{mode => read}),
     % assert Entries have been fully transferred
     Entries = [{I, T, binary_to_term(B)}
                || {I, T, B} <- read_sparse(FakeSeg, [1, 2, 3])],
@@ -699,6 +700,48 @@ my_segments(Config) ->
               exit(ra_log_event_timeout)
     end,
     proc_lib:stop(TblWriterPid),
+    ok.
+
+upgrade_segment_name_format(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{name => ?SEGWR,
+                                                            system => default,
+                                                            data_dir => Dir}),
+    UId = ?config(uid, Config),
+    % fake up a mem segment for Self
+    Entries = [{1, 42, a}, {2, 42, b}, {3, 43, c}],
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
+    TidRanges = maps:get(UId, Ranges),
+    WalFile = make_wal(Config, "00001.wal"),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
+    File =
+    receive
+        {ra_log_event, {segments, TidRanges, [{{1, 3}, _Fn}]}} ->
+            [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
+            MyFile
+    after 2000 ->
+              flush(),
+              exit(ra_log_event_timeout)
+    end,
+
+    %% stop segment writer and rename existing segment to old format
+    proc_lib:stop(TblWriterPid),
+    Root = filename:dirname(File),
+    Base = filename:basename(File),
+    {_, FileOld} = lists:split(8, Base),
+    ok = file:rename(File, filename:join(Root, FileOld)),
+    %% also remove upgrade marker file
+    ok = file:delete(filename:join(Dir, "segment_name_upgrade_marker")),
+    %% restart segment writer which should trigger upgrade process
+    {ok, Pid2} = ra_log_segment_writer:start_link(#{name => ?SEGWR,
+                                                    system => default,
+                                                    data_dir => Dir}),
+    %% validate the renamed segment has been renamed back to the new
+    %% 16 character format
+    [File] = ra_log_segment_writer:my_segments(?SEGWR, UId),
+
+    proc_lib:stop(Pid2),
     ok.
 
 skip_entries_lower_than_snapshot_index(Config) ->
