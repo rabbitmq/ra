@@ -349,7 +349,7 @@ accept_mem_tables_for_down_server(Config) ->
     %% validate fake uid entries were written
     ra_log_segment_writer:await(?SEGWR),
     DownFn = ra_lib:zpad_filename("", "segment", 1),
-    ct:pal("FakeFn ~s", [DownFn]),
+    ct:pal("DownFn ~s", [DownFn]),
     DownSegmentFile = filename:join([?config(wal_dir, Config),
                                      DownUId, DownFn]),
     {ok, FakeSeg} = ra_log_segment:open(DownSegmentFile, #{mode => read}),
