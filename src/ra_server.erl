@@ -146,6 +146,8 @@
                   ra_log:event() |
                   {consistent_query, term(), ra:query_fun()} |
                   #heartbeat_rpc{} |
+                  #info_rpc{} |
+                  #info_reply{} |
                   {ra_server_id, #heartbeat_reply{}} |
                   pipeline_rpcs.
 
@@ -192,6 +194,18 @@
 %% The simple machine config is version that can only be used for simple state
 %% machines that cannot access any of the advanced features.
 
+-type machine_upgrade_strategy() :: all | quorum.
+%% When a new Ra machine version should be upgraded to.
+%%
+%% <ul>
+%% <li>`all': a new machine version it used only when all members of the
+%% cluster support it. This is the default behavior starting with Ra
+%% 2.16.</li>
+%% <li>`quorum': when a leader is elected and if it supports a newer machine
+%% version, it switches to that new version. This was the default and only
+%% possible behavior in Ra up to 2.15.</li>
+%% </ul>
+
 -type ra_server_config() :: #{id := ra_server_id(),
                               uid := ra_uid(),
                               %% a friendly name to refer to a particular
@@ -219,6 +233,27 @@
                               has_changed => boolean()
                              }.
 
+-type ra_server_info_key() :: machine_version | atom().
+%% Key one can get in `ra_server_info()'.
+%%
+%% This is used in the `#info_rpc{}' to ask for a specific list of info keys.
+%%
+%% Key meanings:
+%% <ul>
+%% <li>`machine_version': Highest machine version supported by this Ra
+%% server.</li>
+%% </ul>
+%%
+%% Any atom is supported because a future version of Ra could ask for
+%% something this version does not know about.
+
+-type ra_server_info() :: #{machine_version => ra_machine:version(),
+                            atom() => any()}.
+%% Info for a Ra server, got from `#info_reply{}'.
+%%
+%% In addition, the map may contain keys unknown to this version of Ra but
+%% emitted by a future version.
+
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
                             broadcast_time => non_neg_integer(), % ms
@@ -235,6 +270,8 @@
               ra_server_state/0,
               ra_state/0,
               ra_server_config/0,
+              ra_server_info_key/0,
+              ra_server_info/0,
               mutable_config/0,
               ra_msg/0,
               machine_conf/0,
@@ -246,7 +283,8 @@
               command_reply_mode/0,
               ra_event_formatter_fun/0,
               effect/0,
-              effects/0
+              effects/0,
+              machine_upgrade_strategy/0
              ]).
 
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
@@ -814,6 +852,29 @@ handle_leader(#request_vote_result{}, State) ->
 handle_leader(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {leader, State, []};
+handle_leader(#info_rpc{term = Term} = Msg,
+              #{current_term := CurTerm,
+                cfg := #cfg{log_id = LogId}} = State0)
+        when CurTerm < Term ->
+    ?INFO("~ts: leader saw info_rpc from ~w for term ~b, abdicates term: ~b!",
+          [LogId, Msg#info_rpc.from, Term, CurTerm]),
+    {follower, update_term(Term, State0#{leader_id => undefined}),
+     [{next_event, Msg}]};
+handle_leader(#info_rpc{} = InfoRpc, State) ->
+    InfoReplyEffect = info_reply_effect(State, InfoRpc),
+    {leader, State, [InfoReplyEffect]};
+handle_leader(#info_reply{term = Term} = Msg,
+              #{current_term := CurTerm,
+                cfg := #cfg{log_id = LogId}} = State0)
+        when CurTerm < Term ->
+    ?INFO("~ts: leader saw info_reply from ~w for term ~b, abdicates "
+          "term: ~b!",
+          [LogId, Msg#info_reply.from, Term, CurTerm]),
+    {follower, update_term(Term, State0#{leader_id => undefined}),
+     [{next_event, Msg}]};
+handle_leader(#info_reply{} = InfoReply, State) ->
+    {State1, Effects} = handle_info_reply(State, InfoReply),
+    {leader, State1, Effects};
 handle_leader({transfer_leadership, Leader},
               #{cfg := #cfg{id = Leader, log_id = LogId}} = State) ->
     ?DEBUG("~ts: transfer leadership requested but already leader",
@@ -860,8 +921,7 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
-                               log_id = LogId,
-                               machine = Mac},
+                               log_id = LogId},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
@@ -871,11 +931,10 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     case required_quorum(Nodes) of
         NewVotes ->
             {State1, Effects} = make_all_rpcs(initialise_peers(State0)),
-            Noop = {noop, #{ts => erlang:system_time(millisecond)},
-                    ra_machine:version(Mac)},
             State = State1#{leader_id => Id},
+            PostElectionEffects = post_election_effects(State),
             {leader, maps:without([votes], State),
-             [{next_event, cast, {command, Noop}} | Effects]};
+             PostElectionEffects ++ Effects};
         _ ->
             {candidate, State0#{votes => NewVotes}, []}
     end;
@@ -966,6 +1025,27 @@ handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {candidate, State#{log => Log}, Effs};
 handle_candidate(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
+handle_candidate(#info_rpc{term = Term} = Msg,
+                 #{current_term := CurTerm,
+                   cfg := #cfg{log_id = LogId}} = State0)
+  when CurTerm < Term ->
+    ?INFO("~ts: candidate info_rpc with higher term received ~b -> ~b",
+          [LogId, CurTerm, Term]),
+    State = update_term_and_voted_for(Term, undefined, State0),
+    {follower, State, [{next_event, Msg}]};
+handle_candidate(#info_rpc{} = InfoRpc, State) ->
+    InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
+    {candidate, State, [InfoReplyEffect]};
+handle_candidate(#info_reply{term = Term} = Msg,
+                 #{current_term := CurTerm,
+                   cfg := #cfg{log_id = LogId}} = State0)
+  when CurTerm < Term ->
+    ?INFO("~ts: candidate info_reply with higher term received ~b -> ~b",
+          [LogId, CurTerm, Term]),
+    State = update_term_and_voted_for(Term, undefined, State0),
+    {follower, State, [{next_event, Msg}]};
+handle_candidate(#info_reply{}, State) ->
+    {candidate, State, []};
 handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, [{reply, {error, {unsupported_call, Msg}}}]}.
@@ -1048,6 +1128,19 @@ handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {pre_vote, State#{log => Log}, Effs};
 handle_pre_vote(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
+handle_pre_vote(#info_rpc{term = Term} = Msg,
+                #{current_term := CurTerm} = State0)
+  when CurTerm < Term ->
+    {follower, State0#{votes => 0}, [{next_event, Msg}]};
+handle_pre_vote(#info_rpc{} = InfoRpc, State) ->
+    InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
+    {pre_vote, State, [InfoReplyEffect]};
+handle_pre_vote(#info_reply{term = Term} = Msg,
+                #{current_term := CurTerm} = State0)
+  when CurTerm < Term ->
+    {follower, State0#{votes => 0}, [{next_event, Msg}]};
+handle_pre_vote(#info_reply{}, State) ->
+    {pre_vote, State, []};
 handle_pre_vote(Msg, State) ->
     log_unhandled_msg(pre_vote, Msg, State),
     {pre_vote, State, [{reply, {error, {unsupported_call, Msg}}}]}.
@@ -1349,6 +1442,21 @@ handle_follower(force_member_change,
     {ok, _, _, State, Effects} =
         append_cluster_change(Cluster, undefined, no_reply, State0, []),
     call_for_election(pre_vote, State, [{reply, ok} | Effects]);
+handle_follower(#info_rpc{term = Term} = Msg,
+                #{current_term := CurTerm} = State)
+  when CurTerm < Term ->
+    State1 = update_term(Term, State),
+    {follower, State1, [{next_event, Msg}]};
+handle_follower(#info_rpc{} = InfoRpc, State) ->
+    InfoReplyEffect = info_reply_effect(State, InfoRpc),
+    {follower, State, [InfoReplyEffect]};
+handle_follower(#info_reply{term = Term} = Msg,
+                #{current_term := CurTerm} = State)
+  when CurTerm < Term ->
+    State1 = update_term(Term, State),
+    {follower, State1, [{next_event, Msg}]};
+handle_follower(#info_reply{}, State) ->
+    {follower, State, []};
 handle_follower(Msg, State) ->
     log_unhandled_msg(follower, Msg, State),
     {follower, State, [{reply, {error, {unsupported_call, Msg}}}]}.
@@ -1465,6 +1573,39 @@ handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
 handle_receive_snapshot({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
     {receive_snapshot, State#{log => Log}, Effs};
+handle_receive_snapshot(#info_rpc{term = Term} = Msg,
+                        #{current_term := CurTerm,
+                          cfg := #cfg{log_id = LogId},
+                          log := Log0} = State)
+  when CurTerm < Term ->
+    ?INFO("~ts: follower receiving snapshot saw info_rpc from ~w for term ~b "
+          "abdicates term: ~b!",
+          [LogId, Msg#info_rpc.from,
+           Term, CurTerm]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log = ra_log:set_snapshot_state(SnapState, Log0),
+    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+     [{next_event, Msg}]};
+handle_receive_snapshot(#info_rpc{} = InfoRpc, State) ->
+    InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
+    {receive_snapshot, State, [InfoReplyEffect]};
+handle_receive_snapshot(#info_reply{term = Term} = Msg,
+                        #{current_term := CurTerm,
+                          cfg := #cfg{log_id = LogId},
+                          log := Log0} = State)
+  when CurTerm < Term ->
+    ?INFO("~ts: follower receiving snapshot saw info_reply from ~w for term ~b "
+          "abdicates term: ~b!",
+          [LogId, Msg#info_reply.from,
+           Term, CurTerm]),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log = ra_log:set_snapshot_state(SnapState, Log0),
+    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+     [{next_event, Msg}]};
+handle_receive_snapshot(#info_reply{}, State) ->
+    {receive_snapshot, State, []};
 handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
     %% drop all other events??
@@ -1533,9 +1674,10 @@ process_new_leader_queries(#{pending_consistent_queries := Pending,
 
 -spec tick(ra_server_state()) -> effects().
 tick(#{cfg := #cfg{effective_machine_module = MacMod},
-       machine_state := MacState}) ->
+       machine_state := MacState} = State) ->
+    InfoRpcEffects = info_rpc_effects(State),
     Now = erlang:system_time(millisecond),
-    ra_machine:tick(MacMod, Now, MacState).
+    InfoRpcEffects ++ ra_machine:tick(MacMod, Now, MacState).
 
 -spec log_tick(ra_server_state()) -> ra_server_state().
 log_tick(#{cfg := #cfg{},
@@ -3313,6 +3455,178 @@ after_log_append_reply(Cmd, Idx, Term, Effects0) ->
         _ ->
             Effects0
     end.
+
+post_election_effects(
+  #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
+                machine = Mac,
+                system_config = SystemConfig}} = State) ->
+    Peers = peers(State),
+    PeerIds = maps:keys(Peers),
+
+    MachineUpgradeStrategy = maps:get(machine_upgrade_strategy, SystemConfig,
+                                      ?DEFAULT_MACHINE_UPGRADE_STRATEGY),
+    UpgradeMachineNow = (PeerIds =:= [] orelse
+                         MachineUpgradeStrategy =:= quorum),
+
+    case UpgradeMachineNow of
+        true ->
+            %% This node is alone in the cluster, we can send the `noop'
+            %% command with the newer machine version right away.
+            MacVer = ra_machine:version(Mac),
+            Noop = {noop, #{ts => erlang:system_time(millisecond)},
+                    MacVer},
+            NoopEffect = {next_event, cast, {command, Noop}},
+            [NoopEffect];
+        false ->
+            %% We continue to send the `noop' command immediately after
+            %% becoming a leader, but compared to Ra 2.15 and older, we don't
+            %% set the machine version to the latest: we keep the same
+            %% effective machine version for now.
+            %%
+            %% However, we query info keys from all peers, including their
+            %% supported machine version. The replies will be used to
+            %% determine the max supported machine version and when it is
+            %% greater than the effective one, another `noop' command will be
+            %% sent.
+            Noop = {noop, #{ts => erlang:system_time(millisecond)},
+                    EffectiveMacVer},
+            NoopEffect = {next_event, cast, {command, Noop}},
+            InfoRpcEffects = info_rpc_effects(State),
+            [NoopEffect | InfoRpcEffects]
+    end.
+
+info_rpc_effects(#{cfg := #cfg{id = Id}, cluster := Cluster} = State) ->
+    InfoRpcEffects = maps:fold(
+                       fun
+                           (PeerId, _, Acc) when PeerId =:= Id ->
+                               Acc;
+                           (PeerId, _, Acc) ->
+                               Acc ++ info_rpc_effects_for_peer(State, PeerId)
+                       end, [], Cluster),
+    InfoRpcEffects.
+
+info_rpc_effects_for_peer(
+  #{cluster := Cluster, current_term := CurTerm} = State, PeerId) ->
+    %% We determine if we need to ask (for the fist time or again) the info
+    %% from a peer.
+    SendRpc = case Cluster of
+                  #{PeerId := #{machine_version := PeerMacVer}} ->
+                      %% We have the machine version of the peer, but we want
+                      %% to ask again if that version is old, in the hope the
+                      %% peer restarted and was updated.
+                      MacVer = machine_version(State),
+                      PeerMacVer < MacVer;
+                  _ ->
+                      %% We don't have any details about the peer, we ask.
+                      true
+              end,
+    case SendRpc of
+        true ->
+            %% We ask for all info keys currently. If we ask for specific
+            %% keys, we will have to handle merging of already known info keys
+            %% and updates.
+            Id = id(State),
+            Command = #info_rpc{from = Id,
+                                term = CurTerm,
+                                keys = [machine_version]},
+            [{send_rpc, PeerId, Command}];
+        false ->
+            []
+    end.
+
+info_reply_effect(#{current_term := CurTerm} = State,
+                  #info_rpc{from = FromId, keys = Keys}) ->
+    Id = id(State),
+    Info = ra_server_info(State, Keys),
+    InfoReply = #info_reply{from = Id,
+                            term = CurTerm,
+                            keys = Keys,
+                            info = Info},
+    {cast, FromId, InfoReply}.
+
+empty_info_reply_effect(#{current_term := CurTerm} = State,
+                        #info_rpc{from = FromId, keys = Keys}) ->
+    Id = id(State),
+    InfoReply = #info_reply{from = Id,
+                            term = CurTerm,
+                            keys = Keys,
+                            info = #{}},
+    {cast, FromId, InfoReply}.
+
+ra_server_info(State) ->
+    MacVer = machine_version(State),
+    #{machine_version => MacVer}.
+
+ra_server_info(State, Keys) ->
+    %% Note that the node that asked may ask for keys we don't know.
+    Info0 = ra_server_info(State),
+    Info1 = maps:filter(
+              fun(Key, _Value) ->
+                      lists:member(Key, Keys)
+              end, Info0),
+    Info1.
+
+handle_info_reply(
+  #{cluster := Cluster} = State,
+  #info_reply{from = PeerId, keys = Keys, info = Info}) ->
+    PeerState0 = maps:get(PeerId, Cluster),
+    PeerState1 = lists:foldl(fun(Key, PS) ->
+                                     case Info of
+                                         #{Key := Value} ->
+                                             PS#{Key => Value};
+                                         _ ->
+                                             maps:remove(Key, PS)
+                                     end
+                             end, PeerState0, Keys),
+    Cluster1 = Cluster#{PeerId => PeerState1},
+    State1 = State#{cluster => Cluster1},
+    determine_if_machine_upgrade_allowed(State1).
+
+determine_if_machine_upgrade_allowed(
+  #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
+                log_id = LogId}} = State) ->
+    Effects = case get_max_supported_machine_version(State) of
+                  MaxSupMacVer
+                    when MaxSupMacVer > EffectiveMacVer ->
+                      ?DEBUG(
+                         "~ts: max supported machine version = ~b, "
+                         "upgrading from ~b",
+                         [LogId, MaxSupMacVer, EffectiveMacVer]),
+                      Noop = {noop,
+                              #{ts => erlang:system_time(millisecond)},
+                              MaxSupMacVer},
+                      [{next_event, cast, {command, Noop}}];
+                  _ ->
+                      []
+              end,
+    {State, Effects}.
+
+get_max_supported_machine_version(
+  #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
+                id = Id}, cluster := Cluster} = State) ->
+    MacVer = machine_version(State),
+    MaxSupMacVer = maps:fold(
+                     fun
+                         (PeerId, #{machine_version := PeerMacVer}, Max)
+                           when PeerId =/= Id
+                                andalso PeerMacVer < Max ->
+                             %% This peer has a lower machine version than the
+                             %% previous peers in the list so far. This becomes
+                             %% the highest machine version we can upgrade to.
+                             PeerMacVer;
+                         (PeerId, PeerState, _Max)
+                           when PeerId =/= Id andalso
+                                not is_map_key(machine_version, PeerState) ->
+                             %% We don't have the machine version of one of the
+                             %% peers yet. We need to stay on the effective
+                             %% machine version.
+                             EffectiveMacVer;
+                         (_PeerId, _PeerState, Max) ->
+                             %% Either this is this Ra server or this is a peer
+                             %% using a newer machine version.
+                             Max
+                     end, MacVer, Cluster),
+    MaxSupMacVer.
 
 %%% ===================
 %%% Internal unit tests

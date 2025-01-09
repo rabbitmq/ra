@@ -58,7 +58,8 @@
                     low_priority_commands_in_memory_size => non_neg_integer(),
                     server_recovery_strategy => undefined |
                                                registered |
-                                               {module(), atom(), list()}
+                                               {module(), atom(), list()},
+                    machine_upgrade_strategy => ra_server:machine_upgrade_strategy()
                    }.
 
 -export_type([
@@ -116,6 +117,8 @@ default_config() ->
                                                        ?FLUSH_COMMANDS_SIZE),
     LowPriorityInMemSize = application:get_env(ra, low_priority_commands_in_memory_size,
                                                ?FLUSH_COMMANDS_SIZE),
+    MachineUpgradeStrategy = application:get_env(ra, machine_upgrade_strategy,
+                                                 ?DEFAULT_MACHINE_UPGRADE_STRATEGY),
     #{name => default,
       data_dir => DataDir,
       wal_data_dir => WalDataDir,
@@ -142,6 +145,7 @@ default_config() ->
       receive_snapshot_timeout => ReceiveSnapshotTimeout,
       low_priority_commands_flush_size => LowPriorityCommandsFlushSize,
       low_priority_commands_in_memory_size => LowPriorityInMemSize,
+      machine_upgrade_strategy => MachineUpgradeStrategy,
       names => #{wal => ra_log_wal,
                  wal_sup => ra_log_wal_sup,
                  log_sup => ra_log_sup,

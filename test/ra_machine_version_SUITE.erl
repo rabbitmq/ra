@@ -29,11 +29,11 @@ all() ->
 all_tests() ->
     [
      server_with_higher_version_needs_quorum_to_be_elected,
+     cluster_waits_for_all_members_to_have_latest_version_to_upgrade,
      server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
      unversioned_machine_never_sees_machine_version_command,
      unversioned_can_change_to_versioned,
      server_upgrades_machine_state_on_noop_command,
-     lower_version_does_not_apply_until_upgraded,
      server_applies_with_new_module
      % snapshot_persists_machine_version
     ].
@@ -65,6 +65,14 @@ end_per_group(_Group, _Config) ->
 init_per_testcase(TestCase, Config) ->
     ok = logger:set_primary_config(level, all),
     ra_server_sup_sup:remove_all(?SYS),
+    case TestCase of
+        server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher ->
+            ok = application:set_env(ra, machine_upgrade_strategy, quorum),
+            _ = ra_system:stop_default(),
+            {ok, _} = ra_system:start_default();
+        _ ->
+            ok
+    end,
     ServerName1 = list_to_atom(atom_to_list(TestCase) ++ "1"),
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
@@ -83,9 +91,17 @@ init_per_testcase(TestCase, Config) ->
      {server_id3, {ServerName3, node()}}
      | Config].
 
-end_per_testcase(_TestCase, Config) ->
+end_per_testcase(TestCase, Config) ->
     catch ra:delete_cluster(?config(cluster, Config)),
     meck:unload(),
+    case TestCase of
+        server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher ->
+            ok = application:unset_env(ra, machine_upgrade_strategy),
+            _ = ra_system:stop_default(),
+            {ok, _} = ra_system:start_default();
+        _ ->
+            ok
+    end,
     ok.
 
 %%%===================================================================
@@ -133,6 +149,78 @@ server_with_higher_version_needs_quorum_to_be_elected(Config) ->
     {ok, _, Leader3} = ra:members(Leader2, 60000),
 
     ?assertNotEqual(LastFollower, Leader3),
+    ok.
+
+cluster_waits_for_all_members_to_have_latest_version_to_upgrade(Config) ->
+    ok = ra_env:configure_logger(logger),
+    LogFile = filename:join([?config(priv_dir, Config), "ra.log"]),
+    LogConfig = #{config => #{type => {file, LogFile}}, level => debug},
+    logger:add_handler(ra_handler, logger_std_h, LogConfig),
+    ok = logger:set_primary_config(level, all),
+    ct:pal("handler config ~p", [logger:get_handler_config()]),
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, _, S) -> {S, ok} end),
+    Cluster = ?config(cluster, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    [Follower1, Follower2] = lists:delete(Leader, Cluster),
+    timer:sleep(100),
+    %% leader and follower 1 are v2s
+    ra:stop_server(?SYS, Leader),
+    ra:stop_server(?SYS, Follower1),
+    ra:stop_server(?SYS, Follower2),
+    meck:expect(Mod, version, fun () ->
+                                      New = [whereis(element(1, Leader)),
+                                             whereis(element(1, Follower1))],
+                                      case lists:member(self(), New) of
+                                          true -> 2;
+                                          _  -> 1
+                                      end
+                              end),
+    ra:restart_server(?SYS, Leader),
+    ra:restart_server(?SYS, Follower1),
+    timer:sleep(100),
+    {ok, _, _Leader1} = ra:members(Leader, 2000),
+    ra:restart_server(?SYS, Follower2),
+    %% The cluster is still using v1 even though Leader and Follower2 knows
+    %% about v2.
+    lists:foreach(
+      fun(Member) ->
+              await(fun () ->
+                            case ra:member_overview(Member) of
+                                {ok, #{effective_machine_version := 1,
+                                       machine_version := 1}, _}
+                                  when Member == Follower2 ->
+                                    true;
+                                {ok, #{effective_machine_version := 1,
+                                       machine_version := 2}, _} ->
+                                    true;
+                                _ ->
+                                    false
+                            end
+                    end, 100)
+      end, Cluster),
+    %% Restart Follower2 with v2. The cluster should now upgrade to v2.
+    ra:stop_server(?SYS, Follower2),
+    meck:expect(Mod, version, fun () -> 2 end),
+    ra:restart_server(?SYS, Follower2),
+    lists:foreach(
+      fun(Member) ->
+              await(fun () ->
+                            case ra:member_overview(Member) of
+                                {ok, #{effective_machine_version := 2,
+                                       machine_version := 2}, _} ->
+                                    true;
+                                _ ->
+                                    false
+                            end
+                    end, 100)
+      end, Cluster),
+
     ok.
 
 server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher(Config) ->
@@ -334,89 +422,6 @@ server_applies_with_new_module(Config) ->
     ok = ra:restart_server(?SYS, ServerId),
     _ = ra:members(ServerId),
     {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
-    ok.
-
-lower_version_does_not_apply_until_upgraded(Config) ->
-    ok = logger:set_primary_config(level, all),
-    Mod = ?config(modname, Config),
-    meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun (_) -> init_state end),
-    meck:expect(Mod, version, fun () -> 1 end),
-    meck:expect(Mod, which_module, fun (_) -> Mod end),
-    meck:expect(Mod, apply, fun
-                                (_, {machine_version, _, _}, S) ->
-                                    %% retain state for machine versions
-                                    {S, ok};
-                                (_, C, _) ->
-                                    %% any other command replaces the state
-                                    {C, ok}
-                            end),
-    Cluster = ?config(cluster, Config),
-    ClusterName = ?config(cluster_name, Config),
-    %% 3 node cluster, upgrade the first two to the later version
-    %% leaving the follower on a lower version
-    Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
-    Followers = lists:delete(Leader, Cluster),
-    ct:pal("Leader1 ~w Followers ~w", [Leader, Followers]),
-    meck:expect(Mod, version, fun () ->
-                                      Self = self(),
-                                      case whereis(element(1, Leader)) of
-                                          Self -> 2;
-                                          _ -> 1
-                                      end
-                              end),
-    timer:sleep(200),
-    ra:stop_server(?SYS, Leader),
-    {ok, _, Leader2} = ra:members(Followers),
-    [LastFollower] = lists:delete(Leader2, Followers),
-    ct:pal("Leader2 ~w LastFollower ~w", [Leader2, LastFollower]),
-    ra:restart_server(?SYS, Leader),
-    meck:expect(Mod, version, fun () ->
-                                      New = [whereis(element(1, Leader)),
-                                             whereis(element(1, Leader2))],
-                                      case lists:member(self(), New) of
-                                          true -> 2;
-                                          _  -> 1
-                                      end
-                              end),
-    ra:stop_server(?SYS, Leader2),
-    timer:sleep(500),
-    {ok, _, Leader3} = ra:members(LastFollower),
-    ct:pal("Leader3 ~w LastFollower ~w", [Leader3, LastFollower]),
-    ra:restart_server(?SYS, Leader2),
-
-    case Leader3 of
-        LastFollower ->
-            %% if last follower happened to be elected
-            ct:pal("Leader3 is LastFollower", []),
-            ra:stop_server(?SYS, Leader3),
-            %% allow time for a different member to be elected
-            timer:sleep(1000),
-            ra:restart_server(?SYS, Leader3);
-        _ -> ok
-    end,
-
-
-    %% process a command that should be replicated to all servers but only
-    %% applied to new machine version servers
-    {ok, ok, _} = ra:process_command(Leader, dummy),
-    %% a little sleep to make it more likely that replication is complete to
-    %% all servers and not just a quorum
-    timer:sleep(100),
-
-    %% the updated servers should have the same state
-    {ok, {{Idx, _}, dummy}, _} = ra:local_query(Leader, fun ra_lib:id/1),
-    {ok, {{Idx, _}, dummy}, _} = ra:local_query(Leader2, fun ra_lib:id/1),
-    %% the last follower with the lower machine version should not have
-    %% applied the last command
-    {ok, {{LFIdx, _}, init_state}, _} = ra:local_query(LastFollower, fun ra_lib:id/1),
-
-    ra:stop_server(?SYS, LastFollower),
-    ra:restart_server(?SYS, LastFollower),
-
-    {ok, {{LFIdx, _}, init_state}, _} = ra:local_query(LastFollower, fun ra_lib:id/1),
-
-    ?assert(Idx > LFIdx),
     ok.
 
 snapshot_persists_machine_version(_Config) ->
