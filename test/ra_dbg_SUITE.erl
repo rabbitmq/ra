@@ -77,7 +77,8 @@ execute_state_machine() ->
   %% creating a new WAL file with ra_fifo
   [Srv] = Nodes = [{ra_dbg, node()}],
   ClusterId = ra_dbg,
-  Config = #{name => ClusterId},
+  Config = #{name => ClusterId,
+             machine_version => 0},
   Machine = {module, ra_fifo, Config},
   ra:start(),
   {ok, _, _} = ra:start_cluster(default, ClusterId, Machine, Nodes),

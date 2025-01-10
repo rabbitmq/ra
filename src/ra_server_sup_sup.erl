@@ -39,7 +39,9 @@
 -include("ra.hrl").
 
 -spec start_server(System :: atom(), ra_server:ra_server_config()) ->
-    supervisor:startchild_ret() | {error, not_new | system_not_started} | {badrpc, term()}.
+    supervisor:startchild_ret() |
+    {error, not_new | system_not_started | invalid_initial_machine_version} |
+    {badrpc, term()}.
 start_server(System, #{id := NodeId,
                        uid := UId} = Config)
   when is_atom(System) ->
@@ -61,9 +63,14 @@ start_server_rpc(System, UId, Config0) ->
             %% check that the server isn't already registered
             case ra_directory:name_of(System, UId) of
                 undefined ->
-                    case ra_system:lookup_name(System, server_sup) of
-                        {ok, Name} ->
-                            start_child(Name, Config);
+                    case validate_config(Config) of
+                        ok ->
+                            case ra_system:lookup_name(System, server_sup) of
+                                {ok, Name} ->
+                                    start_child(Name, Config);
+                                Err ->
+                                    Err
+                            end;
                         Err ->
                             Err
                     end;
@@ -76,6 +83,22 @@ start_server_rpc(System, UId, Config0) ->
                     end
             end
     end.
+
+validate_config(#{system_config := SysConf} = Config) ->
+    Strat = maps:get(machine_upgrade_strategy, SysConf, all),
+    case Config of
+        #{initial_machine_version := InitMacVer,
+          machine := {module, Mod, Args}} when Strat == all ->
+            MacVer = ra_machine:version({machine, Mod, Args}),
+            if MacVer < InitMacVer ->
+                   {error, invalid_initial_machine_version};
+               true ->
+                   ok
+            end;
+        _ ->
+            ok
+    end.
+
 
 restart_server_rpc(System, {RaName, _Node}, AddConfig)
   when is_atom(System) ->
