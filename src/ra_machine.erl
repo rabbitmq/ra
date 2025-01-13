@@ -66,7 +66,7 @@
 
 -include("ra.hrl").
 
--export([init/2,
+-export([init/3,
          apply/4,
          tick/3,
          snapshot_installed/5,
@@ -90,7 +90,9 @@
 -type user_command() :: term().
 %% the command type for a given machine implementation
 
--type machine_init_args() :: #{name := atom(), atom() => term()}.
+-type machine_init_args() :: #{name := atom(),
+                               machine_version => version(),
+                               atom() => term()}.
 %% the configuration passed to the init callback
 
 -type machine() :: {machine, module(), AddInitArgs :: #{term() => term()}}.
@@ -294,15 +296,11 @@
 %% @doc initialise a new machine
 %% This is only called on startup only if there isn't yet a snapshot to recover
 %% from. Once a snapshot has been taken this is never called again.
--spec init(machine(), atom()) -> state().
-init({machine, _, Args} = Machine, Name) ->
-    %% init always dispatches to the first version
-    %% as this means every state machine in a mixed version cluster will
-    %% have a common starting point.
-    %% TODO: it should be possible to pass a lowest supported state machine
-    %% version flag in the init args so that old machine version can be purged
-    Mod = which_module(Machine, 0),
-    Mod:init(Args#{name => Name}).
+-spec init(machine(), atom(), version()) -> state().
+init({machine, _, Args} = Machine, Name, Version) ->
+    Mod = which_module(Machine, Version),
+    Mod:init(Args#{name => Name,
+                   machine_version => Version}).
 
 -spec apply(module(), command_meta_data(), command(), State) ->
     {State, reply(), effects()} | {State, reply()}.

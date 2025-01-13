@@ -34,7 +34,9 @@ all_tests() ->
      unversioned_machine_never_sees_machine_version_command,
      unversioned_can_change_to_versioned,
      server_upgrades_machine_state_on_noop_command,
-     server_applies_with_new_module
+     server_applies_with_new_module,
+     initial_machine_version,
+     initial_machine_version_quorum
      % snapshot_persists_machine_version
     ].
 
@@ -65,8 +67,8 @@ end_per_group(_Group, _Config) ->
 init_per_testcase(TestCase, Config) ->
     ok = logger:set_primary_config(level, all),
     ra_server_sup_sup:remove_all(?SYS),
-    case TestCase of
-        server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher ->
+    case lists:member(TestCase, machine_upgrade_quorum_tests()) of
+        true ->
             ok = application:set_env(ra, machine_upgrade_strategy, quorum),
             _ = ra_system:stop_default(),
             {ok, _} = ra_system:start_default();
@@ -94,8 +96,8 @@ init_per_testcase(TestCase, Config) ->
 end_per_testcase(TestCase, Config) ->
     catch ra:delete_cluster(?config(cluster, Config)),
     meck:unload(),
-    case TestCase of
-        server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher ->
+    case lists:member(TestCase, machine_upgrade_quorum_tests()) of
+        true ->
             ok = application:unset_env(ra, machine_upgrade_strategy),
             _ = ra_system:stop_default(),
             {ok, _} = ra_system:start_default();
@@ -103,6 +105,10 @@ end_per_testcase(TestCase, Config) ->
             ok
     end,
     ok.
+
+machine_upgrade_quorum_tests() ->
+    [server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
+     initial_machine_version_quorum].
 
 %%%===================================================================
 %%% Test cases
@@ -427,6 +433,152 @@ server_applies_with_new_module(Config) ->
 snapshot_persists_machine_version(_Config) ->
     error({todo, ?FUNCTION_NAME}).
 
+initial_machine_version(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (#{machine_version := MacVer}) ->
+                                   ?assertEqual(3, MacVer),
+                                   init_state
+                           end),
+    meck:expect(Mod, version, fun () -> 5 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, dummy, S) ->
+                                    {S, ok};
+                                (_, {machine_version, 0, 3}, init_state) ->
+                                    exit(booo),
+                                    {state_v3, ok};
+                                (_, {machine_version, 3, 5}, init_state) ->
+                                    ct:pal("3-5"),
+                                    {state_v5, ok}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    Machine = {module, Mod, #{}},
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => [ServerId],
+                     machine => Machine,
+                     initial_machine_version => 3}
+               end || Id <- [ServerId]],
+    % debugger:start(),
+    % int:i(ra_machine),
+    % int:i(ra_server_sup_sup),
+    % int:break(ra_server_sup_sup, 66),
+    {ok, _, _} = ra:start_cluster(?SYS, Configs, 5000),
+    await(fun () ->
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  S == state_v5
+          end, 100),
+    ?assertMatch({ok, #{effective_machine_version := 5}, _},
+                 ra:member_overview(ServerId)),
+    {ok, _} = ra:delete_cluster([ServerId]),
+    await(fun () -> whereis(element(1, ServerId)) == undefined end, 100),
+    meck:expect(Mod, init, fun (#{machine_version := MacVer}) ->
+                                   ?assertEqual(5, MacVer),
+                                   init_state
+                           end),
+    meck:expect(Mod, apply, fun (Meta, meta, _S) ->
+                                    {state_v5, Meta};
+                                (_, {machine_version, 0, 3}, init_state) ->
+                                    exit(booo),
+                                    {state_v3, ok};
+                                (_, {machine_version, 5, 5}, init_state) ->
+                                    ct:pal("5-5"),
+                                    {state_v5, ok}
+                            end),
+    Configs2 = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => [ServerId],
+                     machine => Machine,
+                     initial_machine_version => 9}
+               end || Id <- [ServerId]],
+    {error, cluster_not_formed} = ra:start_cluster(?SYS, Configs2, 5000),
+    ok.
+
+initial_machine_version_quorum(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (#{machine_version := MacVer}) ->
+                                   ?assertEqual(3, MacVer),
+                                   init_state
+                           end),
+    meck:expect(Mod, version, fun () -> 5 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, dummy, S) ->
+                                    {S, ok};
+                                (_, {machine_version, 0, 3}, init_state) ->
+                                    exit(booo),
+                                    {state_v3, ok};
+                                (_, {machine_version, 3, 5}, init_state) ->
+                                    ct:pal("3-5"),
+                                    {state_v5, ok}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    Machine = {module, Mod, #{}},
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => [ServerId],
+                     machine => Machine,
+                     initial_machine_version => 3}
+               end || Id <- [ServerId]],
+    % debugger:start(),
+    % int:i(ra_machine),
+    % int:i(ra_server_sup_sup),
+    % int:break(ra_server_sup_sup, 66),
+    {ok, _, _} = ra:start_cluster(?SYS, Configs, 5000),
+    await(fun () ->
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  S == state_v5
+          end, 100),
+    ?assertMatch({ok, #{effective_machine_version := 5}, _},
+                 ra:member_overview(ServerId)),
+    {ok, _} = ra:delete_cluster([ServerId]),
+    await(fun () -> whereis(element(1, ServerId)) == undefined end, 100),
+    meck:expect(Mod, init, fun (#{machine_version := MacVer}) ->
+                                   ?assertEqual(5, MacVer),
+                                   init_state
+                           end),
+    meck:expect(Mod, apply, fun (Meta, meta, _S) ->
+                                    {state_v5, Meta};
+                                (_, {machine_version, 0, 3}, init_state) ->
+                                    exit(booo),
+                                    {state_v3, ok};
+                                (_, {machine_version, 5, 5}, init_state) ->
+                                    ct:pal("5-5"),
+                                    {state_v5, ok}
+                            end),
+    Configs2 = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => [ServerId],
+                     machine => Machine,
+                     initial_machine_version => 9}
+               end || Id <- [ServerId]],
+    {ok, _, _} = ra:start_cluster(?SYS, Configs2, 5000),
+    {ok, #{machine_version := 5}, _} = ra:process_command(ServerId, meta),
+    await(fun () ->
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  ct:pal("S ~p", [S]),
+                  S == state_v5
+          end, 100),
+    ct:pal("overview ~p", [ra:member_overview(ServerId)]),
+    ok.
 %% Utility
 
 validate_state_enters(States) ->

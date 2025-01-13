@@ -170,6 +170,7 @@
 -opaque state() :: #state{}.
 
 -type config() :: #{name := atom(),
+                    machine_version := ra_machine:version(),
                     dead_letter_handler => applied_mfa(),
                     become_leader_handler => applied_mfa(),
                     cancel_customer_handler => applied_mfa(),
@@ -902,7 +903,8 @@ size_test(NumMsg, NumCust) ->
     EnqGen = fun(N) -> {N, {enqueue, N}} end,
     CustGen = fun(N) -> {N, {checkout, {auto, 100},
                              spawn(fun() -> ok end)}} end,
-    S0 = run_log(1, NumMsg, EnqGen, init(#{name => size_test})),
+    S0 = run_log(1, NumMsg, EnqGen, init(#{name => size_test,
+                                           machine_version => 0})),
     S = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
     S2 = S#state{ra_indexes = ra_fifo_index:map(fun(_, _) -> undefined end,
                                                 S#state.ra_indexes)},
@@ -918,28 +920,12 @@ perf_test(NumMsg, NumCust) ->
                                 {N, {settle, N - NumMsg - NumCust - 1, Pid}}
                         end,
               S0 = run_log(1, NumMsg, EnqGen,
-                           init(#{name => size_test})),
+                           init(#{name => size_test,
+                                  machine_version => 0})),
               S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
               _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
               ok
      end).
-
-% profile(File) ->
-%     GzFile = atom_to_list(File) ++ ".gz",
-%     lg:trace([ra_fifo, maps, queue, ra_fifo_index], lg_file_tracer,
-%              GzFile, #{running => false, mode => profile}),
-%     NumMsg = 10000,
-%     NumCust = 500,
-%     EnqGen = fun(N) -> {N, {enqueue, self(), N, N}} end,
-%     Pid = spawn(fun() -> ok end),
-%     CustGen = fun(N) -> {N, {checkout, {auto, NumMsg},
-%     {term_to_binary(N), Pid}}} end,
-%     SetlGen = fun(N) -> {N, {settle, N - NumMsg - NumCust - 1, Pid}} end,
-%     S0 = run_log(1, NumMsg, EnqGen, element(1, init(#{name => size_test}))),
-%     S1 = run_log(NumMsg, NumMsg + NumCust, CustGen, S0),
-%     _ = run_log(NumMsg, NumMsg + NumCust + NumMsg, SetlGen, S1),
-%     lg:stop().
-
 
 run_log(Num, Num, _Gen, State) ->
     State;
@@ -995,6 +981,7 @@ dehydrate_state(#state{messages = Messages0,
 
 test_init(Name) ->
     init(#{name => Name,
+           machine_version => 0,
            shadow_copy_interval => 0,
            metrics_handler => {?MODULE, metrics_handler, []}}).
 
@@ -1243,6 +1230,7 @@ discarded_message_without_dead_letter_handler_is_removed_test() ->
 discarded_message_with_dead_letter_handler_emits_mod_call_effect_test() ->
     Cid = {<<"completed_customer_yields_demonitor_effect_test">>, self()},
     State00 = init(#{name => test,
+                     machine_version => 0,
                      dead_letter_handler =>
                      {somemod, somefun, [somearg]}}),
     {State0, _, [_, _]} = enq(1, 1, first, State00),
@@ -1430,6 +1418,7 @@ duplicate_delivery_test() ->
 state_enter_test() ->
 
     S0 = init(#{name => the_name,
+                machine_version => 0,
                 become_leader_handler => {m, f, [a]}}),
     [{mod_call, m, f, [a, the_name]}] = state_enter(leader, S0),
     ok.
@@ -1505,7 +1494,7 @@ run_log(InitState, Entries) ->
 aux_test() ->
     _ = ra_machine_ets:start_link(),
     Aux0 = init_aux(aux_test),
-    MacState = init(#{name => aux_test}),
+    MacState = init(#{name => aux_test, machine_version => 0}),
     Log = undefined,
     {no_reply, Aux, undefined} = handle_aux(leader, cast, active, Aux0,
                                             Log, MacState),

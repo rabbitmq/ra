@@ -215,6 +215,7 @@
                               log_init_args := ra_log:ra_log_init_args(),
                               initial_members := [ra_server_id()],
                               machine := machine_conf(),
+                              initial_machine_version => ra_machine:version(),
                               friendly_name => unicode:chardata(),
                               metrics_key => term(),
                               % TODO: review - only really used for
@@ -352,24 +353,26 @@ init(#{id := Id,
     VotedFor = ra_log_meta:fetch(MetaName, UId, voted_for, undefined),
 
     LatestMacVer = ra_machine:version(Machine),
+    InitialMachineVersion = min(LatestMacVer,
+                                maps:get(initial_machine_version, Config, 0)),
 
-    {_FirstIndex, Cluster0, MacVer, MacState,
+    {Cluster0, EffectiveMacVer, MacState,
      {SnapshotIdx, _} = SnapshotIndexTerm} =
         case ra_log:recover_snapshot(Log0) of
             undefined ->
-                InitialMachineState = ra_machine:init(Machine, Name),
-                {0, make_cluster(Id, InitialNodes),
-                 0, InitialMachineState, {0, 0}};
+                InitialMachineState = ra_machine:init(Machine, Name,
+                                                      InitialMachineVersion),
+                {make_cluster(Id, InitialNodes),
+                 InitialMachineVersion, InitialMachineState, {0, 0}};
             {#{index := Idx,
                term := Term,
                cluster := ClusterNodes,
                machine_version := MacVersion}, MacSt} ->
                 Clu = make_cluster(Id, ClusterNodes),
                 %% the snapshot is the last index before the first index
-                %% TODO: should this be Idx + 1?
-                {Idx + 1, Clu, MacVersion, MacSt, {Idx, Term}}
+                {Clu, MacVersion, MacSt, {Idx, Term}}
         end,
-    MacMod = ra_machine:which_module(Machine, MacVer),
+    MacMod = ra_machine:which_module(Machine, EffectiveMacVer),
 
     CommitIndex = max(LastApplied, SnapshotIdx),
     Cfg = #cfg{id = Id,
@@ -378,8 +381,8 @@ init(#{id := Id,
                metrics_key = MetricKey,
                machine = Machine,
                machine_version = LatestMacVer,
-               machine_versions = [{SnapshotIdx, MacVer}],
-               effective_machine_version = MacVer,
+               machine_versions = [{SnapshotIdx, EffectiveMacVer}],
+               effective_machine_version = EffectiveMacVer,
                effective_machine_module = MacMod,
                effective_handle_aux_fun = ra_machine:which_aux_fun(MacMod),
                max_pipeline_count = MaxPipelineCount,
@@ -389,7 +392,7 @@ init(#{id := Id,
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, MacVer),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, EffectiveMacVer),
 
     NonVoter = get_membership(Cluster0, Id, UId,
                              maps:get(membership, Config, voter)),
