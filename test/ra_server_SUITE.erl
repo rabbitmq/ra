@@ -533,7 +533,7 @@ follower_aer_5(_Config) ->
     %% next index
     Init = empty_state(3, n2),
     AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
-                               prev_log_term = 0, leader_commit = 10,
+                               prev_log_term = 0, leader_commit = 2,
                                entries = [
                                           entry(1, 1, one),
                                           entry(2, 1, two),
@@ -555,7 +555,6 @@ follower_aer_5(_Config) ->
     ?assertMatch(#append_entries_reply{next_index = 4,
                                        last_term = 1,
                                        last_index = 3}, M),
-    % ct:pal("Effects ~p~n State: ~p", [Effects, State1]),
     ok.
 
 

@@ -171,7 +171,7 @@ delete_server_rpc(System, RaName) ->
         #{data_dir := _SysDir,
           names := #{log_meta := Meta,
                      server_sup := SrvSup} = Names} ->
-            ?INFO("Deleting server ~w and its data directory.~n",
+            ?INFO("Deleting server ~w and its data directory.",
                   [RaName]),
             %% TODO: better handle and report errors
             %% UId could be `undefined' here
@@ -201,7 +201,7 @@ delete_data_directory(Directory) ->
                                      ok
                              catch
                                  _:_ = Err ->
-                                     ?WARN("ra: delete_server/1 failed to delete directory ~ts~n"
+                                     ?WARN("ra: delete_server/1 failed to delete directory ~ts. "
                                            "Error: ~p", [Directory, Err]),
                                      error
                              end
@@ -218,7 +218,7 @@ delete_data_directory(Directory) ->
 remove_all(System) when is_atom(System) ->
     #{names := #{server_sup := Sup}} = ra_system:fetch(System),
     _ = [begin
-             ?DEBUG("ra: terminating child ~w in system ~ts~n", [Pid, System]),
+             ?DEBUG("ra: terminating child ~w in system ~ts", [Pid, System]),
              supervisor:terminate_child(Sup, Pid)
          end
          || {_, Pid, _, _} <- supervisor:which_children(Sup)],

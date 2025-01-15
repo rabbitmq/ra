@@ -59,7 +59,7 @@ init([System]) ->
                 ok ->
                     ok
             catch C:E:S ->
-                      ?ERROR("~s: ~s encountered during server recovery ~p~n "
+                      ?ERROR("~s: ~s encountered during server recovery ~p. "
                              "stack ~p",
                              [?MODULE, C, E, S]),
                       ok
