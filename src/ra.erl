@@ -444,7 +444,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             end, ServerConfigs),
     case Started of
         [] ->
-            ?ERR("ra: failed to form a new cluster ~w.~n "
+            ?ERR("ra: failed to form a new cluster ~w. "
                   "No servers were successfully started.",
                   [ClusterName]),
             {error, cluster_not_formed};
@@ -460,15 +460,15 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             case members(TriggeredId,
                          length(ServerConfigs) * Timeout) of
                 {ok, _, Leader} ->
-                    ?INFO("ra: started cluster ~ts with ~b servers~n"
-                          "~b servers failed to start: ~w~nLeader: ~w",
+                    ?INFO("ra: started cluster ~ts with ~b servers. "
+                          "~b servers failed to start: ~w. Leader: ~w",
                           [ClusterName, length(ServerConfigs),
                            length(NotStarted), NotStartedIds,
                            Leader]),
                     % we have a functioning cluster
                     {ok, StartedIds, NotStartedIds};
                 Err ->
-                    ?WARN("ra: failed to form new cluster ~w.~n "
+                    ?WARN("ra: failed to form new cluster ~w. "
                           "Error: ~w", [ClusterName, Err]),
                     _ = [force_delete_server(System, N) || N <- StartedIds],
                     % we do not have a functioning cluster

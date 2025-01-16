@@ -6,6 +6,7 @@
 %% @hidden
 -module(ra_server).
 
+-include_lib("stdlib/include/assert.hrl").
 -include("ra.hrl").
 -include("ra_server.hrl").
 
@@ -1160,6 +1161,7 @@ handle_follower(#append_entries_rpc{term = Term,
                 State00 = #{cfg := #cfg{log_id = LogId,
                                         id = Id} = Cfg,
                             log := Log00,
+                            commit_index := CommitIndex,
                             current_term := CurTerm})
   when Term >= CurTerm ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
@@ -1175,13 +1177,14 @@ handle_follower(#append_entries_rpc{term = Term,
             case Entries of
                 [] ->
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
-                    LastIdx = ra_log:last_index_term(Log1),
+                    {LastIdx, _} = ra_log:last_index_term(Log1),
                     Log2 = case Entries0 of
-                               [] when element(1, LastIdx) > PLIdx ->
+                               [] when LastIdx > PLIdx ->
                                    %% if no entries were sent we need to reset
                                    %% last index to match the leader
-                                   ?DEBUG("~ts: resetting last index to ~b",
-                                         [LogId, PLIdx]),
+                                   ?DEBUG("~ts: resetting last index to ~b from ~b in term ~b",
+                                         [LogId, PLIdx, LastIdx, Term]),
+                                   ?assertNot(PLIdx =< CommitIndex),
                                    {ok, L} = ra_log:set_last_index(PLIdx, Log1),
                                    L;
                                _ ->
@@ -1218,7 +1221,6 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% alternative where the WAL writes the last index, term
                             %% it wrote for each UID into an ETS table and query
                             %% this.
-                            % Log = ra_log:reset_to_last_known_written(Log1),
                             Log = Log1,
                             {await_condition,
                              State1#{log => Log,
@@ -1249,7 +1251,7 @@ handle_follower(#append_entries_rpc{term = Term,
             %% NB: this is the commit index before update
             LastApplied = maps:get(last_applied, State00),
             ?INFO("~ts: term mismatch - follower had entry at ~b with term ~b "
-                  "but not with term ~b~n"
+                  "but not with term ~b. "
                   "Asking leader ~w to resend from ~b",
                   [LogId, PLIdx, OtherTerm, PLTerm, LeaderId, LastApplied + 1]),
             % This situation arises when a minority leader replicates entries
@@ -1346,7 +1348,7 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
     LastIdxTerm = last_idx_term(State1),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true ->
-            ?INFO("~ts: granting vote for ~w with last indexterm ~w"
+            ?INFO("~ts: granting vote for ~w with last {index, term} ~w"
                   " for term ~b previous term was ~b",
                   [LogId, Cand, {LLIdx, LLTerm}, Term, CurTerm]),
             Reply = #request_vote_result{term = Term, vote_granted = true},
@@ -1354,8 +1356,8 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             {follower, State, [{reply, Reply}]};
         false ->
             ?INFO("~ts: declining vote for ~w for term ~b,"
-                  " candidate last log index term was: ~w~n"
-                  " last log entry idxterm seen was: ~w",
+                  " candidate last log {index, term} was: ~w "
+                  " last log entry {index, term} is: ~w",
                   [LogId, Cand, Term, {LLIdx, LLTerm}, {LastIdxTerm}]),
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, update_term(Term, State1), [{reply, Reply}]}
@@ -2399,7 +2401,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    TheirMacVer =< OurMacVer) ->
             ?DEBUG("~ts: granting pre-vote for ~w"
                    " machine version (their:ours:effective) ~b:~b:~b"
-                   " with last indexterm ~w"
+                   " with last {index, term} ~w"
                    " for term ~b previous term ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
@@ -2413,8 +2415,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                start_election_timeout]};
         false ->
             ?DEBUG("~ts: declining pre-vote for ~w for term ~b,"
-                   " candidate last log index term was: ~w~n"
-                   "Last log entry idxterm seen was: ~w",
+                   " candidate last log {index, term} was: ~w "
+                   "last log entry {index, term} seen is: ~w",
                    [log_id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
             case FsmState of
                 follower ->

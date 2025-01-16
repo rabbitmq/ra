@@ -1109,7 +1109,7 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
     catch
         _:_ = Err ->
             ?WARN("ra_log:delete_everything/1 failed to delete "
-                  "directory ~ts~n Error: ~p", [Dir, Err])
+                  "directory ~ts. Error: ~p", [Dir, Err])
     end,
     ok.
 
