@@ -14,6 +14,7 @@
          fold/6,
          is_modified/1,
          read_sparse/4,
+         read_sparse_no_checks/4,
          term_query/2,
          close/1,
          range/1,
@@ -299,7 +300,8 @@ is_modified(#state{cfg = #cfg{fd = Fd},
             false;
         false ->
             %% get info and compare to data_offset
-            {ok, #file_info{size = Size}} =  prim_file:read_handle_info(Fd),
+            {ok, #file_info{size = Size}} =
+                prim_file:read_handle_info(Fd, [posix]),
             Size > DataOffset
     end.
 
@@ -308,16 +310,24 @@ is_modified(#state{cfg = #cfg{fd = Fd},
                   Acc) ->
     {ok, NumRead :: non_neg_integer(), Acc} | {error, modified}
       when Acc :: term().
-read_sparse(#state{index = Index,
-                   cfg = #cfg{fd = Fd}} = State,
-            Indexes, AccFun, Acc) ->
+read_sparse(#state{} = State, Indexes, AccFun, Acc) ->
     case is_modified(State) of
         true ->
             {error, modified};
         false ->
-            Cache0 = prepare_cache(Fd, Indexes, Index),
-            read_sparse0(Fd, Indexes, Index, Cache0, Acc, AccFun, 0)
+            read_sparse_no_checks(State, Indexes, AccFun, Acc)
     end.
+
+-spec read_sparse_no_checks(state(), [ra_index()],
+                            fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
+                                Acc) ->
+    {ok, NumRead :: non_neg_integer(), Acc}
+      when Acc :: term().
+read_sparse_no_checks(#state{index = Index,
+                             cfg = #cfg{fd = Fd}},
+                      Indexes, AccFun, Acc) ->
+    Cache0 = prepare_cache(Fd, Indexes, Index),
+    read_sparse0(Fd, Indexes, Index, Cache0, Acc, AccFun, 0).
 
 read_sparse0(_Fd, [], _Index, _Cache, Acc, _AccFun, Num) ->
     {ok, Num, Acc};
