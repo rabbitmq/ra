@@ -128,19 +128,16 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 single_server_processes_command(Config) ->
-    % ok = logger:set_primary_config(level, all),
     Name = ?config(test_name, Config),
-    N1 = nth_server_name(Config, 1),
+    {_RaName, _} = N1 = nth_server_name(Config, 1),
     ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
     monitor(process, element(1, N1)),
     % index is 2 as leaders commit a no-op entry on becoming leaders
-    % debugger:start(),
-    % int:i(ra_server_proc),
-    % int:break(ra_server_proc, 440),
     {ok, 5, _} = ra:process_command(N1, 5, 2000),
     {ok, 10, _} = ra:process_command(N1, 5, 2000),
-    terminate_cluster([N1]).
+    terminate_cluster([N1]),
+    ok.
 
 pipeline_commands(Config) ->
     Name = ?config(test_name, Config),

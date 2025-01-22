@@ -72,6 +72,19 @@
 -define(HANDLE_EFFECTS(Effects, EvtType, State0),
         handle_effects(?FUNCTION_NAME, Effects, EvtType, State0)).
 
+-define(ASYNC_DIST(Node, Send),
+        case Node == node() of
+            true ->
+                Send,
+                ok;
+            false ->
+                %% use async_dist for remote sends
+                process_flag(async_dist, true),
+                Send,
+                process_flag(async_dist, false),
+                ok
+        end).
+
 -type query_fun() :: ra:query_fun().
 -type query_options() :: #{condition => ra:query_condition()}.
 
@@ -1349,8 +1362,8 @@ handle_effect(_, {next_event, _, _} = Next, _, State, Actions) ->
     {State, [Next | Actions]};
 handle_effect(leader, {send_msg, To, Msg}, _, State, Actions) ->
     %% default is to send without any wrapping
-    %% TODO: handle send failure? how?
-    _ = send(To, Msg, State#state.conf),
+    ToNode = get_node(To),
+    ?ASYNC_DIST(ToNode, _ = send(To, Msg, State#state.conf)),
     {State, Actions};
 handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
               _, State, Actions) ->
@@ -1359,13 +1372,13 @@ handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
         true ->
             case can_execute_locally(RaftState, ToNode, State) of
                 true ->
-                    send_msg(Eff, State);
+                    ?ASYNC_DIST(ToNode, send_msg(Eff, State));
                 false ->
                     ok
             end;
         false when RaftState == leader ->
             %% the effect got here so we can execute
-            send_msg(Eff, State);
+            ?ASYNC_DIST(ToNode, send_msg(Eff, State));
         false ->
             ok
     end,
@@ -1978,11 +1991,7 @@ handle_tick_metrics(State) ->
 
 can_execute_locally(RaftState, TargetNode,
                     #state{server_state = ServerState} = State) ->
-    Membership = ra_server:get_membership(ServerState),
     case RaftState of
-        _ when RaftState =/= leader andalso
-               Membership == voter ->
-            TargetNode == node();
         leader when TargetNode =/= node() ->
             %% We need to evaluate whether to send the message.
             %% Only send if there isn't a local node for the target pid.
@@ -1990,8 +1999,9 @@ can_execute_locally(RaftState, TargetNode,
             not lists:any(fun ({_, N}) -> N == TargetNode end, Members);
         leader ->
             true;
-        _ ->
-            false
+        _ when RaftState =/= leader ->
+            TargetNode == node() andalso
+            voter == ra_server:get_membership(ServerState)
     end.
 
 can_execute_on_member(_RaftState, Member,
