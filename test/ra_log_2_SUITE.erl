@@ -489,11 +489,13 @@ read_plan_modified(Config) ->
     Plan = ra_log:partial_read([1], Log2, fun (_, _, Cmd) -> Cmd end),
     {#{1 := _}, Flru} = ra_log_read_plan:execute(Plan, undefined),
 
-    Log = deliver_all_log_events(write_and_roll(2, 3, 1, Log2, 50), 100),
-    Plan2 = ra_log:partial_read([1,2], Log, fun (_, _, Cmd) -> Cmd end),
+    Log3 = deliver_all_log_events(write_and_roll(2, 3, 1, Log2, 50), 100),
+    Plan2 = ra_log:partial_read([1,2], Log3, fun (_, _, Cmd) -> Cmd end),
     %% assert we can read the newly appended item with the cached
     %% segment
-    {#{1 := _, 2 := _}, _} = ra_log_read_plan:execute(Plan2, Flru),
+    {#{1 := _, 2 := _}, Flru2} = ra_log_read_plan:execute(Plan2, Flru),
+    Log = deliver_all_log_events(write_and_roll(3, 4, 1, Log3, 50), 100),
+    {#{1 := _, 2 := _}, _} = ra_log_read_plan:execute(Plan2, Flru2),
     ra_log:close(Log),
     ok.
 

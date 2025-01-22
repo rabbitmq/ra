@@ -220,6 +220,8 @@ full_file(Config) ->
     {ok, Seg} = ra_log_segment:append(Seg1, 2, 2, Data),
     {error, full} = ra_log_segment:append(Seg, 3, 2, Data),
     ?assertNot(ra_log_segment:is_modified(Seg)),
+    {ok, R} = ra_log_segment:open(Fn, #{mode => read}),
+    ?assertNot(ra_log_segment:is_modified(R)),
     {1,2} = ra_log_segment:range(Seg),
     ok = ra_log_segment:close(Seg),
     ok.

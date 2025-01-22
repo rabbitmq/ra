@@ -235,9 +235,18 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
                   {ok, _, Acc} ->
                       {Acc, Open2};
                   {error, modified} ->
+                      %% if the segment has been modified since it was opened
+                      %% it is not safe to attempt the read as the read plan
+                      %% may refer to indexes that weren't in the segment at
+                      %% that time. In this case we evict all segments and
+                      %% re-open what we need.
                       {_, Open3} = ra_flru:evict(BaseName, Open2),
                       {SegNew, Open} = get_segment_ext(Dir, Open3, BaseName, Options),
-                      {ok, _, Acc} = ra_log_segment:read_sparse(SegNew, Idxs, Fun, Acc1),
+                      %% at this point we can read without checking for modification
+                      %% as the read plan would have been created before we
+                      %% read the index from the segment
+                      {ok, _, Acc} = ra_log_segment:read_sparse_no_checks(
+                                       SegNew, Idxs, Fun, Acc1),
                       {Acc, Open}
               end
       end, {Acc0, Open0}, Plan).
