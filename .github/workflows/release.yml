@@ -12,7 +12,7 @@ jobs:
       with:
         path: ra
     - name: CONFIGURE OTP & ELIXIR
-      uses: erlef/setup-beam@v1.16
+      uses: erlef/setup-beam@v1
       with:
         otp-version: 26
     - name: ASSERT VERSIONS
