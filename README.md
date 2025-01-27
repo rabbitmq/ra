@@ -36,8 +36,8 @@ distributed system verification framework.
 
 Ra supports the following Erlang/OTP versions:
 
+ * `27.x`
  * `26.x`
- * `25.x`
 
 Modern Erlang releases provide [distribution traffic fragmentation](https://www.erlang.org/blog/otp-22-highlights/#fragmented-distribution-messages)
 which algorithms such as Raft significantly benefit from.
