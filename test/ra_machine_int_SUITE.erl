@@ -610,19 +610,31 @@ log_effect(Config) ->
                                      {log, lists:reverse(Idxs),
                                       fun (Cmds) ->
                                               Datas = [D || {_, D} <- Cmds],
-                                              [{send_msg, Self,
-                                                {datas, Datas}}]
+                                              %% using a plain send here to
+                                              %% ensure this effect is only
+                                              %% evaluated on leader
+                                              Self ! {datas, Datas},
+                                              []
                                       end}}
                             end),
     ClusterName = ?config(cluster_name, Config),
-    ServerId = ?config(server_id, Config),
-    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
-    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi1">>}),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}},
+                       [ServerId1, ServerId2, ServerId3]),
+    {ok, _, ServerId} = ra:process_command(ServerId1, {cmd, <<"hi1">>}),
     {ok, _, ServerId} = ra:process_command(ServerId, {cmd, <<"hi2">>}),
-    {ok, _, ServerId} = ra:process_command(ServerId, get_data),
+    {ok, ok, ServerId} = ra:process_command(ServerId, get_data),
     receive
         {datas, [<<"hi1">>, <<"hi2">>]} ->
-            ok
+            receive
+                {datas, [<<"hi1">>, <<"hi2">>]} ->
+                    ct:fail("unexpected second log effect execution"),
+                    ok
+            after 100 ->
+                      ok
+            end
     after 5000 ->
               flush(),
               exit(data_timeout)

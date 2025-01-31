@@ -1383,16 +1383,6 @@ handle_effect(RaftState, {send_msg, To, _Msg, Options} = Eff,
             ok
     end,
     {State, Actions};
-handle_effect(RaftState, {LogOrLogExt, Idxs, Fun, {local, Node}}, EvtType,
-              State, Actions)
-  when LogOrLogExt == log orelse LogOrLogExt == log_ext ->
-    case can_execute_locally(RaftState, Node, State) of
-        true ->
-            handle_effect(RaftState, {LogOrLogExt, Idxs, Fun}, EvtType,
-                          State, Actions);
-        false ->
-            {State, Actions}
-    end;
 handle_effect(leader, {append, Cmd}, _EvtType, State, Actions) ->
     Evt = {command, normal, {'$usr', Cmd, noreply}},
     {State, [{next_event, cast, Evt} | Actions]};
@@ -1405,33 +1395,29 @@ handle_effect(_RaftState, {try_append, Cmd, ReplyMode}, _EvtType, State, Actions
     %% limited to the leader
     Evt = {command, normal, {'$usr', Cmd, ReplyMode}},
     {State, [{next_event, cast, Evt} | Actions]};
-handle_effect(RaftState, {log, Idxs, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions)
-  when is_list(Idxs) ->
+handle_effect(RaftState, {LogOrLogExt, Idxs, Fun, {local, Node}}, EvtType,
+              State0, Actions)
+  when LogOrLogExt == log orelse
+       LogOrLogExt == log_ext ->
+    case can_execute_locally(RaftState, Node, State0) of
+        true ->
+            {Effects, State} = handle_log_effect(LogOrLogExt, Idxs, Fun,
+                                                 State0),
+            handle_effects(RaftState, Effects, EvtType,
+                           State, Actions);
+        false ->
+            {State0, Actions}
+    end;
+handle_effect(leader, {LogOrLogExt, Idxs, Fun}, EvtType, State0, Actions)
+  when is_list(Idxs) andalso
+       (LogOrLogExt == log orelse
+        LogOrLogExt == log_ext) ->
     %% Useful to implement a batch send of data obtained from the log.
     %% 1) Retrieve all data from the list of indexes
-    {ok, Cmds, SS} = ra_server:log_read(Idxs, SS0),
-    %% 2) Apply the fun to the list of commands as a whole and deal with any effects
-    case Fun(Cmds) of
-        [] ->
-            {State#state{server_state = SS}, Actions};
-        Effects ->
-            %% recurse with the new effects
-            handle_effects(RaftState, Effects, EvtType,
-                           State#state{server_state = SS}, Actions)
-    end;
-handle_effect(RaftState, {log_ext, Idxs, Fun}, EvtType,
-              State = #state{server_state = SS0}, Actions)
-  when is_list(Idxs) ->
-    ReadState = ra_server:log_partial_read(Idxs, SS0),
-    case Fun(ReadState) of
-        [] ->
-            {State, Actions};
-        Effects ->
-            %% recurse with the new effects
-            handle_effects(RaftState, Effects, EvtType,
-                           State, Actions)
-    end;
+    {Effects, State} = handle_log_effect(LogOrLogExt, Idxs, Fun,
+                                         State0),
+    handle_effects(leader, Effects, EvtType,
+                   State, Actions);
 handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {_, ServerState, Effects} = ra_server:handle_aux(RaftState, cast, Cmd,
                                                      State0#state.server_state),
@@ -2122,3 +2108,18 @@ schedule_command_flush(Delayed) ->
         _ ->
             ok = gen_statem:cast(self(), flush_commands)
     end.
+
+
+handle_log_effect(log, Idxs, Fun,
+                  #state{server_state = SS0} = State)
+  when is_list(Idxs) ->
+    %% Useful to implement a batch send of data obtained from the log.
+    %% 1) Retrieve all data from the list of indexes
+    {ok, Cmds, SS} = ra_server:log_read(Idxs, SS0),
+    %% 2) Apply the fun to the list of commands as a whole and deal with any effects
+    {Fun(Cmds), State#state{server_state = SS}};
+handle_log_effect(log_ext, Idxs, Fun,
+                  #state{server_state = SS0} = State)
+  when is_list(Idxs) ->
+    ReadState = ra_server:log_partial_read(Idxs, SS0),
+    {Fun(ReadState), State}.
