@@ -610,6 +610,7 @@ log_effect(Config) ->
                                     {[], ok,
                                      {log, lists:reverse(Idxs),
                                       fun (Cmds) ->
+                                              ct:pal("LOG!!"),
                                               Datas = [D || {_, D} <- Cmds],
                                               %% using a plain send here to
                                               %% ensure this effect is only

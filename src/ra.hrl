@@ -94,6 +94,8 @@
 %% A member of the cluster from which replies should be sent.
 -type ra_reply_from() :: leader | local | {member, ra_server_id()}.
 
+-type mfargs() :: {M :: module(), F :: atom(), A :: [term()]}.
+
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the
