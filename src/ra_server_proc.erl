@@ -146,7 +146,8 @@
                receive_snapshot_timeout = ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT :: non_neg_integer(),
                install_snap_rpc_timeout :: non_neg_integer(),
                aten_poll_interval = 1000 :: non_neg_integer(),
-               counter :: undefined | counters:counters_ref()
+               counter :: undefined | counters:counters_ref(),
+               worker_pid :: pid()
               }).
 
 -record(state, {conf :: #conf{},
@@ -301,18 +302,14 @@ multi_statem_call([ServerId | ServerIds], Msg, Errs, Timeout) ->
 %%%===================================================================
 
 init(#{reply_to := ReplyTo} = Config) ->
-    %% we have a reply to key, perform init async
     {ok, post_init, maps:remove(reply_to, Config),
-     [{next_event, internal, {go, ReplyTo}}]};
-init(Config) ->
-    %% no reply_to key, must have been started by an older node run synchronous
-    %% init
-    State = do_init(Config),
-    {ok, recover, State, [{next_event, cast, go}]}.
+     [{next_event, internal, {go, ReplyTo}}]}.
 
 do_init(#{id := Id,
           uid := UId,
-          cluster_name := ClusterName} = Config0) ->
+          parent := ParentPid,
+          cluster_name := ClusterName} = Config0)
+  when is_pid(ParentPid) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
@@ -362,6 +359,16 @@ do_init(#{id := Id,
                                       ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     AtenPollInt = application:get_env(aten, poll_interval, 1000),
     LogId = ra_server:log_id(ServerState),
+    %% TODO: full error handling
+    WorkerPid = case ra_server_sup:start_ra_worker(ParentPid, Config) of
+                    {ok, P} -> P;
+                    {error, {already_started, P}} ->
+                        P
+                end,
+    ra_env:configure_logger(logger),
+    %% monitor worker process, it is easier to handle than linking as we're
+    %% already processing all downs
+    _ = monitor(process, WorkerPid),
     State = #state{conf = #conf{log_id = LogId,
                                 cluster_name = ClusterName,
                                 name = Key,
@@ -373,7 +380,8 @@ do_init(#{id := Id,
                                 install_snap_rpc_timeout = InstallSnapRpcTimeout,
                                 receive_snapshot_timeout = ReceiveSnapshotTimeout,
                                 aten_poll_interval = AtenPollInt,
-                                counter = Counter},
+                                counter = Counter,
+                                worker_pid = WorkerPid},
                    low_priority_commands = ra_ets_queue:new(),
                    server_state = ServerState},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
@@ -1548,7 +1556,7 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, 
             SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
             {State0#state{server_state = SS}, Actions}
     end;
-handle_effect(_, {delete_snapshot, Dir,  SnapshotRef}, _, State0, Actions) ->
+handle_effect(_, {delete_snapshot, Dir, SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
     _ = spawn(fun() ->
                       ra_snapshot:delete(Dir, SnapshotRef)
@@ -1638,6 +1646,11 @@ handle_effect(follower, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     {State, [{state_timeout, infinity, undefined} | Actions]};
 handle_effect(_, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     %% non follower states don't need to reset state timeout after an effect
+    {State0, Actions};
+handle_effect(_, {bg_work, FunOrMfa, ErrFun}, _,
+              #state{conf = #conf{worker_pid = WorkerPid}} = State0, Actions) ->
+    %% non follower states don't need to reset state timeout after an effect
+    ra_worker:queue_work(WorkerPid, FunOrMfa, ErrFun),
     {State0, Actions};
 handle_effect(_, _, _, State0, Actions) ->
     {State0, Actions}.
@@ -2048,6 +2061,11 @@ handle_node_status_change(Node, Status, InfoList, RaftState,
                                                    monitors = Monitors}),
     {keep_state, State, Actions}.
 
+handle_process_down(Pid, Info, _RaftState,
+                    #state{conf = #conf{worker_pid = Pid}} = State) ->
+    ?WARN("~ts: worker exited with ~w",
+          [log_id(State), Info]),
+    {stop, Info, State};
 handle_process_down(Pid, Info, RaftState,
                     #state{monitors = Monitors0,
                            pending_notifys = Nots,
