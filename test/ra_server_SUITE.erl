@@ -156,7 +156,7 @@ setup_log() ->
                 end),
     meck:expect(ra_snapshot, accept_chunk,
                 fun(_Data, _OutOf, _Flag, SS) ->
-                        {ok, SS}
+                        {ok, SS, []}
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
