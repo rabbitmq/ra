@@ -24,6 +24,7 @@
 
          % profile/0,
          % stop_profile/0
+         start/2,
 
          prepare/0,
          run/3,
