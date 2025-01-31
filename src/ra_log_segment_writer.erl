@@ -179,7 +179,8 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
     ok = prim_file:delete(filename:join(Dir, WalFile)),
     T2 = erlang:monotonic_time(),
     Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-    ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file ~s in ~bms",
+    ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file "
+           "~s in ~bms",
           [System, length(RangesList), WalFile, Diff]),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
@@ -315,8 +316,6 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
                              segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
     StartIdx = start_index(ServerUId, StartIdx0),
-    ?DEBUG("~s ~s ~b:~b to ~b",
-          [?FUNCTION_NAME, ServerUId, StartIdx0, StartIdx, EndIdx]),
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
@@ -325,7 +324,7 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
             %% clean up the tables for this process
             [];
         Segment0 ->
-            case append_to_segment(ServerUId, Tid, StartIdx0, EndIdx,
+            case append_to_segment(ServerUId, Tid, StartIdx, EndIdx,
                                    Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
