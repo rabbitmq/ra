@@ -147,7 +147,7 @@ handle_cast({exec_delete, UId, Spec},
     %% TODO: delete from ra_log_open_mem_tables if {delete, tid()}
     try timer:tc(fun () -> ra_mt:delete(Spec) end) of
         {Time, Num} ->
-            ?DEBUG("ra_log_ets: ra_mt:delete/1 took ~bms to delete ~w ~b entries",
+            ?DEBUG_IF(Time > 25_000, "ra_log_ets: ra_mt:delete/1 took ~bms to delete ~w ~b entries",
                    [Time div 1000, Spec, Num]),
             ok
     catch
@@ -166,7 +166,7 @@ handle_cast({delete_mem_tables, UId},
     [begin
          try timer:tc(fun () -> ets_delete(Tid) end) of
              {Time, true} ->
-                 ?DEBUG("ra_log_ets: ets:delete/1 took ~bms to delete ~w",
+                 ?DEBUG_IF(Time > 25_000, "ra_log_ets: ets:delete/1 took ~bms to delete ~w",
                         [Time div 1000, Tid]),
                  ok
          catch
