@@ -176,7 +176,8 @@
     {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
-    start_election_timeout.
+    start_election_timeout |
+    {bg_work, fun(() -> ok) | mfargs()}.
 
 -type effects() :: [effect()].
 
@@ -231,7 +232,8 @@
                               counter => counters:counters_ref(),
                               membership => ra_membership(),
                               system_config => ra_system:config(),
-                              has_changed => boolean()
+                              has_changed => boolean(),
+                              parent => term() %% the supervisor
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -1533,8 +1535,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
            [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
-                                               SnapState0),
+    {ok, SnapState, Effs0} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
+                                                      SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
@@ -1588,11 +1590,12 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |
-                                                     Effs ++ SnapInstalledEffs]};
+                                                     Effs0 ++ Effs ++
+                                                     SnapInstalledEffs]};
         next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
             State = update_term(Term, State0#{log => Log}),
-            {receive_snapshot, State, [{reply, Reply}]}
+            {receive_snapshot, State, [{reply, Reply} | Effs0]}
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
@@ -2277,20 +2280,20 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
               "~ts: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
-handle_down(RaftState, snapshot_writer, Pid, Info,
-            #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
-  when is_pid(Pid) ->
-    case Info of
-        noproc -> ok;
-        normal -> ok;
-        _ ->
-            ?WARN("~ts: Snapshot write process ~w exited with ~w",
-                  [LogId, Pid, Info])
-    end,
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {RaftState, State#{log => Log}, []};
+% handle_down(RaftState, snapshot_writer, Pid, Info,
+%             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
+%   when is_pid(Pid) ->
+%     case Info of
+%         noproc -> ok;
+%         normal -> ok;
+%         _ ->
+%             ?WARN("~ts: Snapshot write process ~w exited with ~w",
+%                   [LogId, Pid, Info])
+%     end,
+%     SnapState0 = ra_log:snapshot_state(Log0),
+%     SnapState = ra_snapshot:handle_error(Pid, Info, SnapState0),
+%     Log = ra_log:set_snapshot_state(SnapState, Log0),
+%     {RaftState, State#{log => Log}, []};
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};

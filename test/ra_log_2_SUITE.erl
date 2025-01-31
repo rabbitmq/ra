@@ -65,8 +65,6 @@ all_tests() ->
      recover_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
-     %% TODO mt: do or deprecate in current minor
-     % external_reader,
      write_config
     ].
 
@@ -399,8 +397,9 @@ sparse_read_out_of_range_2(Config) ->
                                           write_and_roll(1, 10, 2, Log0)), 50),
     SnapIdx = 10,
     %% do snapshot in
-    {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
-                                             <<"snap@10">>, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
+                                                <<"snap@10">>, Log1),
+    run_effs(Effs),
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {10, 2},
                                     snapshot} = Evt} ->
@@ -534,8 +533,9 @@ written_event_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
-                                             <<"one+two">>, Log1b),
+    {Log2, Effs} = ra_log:update_release_cursor(2, #{}, 1,
+                                                <<"one+two">>, Log1b),
+    run_effs(Effs),
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {2, 1},
                                     snapshot} = Evt} ->
@@ -549,9 +549,10 @@ written_event_after_snapshot(Config) ->
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     Log6b = deliver_all_log_events(Log6, 100),
-    {Log7, _} = ra_log:update_release_cursor(4, #{}, 1,
-                                             <<"one+two+three+four">>,
-                                             Log6b),
+    {Log7, Effs2} = ra_log:update_release_cursor(4, #{}, 1,
+                                                 <<"one+two+three+four">>,
+                                                 Log6b),
+    run_effs(Effs2),
     _ = receive
             {ra_log_event, {snapshot_written, {4, 1}, snapshot} = E} ->
                 ra_log:handle_event(E, Log7)
@@ -569,8 +570,9 @@ recover_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log2 = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log3, _} = ra_log:update_release_cursor(2, #{}, 1,
-                                             <<"one+two">>, Log2),
+    {Log3, Effs} = ra_log:update_release_cursor(2, #{}, 1,
+                                                <<"one+two">>, Log2),
+    run_effs(Effs),
     Log4 = deliver_all_log_events(Log3, 100),
     ra_log:close(Log4),
     restart_wal(),
@@ -591,7 +593,8 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     Log1b = deliver_all_log_events(ra_log:append({2, 1, <<"two">>}, Log1), 500),
     true = erlang:suspend_process(whereis(ra_log_wal)),
     Log2 = write_n(3, 500, 1, Log1b),
-    {Log3, _} = ra_log:update_release_cursor(100, #{}, 1, <<"100">>, Log2),
+    {Log3, Effs0} = ra_log:update_release_cursor(100, #{}, 1, <<"100">>, Log2),
+    run_effs(Effs0),
     Log4 = deliver_all_log_events(Log3, 500),
 
     Overview = ra_log:overview(Log4),
@@ -1059,8 +1062,9 @@ snapshot_written_after_installation(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, _} = ra_log:update_release_cursor(5, #{}, 1,
-                                             <<"one-five">>, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(5, #{}, 1,
+                                                <<"one-five">>, Log1),
+    run_effs(Effs),
     DelayedSnapWritten = receive
                              {ra_log_event, {snapshot_written, {5, 1},
                                              snapshot} = Evt} ->
@@ -1075,7 +1079,8 @@ snapshot_written_after_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, Context),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AEffs),
     {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
     %% write some more to create another segment
     Log4 = write_and_roll(16, 20, 2, Log3),
@@ -1104,7 +1109,8 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
                                  min_checkpoint_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, _} = ra_log:checkpoint(5, #{}, 1, <<"one-five">>, Log1),
+    {Log2, Effs} = ra_log:checkpoint(5, #{}, 1, <<"one-five">>, Log1),
+    run_effs(Effs),
     DelayedSnapWritten = receive
                              {ra_log_event, {snapshot_written, {5, 1},
                                              checkpoint} = Evt} ->
@@ -1120,7 +1126,9 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, Context),
     SnapState0 = ra_log:snapshot_state(Log3),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {ok, SnapState, AcceptEffs} =
+        ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AcceptEffs),
     {Log4, Effs4} = ra_log:install_snapshot({15, 2}, SnapState, Log3),
     ?assert(lists:any(fun (E) -> element(1, E) == delete_snapshot end, Effs4)),
     %% write some more to create another segment
@@ -1164,7 +1172,8 @@ snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AEffs),
     {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
 
     {15, _} = ra_log:last_index_term(Log3),
@@ -1213,7 +1222,8 @@ append_after_snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AEffs),
     {Log2, _} = ra_log:install_snapshot({15, 2}, SnapState, Log1),
     {15, _} = ra_log:last_index_term(Log2),
     {15, _} = ra_log:last_written(Log2),
@@ -1244,7 +1254,8 @@ written_event_after_snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AEffs),
     {Log2, _} = ra_log:install_snapshot({SnapIdx, 2}, SnapState, Log1),
     {SnapIdx, _} = ra_log:last_index_term(Log2),
     {SnapIdx, _} = ra_log:last_written(Log2),
@@ -1281,10 +1292,11 @@ update_release_cursor(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             1, initial_state, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                1, initial_state, Log1),
 
+    run_effs(Effs),
     Log3 = assert_log_events(Log2,
                              fun (L) ->
                                      {127, 2} == ra_log:snapshot_index_term(L)
@@ -1299,9 +1311,10 @@ update_release_cursor(Config) ->
                  end, 10, 100),
     Log3b = validate_fold(128, 149, 2, Log3),
     % update the release cursor all the way
-    {Log4, _} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             1, initial_state, Log3b),
+    {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
+                                                        ?N2 => new_peer()},
+                                                 1, initial_state, Log3b),
+    run_effs(Effs2),
     Log5 = assert_log_events(Log4,
                              fun (L) ->
                                      {149, 2} == ra_log:snapshot_index_term(L)
@@ -1338,10 +1351,11 @@ update_release_cursor_with_machine_version(Config) ->
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
     MacVer = 2,
-    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             MacVer,
-                                             initial_state, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                MacVer,
+                                                initial_state, Log1),
+    run_effs(Effs),
     Log = assert_log_events(Log2,
                             fun (L) ->
                                     {127, 2} == ra_log:snapshot_index_term(L)
@@ -1388,9 +1402,10 @@ missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
     Log5 = validate_fold(1, 154, 2, Log4),
 
     % then update the release cursor
-    {Log6, _Effs} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
+    {Log6, Effs2} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
                                                         ?N2 => new_peer()},
                                                  1, initial_state, Log5),
+    run_effs(Effs2),
     Log7 = deliver_log_events_cond(Log6,
                                    fun (_) ->
                                            case find_segments(Config) of
@@ -1713,7 +1728,8 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
     MacRef = <<"9">>,
-    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
+    {Sn1, [{bg_work, Fun, _ErrFun}]} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
+    Fun(),
     Sn2 =
         receive
             {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, snapshot}} ->
@@ -1756,3 +1772,5 @@ wait_for_wal(OldPid) ->
                               P = whereis(ra_log_wal),
                               is_pid(P) andalso P =/= OldPid
                       end, 100, 100).
+run_effs(Effs) ->
+    [Fun() || {bg_work, Fun, _} <- Effs].

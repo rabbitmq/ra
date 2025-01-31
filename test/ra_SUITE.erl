@@ -131,7 +131,6 @@ single_server_processes_command(Config) ->
     {_RaName, _} = N1 = nth_server_name(Config, 1),
     ok = ra:start_server(default, Name, N1, add_machine(), []),
     ok = ra:trigger_election(N1),
-    monitor(process, element(1, N1)),
     % index is 2 as leaders commit a no-op entry on becoming leaders
     {ok, 5, _} = ra:process_command(N1, 5, 2000),
     {ok, 10, _} = ra:process_command(N1, 5, 2000),

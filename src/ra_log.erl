@@ -772,6 +772,12 @@ handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
                 ra_snapshot:directory(SnapState, SnapKind),
                 Snap}],
     {State0, Effects};
+handle_event({snapshot_error, Snap, SnapKind, Error},
+             #?MODULE{cfg =#cfg{log_id = LogId},
+                      snapshot_state = SnapState0} = State0) ->
+    ?INFO("~ts: snapshot error for ~w ~s ", [LogId, Snap, SnapKind]),
+    SnapState = ra_snapshot:handle_error(Snap, Error, SnapState0),
+    {State0#?MODULE{snapshot_state = SnapState}, []};
 handle_event({resend_write, Idx},
              #?MODULE{cfg = #cfg{log_id = LogId}} = State) ->
     % resend missing entries from mem tables.
@@ -887,7 +893,7 @@ suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
 promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
                                  snapshot_state = SnapState0} = State) ->
     case ra_snapshot:pending(SnapState0) of
-        {_WriterPid, _IdxTerm, snapshot} ->
+        {_IdxTerm, snapshot} ->
             %% If we're currently writing a snapshot, skip promoting a
             %% checkpoint.
             {State, []};
@@ -1082,24 +1088,24 @@ read_config(Dir) ->
 delete_everything(#?MODULE{cfg = #cfg{uid = UId,
                                       names = Names,
                                       directory = Dir},
-                           snapshot_state = SnapState} = Log) ->
+                           snapshot_state = _SnapState} = Log) ->
     _ = close(Log),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),
     catch ets:delete(ra_log_snapshot_state, UId),
-    case ra_snapshot:pending(SnapState) of
-        {Pid, _, _} ->
-            case is_process_alive(Pid) of
-                true ->
-                    exit(Pid, kill),
-                    ok;
-                false ->
-                    ok
-            end;
-        _ ->
-            ok
-    end,
+    % case ra_snapshot:pending(SnapState) of
+    %     {Pid, _, _} ->
+    %         case is_process_alive(Pid) of
+    %             true ->
+    %                 exit(Pid, kill),
+    %                 ok;
+    %             false ->
+    %                 ok
+    %         end;
+    %     _ ->
+    %         ok
+    % end,
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch
