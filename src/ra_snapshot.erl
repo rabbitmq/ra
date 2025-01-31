@@ -38,7 +38,7 @@
 
          context/2,
 
-         handle_down/3,
+         handle_error/3,
          current_snapshot_dir/1,
 
          latest_checkpoint/1,
@@ -47,7 +47,8 @@
          take_extra_checkpoints/1
         ]).
 
--type effect() :: {monitor, process, snapshot_writer, pid()}.
+-type effect() :: {monitor, process, snapshot_writer, pid()} |
+                  {bg_work, fun(), fun()}.
 
 -type kind() :: snapshot | checkpoint.
 
@@ -79,7 +80,7 @@
          %% like snapshots, these are also stored in subdirs
          %% as <data_dir>/checkpoints/Term_Index
          checkpoint_directory :: file:filename_all(),
-         pending :: option({pid(), ra_idxterm(), kind()}),
+         pending :: option({ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
          current :: option(ra_idxterm()),
          checkpoints = [] :: list(checkpoint()),
@@ -329,7 +330,7 @@ current(#?MODULE{current = Current}) -> Current.
 latest_checkpoint(#?MODULE{checkpoints = [Current | _]}) -> Current;
 latest_checkpoint(#?MODULE{checkpoints = _}) -> undefined.
 
--spec pending(state()) -> option({pid(), ra_idxterm(), kind()}).
+-spec pending(state()) -> option({ra_idxterm(), kind()}).
 pending(#?MODULE{pending = Pending}) ->
     Pending.
 
@@ -371,13 +372,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    %% call prepare then write_snapshot
+    %% call prepare then write_snapshotS
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
     Ref = Mod:prepare(Meta, MacRef),
     %% write the snapshot in a separate process
     Self = self(),
-    Pid = spawn(fun () ->
+    IdxTerm = {Idx, Term},
+    BgWorkFun = fun () ->
                         ok = ra_lib:make_dir(SnapDir),
                         case Mod:write(SnapDir, Meta, Ref, Sync) of
                             ok -> ok;
@@ -387,14 +389,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
                                 ok
                         end,
                         Self ! {ra_log_event,
-                                {snapshot_written, {Idx, Term}, SnapKind}},
+                                {snapshot_written, IdxTerm, SnapKind}},
                         ok
-                end),
+                end,
 
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
-    {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
-     [{monitor, process, snapshot_writer, Pid}]}.
+    {State#?MODULE{pending = {{Idx, Term}, SnapKind}},
+     [{bg_work, BgWorkFun, err_fun(IdxTerm, SnapKind)}]}.
 
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
     {boolean(), State :: state(), Effects :: [effect()]}.
@@ -411,20 +413,21 @@ promote_checkpoint(PromotionIdx,
             Checkpoint = make_snapshot_dir(CheckpointDir, Idx, Term),
             Snapshot = make_snapshot_dir(SnapDir, Idx, Term),
             Self = self(),
-            Pid = spawn(fun() ->
-                                %% Checkpoints are created without calling
-                                %% fsync. Snapshots must be fsync'd though, so
-                                %% sync the checkpoint before promoting it
-                                %% into a snapshot.
-                                ok = Mod:sync(Checkpoint),
-                                ok = ra_file:rename(Checkpoint, Snapshot),
-                                Self ! {ra_log_event,
-                                        {snapshot_written,
-                                         {Idx, Term}, snapshot}}
-                        end),
-            State = State0#?MODULE{pending = {Pid, {Idx, Term}, snapshot},
+            Fun = fun() ->
+                          %% Checkpoints are created without calling
+                          %% fsync. Snapshots must be fsync'd though, so
+                          %% sync the checkpoint before promoting it
+                          %% into a snapshot.
+                          ok = Mod:sync(Checkpoint),
+                          ok = ra_file:rename(Checkpoint, Snapshot),
+                          Self ! {ra_log_event,
+                                  {snapshot_written,
+                                   {Idx, Term}, snapshot}}
+                  end,
+
+            State = State0#?MODULE{pending = {{Idx, Term}, snapshot},
                                    checkpoints = Checkpoints},
-            {true, State, [{monitor, process, snapshot_writer, Pid}]};
+            {true, State, [{bg_work, Fun, err_fun({Idx, Term}, snapshot)}]};
         undefined ->
             {false, State0, []}
     end.
@@ -450,6 +453,11 @@ find_promotable_checkpoint(_Idx, [], _Acc) ->
 
 -spec complete_snapshot(ra_idxterm(), kind(), state()) ->
     state().
+complete_snapshot(_IdxTerm, snapshot,
+                  #?MODULE{pending = undefined} = State) ->
+    %% if pending=undefined it means and snapshot installation with a higher
+    %% index was accepted concurrently
+    State;
 complete_snapshot({Idx, _} = IdxTerm, snapshot,
                   #?MODULE{uid = UId} = State) ->
     true = ets:insert(?ETSTBL, {UId, Idx}),
@@ -472,12 +480,13 @@ begin_accept(#{index := Idx, term := Term} = Meta,
                                            state = AcceptState}}}.
 
 -spec accept_chunk(term(), non_neg_integer(), chunk_flag(), state()) ->
-    {ok, state()}.
+    {ok, state(), [effect()]}.
 accept_chunk(Chunk, Num, last,
              #?MODULE{uid = UId,
                       module = Mod,
                       snapshot_directory = Dir,
                       current = Current,
+                      pending = Pending,
                       accepting = #accept{next = Num,
                                           idxterm = {Idx, _} = IdxTerm,
                                           state = AccState}} = State) ->
@@ -485,13 +494,22 @@ accept_chunk(Chunk, Num, last,
     ok = Mod:complete_accept(Chunk, AccState),
     %% run validate here?
     %% delete the current snapshot if any
-    _ = spawn(fun () -> delete(Dir, Current) end),
+    Dels = case Pending of
+               undefined ->
+                   [Current];
+               {PendIdxTerm, _} ->
+                   [Current, PendIdxTerm]
+           end,
+    Eff = {bg_work,
+           fun() -> [delete(Dir, Del) || Del <- Dels] end,
+           fun (_) -> ok end},
+
     %% update ets table
     true = ets:insert(?ETSTBL, {UId, Idx}),
     {ok, State#?MODULE{accepting = undefined,
                        %% reset any pending snapshot writes
                        pending = undefined,
-                       current = IdxTerm}};
+                       current = IdxTerm}, [Eff]};
 accept_chunk(Chunk, Num, next,
              #?MODULE{module = Mod,
                       accepting =
@@ -499,12 +517,13 @@ accept_chunk(Chunk, Num, next,
                               next = Num} = Accept} = State) ->
     {ok, AccState} = Mod:accept_chunk(Chunk, AccState0),
     {ok, State#?MODULE{accepting = Accept#accept{state = AccState,
-                                                 next = Num + 1}}};
+                                                 next = Num + 1}},
+     []};
 accept_chunk(_Chunk, Num, _ChunkFlag,
              #?MODULE{accepting = #accept{next = Next}} = State)
   when Next > Num ->
     %% this must be a resend - we can just ignore it
-    {ok, State}.
+    {ok, State, []}.
 
 -spec abort_accept(state()) -> state().
 abort_accept(#?MODULE{accepting = undefined} = State) ->
@@ -527,27 +546,22 @@ context(#?MODULE{module = Mod}, Node) ->
 
 
 
--spec handle_down(pid(), Info :: term(), state()) ->
+-spec handle_error({ra:index(), ra_term()}, Error :: term(), state()) ->
     state().
-handle_down(_Pid, _Info, #?MODULE{pending = undefined} = State) ->
-    State;
-handle_down(_Pid, normal, State) ->
-    State;
-handle_down(_Pid, noproc, State) ->
-    %% this could happen if the monitor was set up after the process had
-    %% finished
-    State;
-handle_down(Pid, _Info,
+handle_error(IDX_TERM = IdxTerm, _Error,
             #?MODULE{snapshot_directory = SnapshotDir,
                      checkpoint_directory = CheckpointDir,
-                     pending = {Pid, IdxTerm, SnapKind}} = State) ->
+                     pending = {IDX_TERM, SnapKind}} = State) ->
     %% delete the pending snapshot/checkpoint directory
     Dir = case SnapKind of
               snapshot -> SnapshotDir;
               checkpoint -> CheckpointDir
           end,
     ok = delete(Dir, IdxTerm),
-    State#?MODULE{pending = undefined}.
+    State#?MODULE{pending = undefined};
+handle_error(_IdxTerm, _Error, #?MODULE{} = State) ->
+    %% ignore if not referring to the current pending, if any
+    State.
 
 delete(_, undefined) ->
     ok;
@@ -683,7 +697,12 @@ counters_add(undefined, _, _) ->
 counters_add(Counter, Ix, Incr) ->
     counters:add(Counter, Ix, Incr).
 
-
+err_fun(IdxTerm, Kind) ->
+    Self = self(),
+    fun (Error) ->
+            Self ! {ra_log_event,
+                    {snapshot_error, IdxTerm, Kind, Error}}
+    end.
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
