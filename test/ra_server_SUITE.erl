@@ -1873,19 +1873,24 @@ candidate_election(_Config) ->
     {leader, #{cluster := #{N2 := PeerState,
                             N3 := PeerState,
                             N4 := PeerState,
-                            N5 := PeerState}},
+                            N5 := PeerState}} = State2,
      [
-      {next_event, cast, {command, {noop, _, EffectiveMacVer}}},
+      {next_event, cast, {command, {noop, _, EffectiveMacVer}} = Noop},
       {send_rpc, N2, {info_rpc, _, _, _}},
       {send_rpc, N3, {info_rpc, _, _, _}},
       {send_rpc, N4, {info_rpc, _, _, _}},
-      {send_rpc, N5, {info_rpc, _, _, _}},
+      {send_rpc, N5, {info_rpc, _, _, _}}
 
-      {send_rpc, _, _},
-      {send_rpc, _, _},
-      {send_rpc, _, _},
-      {send_rpc, _, _}
-     ]} = ra_server:handle_candidate(Reply, State1).
+     ]} = ra_server:handle_candidate(Reply, State1),
+
+    {leader, _,
+     [
+      {send_rpc, N5, #append_entries_rpc{}},
+      {send_rpc, N4, _},
+      {send_rpc, N3, _},
+      {send_rpc, N2, _}
+     ]} = ra_server:handle_leader(Noop, State2),
+    ok.
 
 pre_vote_election(_Config) ->
     Token = make_ref(),
