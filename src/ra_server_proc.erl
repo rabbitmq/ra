@@ -1331,7 +1331,7 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
                          end, {State0, Actions0}, Effects0),
     {State, lists:reverse(Actions)}.
 
-handle_effect(leader, {send_rpc, To, Rpc}, _,
+handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
               #state{conf = Conf} = State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
