@@ -160,6 +160,10 @@ pipeline_commands(Config) ->
     %% here we are asserting on the order of received
     %% correlations
     [{C1, 15}, {C2, 20}] = gather_applied([], 125),
+    ?assertMatch(#{last_index := I,
+                   last_applied := I,
+                   last_written_index := I,
+                   commit_index := I}, ra:key_metrics(N1)),
     terminate_cluster([N1]).
 
 stop_server_idemp(Config) ->

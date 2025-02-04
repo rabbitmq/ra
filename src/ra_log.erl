@@ -398,7 +398,7 @@ append({Idx, Term, _Cmd} = Entry,
       when Idx =:= LastIdx + 1 ->
     case ra_mt:stage(Entry, Mt0) of
         {ok, Mt} ->
-            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             State#?MODULE{last_index = Idx,
                           last_term = Term,
                           mem_table = Mt};
