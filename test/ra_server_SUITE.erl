@@ -68,6 +68,8 @@ all() ->
      follower_aer_3,
      follower_aer_4,
      follower_aer_5,
+     follower_aer_6,
+     follower_aer_7,
      follower_catchup_condition,
      wal_down_condition_follower,
      wal_down_condition_leader,
@@ -557,6 +559,82 @@ follower_aer_5(_Config) ->
                                        last_index = 3}, M),
     ok.
 
+follower_aer_6(_Config) ->
+    N1 = ?N1, N5 = ?N5,
+    %% Scenario
+    %% Leader with smaller log is elected and sends empty aer
+    %% Follower should truncate it's log and reply with an appropriate
+    %% next index
+    Init = empty_state(3, n2),
+    AER1 = #append_entries_rpc{term = 1, leader_id = N1,
+                               prev_log_index = 0,
+                               prev_log_term = 0,
+                               leader_commit = 3,
+                               entries = [
+                                          entry(1, 1, one),
+                                          entry(2, 1, two),
+                                          entry(3, 1, tre),
+                                          entry(4, 1, for)
+                                         ]},
+    %% set up follower state
+    {follower, State00, _} = ra_server:handle_follower(AER1, Init),
+    %% TODO also test when written even occurs after
+    {follower, #{last_applied := 3} = State0, _} =
+        ra_server:handle_follower(written_evt(1, {4, 4}), State00),
+    % now an AER from another leader in a higher term is received
+    % This is what the leader sends immediately before committing it;s noop
+    AER2 = #append_entries_rpc{term = 2, leader_id = N5,
+                               prev_log_index = 3,
+                               prev_log_term = 1,
+                               leader_commit = 3,
+                               entries = []},
+    {follower, _State1, Effects} = ra_server:handle_follower(AER2, State0),
+    {cast, N5, {_, M}} = hd(Effects),
+    ?assertMatch(#append_entries_reply{next_index = 4,
+                                       last_term = 1,
+                                       last_index = 3}, M),
+    ok.
+
+follower_aer_7(_Config) ->
+    N1 = ?N1, N5 = ?N5,
+    %% Scenario
+    %% Leader with smaller log is elected and sends empty aer
+    %% Follower should truncate it's log and reply with an appropriate
+    %% next index
+    Init = empty_state(3, n2),
+    AER1 = #append_entries_rpc{term = 1, leader_id = N1,
+                               prev_log_index = 0,
+                               prev_log_term = 0,
+                               leader_commit = 3,
+                               entries = [
+                                          entry(1, 1, one),
+                                          entry(2, 1, two),
+                                          entry(3, 1, tre),
+                                          entry(4, 1, for)
+                                         ]},
+    %% set up follower state
+    {follower, State00, _} = ra_server:handle_follower(AER1, Init),
+    %% TODO also test when written even occurs after
+    {follower, #{last_applied := 3} = State0, _} =
+        ra_server:handle_follower(written_evt(1, {4, 4}), State00),
+    % now an AER from another leader in a higher term is received
+    % This is what the leader sends immediately before committing it;s noop
+    AER2 = #append_entries_rpc{term = 2,
+                               leader_id = N5,
+                               prev_log_index = 3,
+                               prev_log_term = 1,
+                               leader_commit = 4,
+                               entries = [
+                                          entry(4, 2, for2)
+                                         ]},
+    {follower, State1, _} = ra_server:handle_follower(AER2, State0),
+    {follower, #{last_applied := 4} = _State, Effects} =
+        ra_server:handle_follower(written_evt(2, {4, 4}), State1),
+    {cast, N5, {_, M}} = hd(Effects),
+    ?assertMatch(#append_entries_reply{next_index = 5,
+                                       last_term = 2,
+                                       last_index = 4}, M),
+    ok.
 
 follower_aer_term_mismatch(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,

@@ -537,6 +537,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           % entry was not found - simply set next index to
                           ?DEBUG("~ts: setting next index for ~w ~b",
                                  [LogId, PeerId, NextIdx]),
+                          %% TODO: match index should not be set here surely??
                           {Peer0#{match_index => LastIdx,
                                   next_index => NextIdx}, L};
                       % entry exists we can forward
@@ -1189,9 +1190,10 @@ handle_follower(#append_entries_rpc{term = Term,
                                [] when LastIdx > PLIdx ->
                                    %% if no entries were sent we need to reset
                                    %% last index to match the leader
-                                   ?DEBUG("~ts: resetting last index to ~b from ~b in term ~b",
+                                   ?DEBUG("~ts: resetting last index to ~b from ~b "
+                                          "in term ~b",
                                          [LogId, PLIdx, LastIdx, Term]),
-                                   ?assertNot(PLIdx =< CommitIndex),
+                                   ?assertNot(PLIdx < CommitIndex),
                                    {ok, L} = ra_log:set_last_index(PLIdx, Log1),
                                    L;
                                _ ->
@@ -3449,7 +3451,8 @@ required_quorum(Cluster) ->
 
 count_voters(Cluster) ->
     maps:fold(
-      fun (_, #{voter_status := #{membership := Membership}}, Count) when Membership =/= voter ->
+      fun (_, #{voter_status := #{membership := Membership}}, Count)
+            when Membership =/= voter ->
               Count;
           (_, _, Count) ->
               Count + 1
