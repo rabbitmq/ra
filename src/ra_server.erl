@@ -1186,7 +1186,7 @@ handle_follower(#append_entries_rpc{term = Term,
                 drop_existing(Log0, Entries0, PLIdx),
             case Entries of
                 [] ->
-                    %% all entries have alrady been written
+                    %% all entries have already been written
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
                     {LocalLastIdx, _} = ra_log:last_index_term(Log1),
                     {LogIsValidated, Log2} =
