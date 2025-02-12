@@ -552,7 +552,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                         when PeerLastIdx < MI ->
                           % TODO: this can only really happen when peers are
                           % non-persistent.
-                          % Should they turn-into non-voters when this sitution
+                          % Should they turn-into non-voters when this situation
                           % is detected??
                           ?WARN("~ts: leader saw peer with last_index [~b in ~b]"
                                 " lower than recorded match index [~b]."
