@@ -16,6 +16,7 @@ all() ->
      init_test,
      recover_restores_cluster_changes,
      election_timeout,
+     follower_aer_diverged,
      follower_aer_term_mismatch,
      follower_aer_term_mismatch_snapshot,
      follower_handles_append_entries_rpc,
@@ -56,6 +57,7 @@ all() ->
      follower_installs_snapshot,
      follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
+     follower_receives_snapshot_lower_than_last_applied,
      receive_snapshot_timeout,
      receive_snapshot_new_leader_aer,
      snapshotted_follower_received_append_entries,
@@ -453,7 +455,7 @@ follower_aer_3(_Config) ->
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
     {await_condition, State3 = #{leader_id := N1, current_term := 1,
-                                 commit_index := 3, last_applied := 1},
+                                 commit_index := 1, last_applied := 1},
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             success = false,
                                             last_term = 1,
@@ -634,6 +636,54 @@ follower_aer_7(_Config) ->
     ?assertMatch(#append_entries_reply{next_index = 5,
                                        last_term = 2,
                                        last_index = 4}, M),
+    ok.
+
+follower_aer_diverged(_Config) ->
+    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
+                                              commit_index => 2},
+    %% the leaders sends an rpc with old entries the diverged follower already
+    %% has
+    AER = #append_entries_rpc{term = 6,
+                              leader_id = ?N1,
+                              prev_log_index = 1,
+                              prev_log_term = 1, % higher log term
+                              leader_commit = 3,
+                              entries = [
+                                         {2, 3, usr(<<"hi2">>)}
+                                        ]},
+    {follower, State1, Effects} = ra_server:handle_follower(AER, State0),
+    ?assertMatch([{cast,_,
+                   {_, #append_entries_reply{success = false,
+                                             next_index = 3}}} | _],
+                 Effects),
+    %% ensure the follower does not incorrectly apply the diverged entry at 3
+    ?assertMatch(#{last_applied := 2,
+                   commit_index := 2}, State1),
+
+    %% leader will send empty rpc
+    AER2 = #append_entries_rpc{term = 6,
+                               leader_id = ?N1,
+                               prev_log_index = 3,
+                               prev_log_term = 6, %% higher log term
+                               leader_commit = 3,
+                               entries = []},
+    {await_condition, State2, Effects2} = ra_server:handle_follower(AER2, State1),
+    ?assertMatch([{cast,_,
+                   {_, #append_entries_reply{success = false,
+                                             next_index = 3}}} | _],
+                 Effects2),
+    AER3 = #append_entries_rpc{term = 6,
+                               leader_id = ?N1,
+                               prev_log_index = 2,
+                               prev_log_term = 3,
+                               leader_commit = 3,
+                               entries = [
+                                          {3, 6, usr(<<"hi3b">>)}
+                                         ]},
+    {follower, State3, Effects3} = ra_server:handle_follower(AER3, State2),
+    ?assertMatch(#{last_applied := 3,
+                   commit_index := 3}, State3),
+    ?assertMatch([{aux, eval}, {record_leader_msg, _}], Effects3),
     ok.
 
 follower_aer_term_mismatch(_Config) ->
@@ -2151,20 +2201,37 @@ follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
     ok.
 
 follower_receives_stale_snapshot(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState0 = #{cluster := Config,
-                            current_term := CurTerm}, _}}
-    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    N1 = ?N1,
+    FState0 = base_state(3, ra_queue),
     FState = FState0#{last_applied => 3},
-    LastTerm = 1, % snapshot term
+    LastTerm = 3, % snapshot term
     Idx = 2,
-    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm, Config),
+    ISRpc = #install_snapshot_rpc{term = 3, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm,
+                                                   maps:get(cluster, FState)),
                                   chunk_state = {1, last},
                                   data = []},
     %% this should be a rare occurrence, rather than implement a special
     %% protocol at this point the server just replies
-    {follower, _, _} =
+    {follower, _, [{reply, #install_snapshot_result{term = 5}}]} =
+        ra_server:handle_follower(ISRpc, FState),
+    ok.
+
+follower_receives_snapshot_lower_than_last_applied(_Config) ->
+    N1 = ?N1,
+    FState0 = base_state(3, ra_queue),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 5, % snapshot term
+    Idx = 3,
+    ISRpc = #install_snapshot_rpc{term = 6, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm,
+                                                   maps:get(cluster, FState)),
+                                  chunk_state = {1, last},
+                                  data = []},
+    %% this should be a rare occurrence, rather than implement a special
+    %% protocol at this point the server just replies
+    {follower, _, [{reply, #append_entries_reply{term = 6,
+                                                 next_index = 4}}]} =
         ra_server:handle_follower(ISRpc, FState),
     ok.
 
