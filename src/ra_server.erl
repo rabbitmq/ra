@@ -1466,7 +1466,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
     ?DEBUG("~ts: install_snapshot received with lower last index ~b in ~b",
            [LogId, LastIndex, Term]),
     %% follower receives a snapshot for an index lower than its last applied
-    %% index, just reply with append_entrie_reply to make the leader skip
+    %% index, just reply with append_entries_reply to make the leader skip
     %% ahead
     {Reply, State} =
         mismatch_append_entries_reply(Term, LastApplied, State0),
