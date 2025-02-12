@@ -87,6 +87,7 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, #{}, Counter)
                       undefined
               end,
     SegRefsRev = lists:reverse(SegRefs),
+    reset_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS),
     #?STATE{cfg = Cfg,
             open_segments = ra_flru:new(MaxOpen, FlruHandler),
             range = Range,
@@ -433,6 +434,12 @@ limit(LimitIdx, [{PrevRange, PrevFn} | PrevRem]) ->
         NewPrevRange ->
             [{NewPrevRange, PrevFn} | PrevRem]
     end.
+
+reset_counter(#cfg{counter = Cnt}, Ix)
+  when Cnt =/= undefined ->
+    counters:put(Cnt, Ix, 0);
+reset_counter(#cfg{counter = undefined}, _) ->
+    ok.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);
