@@ -33,6 +33,7 @@ all_tests() ->
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
+     diverged_follower,
      server_restart_after_application_restart,
      restarted_server_does_not_reissue_side_effects,
      recover,
@@ -62,11 +63,19 @@ init_per_suite(Config) ->
     SysCfg = #{name => ?SYS,
                names => ra_system:derive_names(?SYS),
                segment_max_entries => 128,
-               default_max_pipeline_count => 1024,
-               default_max_append_entries_rpc_batch_size => 32,
+               default_max_pipeline_count => 1,
+               default_max_append_entries_rpc_batch_size => 1,
                message_queue_data => off_heap,
                data_dir => SysDir},
-    ct:pal("SYS CFG ~p", [SysCfg]),
+    ra_env:configure_logger(logger),
+    ok = logger:set_primary_config(level, debug),
+    LogFile = filename:join(?config(priv_dir, Config), "ra.log"),
+    SaslFile = filename:join(?config(priv_dir, Config), "ra_sasl.log"),
+    logger:add_handler(ra_handler, logger_std_h, #{config => #{file => LogFile}}),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
     {ok, _} = ra_system:start(SysCfg),
     application:ensure_all_started(lg),
     [{sys_cfg, SysCfg} | Config].
@@ -120,8 +129,8 @@ server_config(Config) ->
     ok = ra:start_server(?SYS, Conf),
     ok = ra:trigger_election(ServerId),
     {ok, O, _} = ra:member_overview(ServerId),
-    ?assertMatch(#{max_pipeline_count := 1024,
-                   max_append_entries_rpc_batch_size := 32}, O),
+    ?assertMatch(#{max_pipeline_count := 1,
+                   max_append_entries_rpc_batch_size := 1}, O),
     MsgQD = erlang:process_info(whereis(element(1, ServerId)), message_queue_data),
     ?assertEqual({message_queue_data, off_heap}, MsgQD),
     ok = ra:stop_server(?SYS, ServerId),
@@ -334,6 +343,59 @@ cluster_cannot_be_deleted_in_minority(Config) ->
     {error, {no_more_servers_to_try, Err}} = ra:delete_cluster(lists:reverse(Peers), 250),
     ct:pal("Err~p", [Err]),
     ra:stop_server(?SYS, ServerId1),
+    ok.
+
+diverged_follower(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Peers = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, Peers),
+    {ok, _, LeaderId1} = ra:members(ServerId1),
+    ok= enqueue(LeaderId1, m1),
+    ok= enqueue(LeaderId1, m2),
+
+    %% stop 2 followers and publish to leader so it diverges
+    [F1, F2] = Peers -- [LeaderId1],
+    ra:stop_server(?SYS, F1),
+    ra:stop_server(?SYS, F2),
+
+    %% use pipeline as wont be able to commit
+    ra:pipeline_command(LeaderId1, {enq, d3}, make_ref()),
+    ra:pipeline_command(LeaderId1, {enq, d4}, make_ref()),
+
+    %% stop leader
+    ra:stop_server(?SYS, LeaderId1),
+
+    %% restart followers
+    ra:restart_server(?SYS, F1),
+    ra:restart_server(?SYS, F2),
+    {ok, _, LeaderId2} = ra:members(F1),
+    %% enqueue
+    ok= enqueue(LeaderId2, m3),
+    ok= enqueue(LeaderId2, m4),
+    ok= enqueue(LeaderId2, m5),
+
+    [F] = [F1, F2] -- [LeaderId2],
+
+    ok = ra:transfer_leadership(LeaderId2, F),
+    {ok, _, F} = ra:members(F),
+
+    %% restart the old leader with the diverged log
+    ra:restart_server(?SYS, LeaderId1),
+
+    ra_lib:retry(
+      fun() ->
+              States = [begin
+                            {ok, {_, Q}, _} = ra:local_query(Id, fun (S) -> S end),
+                            queue:to_list(Q)
+                        end || Id <- Peers],
+
+              [[m1, m2, m3, m4, m5]] == lists:usort(States)
+      end, 50),
+
+    ra:delete_cluster(Peers),
     ok.
 
 server_restart_after_application_restart(Config) ->
