@@ -374,6 +374,7 @@
 -define(C_RA_SVR_METRIC_TERM, ?C_RA_SRV_RESERVED + 7).
 -define(C_RA_SVR_METRIC_CHECKPOINT_INDEX, ?C_RA_SRV_RESERVED + 8).
 -define(C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, ?C_RA_SRV_RESERVED + 9).
+-define(C_RA_SVR_METRIC_NUM_SEGMENTS, ?C_RA_SRV_RESERVED + 10).
 
 -define(RA_SRV_METRICS_COUNTER_FIELDS,
         [
@@ -393,7 +394,9 @@
          {checkpoint_index, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, counter,
           "The current checkpoint index."},
          {effective_machine_version, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION,
-          gauge, "The current effective version number of the machine."}
+          gauge, "The current effective version number of the machine."},
+         {num_segments, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
+          gauge, "The number of non-empty segment files."}
         ]).
 
 -define(RA_COUNTER_FIELDS,

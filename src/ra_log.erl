@@ -259,6 +259,7 @@ init(#{uid := UId,
     LastIdx = State0#?MODULE.last_index,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, ra_log_reader:segment_ref_count(Reader)),
     case ra_snapshot:latest_checkpoint(SnapshotState) of
         undefined ->
             ok;
@@ -679,12 +680,13 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
                          State#?MODULE{last_written_index_term = {Expected, Term}})
     end;
 handle_event({segments, TidRanges, NewSegs},
-             #?MODULE{cfg = #cfg{uid = UId, names = Names},
+             #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
                       mem_table = Mt0,
                       readers = Readers
                      } = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, ra_log_reader:segment_ref_count(Reader)),
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
@@ -1161,7 +1163,7 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
 %% the Idx argument
 delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
                                              segment_writer = SegWriter,
-                                             uid = UId},
+                                             uid = UId} = Cfg,
                                   readers = Readers,
                                   reader = Reader0} = State0) ->
     case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
@@ -1178,6 +1180,7 @@ delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
             NumActive = ra_log_reader:segment_ref_count(Reader),
             ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
                    [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
             State = State0#?MODULE{reader = Reader},
             {State, log_update_effects(Readers, Pid, State)}
     end.
