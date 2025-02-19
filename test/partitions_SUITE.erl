@@ -59,10 +59,10 @@ init_per_testcase(TestCase, Config0) ->
 end_per_testcase(print, Config) ->
     Config;
 end_per_testcase(_, Config) ->
-    Nodes = ?config(nodes, Config),
-    ct:pal("end_per_testcase: Stopping nodes ~p", [Nodes]),
-    erlang_node_helpers:stop_erlang_nodes(Nodes),
-    ct:pal("end_per_testcase: Stopped nodes ~p", [Nodes]),
+    Peers = proplists:get_value(peers, Config, []),
+    ct:pal("end_per_testcase: Stopping peer nodes ~p", [Peers]),
+    erlang_node_helpers:stop_erlang_nodes(proplists:get_value(peers, Config, [])),
+    ct:pal("end_per_testcase: Stopped peer nodes ~p", [Peers]),
     ok.
 
 -type nodes5() :: foo1@localhost |
@@ -228,8 +228,8 @@ erlang_nodes(5) ->
 
 prepare_erlang_cluster(Config, Nodes) ->
     Config0 = tcp_inet_proxy_helpers:configure_dist_proxy(Config),
-    erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
-    Config0.
+    Peers = erlang_node_helpers:start_erlang_nodes(Nodes, Config0),
+    [{peers, Peers} | Config0].
 
 setup_ra_cluster(Config, Machine) ->
     Nodes = ?config(nodes, Config),
