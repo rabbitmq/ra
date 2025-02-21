@@ -79,8 +79,8 @@ start_cluster(Config) ->
     Sys = ?FUNCTION_NAME,
     DataDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_child_node(N, DataDir)}
-                 || N <- [s1, s2, s3]],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
+    ServerIds = [{ClusterName, S} || {S, _P} <- Peers],
     Nodes = lists:map(fun ({_, N}) -> N end, ServerIds),
     Machine = {module, ?MODULE, #{}},
     %% the system hasn't been started yet
@@ -96,7 +96,7 @@ start_cluster(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(S, 500) || S <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    [ok = slave:stop(N) || N <- Nodes],
+    stop_peers(Peers),
     ok.
 
 start_clusters_in_systems(Config) ->
@@ -105,29 +105,30 @@ start_clusters_in_systems(Config) ->
     DataDir = ?config(data_dir, Config),
     ClusterName1 = start_clusters_in_systems_1,
     ClusterName2 = start_clusters_in_systems_2,
-    Nodes = [start_child_node(N, DataDir) || N <- [s1, s2, s3]],
-    Servers1 = [{ClusterName1, N} || N <- Nodes],
-    Servers2 = [{ClusterName2, N} || N <- Nodes],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
+    Servers1 = [{ClusterName1, S} || {S, _P} <- Peers],
+    Servers2 = [{ClusterName2, S} || {S, _P} <- Peers],
     Machine = {module, ?MODULE, #{}},
     %% the system hasn't been started yet
     {error, cluster_not_formed} = ra:start_cluster(Sys1, ClusterName1, Machine,
                                                    Servers1),
     %% start system on all nodes
-    [ok = start_system_on(Sys1, N, DataDir) || N <- Nodes],
-    [ok = start_system_on(Sys2, N, DataDir) || N <- Nodes],
+    [ok = start_system_on(Sys1, S, DataDir) || {S, _P} <- Peers],
+    [ok = start_system_on(Sys2, S, DataDir) || {S, _P} <- Peers],
 
     {ok, Started1, []} = ra:start_cluster(Sys1, ClusterName1, Machine, Servers1),
     [] = Started1 -- Servers1,
     {ok, Started2, []} = ra:start_cluster(Sys2, ClusterName2, Machine, Servers2),
     [] = Started2 -- Servers2,
+    stop_peers(Peers),
     ok.
 
 restart_system(Config) ->
     Sys = ?FUNCTION_NAME,
     DataDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_child_node(N, DataDir)}
-                 || N <- [s1, s2, s3]],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
+    ServerIds = [{ClusterName, S} || {S, _P} <- Peers],
     Nodes = lists:map(fun ({_, N}) -> N end, ServerIds),
     Machine = {module, ?MODULE, #{}},
     %% the system hasn't been started yet
@@ -145,6 +146,7 @@ restart_system(Config) ->
     [ok = start_system_on(Sys, N, DataDir) || N <- Nodes],
     {ok, Started2, []} = ra:start_cluster(Sys, ClusterName, Machine, ServerIds),
     [] = Started2 -- ServerIds,
+    stop_peers(Peers),
     ok.
 
 ra_overview(Config) ->
@@ -216,13 +218,19 @@ search_paths() ->
     lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
                  code:get_path()).
 
-start_child_node(N, _PrivDir) ->
-    Host = get_current_host(),
-    Pa = string:join(["-pa" | search_paths()], " "),
-    ct:pal("starting child node with ~ts on host ~ts for node ~ts~n", [Pa, Host, node()]),
-    {ok, S} = slave:start_link(Host, N, Pa),
-    _ = rpc:call(S, application, ensure_all_started, [ra]),
-    S.
+start_peer(PrivDir) ->
+    Name = ?CT_PEER_NAME(),
+    Dir0 = filename:join(PrivDir, Name),
+    Dir = "'" ++ Dir0 ++ "'",
+    Pa = filename:dirname(code:which(ra)),
+    Args = ["-pa", Pa, "-ra", "data_dir", Dir],
+    ct:pal("starting child node ~ts for node ~ts~n", [Name, Args]),
+    {ok, P, S} = ?CT_PEER(#{name => Name, args => Args}),
+    {ok, _} = rpc:call(S, application, ensure_all_started, [ra]),
+    {S, P}.
+
+stop_peers(Peers) ->
+    [peer:stop(P) || {_S, P} <- Peers].
 
 flush() ->
     receive

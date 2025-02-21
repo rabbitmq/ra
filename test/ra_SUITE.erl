@@ -1521,14 +1521,11 @@ start_remote_cluster(Num, PrivDir, ClusterName, Machine) ->
     Nodes.
 
 start_peer(Name, PrivDir) ->
-    Dir0 = filename:join(PrivDir, Name),
-    Dir = "'\"" ++ Dir0 ++ "\"'",
-    Host = get_current_host(),
-    Pa = string:join(["-pa" | search_paths()] ++ ["-s ra -ra data_dir", Dir],
-                     " "),
-    ct:pal("starting peer node ~ts on host ~s for node ~ts with ~ts",
-           [Name, Host, node(), Pa]),
-    {ok, S} = slave:start_link(Host, Name, Pa),
+    Dir = "'" ++ filename:join(PrivDir, Name) ++ "'",
+    Pa = filename:dirname(code:which(ra)),
+    ct:pal("starting peer node ~ts for node ~ts with -pa ~ts and data_dir ~ts",
+           [Name, node(), Pa, Dir]),
+    {ok, _P, S} = ?CT_PEER(#{name => Name, args => ["-pa", Pa, "-ra", "data_dir", Dir]}),
     _ = rpc:call(S, ra, start, []),
     ok = ct_rpc:call(S, logger, set_primary_config,
                      [level, all]),
@@ -1538,11 +1535,6 @@ get_current_host() ->
     NodeStr = atom_to_list(node()),
     Host = re:replace(NodeStr, "^[^@]+@", "", [{return, list}]),
     list_to_atom(Host).
-
-search_paths() ->
-    Ld = code:lib_dir(),
-    lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
-                 code:get_path()).
 
 await_condition(_Fun, 0) ->
     exit(condition_did_not_materialise);

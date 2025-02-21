@@ -98,7 +98,7 @@ conf({Name, _Node} = NodeId, Nodes) ->
 
 start_stop_restart_delete_on_remote(Config) ->
     PrivDir = ?config(data_dir, Config),
-    S1 = start_follower(s1, PrivDir),
+    {S1, P1} = start_peer(s1, PrivDir),
     % ensure application is started
     ServerId = {c1, S1},
     Conf = conf(ServerId, [ServerId]),
@@ -116,14 +116,14 @@ start_stop_restart_delete_on_remote(Config) ->
     ok = ra:force_delete_server(?SYS, ServerId),
     % idempotency
     ok = ra:force_delete_server(?SYS, ServerId),
-    stop_nodes([ServerId]),
-    slave:stop(S1),
+    peer:stop(P1),
     ok.
 
 start_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3,s4,s5]],
+    Peers = start_peers([s1,s2,s3,s4,s5], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     % assert all were said to be started
@@ -133,13 +133,14 @@ start_cluster(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 start_or_restart_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     %% this should start
     {ok, Started, []} = ra:start_or_restart_cluster(?SYS, ClusterName, Machine,
@@ -150,8 +151,8 @@ start_or_restart_cluster(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    stop_peers(Peers),
+    Peers2 = start_peers([s1,s2,s3], PrivDir),
     %% this should restart
     {ok, Started2, []} = ra:start_or_restart_cluster(?SYS, ClusterName, Machine,
                                                      ServerIds),
@@ -160,13 +161,14 @@ start_or_restart_cluster(Config) ->
     PingResults2 = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults2)),
-    stop_nodes(ServerIds),
+    stop_peers(Peers2),
     ok.
 
 delete_one_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    Peers1 = start_peers([s1], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers1),
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     [{_, Node}] = ServerIds,
@@ -179,9 +181,9 @@ delete_one_server_cluster(Config) ->
     [] = [F || F <- filelib:wildcard(Wc), filelib:is_dir(F)],
     {error, _} = ra_server_proc:ping(hd(ServerIds), 50),
     % assert all nodes are actually started
-    [ok = slave:stop(S) || {_, S} <- ServerIds],
+    stop_peers(Peers1),
     % restart node
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    Peers2 = start_peers([s1], PrivDir),
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -195,13 +197,15 @@ delete_one_server_cluster(Config) ->
     undefined = rpc:call(Node, ra_log_meta, fetch, [ra_log_meta, UId, current_term]),
     ct:pal("Files  ~p", [Files]),
     [] = Files,
-    stop_nodes(ServerIds),
+    stop_peers(Peers1),
+    stop_peers(Peers2),
     ok.
 
 delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
+    Peers = start_peers([s1,s2], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     {ok, _} = ra:delete_cluster(ServerIds),
@@ -212,7 +216,7 @@ delete_two_server_cluster(Config) ->
                         undefined == erpc:call(Node, erlang, whereis, [Name])
                 end, ServerIds)
       end, 100),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -225,7 +229,8 @@ delete_two_server_cluster(Config) ->
 delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     {ok, _} = ra:delete_cluster(ServerIds),
@@ -236,13 +241,14 @@ delete_three_server_cluster(Config) ->
                         undefined == erpc:call(Node, erlang, whereis, [Name])
                 end, ServerIds)
       end, 100),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 delete_three_server_cluster_parallel(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     %% spawn a delete command to try cause it to commit more than
@@ -261,7 +267,7 @@ delete_three_server_cluster_parallel(Config) ->
          true = rpc:call(S, ?MODULE, check_sup, [])
      end || {_, S} <- ServerIds],
     % assert all nodes are actually started
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 check_sup() ->
@@ -270,7 +276,8 @@ check_sup() ->
 start_cluster_majority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2]],
+    Peers = start_peers([s1,s2], PrivDir),
+    ServerIds0 = server_ids(ClusterName, Peers),
     % s3 isn't available
     S3 = make_node_name(s3),
     NodeIds = ServerIds0 ++ [{ClusterName, S3}],
@@ -284,13 +291,14 @@ start_cluster_majority(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- Started],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
-    stop_nodes(ServerIds0),
+    stop_peers(Peers),
     ok.
 
 start_cluster_minority(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds0 = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1]],
+    Peers = start_peers([s1], PrivDir),
+    ServerIds0 = server_ids(ClusterName, Peers),
     % s3 isn't available
     S2 = make_node_name(s2),
     S3 = make_node_name(s3),
@@ -300,16 +308,16 @@ start_cluster_minority(Config) ->
         ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
     % assert none is started
     [{error, _} = ra_server_proc:ping(N, 50) || N <- NodeIds],
-    stop_nodes(ServerIds0),
+    stop_peers(Peers),
     ok.
 
 grow_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [{_, ANode} = A,
-     {_, BNode} = B,
-     {_, CNode} = C] =
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    [{_, ANode} = A, {_, BNode} = B, {_, CNode} = C] = ServerIds,
+
     Machine = {module, ?MODULE, #{}},
     {ok, [A], []} = ra:start_cluster(?SYS, ClusterName, Machine, [A]),
 
@@ -325,7 +333,10 @@ grow_cluster(Config) ->
     {ok, _, _} = ra:add_member(A, C),
     {ok, _, _} = ra:process_command(A, banana),
     {ok, _, L1} = ra:members(A),
-    [A, B, C] = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    X = rpc:call(ANode, ra_leaderboard, lookup_members, [ClusterName]),
+    ct:pal("X: ~p", [X]),
+    ct:pal("[A, B, C]: [~p, ~p, ~p]", [A, B, C]),
+    [A, B, C] = X,
     L1 = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
 
     await_condition(
@@ -368,14 +379,15 @@ grow_cluster(Config) ->
     undefined = rpc:call(ANode, ra_leaderboard, lookup_leader, [ClusterName]),
     undefined = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 send_local_msg(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)}
-                                    || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [A, B, NonVoter] = server_ids(ClusterName, Peers),
+
     NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
@@ -407,14 +419,14 @@ send_local_msg(Config) ->
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, ra_event]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, send_local_msg, [local, cast, ra_event]),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 local_log_effect(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [A, B, NonVoter] = [{ClusterName, start_follower(N, PrivDir)}
-                                    || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [A, B, NonVoter] = server_ids(ClusterName, Peers),
     NodeIds = [A, B],
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, NodeIds),
@@ -446,13 +458,15 @@ local_log_effect(Config) ->
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, ra_event]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast]),
     test_local_msg(Leader, NonVoterNode, LeaderNode, do_local_log, [local, cast, ra_event]),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 disconnected_node_catches_up(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = [start_peer(N, PrivDir) || N <- [s1,s2,s3]],
+    ServerIds = server_ids(ClusterName, Peers),
+
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     {ok, _, Leader} = ra:members(hd(Started)),
@@ -461,7 +475,7 @@ disconnected_node_catches_up(Config) ->
     %% the ra_directory DETS table has a 500ms autosave configuration
     timer:sleep(1000),
 
-    ok = slave:stop(DownServerNode),
+    ok = stop_peer(lists:keyfind(DownServerNode, 1, Peers)),
 
     ct:pal("Nodes ~p", [nodes()]),
     [
@@ -483,7 +497,7 @@ disconnected_node_catches_up(Config) ->
         end,
 
 
-    DownNode = start_follower(DownServerNodeName, PrivDir),
+    {DownNode, _} = DownPeer = start_peer(DownServerNodeName, PrivDir),
 
     Self = self(),
     SPid = erlang:spawn(DownNode,
@@ -521,13 +535,15 @@ disconnected_node_catches_up(Config) ->
               ok
     end,
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
+    stop_peer(DownPeer),
     ok.
 
 nonvoter_catches_up(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [A, B, C = {Group, NodeC}] = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
     {ok, _, Leader} = ra:members(hd(Started)),
@@ -556,13 +572,14 @@ nonvoter_catches_up(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 nonvoter_catches_up_after_restart(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [A, B, C = {Group, NodeC}] = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
     {ok, _, Leader} = ra:members(hd(Started)),
@@ -593,13 +610,14 @@ nonvoter_catches_up_after_restart(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 nonvoter_catches_up_after_leader_restart(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    [A, B, C = {Group, NodeC}] = ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [A, B, C = {Group, NodeC}] = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, [A, B]),
     {ok, _, Leader} = ra:members(hd(Started)),
@@ -630,13 +648,14 @@ nonvoter_catches_up_after_leader_restart(Config) ->
     ?assertMatch(#{membership := voter},
                  ra:key_metrics(C)),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 key_metrics(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     {ok, _, Leader} = ra:members(hd(Started)),
@@ -681,14 +700,15 @@ key_metrics(Config) ->
      end
      || S <- Started],
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 
 leaderboard(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     % assert all were said to be started
@@ -721,13 +741,15 @@ leaderboard(Config) ->
                          end || {_, N} <- ServerIds])
       end, 100),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 bench(Config) ->
     %% exercises the large message handling code
     PrivDir = ?config(data_dir, Config),
-    Nodes = [start_follower(N, PrivDir) || N <- [s1,s2,s3]],
+    ClusterName = ?FUNCTION_NAME,
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    Nodes = [ N || {_, N} <- server_ids(ClusterName, Peers)],
     ok = ra_bench:run(#{name => ?FUNCTION_NAME,
                         seconds => 10,
                         target => 500,
@@ -735,7 +757,7 @@ bench(Config) ->
                         data_size => 256 * 1000,
                         nodes => Nodes}),
 
-    stop_nodes(Nodes),
+    stop_peers(Peers),
     %% clean up
     ra_lib:recursive_delete(PrivDir),
     ok.
@@ -743,8 +765,8 @@ bench(Config) ->
 recover_from_checkpoint(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerNames = [s1, s2, s3],
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- ServerNames],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Configs = [begin
                    UId = atom_to_binary(Name, utf8),
                    #{cluster_name => ClusterName,
@@ -857,7 +879,7 @@ recover_from_checkpoint(Config) ->
                                                  undefined)
                                 end) || ServerId <- ServerIds],
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 segment_writer_or_wal_crash_follower(Config) ->
@@ -869,8 +891,8 @@ segment_writer_or_wal_crash_follower(Config) ->
     %% correactly and that the log data contains no missing entries
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerNames = [s1, s2, s3],
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- ServerNames],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Configs = [begin
                    UId = atom_to_binary(Name, utf8),
                    #{cluster_name => ClusterName,
@@ -954,7 +976,7 @@ segment_writer_or_wal_crash_follower(Config) ->
 
     await_condition(AwaitReplicated, 100),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 segment_writer_or_wal_crash_leader(Config) ->
@@ -966,8 +988,8 @@ segment_writer_or_wal_crash_leader(Config) ->
     %% correctly and that the log data does not miss any entries
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerNames = [s1, s2, s3],
-    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- ServerNames],
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
     Configs = [begin
                    UId = atom_to_binary(Name, utf8),
                    #{cluster_name => ClusterName,
@@ -1064,16 +1086,16 @@ segment_writer_or_wal_crash_leader(Config) ->
 
     await_condition(AwaitReplicated, 100),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 server_recovery_strategy(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerNames = [s1, s2, s3],
     SysCfg = #{server_recovery_strategy => registered},
-    ServerIds = [{ClusterName, start_follower(N, PrivDir, SysCfg)}
-                 || N <- ServerNames],
+    Peers = start_peers([s1,s2,s3], PrivDir, SysCfg),
+    ServerIds = server_ids(ClusterName, Peers),
+
     Configs = [begin
                    UId = atom_to_binary(Name, utf8),
                    #{cluster_name => ClusterName,
@@ -1101,7 +1123,7 @@ server_recovery_strategy(Config) ->
 
     timer:sleep(100),
 
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 stopped_wal_causes_leader_change_registered(Config) ->
@@ -1113,10 +1135,9 @@ stopped_wal_causes_leader_change_mfa(Config) ->
 stopped_wal_causes_leader_change(Config, RecoverStrat) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    ServerNames = [s1, s2, s3],
     SysCfg = #{server_recovery_strategy => RecoverStrat},
-    ServerIds = [{ClusterName, start_follower(N, PrivDir, SysCfg)}
-                 || N <- ServerNames],
+    Peers = start_peers([s1,s2,s3], PrivDir, SysCfg),
+    ServerIds = server_ids(ClusterName, Peers),
     Configs = [begin
                    UId = atom_to_binary(Name, utf8),
                    #{cluster_name => ClusterName,
@@ -1187,7 +1208,7 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
                              end)
                     end, 200),
     await_condition(AwaitReplicated, 100),
-    stop_nodes(ServerIds),
+    stop_peers(Peers),
     ok.
 
 %% Utility
@@ -1254,29 +1275,50 @@ make_node_name(N) ->
     H = get_current_host(),
     list_to_atom(lists:flatten(io_lib:format("~s@~s", [N, H]))).
 
-search_paths() ->
-    Ld = code:lib_dir(),
-    lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
-                 code:get_path()).
+start_peers(Ns, PrivDir) ->
+    start_peers(Ns, PrivDir, #{}).
 
-start_follower(N, PrivDir) ->
-    start_follower(N, PrivDir, #{}).
+start_peers(Ns, PrivDir, SysCfg) ->
+    Peers = [start_peer(N, PrivDir, SysCfg) || N <- Ns],
+    ct:pal("Peers: ~p", [Peers]),
+    Peers.
 
-start_follower(N, PrivDir, SysCfg) ->
+start_peer(N, PrivDir) ->
+    start_peer(N, PrivDir, #{}).
+
+start_peer(N, PrivDir, SysCfg) ->
     Dir0 = filename:join(PrivDir, N),
-    Dir = "'\"" ++ Dir0 ++ "\"'",
-    Host = get_current_host(),
-    Pa = string:join(["-pa" | search_paths()] ++ ["-ra data_dir", Dir], " "),
-    ct:pal("starting child node with ~ts on host ~ts for node ~ts",
-           [Pa, Host, node()]),
-    {ok, S} = slave:start_link(Host, N, Pa),
+    Dir = "'" ++ Dir0 ++ "'",
+    %Host = get_current_host(),
+    Args = ["-pa", filename:dirname(code:which(ra)), "-ra", "data_dir", Dir],
+    ct:pal("starting child node ~ts with args ~ts", [N, Args]),
+    {ok, P, S} = ?CT_PEER(#{name => N, args => Args}),
     ct:pal("started child node ~s", [S]),
     ok = ct_rpc:call(S, ?MODULE, node_setup, [Dir0]),
     % ok = ct_rpc:call(S, logger, set_primary_config,
     %                  [level, all]),
     _ = ct_cover:add_nodes([S]),
     {ok, _} = ct_rpc:call(S, ?MODULE, ra_start, [[], SysCfg]),
-    S.
+    {S, P}.
+
+server_ids(ClusterName, Peers) ->
+    [{ClusterName, S} || {S, _} <- Peers].
+
+peer(NodeName, Peers) ->
+    {_S, P} = lists:keyfind(NodeName, 1, Peers),
+    P.
+
+stop_peers(Peers) when is_list(Peers) ->
+    [ ok = stop_peer(Peer) || Peer <- Peers],
+    ok.
+stop_peer({S, P} = _Peer) ->
+    _ = ct_cover:remove_nodes(S),
+    case is_process_alive(P) of
+        true ->
+            peer:stop(P);
+        false ->
+            ok
+    end.
 
 ra_start(Params, SysCfg) when is_map(SysCfg) ->
     _ = application:stop(ra),
@@ -1392,11 +1434,4 @@ server_recover_function(System) ->
                  ok
          end
      end || {N, _Uid} <- Regd],
-    ok.
-
-stop_nodes([{_, _} | _ ] = ServerIds) ->
-    stop_nodes([S || {_, S} <- ServerIds]);
-stop_nodes(Nodes) ->
-    _ = ct_cover:remove_nodes(Nodes),
-    [ok = slave:stop(S) || S <- Nodes],
     ok.
