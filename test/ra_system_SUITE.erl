@@ -79,7 +79,7 @@ start_cluster(Config) ->
     Sys = ?FUNCTION_NAME,
     DataDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = [start_peer(N, DataDir) || N <- [s1, s2, s3]],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
     ServerIds = [{ClusterName, S} || {S, _P} <- Peers],
     Nodes = lists:map(fun ({_, N}) -> N end, ServerIds),
     Machine = {module, ?MODULE, #{}},
@@ -105,7 +105,7 @@ start_clusters_in_systems(Config) ->
     DataDir = ?config(data_dir, Config),
     ClusterName1 = start_clusters_in_systems_1,
     ClusterName2 = start_clusters_in_systems_2,
-    Peers = [start_peer(N, DataDir) || N <- [s1, s2, s3]],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
     Servers1 = [{ClusterName1, S} || {S, _P} <- Peers],
     Servers2 = [{ClusterName2, S} || {S, _P} <- Peers],
     Machine = {module, ?MODULE, #{}},
@@ -127,7 +127,7 @@ restart_system(Config) ->
     Sys = ?FUNCTION_NAME,
     DataDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = [start_peer(N, DataDir) || N <- [s1, s2, s3]],
+    Peers = [start_peer(DataDir) || _ <- lists:seq(1, 3)],
     ServerIds = [{ClusterName, S} || {S, _P} <- Peers],
     Nodes = lists:map(fun ({_, N}) -> N end, ServerIds),
     Machine = {module, ?MODULE, #{}},
@@ -218,13 +218,14 @@ search_paths() ->
     lists:filter(fun (P) -> string:prefix(P, Ld) =:= nomatch end,
                  code:get_path()).
 
-start_peer(N, PrivDir) ->
-    Dir0 = filename:join(PrivDir, N),
+start_peer(PrivDir) ->
+    Name = ?CT_PEER_NAME(),
+    Dir0 = filename:join(PrivDir, Name),
     Dir = "'" ++ Dir0 ++ "'",
     Pa = filename:dirname(code:which(ra)),
     Args = ["-pa", Pa, "-ra", "data_dir", Dir],
-    ct:pal("starting child node ~ts for node ~ts~n", [N, Args]),
-    {ok, P, S} = ?CT_PEER(#{name => N, args => Args}),
+    ct:pal("starting child node ~ts for node ~ts~n", [Name, Args]),
+    {ok, P, S} = ?CT_PEER(#{name => Name, args => Args}),
     {ok, _} = rpc:call(S, application, ensure_all_started, [ra]),
     {S, P}.
 
