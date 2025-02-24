@@ -229,7 +229,9 @@
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
+                              %% Deprecated in favor of counter_label:
                               counter => counters:counters_ref(),
+                              counter_label => seshat:label(),
                               membership => ra_membership(),
                               system_config => ra_system:config(),
                               has_changed => boolean()
@@ -258,6 +260,7 @@
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
+                            counter_label => seshat:label(),
                             broadcast_time => non_neg_integer(), % ms
                             tick_timeout => non_neg_integer(), % ms
                             install_snap_rpc_timeout => non_neg_integer(), % ms

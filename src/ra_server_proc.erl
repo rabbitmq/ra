@@ -315,9 +315,22 @@ do_init(#{id := Id,
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
-    Config = #{counter := Counter,
-               system_config := #{names := Names} = SysConf} = maps:merge(config_defaults(Id),
-                                                      Config0),
+    Config1 = #{system_config := SysConf} = maps:merge(config_defaults(),
+                                                       Config0),
+    Counter = case maps:find(counter, Config1) of
+                  {ok, C} ->
+                      C;
+                  error ->
+                      case ra_counters:fetch(Id) of
+                          undefined ->
+                              Label = maps:get(counter_label, Config1, Id),
+                              ra_counters:new(
+                                Id, {persistent_term, ?FIELDSPEC_KEY}, Label);
+                          C ->
+                              C
+                      end
+              end,
+    Config = maps:put(counter, Counter, Config1),
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
                                ?MIN_BIN_VHEAP_SIZE),
@@ -1768,20 +1781,12 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
-config_defaults(ServerId) ->
-    Counter = case ra_counters:fetch(ServerId) of
-                  undefined ->
-                      ra_counters:new(ServerId,
-                                      {persistent_term, ?FIELDSPEC_KEY});
-                  C ->
-                      C
-              end,
+config_defaults() ->
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
       install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
       await_condition_timeout => ?DEFAULT_AWAIT_CONDITION_TIMEOUT,
       initial_members => [],
-      counter => Counter,
       system_config => ra_system:default_config()
      }.
 

@@ -10,7 +10,7 @@ ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 
 dep_gen_batch_server = hex 0.8.9
 dep_aten = hex 0.6.0
-dep_seshat = hex 0.6.0
+dep_seshat = git https://github.com/rabbitmq/seshat.git 2b09eab1e1ec2e97de744236fad98fdb6c3897fa
 DEPS = aten gen_batch_server seshat
 
 TEST_DEPS = proper meck eunit_formatters inet_tcp_proxy
