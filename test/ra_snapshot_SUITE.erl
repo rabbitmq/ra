@@ -16,6 +16,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("src/ra.hrl").
 
+-define(MACMOD, ?MODULE).
+
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -93,9 +95,9 @@ take_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
+    MacState = ?FUNCTION_NAME,
     {State1, [{bg_work, Fun, _}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD,MacState, snapshot, State0),
     undefined = ra_snapshot:current(State1),
     Fun(),
     {{55, 2}, snapshot} = ra_snapshot:pending(State1),
@@ -116,9 +118,9 @@ take_snapshot_crash(Config) ->
     SnapDir = ?config(snap_dir, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
+    MacState = ?FUNCTION_NAME,
     {State1, [{bg_work, _Fun, ErrFun}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacState, snapshot, State0),
     ErrFun({error, blah}),
     undefined = ra_snapshot:current(State1),
     {{55, 2}, snapshot}  = ra_snapshot:pending(State1),
@@ -146,7 +148,7 @@ init_recover(Config) ->
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
     {State1, [{bg_work, Fun, _}]} =
-         ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot, State0),
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
     Fun(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
@@ -173,7 +175,7 @@ init_recover_voter_status(Config) ->
     State0 = init_state(Config),
     Meta = meta(55, 2, #{node() => #{voter_status => test}}),
     {State1, [{bg_work, Fun, _}]} =
-         ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot, State0),
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
     Fun(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
@@ -201,15 +203,16 @@ init_multi(Config) ->
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, snapshot, State0),
+        ra_snapshot:begin_snapshot(Meta1, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
     %% simulate ra worker execution
     Fun(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
             {State3, [{bg_work, Fun2, _}]} =
-                ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME, snapshot,
-                                           State2),
+                ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
+                                           snapshot, State2),
             {{165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
@@ -244,13 +247,15 @@ init_recover_multi_corrupt(Config) ->
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, snapshot, State0),
+        ra_snapshot:begin_snapshot(Meta1, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
     Fun(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
             {State3, [{bg_work, Fun2, _}]} =
-                ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME, snapshot, State2),
+                ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
+                                           snapshot, State2),
             {{165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
@@ -291,7 +296,8 @@ init_recover_corrupt(Config) ->
     SnapsDir = ?config(snap_dir, Config),
     State0 = init_state(Config),
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot, State0),
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
     Fun(),
     _ = receive
                  {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
@@ -322,7 +328,7 @@ read_snapshot(Config) ->
     Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacRef, snapshot, State0),
     Fun(),
     State = receive
                 {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
@@ -412,7 +418,7 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
     MetaRemoteBin = term_to_binary(MetaHigh),
     %% begin a local snapshot
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(MetaLow, ?FUNCTION_NAME, snapshot, State0),
+        ra_snapshot:begin_snapshot(MetaLow, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
     Fun(),
     MacRef = crypto:strong_rand_bytes(1024),
     MacBin = term_to_binary(MacRef),
@@ -452,7 +458,8 @@ accept_receives_snapshot_written_with_higher_index_2(Config) ->
     MetaHigh = meta(165, 2, [node()]),
     %% begin a local snapshot
     {State1, [{bg_work, Fun, _}]} =
-        ra_snapshot:begin_snapshot(MetaLow, ?FUNCTION_NAME, snapshot, State0),
+        ra_snapshot:begin_snapshot(MetaLow, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
     Fun(),
     MacRef = crypto:strong_rand_bytes(1024),
     MacBin = term_to_binary(MacRef),
@@ -496,3 +503,7 @@ meta(Idx, Term, Cluster) ->
       term => Term,
       cluster => Cluster,
       machine_version => 1}.
+
+%% ra_machine fakes
+version() -> 1.
+live_indexes(_) -> [].
