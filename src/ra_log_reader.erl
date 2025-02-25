@@ -13,7 +13,7 @@
          init/7,
          close/1,
          update_segments/2,
-         handle_log_update/2,
+         handle_compaction/2,
          segment_refs/1,
          segment_ref_count/1,
          range/1,
@@ -109,7 +109,7 @@ update_segments(NewSegmentRefs,
 
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
     SegmentRefsComp = compact_segrefs(NewSegmentRefs, SegmentRefs0),
-    SegmentRefsCompRev = lists:reverse(SegmentRefsComp ),
+    SegmentRefsCompRev = lists:reverse(SegmentRefsComp),
     SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
     Range = case SegmentRefsComp of
                 [{{_, L}, _} | _] ->
@@ -131,19 +131,20 @@ update_segments(NewSegmentRefs,
                   range = Range,
                   open_segments = Open}.
 
--spec handle_log_update({ra_log_update, undefined | pid(), ra_index(),
-                         [segment_ref()]}, state()) -> state().
-handle_log_update({ra_log_update, From, _FstIdx, SegRefs},
-                  #?STATE{open_segments = Open0} = State) ->
+-record(log_compaction_result,
+        {%range :: ra:range(),
+         deleted :: [segment_ref()],
+         new :: [segment_ref()]}).
+-spec handle_compaction(#log_compaction_result{}, state()) -> state().
+handle_compaction(#log_compaction_result{deleted = Deleted,
+                                         new = New},
+                  #?STATE{open_segments = Open0,
+                          segment_refs = SegRefs0} = State) ->
+    SegmentRefs0 = ra_lol:to_list(SegRefs0),
+    SegmentRefs = lists:sort((SegmentRefs0 -- Deleted) ++ New),
     Open = ra_flru:evict_all(Open0),
-    case From of
-        undefined -> ok;
-        _ ->
-            %% reply to the updater process
-            From ! ra_log_update_processed
-    end,
     State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
-                                                  lists:reverse(SegRefs)),
+                                                  lists:reverse(SegmentRefs)),
                   open_segments = Open}.
 
 -spec update_first_index(ra_index(), state()) ->
