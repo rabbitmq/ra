@@ -397,7 +397,7 @@ sparse_read_out_of_range_2(Config) ->
                                           write_and_roll(1, 10, 2, Log0)), 50),
     SnapIdx = 10,
     %% do snapshot in
-    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
+    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, ?MODULE,
                                                 <<"snap@10">>, Log1),
     run_effs(Effs),
     {Log3, _} = receive
@@ -533,7 +533,7 @@ written_event_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log2, Effs} = ra_log:update_release_cursor(2, #{}, 1,
+    {Log2, Effs} = ra_log:update_release_cursor(2, #{}, ?MODULE,
                                                 <<"one+two">>, Log1b),
     run_effs(Effs),
     {Log3, _} = receive
@@ -549,7 +549,7 @@ written_event_after_snapshot(Config) ->
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     Log6b = deliver_all_log_events(Log6, 100),
-    {Log7, Effs2} = ra_log:update_release_cursor(4, #{}, 1,
+    {Log7, Effs2} = ra_log:update_release_cursor(4, #{}, ?MODULE,
                                                  <<"one+two+three+four">>,
                                                  Log6b),
     run_effs(Effs2),
@@ -570,7 +570,7 @@ recover_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log2 = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log3, Effs} = ra_log:update_release_cursor(2, #{}, 1,
+    {Log3, Effs} = ra_log:update_release_cursor(2, #{}, ?MODULE,
                                                 <<"one+two">>, Log2),
     run_effs(Effs),
     Log4 = deliver_all_log_events(Log3, 100),
@@ -593,7 +593,8 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     Log1b = deliver_all_log_events(ra_log:append({2, 1, <<"two">>}, Log1), 500),
     true = erlang:suspend_process(whereis(ra_log_wal)),
     Log2 = write_n(3, 500, 1, Log1b),
-    {Log3, Effs0} = ra_log:update_release_cursor(100, #{}, 1, <<"100">>, Log2),
+    {Log3, Effs0} = ra_log:update_release_cursor(100, #{}, ?MODULE,
+                                                 <<"100">>, Log2),
     run_effs(Effs0),
     Log4 = deliver_all_log_events(Log3, 500),
 
@@ -1062,7 +1063,7 @@ snapshot_written_after_installation(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, Effs} = ra_log:update_release_cursor(5, #{}, 1,
+    {Log2, Effs} = ra_log:update_release_cursor(5, #{}, ?MODULE,
                                                 <<"one-five">>, Log1),
     run_effs(Effs),
     DelayedSnapWritten = receive
@@ -1109,7 +1110,7 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
                                  min_checkpoint_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, Effs} = ra_log:checkpoint(5, #{}, 1, <<"one-five">>, Log1),
+    {Log2, Effs} = ra_log:checkpoint(5, #{}, ?MODULE, <<"one-five">>, Log1),
     run_effs(Effs),
     DelayedSnapWritten = receive
                              {ra_log_event, {snapshot_written, {5, 1},
@@ -1294,7 +1295,7 @@ update_release_cursor(Config) ->
     % update release cursor to the last entry of the first segment
     {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
                                                        ?N2 => new_peer()},
-                                                1, initial_state, Log1),
+                                                ?MODULE, initial_state, Log1),
 
     run_effs(Effs),
     Log3 = assert_log_events(Log2,
@@ -1313,7 +1314,7 @@ update_release_cursor(Config) ->
     % update the release cursor all the way
     {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
                                                         ?N2 => new_peer()},
-                                                 1, initial_state, Log3b),
+                                                 ?MODULE, initial_state, Log3b),
     run_effs(Effs2),
     Log5 = assert_log_events(Log4,
                              fun (L) ->
@@ -1350,10 +1351,9 @@ update_release_cursor_with_machine_version(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    MacVer = 2,
     {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
                                                        ?N2 => new_peer()},
-                                                MacVer,
+                                                ?MODULE,
                                                 initial_state, Log1),
     run_effs(Effs),
     Log = assert_log_events(Log2,
@@ -1364,7 +1364,7 @@ update_release_cursor_with_machine_version(Config) ->
     %% assert the version is in the snapshot state meta data
     CurrentDir = ra_snapshot:current_snapshot_dir(SnapState),
     {ok, Meta} = ra_snapshot:read_meta(ra_log_snapshot, CurrentDir),
-    ?assertMatch(#{index := 127, machine_version := MacVer}, Meta),
+    ?assertMatch(#{index := 127, machine_version := 1}, Meta),
     ok.
 
 missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
@@ -1404,7 +1404,7 @@ missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
     % then update the release cursor
     {Log6, Effs2} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
                                                         ?N2 => new_peer()},
-                                                 1, initial_state, Log5),
+                                                 ?MODULE, initial_state, Log5),
     run_effs(Effs2),
     Log7 = deliver_log_events_cond(Log6,
                                    fun (_) ->
@@ -1727,8 +1727,9 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
-    MacRef = <<"9">>,
-    {Sn1, [{bg_work, Fun, _ErrFun}]} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
+    MacState = <<"9">>,
+    {Sn1, [{bg_work, Fun, _ErrFun}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),
     Fun(),
     Sn2 =
         receive
@@ -1774,3 +1775,7 @@ wait_for_wal(OldPid) ->
                       end, 100, 100).
 run_effs(Effs) ->
     [Fun() || {bg_work, Fun, _} <- Effs].
+
+%% ra_machine fakes
+version() -> 1.
+live_indexes(_) -> [].
