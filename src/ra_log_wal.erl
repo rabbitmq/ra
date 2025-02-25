@@ -716,12 +716,11 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     State#state{wal = Wal#wal{ranges = Ranges}}.
 
 complete_batch_writer(Pid, #batch_writer{snap_idx = SnapIdx,
-                         tid = MtTid,
-                         uid = UId,
-                         range = Range,
-                         term = Term,
-                         old = undefined
-                        }, Ranges) ->
+                                         tid = MtTid,
+                                         uid = UId,
+                                         range = Range,
+                                         term = Term,
+                                         old = undefined}, Ranges) ->
     Pid ! {ra_log_event, {written, Term, Range}},
     update_ranges(Ranges, UId, MtTid, SnapIdx, Range);
 complete_batch_writer(Pid, #batch_writer{old = #batch_writer{} = OldBw} = Bw,
