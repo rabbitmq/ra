@@ -84,7 +84,7 @@ init_per_group(Group, Config) ->
     SysCfg = (ra_system:default_config())#{data_dir => Dir},
     ra_system:store(SysCfg),
     ra_directory:init(?SYS),
-    ra_counters:init(),
+    ra_counters:init(?SYS),
     % application:ensure_all_started(lg),
     SyncMethod =
         case Group of
@@ -108,7 +108,7 @@ init_per_testcase(TestCase, Config) ->
     Sys = ?config(sys_cfg, Config),
     Dir = filename:join([PrivDir, M, TestCase]),
     {ok, Ets} = ra_log_ets:start_link(Sys),
-    ra_counters:init(),
+    ra_counters:init(?SYS),
     UId = atom_to_binary(TestCase, utf8),
     ok = ra_directory:register_name(default, UId, self(), undefined,
                                     TestCase, TestCase),

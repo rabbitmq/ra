@@ -330,13 +330,14 @@ init(#{reply_to := ReplyTo} = Config) ->
 do_init(#{id := Id,
           uid := UId,
           parent := ParentPid,
-          cluster_name := ClusterName} = Config0)
+          cluster_name := ClusterName,
+          system_config := #{name := System}} = Config0)
   when is_pid(ParentPid) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
     MetricLabels = maps:get(metrics_labels, Config0, #{}),
-    Config = maps:merge(config_defaults(Id, MetricLabels), Config0),
+    Config = maps:merge(config_defaults(System, Id, MetricLabels), Config0),
     #{counter := Counter,
       system_config := #{names := Names} = SysConf} = Config,
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
@@ -1183,10 +1184,11 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{conf = #conf{name = Key,
-                              cluster_name = ClusterName,
-                              worker_pid = WorkerPid},
-                 server_state = ServerState} = State) ->
+              #state{conf = #conf{name = Key,
+                                  cluster_name = ClusterName,
+                                  worker_pid = WorkerPid},
+                     server_state = #{cfg := #cfg{
+                         system_config = #{name := System}}} = ServerState} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
     #{names := #{server_sup := SrvSup,
@@ -1212,7 +1214,7 @@ terminate(Reason, StateName,
             catch ra_directory:unregister_name(Names, UId),
             _ = ra_server:terminate(ServerState, Reason),
             catch ra_log_meta:delete_sync(MetaName, UId),
-            catch ra_counters:delete(Id),
+            catch ra_counters:delete(System, Id),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% won't do this automatically, even for transient children
@@ -1630,7 +1632,7 @@ handle_effect(_RaftState, {reply, Reply}, {call, From}, State, Actions) ->
 handle_effect(_RaftState, {reply, _From, _Reply}, _EvtType, State, Actions) ->
     {State, Actions};
 handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}}, _,
-              #state{server_state = SS0,
+              #state{server_state = #{cfg := #cfg{system_config = #{name := System}}} = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
                                   log_id = LogId,
@@ -1653,7 +1655,7 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                            end,
             Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
-                                send_snapshots(Id, Term, To,
+                                send_snapshots(System, Id, Term, To,
                                                ChunkSize, InstallSnapTimeout,
                                                SnapState, Machine, LogId)
                         end),
@@ -1972,15 +1974,15 @@ reset_commit_rate({LI, _LastCI, _LastRate}, ServerState) ->
     #{commit_index := CI} = ServerState,
     {ra_li:reset(LI), CI, 0.0}.
 
-config_defaults(ServerId, MetricLabels) ->
-    Counter = case ra_counters:fetch(ServerId) of
-                  undefined ->
-                      ra_counters:new(ServerId,
-                                      {persistent_term, ?FIELDSPEC_KEY},
-                                      MetricLabels);
-                  C ->
-                      C
-              end,
+config_defaults(System, ServerId, MetricLabels) ->
+    Counter = case ra_counters:fetch(System, ServerId) of
+                    undefined ->
+                        ra_counters:new(System, ServerId,
+                                        {persistent_term, ?FIELDSPEC_KEY},
+                                        MetricLabels);
+                    C ->
+                        C
+                end,
     #{broadcast_time => ?DEFAULT_BROADCAST_TIME,
       tick_timeout => ?TICK_INTERVAL_MS,
       install_snap_rpc_timeout => ?INSTALL_SNAP_RPC_TIMEOUT,
@@ -2044,7 +2046,7 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
                                                end),
     {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
-send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
+send_snapshots(System, Id, Term, {_, ToNode} = To, ChunkSize,
                InstallTimeout, SnapState, Machine, LogId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{index := SnapIdx,
@@ -2093,7 +2095,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                     %% there are live indexes to send before the snapshot
                     #{last_applied := LastApplied} =
                         erpc:call(ToNode, ra_counters, counters,
-                                  [To, [last_applied]]),
+                                  [System, To, [last_applied]]),
                     %% remove all indexes lower than the target's last applied
                     Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
                     ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~w ",

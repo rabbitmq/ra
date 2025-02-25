@@ -46,13 +46,15 @@ groups() ->
      {tests, [], all_tests()}
     ].
 
+-define(SYS, default).
+
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     ok = ra_lib:make_dir(Dir),
     CompConf = #{max_count => 128,
                  max_size => 128_000},
-    ra_counters:init(),
+    ra_counters:init(?SYS),
     [{uid, atom_to_binary(TestCase, utf8)},
      {comp_conf, CompConf},
      {test_case, TestCase},
@@ -653,7 +655,7 @@ major_strategy_num_minors(Config) ->
 
     ],
 
-    Counters = ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    Counters = ra_counters:new(?SYS, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     CompConf  = #{max_count => 16,
                   max_size => 128_000,
                   major_strategy => {num_minors, 2}},
@@ -662,7 +664,7 @@ major_strategy_num_minors(Config) ->
     _Segs = run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ?assertMatch(#{major_compactions := 1,
                    minor_compactions := 2},
-                 ra_counters:counters(?FUNCTION_NAME,
+                 ra_counters:counters(?SYS, ?FUNCTION_NAME,
                                             [minor_compactions,
                                              major_compactions])),
 

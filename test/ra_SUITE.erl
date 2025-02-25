@@ -162,7 +162,7 @@ pipeline_commands(Config) ->
     ?assertMatch(#{last_index := I,
                    last_applied := I,
                    last_written_index := I,
-                   commit_index := I}, ra:key_metrics(N1)),
+                   commit_index := I}, ra:key_metrics(?SYS, N1)),
     terminate_cluster([N1]).
 
 stop_server_idemp(Config) ->
