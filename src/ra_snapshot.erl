@@ -28,7 +28,7 @@
          directory/2,
          last_index_for/1,
 
-         begin_snapshot/4,
+         begin_snapshot/5,
          promote_checkpoint/2,
          complete_snapshot/3,
 
@@ -353,9 +353,10 @@ last_index_for(UId) ->
             undefined
     end.
 
--spec begin_snapshot(meta(), ReleaseCursorRef :: term(), kind(), state()) ->
+-spec begin_snapshot(meta(), MacModule :: module(),
+                     MacStateb :: term(), kind(), state()) ->
     {state(), [effect()]}.
-begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
+begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                #?MODULE{module = Mod,
                         counter = Counter,
                         snapshot_directory = SnapshotDir,
@@ -372,10 +373,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
+    %% TODO: really we'd like to run this in the ra worker as good potentially
+    %% be quite large and a touch expensive to compute but also we don't want
+    %% to close over both the MacState and the MacRef
+    Indexes = ra_machine:live_indexes(MacMod, MacState),
     %% call prepare then write_snapshotS
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
-    Ref = Mod:prepare(Meta, MacRef),
+    Ref = Mod:prepare(Meta, MacState),
     %% write the snapshot in a separate process
     Self = self(),
     IdxTerm = {Idx, Term},
@@ -386,6 +391,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
                             {ok, BytesWritten} ->
                                 counters_add(Counter, CounterIdx,
                                              BytesWritten),
+                                ok
+                        end,
+                        %% write the live indexes, if any
+                        case Indexes of
+                            [] -> ok;
+                            _ ->
+                                F = filename:join(SnapDir, "indexes"),
+                                ok = ra_lib:write_file(F, term_to_binary(Indexes), true),
                                 ok
                         end,
                         Self ! {ra_log_event,
