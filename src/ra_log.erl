@@ -708,6 +708,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
                       first_index = FstIdx,
                       last_index = LstIdx,
                       mem_table = Mt0,
+                      % reader = Reader,
                       last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
@@ -716,8 +717,6 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
     case SnapKind of
         snapshot ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-            % delete any segments outside of first_index
-            {State, Effects0} = delete_segments(SnapIdx, State0),
             %% Delete old snapshot files. This is done as an effect
             %% so that if an old snapshot is still being replicated
             %% the cleanup can be delayed until it is safe.
@@ -730,21 +729,31 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
             CPEffects = [{delete_snapshot,
                           ra_snapshot:directory(SnapState, checkpoint),
                           Checkpoint} || Checkpoint <- Checkpoints],
-            Effects1 = [DeleteCurrentSnap | CPEffects] ++ Effects0,
+            Effects0 = [DeleteCurrentSnap | CPEffects],
 
-            {LWIdxTerm, Effects} =
+            LWIdxTerm =
                 case LastWrittenIdx > SnapIdx of
                     true ->
-                        {LWIdxTerm0, Effects1};
+                        LWIdxTerm0;
                     false ->
-                        {Snap, Effects1}
+                        Snap
                 end,
+            % delete any segments outside of first_index
+            {State, Effects1} = delete_segments(SnapIdx, State0),
+
+            %% delete from mem table
             %% this will race with the segment writer but if the
             %% segwriter detects a missing index it will query the snaphost
             %% state and if that is higher it will resume flush
             {Spec, Mt1} = ra_mt:set_first(SnapIdx + 1, Mt0),
             ok = exec_mem_table_delete(Names, UId, Spec),
 
+            %% TODO schedule compaction,
+            %% NB the mt cannot be truncated here with set_first as we need
+            %% to keep any live indexes
+            % SegRefs = ra_log_reader:segment_refs(Reader),
+
+            Effects = Effects0 ++ Effects1,
             {State#?MODULE{first_index = SnapIdx + 1,
                            last_index = max(LstIdx, SnapIdx),
                            last_written_index_term = LWIdxTerm,
@@ -841,7 +850,7 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
     CPEffects = [{delete_snapshot,
                   ra_snapshot:directory(SnapState, checkpoint),
                   Checkpoint} || Checkpoint <- Checkpoints],
-    {Spec, Mt} = ra_mt:set_first(SnapIdx, Mt0),
+    {Spec, Mt} = ra_mt:set_first(SnapIdx + 1, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
@@ -865,25 +874,28 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 
--spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
-                            MacVersion :: ra_machine:version(),
+-spec update_release_cursor(Idx :: ra_index(),
+                            Cluster :: ra_cluster(),
+                            MacModule :: module(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
-    suggest_snapshot(snapshot, Idx, Cluster, MacVersion, MacState, State).
+update_release_cursor(Idx, Cluster, MacModule, MacState, State)
+  when is_atom(MacModule) ->
+    suggest_snapshot(snapshot, Idx, Cluster, MacModule, MacState, State).
 
 -spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
-                 MacVersion :: ra_machine:version(),
+                 MacModule :: module(),
                  MacState :: term(), State :: state()) ->
     {state(), effects()}.
-checkpoint(Idx, Cluster, MacVersion, MacState, State) ->
-    suggest_snapshot(checkpoint, Idx, Cluster, MacVersion, MacState, State).
+checkpoint(Idx, Cluster, MacModule, MacState, State)
+  when is_atom(MacModule) ->
+    suggest_snapshot(checkpoint, Idx, Cluster, MacModule, MacState, State).
 
-suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
+suggest_snapshot(SnapKind, Idx, Cluster, MacModule, MacState,
                  #?MODULE{snapshot_state = SnapshotState} = State) ->
     case ra_snapshot:pending(SnapshotState) of
         undefined ->
-            suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State);
+            suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State);
         _ ->
             %% Only one snapshot or checkpoint may be written at a time to
             %% prevent excessive I/O usage.
@@ -929,13 +941,7 @@ tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
             State
     end.
 
-suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
-    ClusterServerIds = maps:map(fun (_, V) ->
-                                        maps:with([voter_status], V)
-                                end, Cluster),
-    Meta = #{index => Idx,
-             cluster => ClusterServerIds,
-             machine_version => MacVersion},
+suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State0) ->
     case should_snapshot(SnapKind, Idx, State0) of
         true ->
             % TODO: here we use the current cluster configuration in
@@ -953,7 +959,15 @@ suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
                 {undefined, _} ->
                     {State0, []};
                 {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState,
+                    ClusterServerIds =
+                        maps:map(fun (_, V) ->
+                                         maps:with([voter_status], V)
+                                 end, Cluster),
+                    MachineVersion = ra_machine:version(MacModule),
+                    Meta = #{index => Idx,
+                             cluster => ClusterServerIds,
+                             machine_version => MachineVersion},
+                    write_snapshot(Meta#{term => Term}, MacModule, MacState,
                                    SnapKind, State)
             end;
         false ->
@@ -1094,18 +1108,6 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),
     catch ets:delete(ra_log_snapshot_state, UId),
-    % case ra_snapshot:pending(SnapState) of
-    %     {Pid, _, _} ->
-    %         case is_process_alive(Pid) of
-    %             true ->
-    %                 exit(Pid, kill),
-    %                 ok;
-    %             false ->
-    %                 ok
-    %         end;
-    %     _ ->
-    %         ok
-    % end,
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch
@@ -1285,7 +1287,7 @@ stage_entries0(Cfg, [Entry | Rem], Mt0) ->
 
 
 
-write_snapshot(Meta, MacRef, SnapKind,
+write_snapshot(Meta, MacModule, MacState, SnapKind,
                #?MODULE{cfg = Cfg,
                         snapshot_state = SnapState0} = State) ->
     Counter = case SnapKind of
@@ -1293,8 +1295,8 @@ write_snapshot(Meta, MacRef, SnapKind,
                   checkpoint -> ?C_RA_LOG_CHECKPOINTS_WRITTEN
               end,
     ok = incr_counter(Cfg, Counter, 1),
-    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapKind,
-                                                      SnapState0),
+    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacModule, MacState,
+                                                      SnapKind, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
 recover_ranges(UId, MtRange, SegWriter) ->

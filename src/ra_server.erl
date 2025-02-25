@@ -2169,21 +2169,26 @@ log_fold_cache(From, _To, _Cache, Acc) ->
                             term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
-                      State = #{log := Log0, cluster := Cluster}) ->
+                      #{cfg := #cfg{machine = Machine},
+                        log := Log0,
+                        cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
-                                                  MacVersion,
+                                                  MacMod,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec checkpoint(ra_index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
 checkpoint(Index, MacState,
-           State = #{log := Log0, cluster := Cluster}) ->
+           #{cfg := #cfg{machine = Machine},
+             log := Log0, cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
-                                       MacVersion, MacState, Log0),
+                                       MacMod, MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec promote_checkpoint(ra_index(), ra_server_state()) ->
