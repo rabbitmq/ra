@@ -40,6 +40,7 @@ init(#{data_dir := DataDir,
                                start => {ra_server_sup_sup, start_link, [Cfg]}},
             Recover = #{id => ra_system_recover,
                         start => {ra_system_recover, start_link, [maps:get(name, Cfg)]}},
+            ra_counters:init(Name),
             {ok, {SupFlags, [Ets, RaLogSup, RaServerSupSup, Recover]}};
         {error, Code} ->
             ?ERR("Failed to create Ra data directory at '~ts', file system operation error: ~p", [DataDir, Code]),

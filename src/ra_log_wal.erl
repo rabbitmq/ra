@@ -266,8 +266,9 @@ init(#{dir := Dir} = Conf0) ->
       garbage_collect := Gc,
       min_heap_size := MinHeapSize,
       min_bin_vheap_size := MinBinVheapSize,
+      system := System,
       names := #{wal := WalName,
-                 open_mem_tbls := MemTablesName} = Names} =
+                 open_mem_tbls := MemTablesName} = Names0} =
         merge_conf_defaults(Conf0),
     ?NOTICE("WAL: ~ts init, mem-tables table name: ~w",
             [WalName, MemTablesName]),
@@ -275,10 +276,11 @@ init(#{dir := Dir} = Conf0) ->
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
     % writers
+    Names = Names0#{system => System},
     process_flag(message_queue_data, off_heap),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
+    CRef = ra_counters:new(System, WalName, ?COUNTER_FIELDS),
     Conf = #conf{dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
@@ -325,7 +327,7 @@ terminate(Reason, State) ->
 format_status(#state{conf = #conf{write_strategy = Strat,
                                   sync_method = SyncMeth,
                                   compute_checksums = Cs,
-                                  names = #{wal := WalName},
+                                  names = #{system := System, wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      wal = #wal{file_size = FSize,
@@ -337,7 +339,7 @@ format_status(#state{conf = #conf{write_strategy = Strat,
       filename => filename:basename(Fn),
       current_size => FSize,
       max_size_bytes => MaxSize,
-      counters => ra_counters:overview(WalName)
+      counters => ra_counters:overview(System, WalName)
      }.
 
 %% Internal

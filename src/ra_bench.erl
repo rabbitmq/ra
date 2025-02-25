@@ -15,6 +15,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-define(BENCH_SYSTEM_NAME, default).
 -define(PIPE_SIZE, 500).
 -define(DATA_SIZE, 256).
 
@@ -146,7 +147,7 @@ start(Name, Nodes) when is_atom(Name) ->
                      initial_members => ServerIds,
                      machine => {module, ?MODULE, #{}}}
                end || N <- Nodes],
-    ra:start_cluster(default, Configs).
+    ra:start_cluster(?BENCH_SYSTEM_NAME, Configs).
 
 prepare() ->
     _ = application:ensure_all_started(ra),
@@ -202,7 +203,7 @@ spawn_client(Parent, Leader, Num, DataSize, Pipe, Counter) ->
 print_metrics(Name) ->
     io:format("Node: ~w~n", [node()]),
     io:format("metrics ~p~n", [ets:lookup(ra_metrics, Name)]),
-    io:format("counters ~p~n", [ra_counters:overview()]).
+    io:format("counters ~p~n", [ra_counters:overview(?BENCH_SYSTEM_NAME)]).
 
 
 

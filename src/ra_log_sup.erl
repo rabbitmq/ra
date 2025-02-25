@@ -52,9 +52,10 @@ init([#{data_dir := DataDir,
 
 
 make_wal_conf(#{data_dir := DataDir,
-                name := _System,
+                name := System,
                 names := #{wal := WalName,
-                           segment_writer := SegWriterName} = Names} = Cfg) ->
+                           segment_writer := SegWriterName} = Names0} = Cfg) ->
+    Names = Names0#{system => System},
     WalDir = case Cfg of
                  #{wal_data_dir := D} -> D;
                  _ -> DataDir
@@ -73,7 +74,8 @@ make_wal_conf(#{data_dir := DataDir,
     MinBinVheapSize = maps:get(wal_min_bin_vheap_size, Cfg,
                                ?MIN_BIN_VHEAP_SIZE),
     MinHeapSize = maps:get(wal_min_heap_size, Cfg, ?MIN_HEAP_SIZE),
-    #{name => WalName,
+    #{system => System,
+      name => WalName,
       names => Names,
       dir => WalDir,
       segment_writer => SegWriterName,

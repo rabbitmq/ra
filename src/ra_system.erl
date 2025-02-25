@@ -15,7 +15,8 @@
          stop_default/0
          ]).
 
--type names() :: #{wal := atom(),
+-type names() :: #{system := atom(),
+                   wal := atom(),
                    wal_sup := atom(),
                    log_sup := atom(),
                    log_ets := atom(),
@@ -159,7 +160,8 @@ default_config() ->
                 }}.
 
 derive_names(SysName) when is_atom(SysName) ->
-    #{wal => derive(SysName, <<"log_wal">>),
+    #{system => SysName,
+      wal => derive(SysName, <<"log_wal">>),
       wal_sup => derive(SysName, <<"log_wal_sup">>),
       log_sup => derive(SysName, <<"log_sup">>),
       log_ets => derive(SysName, <<"log_ets">>),
