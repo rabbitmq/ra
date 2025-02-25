@@ -474,7 +474,7 @@ is_same_filename_all(Fn, Fn) ->
 is_same_filename_all(Fn0, Fn1) ->
     B0 = filename:basename(Fn0),
     B1 = filename:basename(Fn1),
-    ra_lib:to_list(B0) == ra_lib:to_list(B1).
+    ra_lib:to_binary(B0) == ra_lib:to_binary(B1).
 
 update_range(undefined, Idx) ->
     {Idx, Idx};
