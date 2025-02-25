@@ -86,8 +86,7 @@
     {wal_data_dir, file:filename()} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
-    {wal_compute_checksums, boolean()} |
-    {wal_write_strategy, default | o_sync}.
+    {wal_compute_checksums, boolean()}.
 
 -type query_fun() :: fun((term()) -> term()) |
                      {M :: module(), F :: atom(), A :: list()}.
