@@ -67,16 +67,6 @@
                 pending = [] :: iolist()
                }).
 
--type wal_write_strategy() ::
-    % writes all pending in one write(2) call then calls fsync(1)
-    default |
-    % like default but tries to open the file using synchronous io
-    % (O_SYNC) rather than a write(2) followed by an fsync.
-    o_sync |
-    %% low latency mode where writers are notifies _before_ syncing
-    %% but after writing.
-    sync_after_notify.
-
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
                               #{writer_id() => binary()}}.
 
@@ -86,7 +76,6 @@
                max_size_bytes :: non_neg_integer(),
                max_entries :: undefined | non_neg_integer(),
                recovery_chunk_size = ?WAL_RECOVERY_CHUNK_SIZE :: non_neg_integer(),
-               write_strategy = default :: wal_write_strategy(),
                sync_method = datasync :: sync | datasync | none,
                counter :: counters:counters_ref(),
                mem_tables_tid :: ets:tid(),
@@ -139,7 +128,6 @@
                       segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
                       pre_allocate => boolean(),
-                      write_strategy => wal_write_strategy(),
                       sync_method => sync | datasync,
                       recovery_chunk_size  => non_neg_integer(),
                       hibernate_after => non_neg_integer(),
@@ -149,8 +137,7 @@
                       min_bin_vheap_size => non_neg_integer()
                      }.
 
--export_type([wal_conf/0,
-              wal_write_strategy/0]).
+-export_type([wal_conf/0]).
 
 -type wal_command() ::
     {append | truncate, writer_id(), ra_index(), ra_term(), term()}.
@@ -261,7 +248,6 @@ init(#{dir := Dir} = Conf0) ->
       segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
       pre_allocate := PreAllocate,
-      write_strategy := WriteStrategy,
       sync_method := SyncMethod,
       garbage_collect := Gc,
       min_heap_size := MinHeapSize,
@@ -285,7 +271,6 @@ init(#{dir := Dir} = Conf0) ->
                  max_size_bytes = max(?WAL_MIN_SIZE, MaxWalSize),
                  max_entries = MaxEntries,
                  recovery_chunk_size = RecoveryChunkSize,
-                 write_strategy = WriteStrategy,
                  sync_method = SyncMethod,
                  counter = CRef,
                  mem_tables_tid = ets:whereis(MemTablesName),
@@ -299,7 +284,9 @@ init(#{dir := Dir} = Conf0) ->
             % generated during recovery
             ok = ra_log_segment_writer:await(SegWriter),
             {ok, Result}
-    catch _:Err:_Stack ->
+    catch _:Err:Stack ->
+              ?ERROR("WAL: failed to initialise with ~p, stack ~p",
+                     [Err, Stack]),
               {stop, Err}
     end.
 
@@ -322,16 +309,14 @@ terminate(Reason, State) ->
     _ = cleanup(State),
     ok.
 
-format_status(#state{conf = #conf{write_strategy = Strat,
-                                  sync_method = SyncMeth,
+format_status(#state{conf = #conf{sync_method = SyncMeth,
                                   compute_checksums = Cs,
                                   names = #{wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      wal = #wal{file_size = FSize,
                                 filename = Fn}}) ->
-    #{write_strategy => Strat,
-      sync_method => SyncMeth,
+    #{sync_method => SyncMeth,
       compute_checksums => Cs,
       writers => maps:size(Writers),
       filename => filename:basename(Fn),
@@ -595,20 +580,6 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                  wal = Wal,
                  file_num = Num}.
 
-open_wal(File, Max, #conf{write_strategy = o_sync} = Conf) ->
-        Modes = [sync | ?FILE_MODES],
-        case prepare_file(File, Modes) of
-            {ok, Fd} ->
-                % many platforms implement O_SYNC a bit like O_DSYNC
-                % perform a manual sync here to ensure metadata is flushed
-                {Conf, #wal{fd = Fd,
-                            max_size = Max,
-                            filename = File}};
-            {error, enotsup} ->
-                ?WARN("wal: o_sync write strategy not supported. "
-                      "Reverting back to default strategy.", []),
-                open_wal(File, Max, Conf#conf{write_strategy = default})
-        end;
 open_wal(File, Max, #conf{} = Conf0) ->
     {ok, Fd} = prepare_file(File, ?FILE_MODES),
     Conf = maybe_pre_allocate(Conf0, Fd, Max),
@@ -637,9 +608,7 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-maybe_pre_allocate(#conf{pre_allocate = true,
-                         write_strategy = Strat} = Conf, Fd, Max0)
-  when Strat /= o_sync ->
+maybe_pre_allocate(#conf{pre_allocate = true} = Conf, Fd, Max0) ->
     Max = Max0 - ?HEADER_SIZE,
     case file:allocate(Fd, ?HEADER_SIZE, Max) of
         ok ->
@@ -654,7 +623,7 @@ maybe_pre_allocate(#conf{pre_allocate = true,
                   " falling back to fsync instead of fdatasync", []),
             Conf#conf{pre_allocate = false}
     end;
-maybe_pre_allocate(Conf, _Fd, _Max) ->
+maybe_pre_allocate(Conf, _Fd, _Max0) ->
     Conf.
 
 close_file(undefined) ->
@@ -666,26 +635,11 @@ start_batch(#state{conf = #conf{counter = CRef}} = State) ->
     ok = counters:add(CRef, ?C_BATCHES, 1),
     State#state{batch = #batch{}}.
 
-
-post_notify_flush(#state{wal = #wal{fd = Fd},
-                         conf = #conf{write_strategy = sync_after_notify,
-                                      sync_method = SyncMeth}}) ->
-    sync(Fd, SyncMeth);
-post_notify_flush(_State) ->
-    ok.
-
 flush_pending(#state{wal = #wal{fd = Fd},
                      batch = #batch{pending = Pend},
-                     conf = #conf{write_strategy = WriteStrategy,
-                                  sync_method = SyncMeth}} = State0) ->
-
-    case WriteStrategy of
-        default ->
-            ok = file:write(Fd, Pend),
-            sync(Fd, SyncMeth);
-        _ ->
-            ok = file:write(Fd, Pend)
-    end,
+                     conf = #conf{sync_method = SyncMeth}} = State0) ->
+    ok = file:write(Fd, Pend),
+    sync(Fd, SyncMeth),
     State0#state{batch = undefined}.
 
 sync(_Fd, none) ->
@@ -709,7 +663,6 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     Ranges = maps:fold(fun (Pid, BatchWriter, Acc) ->
                                complete_batch_writer(Pid, BatchWriter, Acc)
                        end, Wal#wal.ranges, Waiting),
-    ok = post_notify_flush(State),
     State#state{wal = Wal#wal{ranges = Ranges}}.
 
 complete_batch_writer(Pid, #batch_writer{snap_idx = SnapIdx,
@@ -955,7 +908,6 @@ merge_conf_defaults(Conf) ->
                  recovery_chunk_size => ?WAL_RECOVERY_CHUNK_SIZE,
                  compute_checksums => true,
                  pre_allocate => false,
-                 write_strategy => default,
                  garbage_collect => false,
                  sync_method => datasync,
                  min_bin_vheap_size => ?MIN_BIN_VHEAP_SIZE,

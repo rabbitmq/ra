@@ -17,8 +17,6 @@ all() ->
     [
      {group, default},
      {group, fsync},
-     {group, o_sync},
-     {group, sync_after_notify},
      {group, no_sync}
     ].
 
@@ -64,8 +62,6 @@ groups() ->
      {default, [], all_tests()},
      %% uses fsync instead of the default fdatasync
      {fsync, [], all_tests()},
-     {o_sync, [], all_tests()},
-     {sync_after_notify, [], all_tests()},
      {no_sync, [], all_tests()}
     ].
 
@@ -83,16 +79,16 @@ init_per_group(Group, Config) ->
     ra_directory:init(?SYS),
     ra_counters:init(),
     % application:ensure_all_started(lg),
-    {SyncMethod, WriteStrat} =
+    SyncMethod =
         case Group of
             fsync ->
-                {sync, default};
+                sync;
             no_sync ->
-                {none, default};
+                none;
             _ ->
-                {datasync, Group}
+                datasync
         end,
-    [{write_strategy, WriteStrat},
+    [
      {sys_cfg, SysCfg},
      {sync_method,  SyncMethod} | Config].
 
@@ -101,10 +97,9 @@ end_per_group(_, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
-    G = ?config(write_strategy, Config),
     M = ?config(sync_method, Config),
     Sys = ?config(sys_cfg, Config),
-    Dir = filename:join([PrivDir, G, M, TestCase]),
+    Dir = filename:join([PrivDir, M, TestCase]),
     {ok, Ets} = ra_log_ets:start_link(Sys),
     ra_counters:init(),
     UId = atom_to_binary(TestCase, utf8),
@@ -114,7 +109,6 @@ init_per_testcase(TestCase, Config) ->
     WalConf = #{dir => Dir,
                 name => ra_log_wal,
                 names => Names,
-                write_strategy => G,
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_log_snapshot_state,
                 [named_table, public, {write_concurrency, true}]),
@@ -758,8 +752,16 @@ sys_get_status(Config) ->
     Conf = ?config(wal_conf, Config),
     {_UId, _} = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
-    {_, _, _, [_, _, _, _, [_, _ ,S]]} = sys:get_status(ra_log_wal),
-    #{write_strategy := _} = S,
+    {_, _, _, [_, _, _, _, [_, _ , S]]} = sys:get_status(ra_log_wal),
+    ?assert(is_map(S)),
+
+    ?assertMatch(#{sync_method := _,
+                   compute_checksums := _,
+                   writers := _,
+                   filename := _,
+                   current_size := _,
+                   max_size_bytes := _,
+                   counters := _ }, S),
     proc_lib:stop(Pid),
     ok.
 
