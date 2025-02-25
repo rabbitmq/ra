@@ -107,9 +107,9 @@ init_per_testcase(TestCase, Config) ->
                                     TestCase, TestCase),
     Names = maps:get(names, Sys),
     WalConf = #{dir => Dir,
-                name => ra_log_wal,
                 system => ?SYS,
-                names => Names,
+                system => default,
+                names => Names#{segment_writer => self()},
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_log_snapshot_state,
                 [named_table, public, {write_concurrency, true}]),
@@ -131,7 +131,7 @@ basic_log_writes(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     Tid = ets:new(?FUNCTION_NAME, []),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
     ok = await_written(WriterId, 1, {12, 12}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 13, 1, "value2"),
@@ -145,7 +145,7 @@ basic_log_writes(Config) ->
             ok
     after 5000 ->
               flush(),
-              ct:fail("receiving mem tables timed out")
+              ct:fail("receiving mem table ranges timed out")
     end,
     proc_lib:stop(Pid),
     meck:unload(),
@@ -158,7 +158,7 @@ wal_filename_upgrade(Config) ->
     #{dir := Dir} = Conf,
     {UId, _} = WriterId = ?config(writer_id, Config),
     Tid = ets:new(?FUNCTION_NAME, []),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
     ok = await_written(WriterId, 1, {12, 12}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 13, 1, "value2"),
@@ -171,7 +171,7 @@ wal_filename_upgrade(Config) ->
     % debugger:start(),
     % int:i(ra_log_wal),
     % int:break(ra_log_wal, 373),
-    {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{_Tid, {12, 13}}]}, Fn}} ->
@@ -190,7 +190,7 @@ same_uid_different_process(Config) ->
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
     Tid = ets:new(?FUNCTION_NAME, []),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
     ok = await_written(WriterId, 1, {12, 12}),
     Self = self(),
@@ -223,7 +223,7 @@ consecutive_terms_in_batch_should_result_in_two_written_events(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
@@ -254,7 +254,7 @@ writes_snapshot_idx_overtakes(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
@@ -284,7 +284,7 @@ writes_implicit_truncate_write(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
@@ -317,7 +317,7 @@ writes_snapshot_idx_overtakes_same_batch(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     erlang:suspend_process(Pid),
@@ -355,7 +355,7 @@ overwrite_in_same_batch(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     Tid2 = ets:new(?FUNCTION_NAME, []),
@@ -397,7 +397,7 @@ overwrite_completely(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     Tid2 = ets:new(?FUNCTION_NAME, []),
@@ -427,7 +427,7 @@ overwrite_inside(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     Tid2 = ets:new(?FUNCTION_NAME, []),
@@ -482,7 +482,8 @@ write_many(Config) ->
     ok.
 
 test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) ->
-    Conf0 = #{dir := Dir0} = ?config(wal_conf, Config),
+    Conf0 = #{dir := Dir0} = set_segment_writer(?config(wal_conf, Config),
+                                                spawn(fun () -> ok end)),
     Dir = filename:join(Dir0, Name),
     Conf = Conf0#{dir => Dir},
     WriterId = ?config(writer_id, Config),
@@ -536,7 +537,8 @@ test_write_many(Name, NumWrites, ComputeChecksums, BatchSize, DataSize, Config) 
 write_many_by_many(Config) ->
     NumWrites = 100,
     NumWriters = 100,
-    Conf = ?config(wal_conf, Config),
+    Conf = set_segment_writer(?config(wal_conf, Config),
+                              spawn(fun() -> ok end)),
     % {_UId, _} = WriterId = ?config(writer_id, Config),
     {ok, WalPid} = ra_log_wal:start_link(Conf#{compute_checksums => false}),
     Data = crypto:strong_rand_bytes(1024),
@@ -599,7 +601,8 @@ out_of_seq_writes(Config) ->
     % it will notify the write of the missing index and the writer can resend
     % writes from that point
     % the wal will discard all subsequent writes until it receives the missing one
-    Conf = ?config(wal_conf, Config),
+    Conf = set_segment_writer(?config(wal_conf, Config),
+                              spawn(fun() -> ok end)),
     {_UId, _} = WriterId = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = crypto:strong_rand_bytes(1024),
@@ -659,8 +662,7 @@ roll_over_max_size(Config) ->
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_size_bytes
-    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites,
-                                            segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites}),
     %% DO this to ensure the actual max size bytes config is in place and not
     %% the randomised value
     ra_log_wal:force_roll_over(Pid),
@@ -694,8 +696,7 @@ roll_over_with_data_larger_than_max_size(Config) ->
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_size_bytes
-    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites * 10,
-                                            segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_size_bytes => 1024 * NumWrites * 10}),
     % write entries each larger than the WAL max size to trigger roll over
     Data = crypto:strong_rand_bytes(64 * 1024),
     Tid = ets:new(?FUNCTION_NAME, []),
@@ -726,8 +727,7 @@ roll_over_entry_limit(Config) ->
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
     % configure max_wal_entries
-    {ok, Pid} = ra_log_wal:start_link(Conf#{max_entries => 1000,
-                                            segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf#{max_entries => 1000}),
     % write enough entries to trigger roll over
     Data = crypto:strong_rand_bytes(1024),
     Tid = ets:new(?FUNCTION_NAME, []),
@@ -752,7 +752,8 @@ roll_over_entry_limit(Config) ->
 
 
 sys_get_status(Config) ->
-    Conf = ?config(wal_conf, Config),
+    Conf = set_segment_writer(?config(wal_conf, Config),
+                              spawn(fun () -> ok end)),
     {_UId, _} = ?config(writer_id, Config),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     {_, _, _, [_, _, _, _, [_, _ , S]]} = sys:get_status(ra_log_wal),
@@ -770,9 +771,8 @@ sys_get_status(Config) ->
 
 recover(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -833,9 +833,8 @@ recover(Config) ->
 
 recover_with_snapshot_index(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -869,9 +868,8 @@ recover_with_snapshot_index(Config) ->
 
 recover_overwrite(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -912,9 +910,8 @@ recover_overwrite(Config) ->
 
 recover_overwrite_rollover(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -963,9 +960,8 @@ recover_overwrite_rollover(Config) ->
 
 recover_existing_mem_table(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1011,9 +1007,8 @@ recover_existing_mem_table(Config) ->
 recover_existing_mem_table_with_deletes(Config) ->
     %% tests dirty recovery with partial mem table
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1050,9 +1045,8 @@ recover_existing_mem_table_with_deletes(Config) ->
 
 recover_existing_mem_table_overwrite(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
+    Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1106,7 +1100,7 @@ recover_implicit_truncate(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
@@ -1128,7 +1122,7 @@ recover_implicit_truncate(Config) ->
     % debugger:start(),
     % int:i(ra_log_wal),
     % int:break(ra_log_wal, 900),
-    {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
     ?assertMatch(#{size := 2}, ra_mt:info(Mt)),
@@ -1151,7 +1145,7 @@ recover_delete_uid(Config) ->
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    {ok, Pid} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
     {UId2, _} = WriterId2 = {<<"DELETEDUID">>, self()},
     Data = <<"data">>,
     Tid = ets:new(?FUNCTION_NAME, []),
@@ -1167,7 +1161,7 @@ recover_delete_uid(Config) ->
     flush(),
     ok = proc_lib:stop(Pid),
 
-    {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
 
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
     ?assertMatch(#{size := 3}, ra_mt:info(Mt)),
@@ -1190,8 +1184,7 @@ recover_delete_uid(Config) ->
 
 recover_empty(Config) ->
     ok = logger:set_primary_config(level, all),
-    Conf0 = ?config(wal_conf, Config),
-    Conf = Conf0#{segment_writer => self()},
+    Conf = ?config(wal_conf, Config),
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await,
                 fun(_) -> ok end),
@@ -1204,9 +1197,8 @@ recover_empty(Config) ->
 
 recover_with_partial_last_entry(Config) ->
     ok = logger:set_primary_config(level, all),
-    #{dir := Dir} = Conf0 = ?config(wal_conf, Config),
+    #{dir := Dir} = Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => self()},
     Data = crypto:strong_rand_bytes(1000),
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1248,8 +1240,7 @@ recover_with_last_entry_corruption(Config) ->
     ok = logger:set_primary_config(level, all),
     #{dir := Dir} = Conf0 = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => spawn(fun () -> ok end),
-                  pre_allocate => false},
+    Conf = set_segment_writer(Conf0, spawn(fun () -> ok end)),
     Data = crypto:strong_rand_bytes(1000),
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1279,8 +1270,7 @@ recover_with_last_entry_corruption_pre_allocate(Config) ->
     ok = logger:set_primary_config(level, all),
     #{dir := Dir} = Conf0 = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => spawn(fun () -> ok end),
-                  pre_allocate => true},
+    Conf = set_segment_writer(Conf0, spawn(fun () -> ok end)),
     Data = crypto:strong_rand_bytes(1000),
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1312,8 +1302,7 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
     ok = logger:set_primary_config(level, all),
     #{dir := Dir} = Conf0 = ?config(wal_conf, Config),
     WriterId = ?config(writer_id, Config),
-    Conf = Conf0#{segment_writer => spawn(fun () -> ok end),
-                  pre_allocate => false},
+    Conf = set_segment_writer(Conf0, spawn(fun () -> ok end)),
     Data = crypto:strong_rand_bytes(1000),
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
@@ -1437,3 +1426,6 @@ suspend_process(Pid) ->
                       erlang:raise(error, internal_error, Stack)
               end
     end.
+
+set_segment_writer(#{names := Names} = Conf, Writer) ->
+    Conf#{names => maps:put(segment_writer, Writer, Names)}.

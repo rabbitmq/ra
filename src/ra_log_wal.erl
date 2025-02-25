@@ -71,6 +71,7 @@
                               #{writer_id() => binary()}}.
 
 -record(conf, {dir :: file:filename_all(),
+               system :: atom(),
                segment_writer = ra_log_segment_writer :: atom() | pid(),
                compute_checksums = false :: boolean(),
                max_size_bytes :: non_neg_integer(),
@@ -120,13 +121,11 @@
                }).
 
 -type state() :: #state{}.
--type wal_conf() :: #{name := atom(), %% the name to register the wal as
+-type wal_conf() :: #{names := ra_system:names(),
                       system := atom(),
-                      names := ra_system:names(),
                       dir := file:filename_all(),
                       max_size_bytes => non_neg_integer(),
                       max_entries => non_neg_integer(),
-                      segment_writer => atom() | pid(),
                       compute_checksums => boolean(),
                       pre_allocate => boolean(),
                       sync_method => sync | datasync,
@@ -223,7 +222,9 @@ force_roll_over(Wal) ->
     {ok, pid()} |
     {error, {already_started, pid()}} |
     {error, wal_checksum_validation_failure}.
-start_link(#{name := Name} = Config)
+start_link(#{dir := _,
+             system := _,
+             names := #{wal := Name}} = Config)
   when is_atom(Name) ->
     WalMaxBatchSize = maps:get(max_batch_size, Config,
                                ?WAL_DEFAULT_MAX_BATCH_SIZE),
@@ -242,11 +243,11 @@ start_link(#{name := Name} = Config)
 -spec init(wal_conf()) ->
     {ok, state()} |
     {stop, wal_checksum_validation_failure} | {stop, term()}.
-init(#{dir := Dir, system := System} = Conf0) ->
+init(#{system := System,
+       dir := Dir} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       max_entries := MaxEntries,
       recovery_chunk_size := RecoveryChunkSize,
-      segment_writer := SegWriter,
       compute_checksums := ComputeChecksums,
       pre_allocate := PreAllocate,
       sync_method := SyncMethod,
@@ -254,10 +255,10 @@ init(#{dir := Dir, system := System} = Conf0) ->
       min_heap_size := MinHeapSize,
       min_bin_vheap_size := MinBinVheapSize,
       names := #{wal := WalName,
+                 segment_writer := SegWriter,
                  open_mem_tbls := MemTablesName} = Names} =
         merge_conf_defaults(Conf0),
-    ?NOTICE("WAL: ~ts init, mem-tables table name: ~w",
-            [WalName, MemTablesName]),
+    ?NOTICE("WAL in ~ts initialising with name ~ts", [System, WalName]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
@@ -269,6 +270,7 @@ init(#{dir := Dir, system := System} = Conf0) ->
                            ?COUNTER_FIELDS,
                            #{ra_system => System, module => ?MODULE}),
     Conf = #conf{dir = Dir,
+                 system = System,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
                  max_size_bytes = max(?WAL_MIN_SIZE, MaxWalSize),
@@ -288,8 +290,8 @@ init(#{dir := Dir, system := System} = Conf0) ->
             ok = ra_log_segment_writer:await(SegWriter),
             {ok, Result}
     catch _:Err:Stack ->
-              ?ERROR("WAL: failed to initialise with ~p, stack ~p",
-                     [Err, Stack]),
+              ?ERROR("WAL in ~ts failed to initialise with ~p, stack ~p",
+                     [System, Err, Stack]),
               {stop, Err}
     end.
 
@@ -307,8 +309,9 @@ handle_batch(Ops, #state{conf = #conf{explicit_gc = Gc}} = State0) ->
     %% process all ops
     {ok, Actions, complete_batch(State)}.
 
-terminate(Reason, State) ->
-    ?DEBUG("wal: terminating with ~W", [Reason, 20]),
+terminate(Reason, #state{conf = #conf{system = System}} = State) ->
+
+    ?DEBUG("WAL in ~ts: terminating with ~0P", [System, Reason, 20]),
     _ = cleanup(State),
     ok.
 
@@ -340,7 +343,8 @@ handle_op({info, {'EXIT', _, Reason}}, _State) ->
     %% this is here for testing purposes only
     throw({stop, Reason}).
 
-recover_wal(Dir, #conf{segment_writer = SegWriter,
+recover_wal(Dir, #conf{system = System,
+                       segment_writer = SegWriter,
                        mem_tables_tid = MemTblsTid} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
@@ -366,18 +370,19 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     WalFiles = lists:sort(Files),
     AllWriters =
         [begin
-             ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
+             ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
+                    [System, F, Mode]),
              WalFile = filename:join(Dir, F),
              Fd = open_at_first_record(WalFile),
              {Time, #recovery{ranges = Ranges,
                               writers = Writers}} =
-                 timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
+             timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
              ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, WalFile),
 
              close_existing(Fd),
-             ?DEBUG("wal: recovered ~ts time taken ~bms - recovered ~b writers",
-                    [F, Time div 1000, map_size(Writers)]),
+             ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
+                    [System, F, Time div 1000, map_size(Writers)]),
              Writers
          end || F <- WalFiles],
 
@@ -385,7 +390,8 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
                                        maps:merge(Acc, New)
                                end, #{}, AllWriters),
 
-    ?DEBUG("wal: recovered ~b writers", [map_size(FinalWriters)]),
+    ?DEBUG("WAL in ~ts: final writers recovered ~b",
+           [System, map_size(FinalWriters)]),
 
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
@@ -496,9 +502,9 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?DEBUG("WAL: requesting resend from `~w`, "
+            ?DEBUG("WAL in ~ts: requesting resend from `~w`, "
                    "last idx ~b idx received ~b",
-                   [UId, PrevIdx, Idx]),
+                   [Conf#conf.system, UId, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
@@ -553,13 +559,14 @@ complete_batch_and_roll(#state{} = State0) ->
 
 roll_over(#state{wal = Wal0, file_num = Num0,
                  conf = #conf{dir = Dir,
+                              system = System,
                               segment_writer = SegWriter,
                               max_size_bytes = MaxBytes} = Conf0} = State0) ->
     counters:add(Conf0#conf.counter, ?C_WAL_FILES, 1),
     Num = Num0 + 1,
     Fn = ra_lib:zpad_filename("", "wal", Num),
     NextFile = filename:join(Dir, Fn),
-    ?DEBUG("wal: opening new file ~ts", [Fn]),
+    ?DEBUG("WAL in ~ts: opening new file ~ts", [System, Fn]),
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelihood that each erlang node will
     %% flush mem tables at the same time
@@ -611,7 +618,8 @@ make_tmp(File) ->
     ok = file:close(Fd),
     Tmp.
 
-maybe_pre_allocate(#conf{pre_allocate = true} = Conf, Fd, Max0) ->
+maybe_pre_allocate(#conf{system = System,
+                         pre_allocate = true} = Conf, Fd, Max0) ->
     Max = Max0 - ?HEADER_SIZE,
     case file:allocate(Fd, ?HEADER_SIZE, Max) of
         ok ->
@@ -622,8 +630,9 @@ maybe_pre_allocate(#conf{pre_allocate = true} = Conf, Fd, Max0) ->
         {error, _} ->
             %% fallocate may not be supported, fall back to fsync instead
             %% of fdatasync
-            ?INFO("wal: preallocation may not be supported by the file system"
-                  " falling back to fsync instead of fdatasync", []),
+            ?INFO("WAL in ~ts: preallocation may not be supported by the file system"
+                  " falling back to fsync instead of fdatasync",
+                  [System]),
             Conf#conf{pre_allocate = false}
     end;
 maybe_pre_allocate(Conf, _Fd, _Max0) ->
@@ -795,11 +804,12 @@ recover_records(#conf{names = Names} = Conf, Fd,
                     recover_records(Conf, Fd, Rest, Cache,
                                     State0#recovery{writers = Writers});
                 error ->
-                    ?DEBUG("WAL: record failed CRC check. If this is the last record"
-                           " recovery can resume", []),
+                    System = Conf#conf.system,
+                    ?DEBUG("WAL in ~ts: record failed CRC check. If this is the last record"
+                           " recovery can resume", [System]),
                     %% if this is the last entry in the wal we can just drop the
                     %% record;
-                    ok = is_last_record(Fd, Rest),
+                    ok = is_last_record(Fd, Rest, Conf),
                     State0
             end;
         false ->
@@ -830,11 +840,12 @@ recover_records(#conf{names = Names} = Conf, Fd,
                 ok ->
                     recover_records(Conf, Fd, Rest, Cache, State0);
                 error ->
-                    ?DEBUG("WAL: record failed CRC check. If this is the last record"
-                           " recovery can resume", []),
+                    System = Conf#conf.system,
+                    ?DEBUG("WAL in ~ts: record failed CRC check. If this is the last record"
+                           " recovery can resume", [System]),
                     %% if this is the last entry in the wal we can just drop the
                     %% record;
-                    ok = is_last_record(Fd, Rest),
+                    ok = is_last_record(Fd, Rest, Conf),
                     State0
             end;
         _ ->
@@ -863,20 +874,20 @@ recover_snap_idx(Conf, UId, Trunc, CurIdx) ->
             snap_idx(Conf, UId)
     end.
 
-is_last_record(_Fd, <<0:104, _/binary>>) ->
+is_last_record(_Fd, <<0:104, _/binary>>, _) ->
     ok;
-is_last_record(Fd, Rest) ->
+is_last_record(Fd, Rest, Conf) ->
     case byte_size(Rest) < 13 of
         true ->
             case read_wal_chunk(Fd, 256) of
                 <<>> ->
                     ok;
                 Next ->
-                    is_last_record(Fd, <<Rest/binary, Next/binary>>)
+                    is_last_record(Fd, <<Rest/binary, Next/binary>>, Conf)
             end;
         false ->
-            ?ERROR("WAL: record failed CRC check during recovery. "
-                   "Unable to recover WAL data safely", []),
+            ?ERROR("WAL in ~ts: record failed CRC check during recovery. "
+                   "Unable to recover WAL data safely", [Conf#conf.system]),
             throw(wal_checksum_validation_failure)
 
     end.
