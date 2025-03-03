@@ -1107,7 +1107,7 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),
-    catch ets:delete(ra_log_snapshot_state, UId),
+    catch ra_log_snapshot_state:delete(ra_log_snapshot_state, UId),
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch

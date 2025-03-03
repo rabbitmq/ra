@@ -263,7 +263,7 @@ get_overview(#state{data_dir = Dir,
 
 flush_mem_table_ranges({ServerUId, TidRanges0},
                        #state{system = System} = State) ->
-    SnapIdx = snap_idx(ServerUId),
+    SmallestIdx = smallest_live_idx(ServerUId),
     %% TidRanges arrive here sorted new -> old.
 
     %% truncate and limit all ranges to create a contiguous non-overlapping
@@ -272,14 +272,14 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
     %% processing
     TidRanges = lists:foldl(
                   fun ({T, Range0}, []) ->
-                          case ra_range:truncate(SnapIdx, Range0) of
+                          case ra_range:truncate(SmallestIdx - 1, Range0) of
                               undefined ->
                                   [];
                               Range ->
                                   [{T, Range}]
                           end;
                       ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
-                          Range1 = ra_range:truncate(SnapIdx, Range0),
+                          Range1 = ra_range:truncate(SmallestIdx - 1, Range0),
                           case ra_range:limit(Start, Range1) of
                               undefined ->
                                   Acc;
@@ -352,15 +352,10 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
     end.
 
 start_index(ServerUId, StartIdx0) ->
-    max(snap_idx(ServerUId) + 1, StartIdx0).
+    max(smallest_live_idx(ServerUId), StartIdx0).
 
-snap_idx(ServerUId) ->
-    case ets:lookup(ra_log_snapshot_state, ServerUId) of
-        [{_, SnapIdx}] ->
-            SnapIdx;
-        _ ->
-            -1
-    end.
+smallest_live_idx(ServerUId) ->
+    ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
 
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of

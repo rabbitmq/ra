@@ -1304,7 +1304,8 @@ update_release_cursor(Config) ->
                              end),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
-    [{UId, 127}] = ets:lookup(ra_log_snapshot_state, ?config(uid, Config)),
+    UId = ?config(uid, Config),
+    127 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
     % this should delete a single segment
     ra_lib:retry(fun () ->
                          Segments = find_segments(Config),
@@ -1321,7 +1322,7 @@ update_release_cursor(Config) ->
                                      {149, 2} == ra_log:snapshot_index_term(L)
                              end),
 
-    [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
+    149 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
 
     % only one segment should remain as the segment writer always keeps
     % at least one segment for each
