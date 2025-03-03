@@ -193,12 +193,13 @@ find_snapshots(#?MODULE{uid = UId,
             ok = delete_snapshots(SnapshotsDir, Snaps),
             %% initialise snapshots table even if no snapshots have been taken
             %% this ensure these is an entry when the WAL queries it
-            true = ets:insert(?ETSTBL, {UId, -1}),
+            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, -1, 0, []),
             State;
         Current0 ->
             Current = filename:join(SnapshotsDir, Current0),
             {ok, #{index := Idx, term := Term}} = Module:read_meta(Current),
-            true = ets:insert(?ETSTBL, {UId, Idx}),
+            %% TODO: recover live indexes and record that
+            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
 
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
@@ -346,8 +347,8 @@ directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
-    case ets:lookup(?ETSTBL, UId) of
-        [{_, Index}] when Index >= 0 ->
+    case ra_log_snapshot_state:snapshot(?ETSTBL, UId) of
+        Index when Index >= 0 ->
             Index;
         _ ->
             undefined
@@ -473,7 +474,8 @@ complete_snapshot(_IdxTerm, snapshot,
     State;
 complete_snapshot({Idx, _} = IdxTerm, snapshot,
                   #?MODULE{uid = UId} = State) ->
-    true = ets:insert(?ETSTBL, {UId, Idx}),
+    %% TODO live indexes
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
     State#?MODULE{pending = undefined,
                   current = IdxTerm};
 complete_snapshot(IdxTerm, checkpoint,
@@ -518,7 +520,11 @@ accept_chunk(Chunk, Num, last,
            fun (_) -> ok end},
 
     %% update ets table
-    true = ets:insert(?ETSTBL, {UId, Idx}),
+    % true = ets:insert(?ETSTBL, {UId, Idx}),
+
+    %% TODO: move this to install_snapshot so we can work out the
+    %% live indexes
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
     {ok, State#?MODULE{accepting = undefined,
                        %% reset any pending snapshot writes
                        pending = undefined,
