@@ -259,7 +259,7 @@ writes_snapshot_idx_overtakes(Config) ->
      || I <- lists:seq(1, 3)],
     await_written(WriterId, 1, {1, 3}),
     % snapshot idx overtakes
-    ets:insert(ra_log_snapshot_state, {UId, 5}),
+    ok = ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 5, 6, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(4, 7)],
     await_written(WriterId, 1, {6, 7}),
@@ -292,7 +292,7 @@ writes_implicit_truncate_write(Config) ->
     % snapshot.
     % before we had to detect this and send a special {truncate, append request
     % but this is not necessary anymore
-    ets:insert(ra_log_snapshot_state, {UId, 5}),
+    ok = ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 5, 6, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(6, 7)],
     await_written(WriterId, 1, {6, 7}),
@@ -324,10 +324,13 @@ writes_snapshot_idx_overtakes_same_batch(Config) ->
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 3, 1, Data),
     %% this ensures the snapshot state is updated within the processing of a
     %% single batch
-    gen_batch_server:cast(Pid, {query,
-                                fun (_) ->
-                                        ets:insert(ra_log_snapshot_state, {UId, 5})
-                                end}),
+    gen_batch_server:cast(Pid,
+                          {query,
+                           fun (_) ->
+
+                                   ok = ra_log_snapshot_state:insert(ra_log_snapshot_state, UId,
+                                                                     5, 6, [])
+                           end}),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 4, 1, Data),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 5, 1, Data),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 6, 1, Data),
@@ -845,7 +848,8 @@ recover_with_snapshot_index(Config) ->
     flush(),
     ok = proc_lib:stop(ra_log_wal),
 
-    ets:insert(ra_log_snapshot_state, {UId, 50}),
+
+    ok = ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 50, 51, []),
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 
@@ -1108,7 +1112,7 @@ recover_implicit_truncate(Config) ->
     % snapshot.
     % before we had to detect this and send a special {truncate, append request
     % but this is not necessary anymore
-    ets:insert(ra_log_snapshot_state, {UId, 5}),
+    ok = ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 5, 6, []),
     [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
      || I <- lists:seq(6, 7)],
     await_written(WriterId, 1, {6, 7}),
@@ -1116,7 +1120,7 @@ recover_implicit_truncate(Config) ->
     ok = proc_lib:stop(Pid),
 
     %% this could happen potentially in some edge cases??
-    ets:delete(ra_log_snapshot_state, UId),
+    ra_log_snapshot_state:delete(ra_log_snapshot_state, UId),
     % debugger:start(),
     % int:i(ra_log_wal),
     % int:break(ra_log_wal, 900),
