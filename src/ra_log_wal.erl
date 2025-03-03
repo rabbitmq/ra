@@ -54,7 +54,7 @@
 % tables and segment notification
 -type writer_id() :: {ra_uid(), pid()}.
 
--record(batch_writer, {snap_idx :: ra_index(),
+-record(batch_writer, {smallest_live_idx :: ra_index(),
                        tid :: ets:tid(),
                        uid :: term(),
                        range :: ra:range(),
@@ -140,7 +140,7 @@
 -export_type([wal_conf/0]).
 
 -type wal_command() ::
-    {append | truncate, writer_id(), ra_index(), ra_term(), term()}.
+    {append, writer_id(), ra_index(), ra_term(), term()}.
 
 -type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
@@ -428,7 +428,7 @@ serialize_header(UId, Trunc, {Next, Cache} = WriterCache) ->
              {Next + 1, Cache#{UId => BinId}}}
     end.
 
-write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
+write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
            #state{conf = #conf{counter = Counter,
                                compute_checksums = ComputeChecksum} = _Cfg,
                   batch = Batch0,
@@ -441,7 +441,7 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
     case should_roll_wal(State0) of
         true ->
             State = complete_batch_and_roll(State0),
-            write_data(Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx, State);
+            write_data(Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex, State);
         false ->
             EntryData = case Data0 of
                             {ttb, Bin} ->
@@ -466,7 +466,7 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
                       <<Checksum:32/integer, EntryDataLen:32/unsigned>> |
                       Entry],
             Batch = incr_batch(Batch0, UId, Pid, MtTid,
-                               Idx, Term, Record, SnapIdx),
+                               Idx, Term, Record, SmallestIndex),
             counters:add(Counter, ?C_BYTES_WRITTEN, DataSize),
             State0#state{batch = Batch,
                          wal = Wal#wal{writer_name_cache = Cache,
@@ -479,19 +479,22 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SnapIdx,
 handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
            #state{conf = Conf,
                   writers = Writers} = State0) ->
-    SnapIdx = snap_idx(Conf, UId),
+    SmallestIdx = smallest_live_index(Conf, UId),
     %% detect if truncating flag should be set
-    Trunc = Idx == SnapIdx + 1,
+    Trunc = Idx == SmallestIdx,
+
     case maps:find(UId, Writers) of
-        _ when Idx =< SnapIdx ->
-            %% a snapshot already exists that is higher - just drop the write
-            State0#state{writers = Writers#{UId => {in_seq, SnapIdx}}};
+        _ when Idx < SmallestIdx ->
+            %% the smallest live index for the last snapshot is higher than
+            %% this index, just drop it
+            PrevIdx = SmallestIdx - 1,
+            State0#state{writers = Writers#{UId => {in_seq, PrevIdx}}};
         {ok, {_, PrevIdx}}
           when Idx =< PrevIdx + 1 orelse
                Trunc ->
-            write_data(Id, MtTid, Idx, Term, Entry, Trunc, SnapIdx, State0);
+            write_data(Id, MtTid, Idx, Term, Entry, Trunc, SmallestIdx, State0);
         error ->
-            write_data(Id, MtTid, Idx, Term, Entry, false, SnapIdx, State0);
+            write_data(Id, MtTid, Idx, Term, Entry, false, SmallestIdx, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes?
@@ -505,10 +508,6 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
-handle_msg({truncate, Id, MtTid, Idx, Term, Entry},
-           #state{conf = Conf} = State0) ->
-    SnapIdx = snap_idx(Conf, Id),
-    write_data(Id, MtTid, Idx, Term, Entry, true, SnapIdx, State0);
 handle_msg({query, Fun}, State) ->
     %% for testing
     _ = catch Fun(State),
@@ -520,23 +519,24 @@ incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
            UId, Pid, MT_TID = MtTid,
-           Idx, TERM = Term, Data, SnapIdx) ->
+           Idx, TERM = Term, Data, SmallestIdx) ->
     Waiting = case Waiting0 of
                   #{Pid := #batch_writer{term = TERM,
                                          tid = MT_TID,
                                          range = Range0
                                         } = W} ->
                       %% The Tid and term is the same so add to current batch_writer
-                      Range = ra_range:extend(Idx, ra_range:truncate(SnapIdx, Range0)),
+                      Range = ra_range:extend(Idx, ra_range:truncate(SmallestIdx - 1,
+                                                                     Range0)),
                       Waiting0#{Pid => W#batch_writer{range = Range,
-                                                      snap_idx = SnapIdx,
+                                                      smallest_live_idx = SmallestIdx,
                                                       term = Term
                                                      }};
                   _ ->
                       %% The tid is different, open a new batch writer for the
                       %% new tid and term
                       PrevBatchWriter = maps:get(Pid, Waiting0, undefined),
-                      Writer = #batch_writer{snap_idx = SnapIdx,
+                      Writer = #batch_writer{smallest_live_idx = SmallestIdx,
                                              tid = MtTid,
                                              range = ra_range:new(Idx),
                                              uid = UId,
@@ -675,14 +675,14 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
                        end, Wal#wal.ranges, Waiting),
     State#state{wal = Wal#wal{ranges = Ranges}}.
 
-complete_batch_writer(Pid, #batch_writer{snap_idx = SnapIdx,
+complete_batch_writer(Pid, #batch_writer{smallest_live_idx = SmallestIdx,
                                          tid = MtTid,
                                          uid = UId,
                                          range = Range,
                                          term = Term,
                                          old = undefined}, Ranges) ->
     Pid ! {ra_log_event, {written, Term, Range}},
-    update_ranges(Ranges, UId, MtTid, SnapIdx, Range);
+    update_ranges(Ranges, UId, MtTid, SmallestIdx, Range);
 complete_batch_writer(Pid, #batch_writer{old = #batch_writer{} = OldBw} = Bw,
                       Ranges0) ->
     Ranges = complete_batch_writer(Pid, OldBw, Ranges0),
@@ -778,13 +778,13 @@ recover_records(#conf{names = Names} = Conf, Fd,
     case ra_directory:is_registered_uid(Names, UId) of
         true ->
             Cache = Cache0#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
-            SnapIdx = recover_snap_idx(Conf, UId, Trunc == 1, Idx),
+            SmallestIdx = recover_smallest_idx(Conf, UId, Trunc == 1, Idx),
             case validate_checksum(Checksum, Idx, Term, EntryData) of
-                ok when Idx > SnapIdx ->
+                ok when Idx >= SmallestIdx ->
                     State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
-                                       SnapIdx, State1) of
+                                       SmallestIdx, State1) of
                         {ok, State} ->
                             recover_records(Conf, Fd, Rest, Cache, State);
                         {retry, State} ->
@@ -793,12 +793,14 @@ recover_records(#conf{names = Names} = Conf, Fd,
                 ok ->
                     %% best the the snapshot index as the last
                     %% writer index
-                    Writers = case State0#recovery.writers of
-                                  #{UId := {in_seq, SnapIdx}} = W ->
-                                      W;
-                                  W ->
-                                      W#{UId => {in_seq, SnapIdx}}
-                              end,
+                    % Writers = case State0#recovery.writers of
+                    %               #{UId := {in_seq, SmallestIdx}} = W ->
+                    %                   W;
+                    %               W ->
+                    %                   W#{UId => {in_seq, SmallestIdx}}
+                    %           end,
+                    W = State0#recovery.writers,
+                    Writers =  W#{UId => {in_seq, SmallestIdx - 1}},
                     recover_records(Conf, Fd, Rest, Cache,
                                     State0#recovery{writers = Writers});
                 error ->
@@ -823,13 +825,13 @@ recover_records(#conf{names = Names} = Conf, Fd,
                 Cache, State0) ->
     case Cache of
         #{IdRef := {UId, _}} ->
-            SnapIdx = recover_snap_idx(Conf, UId, Trunc == 1, Idx),
+            SmallestIdx = recover_smallest_idx(Conf, UId, Trunc == 1, Idx),
             case validate_checksum(Checksum, Idx, Term, EntryData) of
-                ok when Idx > SnapIdx ->
+                ok when Idx >= SmallestIdx ->
                     State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
-                                       SnapIdx, State1) of
+                                       SmallestIdx, State1) of
                         {ok, State} ->
                             recover_records(Conf, Fd, Rest, Cache, State);
                         {retry, State} ->
@@ -864,12 +866,12 @@ recover_records(Conf, Fd, Chunk, Cache, State) ->
             recover_records(Conf, Fd, Chunk0, Cache, State)
     end.
 
-recover_snap_idx(Conf, UId, Trunc, CurIdx) ->
+recover_smallest_idx(Conf, UId, Trunc, CurIdx) ->
     case Trunc of
         true ->
-            max(CurIdx-1, snap_idx(Conf, UId));
+            max(CurIdx, smallest_live_index(Conf, UId));
         false ->
-            snap_idx(Conf, UId)
+            smallest_live_index(Conf, UId)
     end.
 
 is_last_record(_Fd, <<0:104, _/binary>>, _) ->
@@ -946,15 +948,15 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
                                          Count + 1 > MaxEntries
                                  end.
 
-snap_idx(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
-    ets:lookup_element(Tid, ServerUId, 2, -1).
+smallest_live_index(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
+    ra_log_snapshot_state:smallest(Tid, ServerUId).
 
-update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
+update_ranges(Ranges, UId, MtTid, SmallestIdx, {Start, _} = AddRange) ->
     case Ranges of
         #{UId := [{MtTid, Range0} | Rem]} ->
-            %% SnapIdx might have moved to we truncate the old range first
+            %% SmallestIdx might have moved to we truncate the old range first
             %% before extending
-            Range1 = ra_range:truncate(SnapIdx, Range0),
+            Range1 = ra_range:truncate(SmallestIdx - 1, Range0),
             %% limit the old range by the add end start as in some resend
             %% cases we may have got back before the prior range.
             Range = ra_range:add(AddRange, ra_range:limit(Start, Range1)),
@@ -962,13 +964,13 @@ update_ranges(Ranges, UId, MtTid, SnapIdx, {Start, _} = AddRange) ->
         #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
             %% new Tid, need to add a new range record for this
             Ranges#{UId => [{MtTid, AddRange},
-                            ra_range:truncate(SnapIdx, {OldMtTid, OldMtRange})
+                            ra_range:truncate(SmallestIdx - 1, {OldMtTid, OldMtRange})
                             | Rem]};
         _ ->
             Ranges#{UId => [{MtTid, AddRange}]}
     end.
 
-recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
+recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
               #recovery{mode = initial,
                         ranges = Ranges0,
                         writers = Writers,
@@ -982,7 +984,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
     case ra_mt:insert(Entry, Mt0) of
         {ok, Mt1} ->
             Ranges = update_ranges(Ranges0, UId, ra_mt:tid(Mt1),
-                                   SnapIdx, ra_range:new(Idx)),
+                                   SmallestIdx, ra_range:new(Idx)),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt1}}};
@@ -991,7 +993,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SnapIdx,
             {ok, Mt1} = ra_log_ets:new_mem_table_please(Names, UId, Mt0),
             {retry, State#recovery{tables = Tables#{UId => Mt1}}}
     end;
-recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
+recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
               #recovery{mode = post_boot,
                         ranges = Ranges0,
                         writers = Writers,
@@ -1014,7 +1016,7 @@ recover_entry(Names, UId, {Idx, Term, _}, SnapIdx,
                                 tables = Tables#{UId => Mt0}}};
         Tid ->
             Ranges = update_ranges(Ranges0, UId, Tid,
-                                   SnapIdx, ra_range:new(Idx)),
+                                   SmallestIdx, ra_range:new(Idx)),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt0}}}
