@@ -546,7 +546,7 @@ accept_mem_tables_multiple_ranges_snapshot(Config)->
                        {ra_mt:tid(Mt2), ra_mt:range(Mt2)},
                        {ra_mt:tid(Mt), ra_mt:range(Mt)}
                       ]},
-    ets:insert(ra_log_snapshot_state, {UId, 64}),
+    ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 64, 65, []),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
 
@@ -790,7 +790,7 @@ skip_entries_lower_than_snapshot_index(Config) ->
     Mt = make_mem_table(UId, Entries),
     Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
-    ets:insert(ra_log_snapshot_state, {UId, 3}),
+    ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 3, 4, []),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     receive
@@ -823,7 +823,7 @@ skip_all_entries_lower_than_snapshot_index(Config) ->
     Mt = make_mem_table(UId, Entries),
     Ranges = #{UId => [{ra_mt:tid(Mt), ra_mt:range(Mt)}]},
     %% update snapshot state table
-    ets:insert(ra_log_snapshot_state, {UId, 3}),
+    ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 3, 4, []),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     TIDRANGES = maps:get(UId, Ranges),
