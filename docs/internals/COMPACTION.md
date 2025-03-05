@@ -227,7 +227,9 @@ process itself
 
 #### Alternative snapshot install procedure
 
-* Sender begins with sending negotiating which live indexes are needed.
+* Sender begins with sending negotiating which live indexes are needed. It is
+probably sufficient for the receiver to return it's `last_applied` index and the
+sender will send all sparse entries after that index
 * Then it proceeds to send the live indexes _before_ the snapshot (so in it's
 natural order if you like).
 * The receiving ra process then writes these commands to the WAL as normal but
@@ -235,6 +237,8 @@ using a special command / flag to avoid the WAL triggering its' gap detection.
 Ideally the specialised command would include the previous idx so that we can
 still do gap detection in the sparse sequence (should all sends include prior
 sequence so this is the only mode?).
+* The sparse writes are written to a new memtable using a new `ra_mt:sparse_write/2`
+API that bypasses gap validation and stores a sparse sequence instead of range
 * Alt the live indexes replication could be done after the snapshot is complete
 as it is easy for the follower to work out which live indexes it needs.
 when it receives the `last` snapshot chunk it then replies with a special
@@ -243,7 +247,7 @@ the live index replication. NB the snapshot sender process may need to call
 into the leader process to get read plans as entries _could_ be in the memtable.
 
 #### How to work out which live indexes the follower needs
-
+WA
 Gnarly example:
 
 Follower term indexes:
@@ -287,4 +291,6 @@ for decision making.
 
 WAL needs to accept sparse writes without a higher snapshot idx (snap install)
 WAL needs to accept contiguous writes with a higher snap idx with and without live indexes
-
+WAL will send ra_seq of entries written in a WAL 
+SegWriter needs to flush the live indexes preceeding the snapshot index which
+_should_ be covered in the sparse sequence of written indexes. 

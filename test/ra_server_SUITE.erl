@@ -154,18 +154,18 @@ setup_log() ->
                                             ra_lib:default(get({U, K}), D)
                                     end),
     meck:expect(ra_snapshot, begin_accept,
-                fun(_Meta, SS) ->
-                        {ok, SS}
+                fun(Meta, undefined) ->
+                        {ok, {Meta, undefined}}
                 end),
     meck:expect(ra_snapshot, accept_chunk,
-                fun(_Data, _OutOf, _Flag, SS) ->
-                        {ok, SS, []}
+                fun(Data, _OutOf, _Flag, {Meta, _}) ->
+                        {ok, {Meta, Data}, []}
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
     meck:expect(ra_log, snapshot_state, fun ra_log_memory:snapshot_state/1),
     meck:expect(ra_log, set_snapshot_state, fun ra_log_memory:set_snapshot_state/2),
-    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/3),
+    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/4),
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory:snapshot_index_term/1),
     meck:expect(ra_log, fold, fun ra_log_memory:fold/5),
@@ -224,8 +224,9 @@ init_test(_Config) ->
                      cluster => dehydrate_cluster(Cluster),
                      machine_version => 1},
     SnapshotData = "hi1+2+3",
-    {LogS, _} = ra_log_memory:install_snapshot({3, 5}, {SnapshotMeta,
-                                                        SnapshotData}, Log0),
+    {_, _, LogS, _} = ra_log_memory:install_snapshot({3, 5}, {SnapshotMeta,
+                                                              SnapshotData},
+                                                     ?MODULE, Log0),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -780,7 +781,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
              cluster => #{},
              machine_version => 1},
     Data = <<"hi3">>,
-    {Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, Log0),
+    {_, _, Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, ?MODULE, Log0),
     State = maps:put(log, Log, State0),
 
     AE = #append_entries_rpc{term = 6,
@@ -2311,14 +2312,6 @@ follower_installs_snapshot(_Config) ->
      [{next_event, ISRpc}, {record_leader_msg, _}]} =
         ra_server:handle_follower(ISRpc, FState),
 
-    meck:expect(ra_log, recover_snapshot,
-                fun (_) ->
-                        {#{index => Idx,
-                           term => Term,
-                           cluster => dehydrate_cluster(Config),
-                           machine_version => 0},
-                         []}
-                end),
     {follower, #{current_term := Term,
                  commit_index := Idx,
                  last_applied := Idx,

@@ -1535,6 +1535,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
            [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
+    ct:pal("SnapStat0 ~p", [SnapState0]),
     {ok, SnapState, Effs0} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
                                                       SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
@@ -1542,9 +1543,6 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                      last_index = SnapIndex},
     case ChunkFlag of
         last ->
-            %% this is the last chunk so we can "install" it
-            {Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
-                                                  SnapState, Log0),
             %% if the machine version of the snapshot is higher
             %% we also need to update the current effective machine configuration
             EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
@@ -1560,9 +1558,11 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                       false ->
                           Cfg0
                   end,
-
-            {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-
+            %% this is the last chunk so we can "install" it
+            {#{cluster := ClusterIds},
+             MacState, Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
+                                                            SnapState,
+                                                            EffMacMod, Log0),
             OldServerIds = maps:map(fun (_, V) ->
                                             maps:with([voter_status], V)
                                     end, Cluster),
@@ -1585,7 +1585,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         cluster_index_term => {SnapIndex,
                                                                SnapTerm},
                                         cluster => make_cluster(Id, ClusterIds),
-                                        membership => get_membership(ClusterIds, State0),
+                                        membership =>
+                                            get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
