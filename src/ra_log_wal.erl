@@ -17,6 +17,7 @@
 
 -export([
          write/6,
+         write/7,
          write_batch/2,
          last_writer_seq/2,
          force_roll_over/1]).
@@ -140,7 +141,8 @@
 -export_type([wal_conf/0]).
 
 -type wal_command() ::
-    {append, writer_id(), ra_index(), ra_term(), term()}.
+    {append, writer_id(), PrevIndex :: ra:index() | -1,
+     Index :: ra:index(), Term :: ra_term(), wal_cmd()}.
 
 -type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
@@ -149,10 +151,23 @@
 -spec write(atom() | pid(), writer_id(), ets:tid(), ra_index(), ra_term(),
             wal_cmd()) ->
     {ok, pid()} | {error, wal_down}.
-write(Wal, {_, _} = From, MtTid, Idx, Term, Cmd)
+write(Wal, From, MtTid, Idx, Term, Cmd) ->
+    %% "normal opereation where we assume a contigious sequence
+    %% this may be removed at some point
+    write(Wal, From, MtTid, Idx-1, Idx, Term, Cmd).
+
+-spec write(atom() | pid(), writer_id(), ets:tid(),
+            PrevIndex :: ra:index() | -1,
+            Index :: ra_index(),
+            Term :: ra_term(),
+            wal_cmd()) ->
+    {ok, pid()} | {error, wal_down}.
+write(Wal, {_, _} = From, MtTid, PrevIdx, Idx, Term, Cmd)
   when is_integer(Idx) andalso
-       is_integer(Term) ->
-    named_cast(Wal, {append, From, MtTid, Idx, Term, Cmd}).
+       is_integer(PrevIdx) andalso
+       is_integer(Term) andalso
+       PrevIdx < Idx ->
+    named_cast(Wal, {append, From, MtTid, PrevIdx, Idx, Term, Cmd}).
 
 -spec write_batch(Wal :: atom() | pid(), [wal_command()]) ->
     {ok, pid()} | {error, wal_down}.
@@ -476,7 +491,7 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
     end.
 
 
-handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
+handle_msg({append, {UId, Pid} = Id, MtTid, PrevIdx0, Idx, Term, Entry},
            #state{conf = Conf,
                   writers = Writers} = State0) ->
     SmallestIdx = smallest_live_index(Conf, UId),
@@ -487,13 +502,17 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
         _ when Idx < SmallestIdx ->
             %% the smallest live index for the last snapshot is higher than
             %% this index, just drop it
-            PrevIdx = SmallestIdx - 1,
-            State0#state{writers = Writers#{UId => {in_seq, PrevIdx}}};
+            LastIdx = SmallestIdx - 1,
+            State0#state{writers = Writers#{UId => {in_seq, LastIdx}}};
         {ok, {_, PrevIdx}}
-          when Idx =< PrevIdx + 1 orelse
+          when PrevIdx0 =< PrevIdx orelse
                Trunc ->
+            %% if the passed in previous index is less than the last written
+            %% index (gap detection) _or_ it is a truncation
+            %% then we can proceed and write the entry
             write_data(Id, MtTid, Idx, Term, Entry, Trunc, SmallestIdx, State0);
         error ->
+            %% no state for the UId is known so go ahead and write
             write_data(Id, MtTid, Idx, Term, Entry, false, SmallestIdx, State0);
         {ok, {out_of_seq, _}} ->
             % writer is out of seq simply ignore drop the write
@@ -528,6 +547,8 @@ incr_batch(#batch{num_writes = Writes,
                       %% The Tid and term is the same so add to current batch_writer
                       Range = ra_range:extend(Idx, ra_range:truncate(SmallestIdx - 1,
                                                                      Range0)),
+                      %% TODO: range nees to become a ra_seq so that we can
+                      %% capture sparse writes correctly
                       Waiting0#{Pid => W#batch_writer{range = Range,
                                                       smallest_live_idx = SmallestIdx,
                                                       term = Term
