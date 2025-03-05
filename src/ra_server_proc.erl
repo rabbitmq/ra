@@ -1283,6 +1283,7 @@ perform_pending_queries1(
                    [{TargetIndex, TargetTerm}, {LastApplied, Term}, QueryFun]),
             Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
             Actions = [{reply, From, Reply} | Actions0],
+            ?DEBUG("  reply to ~0p, ~0p", [From, Reply]),
             {PendingQueries0, Actions, ServerState};
         _ ->
             ?DEBUG("~0p > ~0p -> skipping query ~0p",
