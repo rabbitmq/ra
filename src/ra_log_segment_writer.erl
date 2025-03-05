@@ -66,14 +66,13 @@ start_link(#{name := Name} = Config) ->
 
 -spec accept_mem_tables(atom() | pid(),
                         #{ra_uid() => [{ets:tid(), ra:range()}]},
-                        string()) ->
-    ok.
+                        string()) -> ok.
 accept_mem_tables(_SegmentWriter, Tables, undefined)
   when map_size(Tables) == 0 ->
     ok;
-accept_mem_tables(SegmentWriter, Tables, WalFile)
-  when is_map(Tables) ->
-    gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
+accept_mem_tables(SegmentWriter, UIdTidRanges, WalFile)
+  when is_map(UIdTidRanges) ->
+    gen_server:cast(SegmentWriter, {mem_tables, UIdTidRanges, WalFile}).
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
 truncate_segments(SegWriter, Who, SegRef) ->
@@ -135,9 +134,10 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
-handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
-                                                  system = System} = State) ->
-    ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
+handle_cast({mem_tables, UIdTidRanges, WalFile},
+            #state{data_dir = Dir,
+                   system = System} = State) ->
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(UIdTidRanges)),
     #{names := Names} = ra_system:fetch(System),
     Degree = erlang:system_info(schedulers),
     %% TODO: refactor to make better use of time where each uid has an
@@ -156,7 +156,7 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                                    ok = ra_log_ets:delete_mem_tables(Names, UId),
                                    Acc
                            end
-                   end, [], Ranges),
+                   end, [], UIdTidRanges),
 
     T1 = erlang:monotonic_time(),
     _ = [begin
