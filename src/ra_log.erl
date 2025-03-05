@@ -336,7 +336,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx, Term, Cmd},
+                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
@@ -1176,11 +1176,11 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx, Term, Cmd},
+                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
-    [{_, _, _, LastIdx, LastTerm, _} | _] = WalCommands,
+    [{_, _, _, _PrevIdx, LastIdx, LastTerm, _} | _] = WalCommands,
     {_, Mt} = ra_mt:commit(Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
