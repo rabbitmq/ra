@@ -24,6 +24,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     sparse_writes,
      wal_filename_upgrade,
      same_uid_different_process,
      consecutive_terms_in_batch_should_result_in_two_written_events,
@@ -61,7 +62,8 @@ groups() ->
     [
      {default, [], all_tests()},
      %% uses fsync instead of the default fdatasync
-     {fsync, [], all_tests()},
+     %% just testing that the configuration and dispatch works
+     {fsync, [], [basic_log_writes]},
      {no_sync, [], all_tests()}
     ].
 
@@ -148,6 +150,44 @@ basic_log_writes(Config) ->
     proc_lib:stop(Pid),
     meck:unload(),
     ok.
+
+sparse_writes(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 11, 12, 1, "value"),
+    ok = await_written(WriterId, 1, {12, 12}),
+    debugger:start(),
+    int:i(ra_log_wal),
+    int:break(ra_log_wal, 975),
+    timer:sleep(1000),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 15, 1, "value2"),
+    timer:sleep(200000),
+    ok = await_written(WriterId, 1, {15, 15}),
+    ra_log_wal:force_roll_over(Pid),
+    receive
+        {'$gen_cast',
+         {mem_tables, #{UId := [{Tid, {12, 15}}]}, _}} ->
+            ok
+    after 5000 ->
+              flush(),
+              ct:fail("receiving mem table ranges timed out")
+    end,
+    proc_lib:stop(Pid),
+    meck:unload(),
+    ok.
+
+sparse_write_same_batch(_Config) ->
+    ct:fail("~s", [?FUNCTION_NAME]).
+
+sparse_write_recover(_Config) ->
+    ct:fail("~s", [?FUNCTION_NAME]).
+
+sparse_write_overwrite(_Config) ->
+    ct:fail("~s", [?FUNCTION_NAME]).
 
 wal_filename_upgrade(Config) ->
     meck:new(ra_log_segment_writer, [passthrough]),

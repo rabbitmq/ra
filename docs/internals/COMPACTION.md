@@ -243,7 +243,7 @@ the live index replication. NB the snapshot sender process may need to call
 into the leader process to get read plans as entries _could_ be in the memtable.
 
 #### How to work out which live indexes the follower needs
-
+WA
 Gnarly example:
 
 Follower term indexes:
@@ -287,4 +287,6 @@ for decision making.
 
 WAL needs to accept sparse writes without a higher snapshot idx (snap install)
 WAL needs to accept contiguous writes with a higher snap idx with and without live indexes
-
+WAL will send ra_seq of entries written in a WAL 
+SegWriter needs to flush the live indexes preceeding the snapshot index which
+_should_ be covered in the sparse sequence of written indexes. 
