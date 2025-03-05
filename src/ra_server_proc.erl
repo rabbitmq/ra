@@ -1279,16 +1279,21 @@ perform_pending_queries1(
             %% point of view. We can't tell that here, so they are still
             %% evaluated. The reply will be discarded by Erlang because the
             %% process alias in `From' is inactive after the timeout.
+            ?DEBUG("~0p =< ~0p -> performing query ~0p",
+                   [{TargetIndex, TargetTerm}, {LastApplied, Term}, QueryFun]),
             Reply = perform_local_query(QueryFun, Leader, ServerState, Conf),
             Actions = [{reply, From, Reply} | Actions0],
             {PendingQueries0, Actions, ServerState};
         _ ->
+            ?DEBUG("~0p > ~0p -> skipping query ~0p",
+                   [{TargetIndex, TargetTerm}, {LastApplied, Term}, QueryFun]),
             PendingQueries = [PendingQuery | PendingQueries0],
             {PendingQueries, Actions0, ServerState}
     end;
 perform_pending_queries1(
   PendingQuery,
   {PendingQueries0, Actions, ServerState}, _Context) ->
+    ?DEBUG("(not 'applied' condition) -> skipping query ~0p", [PendingQuery]),
     PendingQueries = [PendingQuery | PendingQueries0],
     {PendingQueries, Actions, ServerState}.
 
