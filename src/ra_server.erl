@@ -1181,14 +1181,18 @@ handle_follower(#append_entries_rpc{term = Term,
     State0 = update_term(Term, State00#{leader_id => LeaderId}),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
+            {LocalLastIdx, _} = ra_log:last_index_term(Log0),
             % filter entries already seen
             {Log1, Entries, LastValidIdx} =
                 drop_existing(Log0, Entries0, PLIdx),
+            ?DEBUG_IF(length(Entries) < length(Entries0),
+                      "~ts DUPES last index ~b incoming last ~b ~b ~b",
+                      [log_id(State0), LocalLastIdx, PLIdx,
+                       length(Entries0), length(Entries)]),
             case Entries of
                 [] ->
                     %% all entries have already been written
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
-                    {LocalLastIdx, _} = ra_log:last_index_term(Log1),
                     {LogIsValidated, Log2} =
                         case Entries0 of
                             [] when LocalLastIdx > PLIdx ->
@@ -1231,9 +1235,9 @@ handle_follower(#append_entries_rpc{term = Term,
                             LastValidatedIdx = max(LastApplied, LastValidIdx),
                             ?DEBUG("~ts: append_entries_rpc with last index ~b "
                                    " including ~b entries did not validate local log. "
-                                   "Requesting resend from index ~b",
+                                   "Requesting resend from index ~b, last index ~b",
                                    [LogId, PLIdx, length(Entries0),
-                                    LastValidatedIdx + 1]),
+                                    LastValidatedIdx + 1, LocalLastIdx]),
                             {Reply, State} =
                                 mismatch_append_entries_reply(Term, LastValidatedIdx,
                                                               State0#{log => Log2}),
@@ -2180,7 +2184,10 @@ log_read(From0, To, Cache, Log0) ->
     {From, Entries0} = log_fold_cache(From0, To, Cache, []),
     ra_log:fold(From, To, fun (E, A) -> [E | A] end, Entries0, Log0).
 
-log_fold_cache(From, To, [{From, _, _} = Entry | Rem], Acc) ->
+%% this cache is a bit so and so as it will only really work when each follower
+%% begins with the same from index
+log_fold_cache(From, To, [{From, _, _} = Entry | Rem], Acc)
+  when From =< To ->
     log_fold_cache(From + 1, To, Rem, [Entry | Acc]);
 log_fold_cache(From, _To, _Cache, Acc) ->
     {From, Acc}.
