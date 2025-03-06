@@ -20,6 +20,8 @@
          fetch_term/2,
          flush/2,
          next_index/1,
+         snapshot_state/1,
+         set_snapshot_state/2,
          install_snapshot/3,
          read_snapshot/1,
          recover_snapshot/1,
@@ -40,13 +42,13 @@
 -include("src/ra.hrl").
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
--type snapshot() :: {snapshot_meta(), term()}.
 
 -record(state, {last_index = 0 :: ra_index(),
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
-                entries = #{0 => {0, undefined}} :: #{ra_term() => {ra_index(), term()}},
+                entries = #{0 => {0, undefined}} ::
+                    #{ra_term() => {ra_index(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
-                snapshot :: option(snapshot())}).
+                snapshot :: option({ra_snapshot:meta(), term()})}).
 
 -type ra_log_memory_state() :: #state{} | ra_log:state().
 
@@ -168,13 +170,22 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     {ra_log_memory_state(), list()}.
+<<<<<<< HEAD
 handle_event({written, {_From, Idx, Term}}, State0) ->
+=======
+handle_event({written, Term, {_From, Idx} = Range0}, State0) ->
+>>>>>>> 324d9bc (Replication bug fixes)
     case fetch_term(Idx, State0) of
         {Term, State} ->
             {State#state{last_written = {Idx, Term}}, []};
         _ ->
-            % if the term doesn't match we just ignore it
-            {State0, []}
+            case ra_range:limit(Idx, Range0) of
+                undefined ->
+                    % if the term doesn't match we just ignore it
+                    {State0, []};
+                Range ->
+                    handle_event({written, Term, Range}, State0)
+            end
     end;
 handle_event(_Evt, State0) ->
             {State0, []}.
@@ -203,17 +214,17 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
--spec install_snapshot(SnapshotMeta :: ra_snapshot:meta(),
-                       SnapshotData :: term(),
-                       State :: ra_log_memory_state()) ->
-    {ra_log_memory_state(), term(), list()}.
-install_snapshot(Meta, Data, #state{entries = Log0} = State) ->
-    Index  = maps:get(index, Meta),
+install_snapshot({Index, Term}, Data, #state{entries = Log0} = State) ->
+    % Index  = maps:get(index, Meta),
+    % Term  = maps:get(term, Meta),
     % discard log
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
-    {State#state{entries = Log, snapshot = {Meta, Data}}, Data, []};
-install_snapshot(_Meta, Data, State) ->
-    {State, Data, []}.
+    {State#state{entries = Log,
+                 last_index = Index,
+                 last_written = {Index, Term},
+                 snapshot = Data}, []};
+install_snapshot(_Meta, _Data, State) ->
+    {State, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
     {ok, ra_snapshot:meta(), term()}.
@@ -224,9 +235,14 @@ read_snapshot(#state{snapshot = {Meta, Data}}) ->
     undefined | {ok, ra_snapshot:meta(), term()}.
 recover_snapshot(#state{snapshot = undefined}) ->
     undefined;
-recover_snapshot(#state{snapshot = {Meta, Data}}) ->
-    {Meta, Data}.
+recover_snapshot(#state{snapshot = {Meta, MacState}}) ->
+    {Meta, MacState}.
 
+set_snapshot_state(SnapState, State) ->
+    State#state{snapshot = SnapState}.
+
+snapshot_state(State) ->
+    State#state.snapshot.
 
 -spec read_meta(Key :: ra_log:ra_meta_key(), State :: ra_log_memory_state()) ->
     option(term()).
@@ -235,10 +251,11 @@ read_meta(Key, #state{meta = Meta}) ->
 
 -spec snapshot_index_term(State :: ra_log_memory_state()) ->
     ra_idxterm().
-snapshot_index_term(#state{snapshot = {#{index := Idx, term := Term}, _}}) ->
-    {Idx, Term};
 snapshot_index_term(#state{snapshot = undefined}) ->
-    undefined.
+    undefined;
+snapshot_index_term(#state{snapshot = {#{index := Idx,
+                                         term := Term}, _}}) ->
+    {Idx, Term}.
 
 -spec update_release_cursor(ra_index(), ra_cluster(),
                             ra_machine:version(), term(),

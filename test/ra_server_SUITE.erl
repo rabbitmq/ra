@@ -22,6 +22,8 @@ all() ->
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
      append_entries_reply_success_promotes_nonvoter,
+     follower_aer_dupe,
+     follower_leader_change_before_written,
      append_entries_reply_success,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
@@ -156,9 +158,9 @@ setup_log() ->
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
-    meck:expect(ra_log, snapshot_state, fun (_) -> snap_state end),
-    meck:expect(ra_log, set_snapshot_state, fun (_, Log) -> Log end),
-    meck:expect(ra_log, install_snapshot, fun (_, _, Log) -> {Log, []} end),
+    meck:expect(ra_log, snapshot_state, fun ra_log_memory:snapshot_state/1),
+    meck:expect(ra_log, set_snapshot_state, fun ra_log_memory:set_snapshot_state/2),
+    meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/3),
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory:snapshot_index_term/1),
     meck:expect(ra_log, fold, fun ra_log_memory:fold/5),
@@ -218,7 +220,8 @@ init_test(_Config) ->
                      cluster => dehydrate_cluster(Cluster),
                      machine_version => 1},
     SnapshotData = "hi1+2+3",
-    {LogS, _, _} = ra_log_memory:install_snapshot(SnapshotMeta, SnapshotData, Log0),
+    {LogS, _} = ra_log_memory:install_snapshot({3, 5}, {SnapshotMeta,
+                                                        SnapshotData}, Log0),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -565,7 +568,7 @@ follower_aer_5(_Config) ->
 follower_aer_diverged(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
                                               commit_index => 2},
-    %% the leaders sends an rpc with old entries the diverged follower already
+    %% the leader sends an rpc with old entries the diverged follower already
     %% has
     AER = #append_entries_rpc{term = 6,
                               leader_id = ?N1,
@@ -577,7 +580,7 @@ follower_aer_diverged(_Config) ->
                                         ]},
     {follower, State1, Effects} = ra_server:handle_follower(AER, State0),
     ?assertMatch([{cast,_,
-                   {_, #append_entries_reply{success = false,
+                   {_, #append_entries_reply{success = true,
                                              next_index = 3}}} | _],
                  Effects),
     %% ensure the follower does not incorrectly apply the diverged entry at 3
@@ -642,7 +645,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
              cluster => #{},
              machine_version => 1},
     Data = <<"hi3">>,
-    {Log, _, _} = ra_log_memory:install_snapshot(Meta, Data, Log0),
+    {Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, Log0),
     State = maps:put(log, Log, State0),
 
     AE = #append_entries_rpc{term = 6,
@@ -1008,8 +1011,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
       _]} = ra_server:handle_leader(RaJoin, State2),
 
     Ack2 = #append_entries_reply{term = 5, success = true,
-                                     next_index = 5,
-                                     last_index = 4, last_term = 5},
+                                 next_index = 5,
+                                 last_index = 4, last_term = 5},
 
     % voter ack, raises commit_index
     {leader, #{cluster := #{N2 := #{next_index := 5,
@@ -1021,6 +1024,100 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
       {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
     ok.
 
+% leader_make_rpcs(_Config) ->
+%     N1 = ?N1, N2 = ?N2, N3 = ?N3,
+%     Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
+%                 N2 => new_peer_with(#{next_index => 4, match_index => 3,
+%                                       commit_index_sent => 3}),
+%                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
+%     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 3,
+%                                               last_applied => 3,
+%                                               cluster => Cluster,
+%                                               machine_state => <<"hi3">>},
+%     {leader, State1, Effs1} = ra_server:handle_leader(pipeline_rpcs, State0),
+%     % Res = ra_server:make_rpcs(State0),
+%     ct:pal("reas ~p", [ra_server:make_rpcs(State1)]),
+
+%     ok.
+
+follower_aer_dupe(_Config) ->
+    N1 = ?N1,
+    N2 = ?N2,
+
+    % AER with index [1], commit = 0, commit_index = 0
+    Init = empty_state(3, n1),
+    AER1 = #append_entries_rpc{term = 1, leader_id = N2, prev_log_index = 0,
+                               prev_log_term = 0, leader_commit = 1,
+                               entries = [entry(1, 1, one),
+                                          entry(2, 1, two),
+                                          entry(3, 1, three)]},
+    {follower, #{leader_id := N2, current_term := 1,
+                 commit_index := 1, last_applied := 1} = State1, _} =
+        ra_server:handle_follower(AER1, Init),
+
+    %% a resend that doesn to fully cover the previous is issued (incorrectly)
+    %% but it could happen
+    AER2 = #append_entries_rpc{term = 1, leader_id = N2, prev_log_index = 1,
+                               prev_log_term = 1, leader_commit = 1,
+                               entries = [entry(2, 1, two)]},
+    {follower, #{leader_id := N2, current_term := 1,
+                 commit_index := 1, last_applied := 1} = _State2,
+     [{cast, N2, {N1, AEReply}}]} =
+        ra_server:handle_follower(AER2, State1),
+
+    ?assertMatch(
+       #append_entries_reply{success = true,
+                             next_index = 3,
+                             last_term = 1,
+                             last_index = 2}, AEReply),
+
+    ok.
+
+follower_leader_change_before_written(_Config) ->
+    N1 = ?N1,
+    N2 = ?N2,
+    N3 = ?N3,
+
+    Init = empty_state(3, n3),
+    AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
+                               prev_log_term = 0, leader_commit = 1,
+                               entries = [entry(1, 1, one),
+                                          entry(2, 1, two)]},
+    {follower, #{leader_id := N1, current_term := 1,
+                 commit_index := 1, last_applied := 1} = State1, _} =
+        ra_server:handle_follower(AER1, Init),
+
+    %% leader change comes in before written notification, this overwrites
+    %% index 2 in term 1
+    AER2 = #append_entries_rpc{term = 2, leader_id = N2, prev_log_index = 0,
+                               prev_log_term = 0, leader_commit = 1,
+                               entries = [entry(2, 2, twos),
+                                          entry(3, 2, three)]},
+    {follower, #{leader_id := N2, current_term := 2,
+                 commit_index := 1, last_applied := 1} = State2, _} =
+        ra_server:handle_follower(AER2, State1),
+
+    %% a written event for indexes 1 and 2 in term 1 should not result in a
+    %% append entries reply confirming index 2 as we have not yet had a notification
+    %% for that, it can however confirm index 1
+    {follower, #{leader_id := N2, last_applied := 1} = State3,
+     [{cast,
+       N2,
+       {N3, #append_entries_reply{success = true,
+                                  term = 2,
+                                  last_index = 1,
+                                  last_term = 1}}}]} =
+        ra_server:handle_follower(written_evt(1, {1, 2}), State2),
+    {follower, #{leader_id := N2, last_applied := 1} = _State4,
+     [{cast,
+       N2,
+       {N3, #append_entries_reply{success = true,
+                                  term = 2,
+                                  last_index = 3,
+                                  last_term = 2}}}]} =
+        ra_server:handle_follower(written_evt(2, {2, 3}), State3),
+    ok.
+
 append_entries_reply_success(_Config) ->
 
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
@@ -1029,9 +1126,9 @@ append_entries_reply_success(_Config) ->
                                       commit_index_sent => 3}),
                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
-                             last_applied => 1,
-                             cluster => Cluster,
-                             machine_state => <<"hi1">>},
+                                              last_applied => 1,
+                                              cluster => Cluster,
+                                              machine_state => <<"hi1">>},
     Msg = {N2, #append_entries_reply{term = 5, success = true,
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
@@ -1707,7 +1804,11 @@ follower_cluster_change(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AE, State),
+<<<<<<< HEAD
             ra_server:handle_follower(written_evt({4, 4, 5}), Int)
+=======
+            ra_server:handle_follower(written_evt(5, {4, 4}), Int)
+>>>>>>> 324d9bc (Replication bug fixes)
         end,
 
     ok.
@@ -2209,9 +2310,8 @@ receive_snapshot_new_leader_aer(_Config) ->
 
 snapshotted_follower_received_append_entries(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState0 = #{cluster := Config}, _}} =
+    #{N3 := {_, FState00 = #{cluster := Config}, _}} =
         init_servers([N1, N2, N3], {module, ra_queue, #{}}),
-    LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
     meck:expect(ra_log, recover_snapshot,
@@ -2223,29 +2323,44 @@ snapshotted_follower_received_append_entries(_Config) ->
                          []}
                 end),
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  meta = snap_meta(Idx, Term, Config),
                                   chunk_state = {1, last},
                                   data = []},
+    % debugger:start(),
+    % int:i(ra_server),
+    % int:break(ra_server, 1563),
+    % int:break(ra_server, 1181),
+    % int:break(ra_server, 1368),
+    meck:expect(ra_log, last_index_term,
+                fun (_) -> {Idx, Term} end),
+    {receive_snapshot, FState0, _} = ra_server:handle_follower(ISRpc, FState00),
     {follower, FState1, _} = ra_server:handle_receive_snapshot(ISRpc, FState0),
 
     meck:expect(ra_log, snapshot_index_term,
-                fun (_) -> {Idx, LastTerm} end),
+                fun (_) -> {Idx, Term} end),
     %% mock the ra_log write to return ok for index 4 as this is the next
     %% expected index after the snapshot
-    meck:expect(ra_log, write,
-                fun ([{4, _, _}], Log) -> {ok, Log} end),
+    % meck:expect(ra_log, write,
+    %             fun ([{4, _, _}], Log) -> {ok, Log} end),
     Cmd = usr({enc, banana}),
     AER = #append_entries_rpc{entries = [{4, 2, Cmd}],
                               leader_id = N1,
                               term = Term,
                               prev_log_index = 3, % snapshot index
-                              prev_log_term = 1,
+                              prev_log_term = Term,
                               leader_commit = 4 % entry is already committed
                              },
+
     {follower, _FState, [{cast, N1, {N3, #append_entries_reply{success = true}}}]} =
         begin
+<<<<<<< HEAD
             {follower, Int, _} = ra_server:handle_follower(AER, FState1),
             ra_server:handle_follower(written_evt({4, 4, 2}), Int)
+=======
+            {follower, Int, _} =
+                ra_server:handle_follower(AER, FState1),
+            ra_server:handle_follower(written_evt(2, {4, 4}), Int)
+>>>>>>> 324d9bc (Replication bug fixes)
         end,
     ok.
 

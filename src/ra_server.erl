@@ -1096,18 +1096,22 @@ handle_follower(#append_entries_rpc{term = Term,
                             {NextState, State,
                              [cast_reply(Id, LeaderId, Reply) | Effects]};
                         false ->
-                            %% We need to ensure we make progress in case
-                            %% the last applied index is lower than the last
-                            %% valid index
+                            %% We need to ensure we make progress in case the
+                            %% leader is having to resend already received
+                            %% entries in order to validate, e.g. after a
+                            %% term_mismatch, hence we reply with success but
+                            %% only up to the last index we already had
                             LastValidatedIdx = max(LastApplied, LastValidIdx),
                             ?DEBUG("~ts: append_entries_rpc with last index ~b "
                                    " including ~b entries did not validate local log. "
-                                   "Requesting resend from index ~b",
-                                   [LogId, PLIdx, length(Entries0),
-                                    LastValidatedIdx + 1]),
-                            {Reply, State} =
-                                mismatch_append_entries_reply(Term, LastValidatedIdx,
-                                                              State0#{log => Log2}),
+                                   "Local last index ~b",
+                                   [LogId, PLIdx, length(Entries0), LocalLastIdx]),
+                            {LVTerm, State} = fetch_term(LastValidatedIdx, State0),
+                            Reply = #append_entries_reply{term = CurTerm,
+                                                          success = true,
+                                                          next_index = LastValidatedIdx + 1,
+                                                          last_index = LastValidatedIdx,
+                                                          last_term = LVTerm},
                             {follower, State,
                              [cast_reply(Id, LeaderId, Reply)]}
                     end;
@@ -1117,15 +1121,20 @@ handle_follower(#append_entries_rpc{term = Term,
                                      LeaderCommit),
                     %% assert we're not writing below the last applied index
                     ?assertNot(FstIdx < LastApplied),
-                    State2 = lists:foldl(fun pre_append_log_follower/2,
-                                         State1, Entries),
+                    State = lists:foldl(fun pre_append_log_follower/2,
+                                        State1, Entries),
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
+<<<<<<< HEAD
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State2#{log => Log2},
                                                                Effects0),
                                 {NextState, State,
                                  [{next_event, {ra_log_event, flush_cache}} | Effects]};
+=======
+                            evaluate_commit_index_follower(State#{log => Log2},
+                                                           Effects0);
+>>>>>>> 324d9bc (Replication bug fixes)
                         {error, wal_down} ->
                             %% at this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
@@ -1137,9 +1146,9 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% it wrote for each UID into an ETS table and query
                             %% this.
                             {await_condition,
-                             State2#{log => Log1,
-                                     condition =>
-                                     #{predicate_fun => fun wal_down_condition/2}},
+                             State#{log => Log1,
+                                    condition =>
+                                        #{predicate_fun => fun wal_down_condition/2}},
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -1213,20 +1222,32 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
                 #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
+<<<<<<< HEAD
 handle_follower({ra_log_event, {written, _} = Evt},
                 State0 = #{log := Log0,
                            cfg := #cfg{id = Id},
                            leader_id := LeaderId,
                            current_term := Term})
   when LeaderId =/= undefined ->
+=======
+handle_follower({ra_log_event, Evt}, #{log := Log0,
+                                       cfg := #cfg{id = Id},
+                                       leader_id := LeaderId,
+                                       current_term := Term} = State0) ->
+    % forward events to ra_log
+    % if the last written changes then send an append entries reply
+    LW = ra_log:last_written(Log0),
+>>>>>>> 324d9bc (Replication bug fixes)
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
-    Reply = append_entries_reply(Term, true, State),
-    {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
-handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
-    % simply forward all other events to ra_log
-    {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {follower, State#{log => Log}, Effects};
+    case LW =/= ra_log:last_written(Log) of
+        true when LeaderId =/= undefined ->
+            %% last written has changed so we need to send an AER reply
+            Reply = append_entries_reply(Term, true, State),
+            {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
+        _ ->
+            {follower, State, Effects}
+    end;
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
@@ -2053,7 +2074,10 @@ log_read(From0, To, Cache, Log0) ->
     {From, Entries0} = log_fold_cache(From0, To, Cache, []),
     ra_log:fold(From, To, fun (E, A) -> [E | A] end, Entries0, Log0).
 
-log_fold_cache(From, To, [{From, _, _} = Entry | Rem], Acc) ->
+%% this cache is a bit so and so as it will only really work when each follower
+%% begins with the same from index
+log_fold_cache(From, To, [{From, _, _} = Entry | Rem], Acc)
+  when From =< To ->
     log_fold_cache(From + 1, To, Rem, [Entry | Acc]);
 log_fold_cache(From, _To, _Cache, Acc) ->
     {From, Acc}.
