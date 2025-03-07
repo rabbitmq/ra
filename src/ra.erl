@@ -92,7 +92,7 @@
 -deprecated({overview, 0}).
 -deprecated({register_external_log_reader, 1}).
 
--define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
+-define(START_TIMEOUT, 30_000).
 
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
 
