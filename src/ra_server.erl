@@ -1346,14 +1346,17 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId,
                   cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, {written, _, _} = Evt},
+handle_follower({ra_log_event, {written, TERM, _} = Evt},
                 State0 = #{log := Log0,
                            cfg := #cfg{id = Id},
                            leader_id := LeaderId,
-                           current_term := Term})
+                           current_term := TERM = Term})
   when LeaderId =/= undefined ->
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
+    %% only reply with success if the written event relates to the current
+    %% term. this avoids accidentally confirming overwritten indexes too
+    %% early
     Reply = append_entries_reply(Term, true, State),
     {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
 handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
