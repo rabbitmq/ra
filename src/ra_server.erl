@@ -1181,18 +1181,14 @@ handle_follower(#append_entries_rpc{term = Term,
     State0 = update_term(Term, State00#{leader_id => LeaderId}),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
-            {LocalLastIdx, _} = ra_log:last_index_term(Log0),
             % filter entries already seen
             {Log1, Entries, LastValidIdx} =
                 drop_existing(Log0, Entries0, PLIdx),
-            ?DEBUG_IF(length(Entries) < length(Entries0),
-                      "~ts DUPES last index ~b incoming last ~b ~b ~b",
-                      [log_id(State0), LocalLastIdx, PLIdx,
-                       length(Entries0), length(Entries)]),
             case Entries of
                 [] ->
                     %% all entries have already been written
                     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER_EMPTY, 1),
+                    {LocalLastIdx, _} = ra_log:last_index_term(Log1),
                     {LogIsValidated, Log2} =
                         case Entries0 of
                             [] when LocalLastIdx > PLIdx ->
@@ -1229,18 +1225,22 @@ handle_follower(#append_entries_rpc{term = Term,
                             {NextState, State,
                              [cast_reply(Id, LeaderId, Reply) | Effects]};
                         false ->
-                            %% We need to ensure we make progress in case
-                            %% the last applied index is lower than the last
-                            %% valid index
+                            %% We need to ensure we make progress in case the
+                            %% leader is having to resend already received
+                            %% entries in order to validate, e.g. after a
+                            %% term_mismatch, hence we reply with success but
+                            %% only up to the last index we already had
                             LastValidatedIdx = max(LastApplied, LastValidIdx),
                             ?DEBUG("~ts: append_entries_rpc with last index ~b "
                                    " including ~b entries did not validate local log. "
-                                   "Requesting resend from index ~b, last index ~b",
-                                   [LogId, PLIdx, length(Entries0),
-                                    LastValidatedIdx + 1, LocalLastIdx]),
-                            {Reply, State} =
-                                mismatch_append_entries_reply(Term, LastValidatedIdx,
-                                                              State0#{log => Log2}),
+                                   "Local last index ~b",
+                                   [LogId, PLIdx, length(Entries0), LocalLastIdx]),
+                            {LVTerm, State} = fetch_term(LastValidatedIdx, State0),
+                            Reply = #append_entries_reply{term = CurTerm,
+                                                          success = true,
+                                                          next_index = LastValidatedIdx + 1,
+                                                          last_index = LastValidatedIdx,
+                                                          last_term = LVTerm},
                             {follower, State,
                              [cast_reply(Id, LeaderId, Reply)]}
                     end;
@@ -1250,14 +1250,12 @@ handle_follower(#append_entries_rpc{term = Term,
                                      LeaderCommit),
                     %% assert we're not writing below the last applied index
                     ?assertNot(FstIdx < LastApplied),
-                    State2 = lists:foldl(fun pre_append_log_follower/2,
-                                         State1, Entries),
+                    State = lists:foldl(fun pre_append_log_follower/2,
+                                        State1, Entries),
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
-                            {NextState, State, Effects} =
-                                evaluate_commit_index_follower(State2#{log => Log2},
-                                                               Effects0),
-                                {NextState, State, Effects};
+                            evaluate_commit_index_follower(State#{log => Log2},
+                                                           Effects0);
                         {error, wal_down} ->
                             %% at this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
@@ -1269,9 +1267,9 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% it wrote for each UID into an ETS table and query
                             %% this.
                             {await_condition,
-                             State2#{log => Log1,
-                                     condition =>
-                                     #{predicate_fun => fun wal_down_condition/2}},
+                             State#{log => Log1,
+                                    condition =>
+                                        #{predicate_fun => fun wal_down_condition/2}},
                              Effects0};
                         {error, _} = Err ->
                             exit(Err)
@@ -1346,23 +1344,23 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId,
                   cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, {written, TERM, _} = Evt},
-                State0 = #{log := Log0,
-                           cfg := #cfg{id = Id},
-                           leader_id := LeaderId,
-                           current_term := TERM = Term})
-  when LeaderId =/= undefined ->
+handle_follower({ra_log_event, Evt}, #{log := Log0,
+                                       cfg := #cfg{id = Id},
+                                       leader_id := LeaderId,
+                                       current_term := Term} = State0) ->
+    % forward events to ra_log
+    % if the last written changes then send an append entries reply
+    LW = ra_log:last_written(Log0),
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
-    %% only reply with success if the written event relates to the current
-    %% term. this avoids accidentally confirming overwritten indexes too
-    %% early
-    Reply = append_entries_reply(Term, true, State),
-    {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
-handle_follower({ra_log_event, Evt}, State = #{log := Log0}) ->
-    % simply forward all other events to ra_log
-    {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {follower, State#{log => Log}, Effects};
+    case LW =/= ra_log:last_written(Log) of
+        true when LeaderId =/= undefined ->
+            %% last written has changed so we need to send an AER reply
+            Reply = append_entries_reply(Term, true, State),
+            {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
+        _ ->
+            {follower, State, Effects}
+    end;
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->

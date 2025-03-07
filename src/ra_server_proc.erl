@@ -560,11 +560,7 @@ leader(info, {update_peer, PeerId, Update}, State0) ->
     State = update_peer(PeerId, Update, State0),
     {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
-    % {State1, RpcEffs} = make_rpcs(State0),
-    % ?DEBUG_IF(length(RpcEffs) > 0, "~ts tick_timeout made ~b rpcs",
-    %           [log_id(State0), length(RpcEffs)]),
-    State1 = State0,
-    RpcEffs = [],
+    {State1, RpcEffs} = make_rpcs(State0),
     ServerState0 = State1#state.server_state,
     Effects = ra_server:tick(ServerState0),
     ServerState = ra_server:log_tick(ServerState0),
@@ -1355,7 +1351,6 @@ handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
                                  incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
                                  Self ! {update_peer, To, #{status => normal}}
                          end),
-            ?DEBUG("~ts suspended ~w", [log_id(State0), To]),
             {update_peer(To, #{status => suspended}, State0), Actions};
         noconnect ->
             %% for noconnects just allow it to pipeline and catch up later
