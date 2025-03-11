@@ -785,6 +785,9 @@ aux_command_v1_and_v2(Config) ->
                     (_RaftState, cast, eval, AuxState, Opaque) ->
                         %% replaces aux state
                         {no_reply, AuxState, Opaque};
+                    (_RaftState, cast, tick, AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, AuxState, Opaque};
                     (_RaftState, cast, NewState, _AuxState, Opaque0) ->
                         {Idx, _} = ra_aux:log_last_index_term(Opaque0),
                         {{_Term, _Meta, apple}, Opaque} = ra_aux:log_fetch(Idx, Opaque0),
@@ -831,6 +834,8 @@ aux_eval(Config) ->
                     (_RaftState, _, eval, AuxState, Log, _MacState) ->
                         %% monitors a process
                         Self ! got_eval,
+                        {no_reply, AuxState, Log, []};
+                    (_RaftState, _, _, AuxState, Log, _MacState) ->
                         {no_reply, AuxState, Log, []}
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
