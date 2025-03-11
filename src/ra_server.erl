@@ -434,13 +434,13 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             State1 = put_peer(PeerId, Peer, State0),
             Effects00 = maybe_promote_peer(PeerId, State1, []),
             {State2, Effects0} = evaluate_quorum(State1, Effects00),
-            {State, Effects1} = process_pending_consistent_queries(State2,
+            {State3, Effects1} = process_pending_consistent_queries(State2,
                                                                    Effects0),
-            Effects = [{next_event, info, pipeline_rpcs} | Effects1],
-            case State of
+            Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
+            case State3 of
                 #{cluster := #{Id := _}} ->
                     % leader is in the cluster
-                    {leader, State, Effects};
+                    {leader, State3, Effects2};
                 #{commit_index := CI,
                   cluster_index_term := {CITIndex, _}}
                   when CI >= CITIndex ->
@@ -448,9 +448,12 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                     % config has been committed
                     % time to say goodbye
                     ?INFO("~ts: leader not in new cluster - goodbye", [LogId]),
+                    %% need to make pipelined rpcs here as cannot use next event
+                    {State, _, Effects} =
+                        make_pipelined_rpc_effects(State3, Effects2),
                     {stop, State, Effects};
                 _ ->
-                    {leader, State, Effects}
+                    {leader, State3, Effects2}
             end
     end;
 handle_leader({PeerId, #append_entries_reply{term = Term}},
@@ -1136,15 +1139,9 @@ handle_follower(#append_entries_rpc{term = Term,
                                                            Effects0);
 >>>>>>> 324d9bc (Replication bug fixes)
                         {error, wal_down} ->
-                            %% at this point we know the wal process exited
+                            %% At this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
                             %% made it to the wal before it crashed.
-                            %% TODO: we cannot discover what the last index
-                            %% the WAL wrote was anymore as the WAL does
-                            %% not write the mem tables. We could implement something
-                            %% alternative where the WAL writes the last index, term
-                            %% it wrote for each UID into an ETS table and query
-                            %% this.
                             {await_condition,
                              State#{log => Log1,
                                     condition =>
@@ -1170,7 +1167,6 @@ handle_follower(#append_entries_rpc{term = Term,
                                    transition_to => follower}}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
-            %% NB: this is the commit index before update
             LastApplied = maps:get(last_applied, State00),
             ?INFO("~ts: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b~n"
@@ -1184,7 +1180,7 @@ handle_follower(#append_entries_rpc{term = Term,
             % is rewind back and use the last applied as the last index
             % and last applied + 1 as the next expected.
             % This _may_ overwrite some valid entries but is probably the
-            % simplest way to proceed
+            % simplest and most reliable way to proceed
             {Reply, State} = mismatch_append_entries_reply(Term, LastApplied,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
@@ -1967,11 +1963,20 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                    end,
                       %% ensure we don't pass a batch size that would allow
                       %% the peer to go over the max pipeline count
-                      BatchSize = min(MaxBatchSize,
-                                      MaxPipelineCount - NumInFlight),
+                      %% we'd only really get here if Force=true so setting
+                      %% a single entry batch size should be fine
+                      BatchSize = max(1,
+                                      min(MaxBatchSize,
+                                          MaxPipelineCount - NumInFlight)),
                       {NewNextIdx, Eff, S} =
+<<<<<<< HEAD
                       make_rpc_effect(PeerId, Peer0, BatchSize, S0,
                                       EntryCache),
+=======
+                          make_rpc_effect(PeerId, Peer0, BatchSize, S0,
+                                          EntryCache),
+                      ?assert(NewNextIdx >= NextIdx),
+>>>>>>> 60c2d19 (Ensure batch size is non negative when making a pipelined AER)
                       Peer = Peer0#{next_index => NewNextIdx,
                                     commit_index_sent => CommitIndex},
                       NewNumInFlight = NewNextIdx - MatchIdx - 1,
@@ -2038,12 +2043,17 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                                             PrevTerm, MaxBatchSize,
                                             State#{log => Log},
                                             EntryCache);
-                {LastIdx, _} ->
+                {SnapIdx, _} ->
+                    ?DEBUG("~ts: sending snapshot to ~w as their next index ~b "
+                           "is lower than snapshot index ~b", [log_id(State),
+                                                               PeerId, Next,
+                                                               SnapIdx]),
+                    ?assert(PrevIdx < SnapIdx),
                     SnapState = ra_log:snapshot_state(Log),
                     %% don't increment the next index here as we will do
                     %% that once the snapshot is fully replicated
                     %% and we don't pipeline entries until after snapshot
-                    {LastIdx,
+                    {SnapIdx,
                      {send_snapshot, PeerId, {SnapState, Id, Term}},
                      State#{log => Log}}
             end
@@ -2726,16 +2736,16 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyMode}},
     State = case State0 of
                 #{cluster_index_term := {CI, CT}}
                   when Idx > CI andalso Term >= CT ->
-                    ?DEBUG("~ts: applying ra cluster change to ~w",
-                           [log_id(State0), maps:keys(NewCluster)]),
+                    ?DEBUG("~ts: applying ra cluster change at index ~b to ~w",
+                           [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% we are recovering and should apply the cluster change
                     State0#{cluster => NewCluster,
                             membership => get_membership(NewCluster, State0),
                             cluster_change_permitted => true,
                             cluster_index_term => {Idx, Term}};
                 _  ->
-                    ?DEBUG("~ts: committing ra cluster change to ~w",
-                           [log_id(State0), maps:keys(NewCluster)]),
+                    ?DEBUG("~ts: committing ra cluster change at index ~b to ~w",
+                           [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% else just enable further cluster changes again
                     State0#{cluster_change_permitted => true}
             end,
@@ -2943,17 +2953,23 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
     % cluster
     case Cmd of
         {'$ra_cluster_change', _, Cluster, _} ->
+            ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~w",
+                   [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
             State#{cluster => Cluster,
                    cluster_index_term => {Idx, Term}};
         _ ->
             % revert back to previous cluster
             {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
+            ?DEBUG("~ts: ~ts: follower reverting cluster change to ~w",
+                   [log_id(State), ?FUNCTION_NAME, maps:keys(PrevCluster)]),
             State1 = State#{cluster => PrevCluster,
                             cluster_index_term => {PrevIdx, PrevTerm}},
             pre_append_log_follower(Entry, State1)
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                         State) ->
+    ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~w",
+           [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
     State#{cluster => Cluster,
            membership => get_membership(Cluster, State),
            cluster_index_term => {Idx, Term}};
@@ -2997,11 +3013,6 @@ mismatch_append_entries_reply(Term, LastAppliedIdx, State0) ->
      State}.
 
 append_entries_reply(Term, Success, #{log := Log} = State) ->
-    % we can't use the the last received idx
-    % as it may not have been persisted yet
-    % also we can't use the last writted Idx as then
-    % the follower may resent items that are currently waiting to
-    % be written.
     {LWIdx, LWTerm} = ra_log:last_written(Log),
     {LastIdx, _} = last_idx_term(State),
     #append_entries_reply{term = Term,

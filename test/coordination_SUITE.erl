@@ -43,6 +43,7 @@ all_tests() ->
      start_cluster_majority,
      start_cluster_minority,
      grow_cluster,
+     shrink_cluster_with_snapshot,
      send_local_msg,
      local_log_effect,
      leaderboard,
@@ -369,6 +370,45 @@ grow_cluster(Config) ->
     undefined = rpc:call(BNode, ra_leaderboard, lookup_leader, [ClusterName]),
 
     stop_nodes(ServerIds),
+    ok.
+
+shrink_cluster_with_snapshot(Config) ->
+    %% this test removes leaders to ensure the remaining cluster can
+    %% resume activity ok
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    [A, B, C] = ServerIds,
+
+    Machine = {module, ?MODULE, #{}},
+    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    {ok, _, Leader1} = ra:members(ServerIds),
+
+    %% run some activity to create a snapshot
+    [_ = ra:process_command(Leader1, {banana, I})
+      || I <- lists:seq(1, 5000)],
+
+    Fun = fun F(L0) ->
+                  {ok, _, L} = ra:process_command(L0, banana),
+                  F(L)
+          end,
+    Pid = spawn(fun () -> Fun(Leader1) end),
+    timer:sleep(100),
+
+    exit(Pid, kill),
+    {ok, _, _} = ra:remove_member(Leader1, Leader1),
+
+
+    timer:sleep(500),
+
+    {ok, _, Leader2} = ra:members(ServerIds),
+
+    ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
+    {ok, O, _} = ra:member_overview(Leader2),
+    ct:pal("overview2 ~p", [O]),
+    stop_peers(Peers),
+    ?assertMatch(#{cluster_change_permitted := true}, O),
     ok.
 
 send_local_msg(Config) ->
