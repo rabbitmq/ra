@@ -1097,22 +1097,6 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
       {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
     ok.
 
-% leader_make_rpcs(_Config) ->
-%     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-%     Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
-%                 N2 => new_peer_with(#{next_index => 4, match_index => 3,
-%                                       commit_index_sent => 3}),
-%                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
-%     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 3,
-%                                               last_applied => 3,
-%                                               cluster => Cluster,
-%                                               machine_state => <<"hi3">>},
-%     {leader, State1, Effs1} = ra_server:handle_leader(pipeline_rpcs, State0),
-%     % Res = ra_server:make_rpcs(State0),
-%     ct:pal("reas ~p", [ra_server:make_rpcs(State1)]),
-
-%     ok.
-
 follower_aer_dupe(_Config) ->
     N1 = ?N1,
     N2 = ?N2,
@@ -2406,11 +2390,7 @@ snapshotted_follower_received_append_entries(_Config) ->
                                   meta = snap_meta(Idx, Term, Config),
                                   chunk_state = {1, last},
                                   data = []},
-    % debugger:start(),
-    % int:i(ra_server),
-    % int:break(ra_server, 1563),
-    % int:break(ra_server, 1181),
-    % int:break(ra_server, 1368),
+
     meck:expect(ra_log, last_index_term,
                 fun (_) -> {Idx, Term} end),
     {receive_snapshot, FState0, _} = ra_server:handle_follower(ISRpc, FState00),
@@ -2418,10 +2398,7 @@ snapshotted_follower_received_append_entries(_Config) ->
 
     meck:expect(ra_log, snapshot_index_term,
                 fun (_) -> {Idx, Term} end),
-    %% mock the ra_log write to return ok for index 4 as this is the next
-    %% expected index after the snapshot
-    % meck:expect(ra_log, write,
-    %             fun ([{4, _, _}], Log) -> {ok, Log} end),
+
     Cmd = usr({enc, banana}),
     AER = #append_entries_rpc{entries = [{4, 2, Cmd}],
                               leader_id = N1,

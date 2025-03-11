@@ -1142,17 +1142,20 @@ handle_enter(RaftState, OldRaftState,
     {ServerState, Effects} = ra_server:handle_state_enter(RaftState,
                                                           OldRaftState,
                                                           ServerState0),
+    LastApplied = do_state_query(last_applied, State),
     case RaftState == leader orelse OldRaftState == leader of
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~ts: ~s -> ~s in term: ~b machine version: ~b",
+            ?NOTICE("~ts: ~s -> ~s in term: ~b machine version: ~b, last applied ~b",
                     [log_id(State), OldRaftState, RaftState,
-                     current_term(State), machine_version(State)]);
+                     current_term(State), machine_version(State),
+                     LastApplied]);
         false ->
-            ?DEBUG("~ts: ~s -> ~s in term: ~b machine version: ~b",
+            ?DEBUG("~ts: ~s -> ~s in term: ~b machine version: ~b, last applied ~b",
                    [log_id(State), OldRaftState, RaftState,
-                    current_term(State), machine_version(State)])
+                    current_term(State), machine_version(State),
+                    LastApplied])
     end,
     handle_effects(RaftState, Effects, cast,
                    State#state{server_state = ServerState}).
