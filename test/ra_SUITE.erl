@@ -620,33 +620,46 @@ local_query_with_condition_option(Config) ->
         %% the Ra servers' state. The answer to these queries will go to
         %% /dev/null because their alias is inactive.
         Parent = self(),
-        _Pid = spawn_link(
-                 fun() ->
-                         ct:pal(
-                           "Query on leader with idxterm ~0p; "
-                           "expecting success", [IdxTerm2]),
-                         ?assertMatch(
-                            {ok, {_, 19}, _},
-                            ra:local_query(
-                              Leader, QueryFun,
-                              #{condition => {applied, IdxTerm2}})),
-                         ct:pal(
-                           "Query on follower with idxterm ~0p; "
-                           "expecting success", [IdxTerm2]),
-                         ?assertMatch(
-                            {ok, {_, 19}, _},
-                            ra:local_query(
-                              Follower, QueryFun,
-                              #{condition => {applied, IdxTerm2}})),
-                         Parent ! done,
-                         erlang:unlink(Parent)
-                 end),
+        _Pid1 = spawn_link(
+                  fun() ->
+                          ct:pal(
+                            "~p: Query on follower with idxterm ~0p; "
+                            "expecting success", [self(), IdxTerm2]),
+                          ?assertMatch(
+                             {ok, {_, 19}, _},
+                             ra:local_query(
+                               Follower, QueryFun,
+                               #{condition => {applied, IdxTerm2}})),
+                          Parent ! done,
+                          erlang:unlink(Parent)
+                  end),
+        _Pid2 = spawn_link(
+                  fun() ->
+                          %% We use a sleep to increase the chance that the
+                          %% follower receives its query first. It shouldn't
+                          %% matter, but it might make debugging easier.
+                          timer:sleep(1000),
+
+                          ct:pal(
+                            "~p: Query on leader with idxterm ~0p; "
+                            "expecting success", [self(), IdxTerm2]),
+                          ?assertMatch(
+                             {ok, {_, 19}, _},
+                             ra:local_query(
+                               Leader, QueryFun,
+                               #{condition => {applied, IdxTerm2}})),
+                          Parent ! done,
+                          erlang:unlink(Parent)
+                  end),
+
+        %% We use a sleep to leave a chance to the processes above to send
+        %% their query before the command below is executed.
+        timer:sleep(2000),
 
         %% Submit a command through the follower.
         ok = ra:pipeline_command(Follower, 2, no_correlation, normal),
-        receive
-            done -> ok
-        end
+        receive done -> ok end,
+        receive done -> ok end
     after
         terminate_cluster(Cluster)
     end.
