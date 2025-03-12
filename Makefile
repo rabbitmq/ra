@@ -59,5 +59,3 @@ RABBITMQ_UPSTREAM_FETCH_URL ?= https://github.com/rabbitmq/aten.git
 
 show-upstream-git-fetch-url:
 	@echo $(RABBITMQ_UPSTREAM_FETCH_URL)
-
-include mk/bazel.mk
