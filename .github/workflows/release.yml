@@ -19,23 +19,12 @@ jobs:
       id: versions
       working-directory: ra
       run: |
-        sudo npm install --global --silent @bazel/buildozer
-
         VERSION_APP_SRC="$(erl -eval '{ok, [{application, _, AppInfo}]} = file:consult("src/ra.app.src"), Version = proplists:get_value(vsn, AppInfo), io:fwrite(Version), halt().' -noshell)"
 
         if [[ "${{ github.ref_name }}" != "v$VERSION_APP_SRC" ]]; then
           echo "Version in src/ra.app.src ($VERSION_APP_SRC) does not match tag (${{ github.ref_name }})"
           exit 1
         fi
-
-        VERSION_BAZEL="$(cat MODULE.bazel | buildozer 'print version' -:%module)"
-
-        if [[ "${{ github.ref_name }}" != "v$VERSION_BAZEL" ]]; then
-          echo "Version in MODULE.bazel ($VERSION_BAZEL) does not match tag (${{ github.ref_name }})"
-          exit 1
-        fi
-
-        echo "version=$VERSION_BAZEL" | tee -a $GITHUB_OUTPUT
     - name: FETCH THE SOURCE ARCHIVE
       run: |
         curl \
