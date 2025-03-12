@@ -1092,11 +1092,11 @@ handle_follower(#append_entries_rpc{term = Term,
                             %% evaluate commit index as we may have received
                             %% an updated commit_index for previously
                             %% written entries
-                            {NextState, State, Effects} =
+                            {NextState, State2, Effects} =
                                 evaluate_commit_index_follower(State1, Effects0),
                             %% log is validated so send a successful reply
-                            Reply = append_entries_reply(Term, true, State),
-                            {NextState, State,
+                            Reply = append_entries_reply(Term, true, State2),
+                            {NextState, State2,
                              [cast_reply(Id, LeaderId, Reply) | Effects]};
                         false ->
                             %% We need to ensure we make progress in case the
@@ -1109,13 +1109,13 @@ handle_follower(#append_entries_rpc{term = Term,
                                    " including ~b entries did not validate local log. "
                                    "Local last index ~b",
                                    [LogId, PLIdx, length(Entries0), LocalLastIdx]),
-                            {LVTerm, State} = fetch_term(LastValidatedIdx, State0),
+                            {LVTerm, State2} = fetch_term(LastValidatedIdx, State0),
                             Reply = #append_entries_reply{term = CurTerm,
                                                           success = true,
                                                           next_index = LastValidatedIdx + 1,
                                                           last_index = LastValidatedIdx,
                                                           last_term = LVTerm},
-                            {follower, State,
+                            {follower, State2,
                              [cast_reply(Id, LeaderId, Reply)]}
                     end;
                 [{FstIdx, _, _} | _] ->
@@ -1124,26 +1124,21 @@ handle_follower(#append_entries_rpc{term = Term,
                                      LeaderCommit),
                     %% assert we're not writing below the last applied index
                     ?assertNot(FstIdx < LastApplied),
-                    State = lists:foldl(fun pre_append_log_follower/2,
+                    State2 = lists:foldl(fun pre_append_log_follower/2,
                                         State1, Entries),
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
-<<<<<<< HEAD
                             {NextState, State, Effects} =
                                 evaluate_commit_index_follower(State2#{log => Log2},
                                                                Effects0),
-                                {NextState, State,
-                                 [{next_event, {ra_log_event, flush_cache}} | Effects]};
-=======
-                            evaluate_commit_index_follower(State#{log => Log2},
-                                                           Effects0);
->>>>>>> 324d9bc (Replication bug fixes)
+                            {NextState, State,
+                             [{next_event, {ra_log_event, flush_cache}} | Effects]};
                         {error, wal_down} ->
                             %% At this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
                             %% made it to the wal before it crashed.
                             {await_condition,
-                             State#{log => Log1,
+                             State2#{log => Log1,
                                     condition =>
                                         #{predicate_fun => fun wal_down_condition/2}},
                              Effects0};
@@ -1152,15 +1147,15 @@ handle_follower(#append_entries_rpc{term = Term,
                     end
             end;
         {missing, Log0} ->
-            State = State0#{log => Log0},
-            Reply = append_entries_reply(Term, false, State),
+            State2 = State0#{log => Log0},
+            Reply = append_entries_reply(Term, false, State2),
             ?INFO("~ts: follower did not have entry at ~b in ~b."
                   " Requesting ~w from ~b",
                   [LogId, PLIdx, PLTerm, LeaderId,
                    Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{condition =>
+             State2#{condition =>
                     #{predicate_fun => follower_catchup_cond_fun(missing),
                       % repeat reply effect on condition timeout
                       timeout => #{effects => Effects,
@@ -1181,11 +1176,11 @@ handle_follower(#append_entries_rpc{term = Term,
             % and last applied + 1 as the next expected.
             % This _may_ overwrite some valid entries but is probably the
             % simplest and most reliable way to proceed
-            {Reply, State} = mismatch_append_entries_reply(Term, LastApplied,
+            {Reply, State2} = mismatch_append_entries_reply(Term, LastApplied,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{log => Log0,
+             State2#{log => Log0,
                     condition =>
                     #{predicate_fun => follower_catchup_cond_fun(term_mismatch),
                       % repeat reply effect on condition timeout
@@ -1218,14 +1213,6 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId},
                 #{cfg := #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(State),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-<<<<<<< HEAD
-handle_follower({ra_log_event, {written, _} = Evt},
-                State0 = #{log := Log0,
-                           cfg := #cfg{id = Id},
-                           leader_id := LeaderId,
-                           current_term := Term})
-  when LeaderId =/= undefined ->
-=======
 handle_follower({ra_log_event, Evt}, #{log := Log0,
                                        cfg := #cfg{id = Id},
                                        leader_id := LeaderId,
@@ -1233,7 +1220,6 @@ handle_follower({ra_log_event, Evt}, #{log := Log0,
     % forward events to ra_log
     % if the last written changes then send an append entries reply
     LW = ra_log:last_written(Log0),
->>>>>>> 324d9bc (Replication bug fixes)
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
     case LW =/= ra_log:last_written(Log) of
@@ -1969,14 +1955,9 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                       min(MaxBatchSize,
                                           MaxPipelineCount - NumInFlight)),
                       {NewNextIdx, Eff, S} =
-<<<<<<< HEAD
-                      make_rpc_effect(PeerId, Peer0, BatchSize, S0,
-                                      EntryCache),
-=======
                           make_rpc_effect(PeerId, Peer0, BatchSize, S0,
                                           EntryCache),
                       ?assert(NewNextIdx >= NextIdx),
->>>>>>> 60c2d19 (Ensure batch size is non negative when making a pipelined AER)
                       Peer = Peer0#{next_index => NewNextIdx,
                                     commit_index_sent => CommitIndex},
                       NewNumInFlight = NewNextIdx - MatchIdx - 1,

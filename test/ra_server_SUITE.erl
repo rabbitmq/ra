@@ -1091,7 +1091,7 @@ follower_leader_change_before_written(_Config) ->
                                   term = 2,
                                   last_index = 1,
                                   last_term = 1}}}]} =
-        ra_server:handle_follower(written_evt(1, {1, 2}), State2),
+        ra_server:handle_follower(written_evt({1, 2, 1}), State2),
     {follower, #{leader_id := N2, last_applied := 1} = _State4,
      [{cast,
        N2,
@@ -1099,7 +1099,7 @@ follower_leader_change_before_written(_Config) ->
                                   term = 2,
                                   last_index = 3,
                                   last_term = 2}}}]} =
-        ra_server:handle_follower(written_evt(2, {2, 3}), State3),
+        ra_server:handle_follower(written_evt({2, 3, 2}), State3),
     ok.
 
 append_entries_reply_success(_Config) ->
@@ -1788,11 +1788,7 @@ follower_cluster_change(_Config) ->
      [{cast, N1, {N2, #append_entries_reply{}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AE, State),
-<<<<<<< HEAD
             ra_server:handle_follower(written_evt({4, 4, 5}), Int)
-=======
-            ra_server:handle_follower(written_evt(5, {4, 4}), Int)
->>>>>>> 324d9bc (Replication bug fixes)
         end,
 
     ok.
@@ -2330,14 +2326,8 @@ snapshotted_follower_received_append_entries(_Config) ->
 
     {follower, _FState, [{cast, N1, {N3, #append_entries_reply{success = true}}}]} =
         begin
-<<<<<<< HEAD
             {follower, Int, _} = ra_server:handle_follower(AER, FState1),
             ra_server:handle_follower(written_evt({4, 4, 2}), Int)
-=======
-            {follower, Int, _} =
-                ra_server:handle_follower(AER, FState1),
-            ra_server:handle_follower(written_evt(2, {4, 4}), Int)
->>>>>>> 324d9bc (Replication bug fixes)
         end,
     ok.
 

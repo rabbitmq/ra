@@ -377,9 +377,9 @@ shrink_cluster_with_snapshot(Config) ->
     %% resume activity ok
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    [A, B, C] = ServerIds,
+    % Peers = start_peers([s1,s2,s3], PrivDir),
+    % ServerIds = server_ids(ClusterName, Peers),
+    ServerIds = [{ClusterName, start_follower(N, PrivDir)} || N <- [s1,s2,s3]],
 
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
@@ -407,7 +407,7 @@ shrink_cluster_with_snapshot(Config) ->
     ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
     {ok, O, _} = ra:member_overview(Leader2),
     ct:pal("overview2 ~p", [O]),
-    stop_peers(Peers),
+    stop_nodes(ServerIds),
     ?assertMatch(#{cluster_change_permitted := true}, O),
     ok.
 

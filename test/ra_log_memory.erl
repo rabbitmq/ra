@@ -170,21 +170,17 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     {ra_log_memory_state(), list()}.
-<<<<<<< HEAD
-handle_event({written, {_From, Idx, Term}}, State0) ->
-=======
-handle_event({written, Term, {_From, Idx} = Range0}, State0) ->
->>>>>>> 324d9bc (Replication bug fixes)
-    case fetch_term(Idx, State0) of
+handle_event({written, {FromIdx, ToIdx, Term}}, State0) ->
+    case fetch_term(ToIdx, State0) of
         {Term, State} ->
-            {State#state{last_written = {Idx, Term}}, []};
+            {State#state{last_written = {ToIdx, Term}}, []};
         _ ->
-            case ra_range:limit(Idx, Range0) of
-                undefined ->
+            case FromIdx < ToIdx  of
+                false ->
                     % if the term doesn't match we just ignore it
                     {State0, []};
-                Range ->
-                    handle_event({written, Term, Range}, State0)
+                true ->
+                    handle_event({written, {FromIdx, ToIdx -1, Term}}, State0)
             end
     end;
 handle_event(_Evt, State0) ->
