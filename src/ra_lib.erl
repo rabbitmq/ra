@@ -303,7 +303,9 @@ partition_parallel(F, Es) ->
 
 partition_parallel(F, Es, Timeout) ->
     Parent = self(),
-    Running = [{spawn_monitor(fun() -> Parent ! {self(), F(E)} end), E}
+    Running = [{spawn_monitor(fun() ->
+                                      Parent ! {self(), F(E)}
+                              end), E}
                || E <- Es],
     collect(Running, {[], []}, Timeout).
 
@@ -317,8 +319,8 @@ collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
         {Pid, false} ->
             erlang:demonitor(MRef, [flush]),
             collect(Next, {Left, [E | Right]}, Timeout);
-        {'DOWN', MRef, process, Pid, _Reason} ->
-            collect(Next, {Left, [E | Right]}, Timeout)
+        {'DOWN', MRef, process, Pid, Reason} ->
+            collect(Next, {Left, [{E, Reason} | Right]}, Timeout)
     after Timeout ->
               exit(partition_parallel_timeout)
     end.

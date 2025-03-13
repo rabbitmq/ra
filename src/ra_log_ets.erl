@@ -54,7 +54,7 @@ mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
         [] ->
-            case gen_server:call(Name, {mem_table_please, UId, #{}}) of
+            case gen_server:call(Name, {mem_table_please, UId, #{}}, infinity) of
                 {ok, [Tid | Rem]} ->
                     Mt = lists:foldl(
                            fun (T, Acc) ->
@@ -137,6 +137,8 @@ handle_call(Request, _From, State) ->
 
 handle_cast({exec_delete, UId, Spec},
             #state{names = #{open_mem_tbls := MemTables}} = State) ->
+
+    %% delete from open mem tables if {delete, tid()}
     case Spec of
         {delete, Tid} ->
             ets:delete_object(MemTables, {UId, Tid});
@@ -144,11 +146,11 @@ handle_cast({exec_delete, UId, Spec},
             ok
     end,
 
-    %% TODO: delete from ra_log_open_mem_tables if {delete, tid()}
     try timer:tc(fun () -> ra_mt:delete(Spec) end) of
         {Time, Num} ->
-            ?DEBUG_IF(Time > 25_000, "ra_log_ets: ra_mt:delete/1 took ~bms to delete ~w ~b entries",
-                   [Time div 1000, Spec, Num]),
+            ?DEBUG_IF(Time > 25_000,
+                      "ra_log_ets: ra_mt:delete/1 took ~bms to delete ~w ~b entries",
+                      [Time div 1000, Spec, Num]),
             ok
     catch
         _:Err ->
@@ -166,8 +168,9 @@ handle_cast({delete_mem_tables, UId},
     [begin
          try timer:tc(fun () -> ets_delete(Tid) end) of
              {Time, true} ->
-                 ?DEBUG_IF(Time > 25_000, "ra_log_ets: ets:delete/1 took ~bms to delete ~w",
-                        [Time div 1000, Tid]),
+                 ?DEBUG_IF(Time > 25_000,
+                           "ra_log_ets: ets:delete/1 took ~bms to delete ~w",
+                           [Time div 1000, Tid]),
                  ok
          catch
              _:Err ->

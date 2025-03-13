@@ -669,9 +669,9 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
                   [LogId, FromIdx, Expected]),
             {resend_from(Expected, State0), []};
         false ->
-            ?INFO("~ts: ra_log: written gap detected at ~b but is outside
-                  of mem table range. Updating last written index to ~b!",
-                  [LogId, FromIdx, Expected]),
+            ?DEBUG("~ts: ra_log: written gap detected at ~b but is outside
+                  of mem table range ~w. Updating last written index to ~b!",
+                   [LogId, FromIdx, MtRange, Expected]),
             %% if the entry is not in the mem table we may have missed a
             %% written event due to wal crash. Accept written event by updating
             %% last written index term and recursing
@@ -686,7 +686,8 @@ handle_event({segments, TidRanges, NewSegs},
                       readers = Readers
                      } = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, ra_log_reader:segment_ref_count(Reader)),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
+                ra_log_reader:segment_ref_count(Reader)),
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(

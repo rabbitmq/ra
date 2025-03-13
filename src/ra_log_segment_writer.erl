@@ -150,8 +150,8 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                                false ->
                                    %% delete all tids as the uid is not
                                    %% registered
-                                   ?DEBUG("segment_writer in '~w': deleting memtable "
-                                          "for ~w as not a registered uid",
+                                   ?DEBUG("segment_writer in '~ts': deleting memtable "
+                                          "for ~ts as not a registered uid",
                                           [System, UId]),
                                    ok = ra_log_ets:delete_mem_tables(Names, UId),
                                    Acc
