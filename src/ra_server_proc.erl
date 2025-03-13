@@ -311,6 +311,7 @@ init(Config) ->
     {ok, recover, State, [{next_event, cast, go}]}.
 
 do_init(#{id := Id,
+          uid := UId,
           cluster_name := ClusterName} = Config0) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
@@ -325,15 +326,12 @@ do_init(#{id := Id,
     process_flag(message_queue_data, MsgQData),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    %% wait for wal for a bit before initialising the server state and log
-    #{cluster := Cluster} = ServerState = ra_server:init(Config),
-    LogId = ra_server:log_id(ServerState),
-    UId = ra_server:uid(ServerState),
-    % ensure ra_directory has the new pid
     #{names := Names} = SysConf,
+    %% register with ra_directory _before_ initialsing the ra server state
     ok = ra_directory:register_name(Names, UId, self(),
                                     maps:get(parent, Config, undefined), Key,
                                     ClusterName),
+    #{cluster := Cluster} = ServerState = ra_server:init(Config),
 
     % ensure each relevant erlang node is connected
     PeerNodes = [PeerNode ||
@@ -362,6 +360,7 @@ do_init(#{id := Id,
     ReceiveSnapshotTimeout = maps:get(receive_snapshot_timeout, SysConf,
                                       ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     AtenPollInt = application:get_env(aten, poll_interval, 1000),
+    LogId = ra_server:log_id(ServerState),
     State = #state{conf = #conf{log_id = LogId,
                                 cluster_name = ClusterName,
                                 name = Key,
