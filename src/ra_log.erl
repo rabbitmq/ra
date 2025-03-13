@@ -669,9 +669,9 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
                   [LogId, FromIdx, Expected]),
             {resend_from(Expected, State0), []};
         false ->
-            ?INFO("~ts: ra_log: written gap detected at ~b but is outside
-                  of mem table range. Updating last written index to ~b!",
-                  [LogId, FromIdx, Expected]),
+            ?DEBUG("~ts: ra_log: written gap detected at ~b but is outside
+                  of mem table range ~w. Updating last written index to ~b!",
+                   [LogId, FromIdx, MtRange, Expected]),
             %% if the entry is not in the mem table we may have missed a
             %% written event due to wal crash. Accept written event by updating
             %% last written index term and recursing
