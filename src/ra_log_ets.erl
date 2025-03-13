@@ -54,7 +54,7 @@ mem_table_please(#{log_ets := Name,
                    open_mem_tbls := OpnMemTbls}, UId, Mode) ->
     case ets:lookup(OpnMemTbls, UId) of
         [] ->
-            case gen_server:call(Name, {mem_table_please, UId, #{}}) of
+            case gen_server:call(Name, {mem_table_please, UId, #{}}, infinity) of
                 {ok, [Tid | Rem]} ->
                     Mt = lists:foldl(
                            fun (T, Acc) ->

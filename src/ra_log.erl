@@ -686,7 +686,8 @@ handle_event({segments, TidRanges, NewSegs},
                       readers = Readers
                      } = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, ra_log_reader:segment_ref_count(Reader)),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
+                ra_log_reader:segment_ref_count(Reader)),
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
