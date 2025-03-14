@@ -513,10 +513,16 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
              [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
-            ?DEBUG("~ts: written event did not find term ~b for index ~b "
-                   "found ~w",
-                   [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
-            {State, []}
+            case FromIdx < ToIdx  of
+                false ->
+                    ?DEBUG("~ts: written event did not find term ~b for index ~b "
+                           "found ~w",
+                           [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
+                    % if the term doesn't match we just ignore it
+                    {State, []};
+                true ->
+                    handle_event({written, {FromIdx, ToIdx -1, Term}}, State0)
+            end
     end;
 handle_event({written, {FromIdx, _, _Term}},
              #?MODULE{cfg = #cfg{log_id = LogId},

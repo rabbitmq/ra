@@ -362,8 +362,9 @@ diverged_follower(Config) ->
     ra:stop_server(?SYS, F2),
 
     %% use pipeline as wont be able to commit
-    ra:pipeline_command(LeaderId1, {enq, d3}, make_ref()),
-    ra:pipeline_command(LeaderId1, {enq, d4}, make_ref()),
+    [
+    ra:pipeline_command(LeaderId1, {enq, I}, make_ref())
+    || I <- lists:seq(3, 100)],
 
     %% stop leader
     ra:stop_server(?SYS, LeaderId1),
@@ -394,6 +395,7 @@ diverged_follower(Config) ->
 
               [[m1, m2, m3, m4, m5]] == lists:usort(States)
       end, 50),
+    flush(),
 
     ra:delete_cluster(Peers),
     ok.
@@ -899,8 +901,8 @@ init(_) ->
 state_enter(eol = S, State) ->
     ct:pal("state_enter ~w ~w", [self(), S]),
     [{send_msg, P, eol, ra_event} || {P, _} <- queue:to_list(State), is_pid(P)];
-state_enter(S, _) ->
-    ct:pal("state_enter ~w ~w", [self(), S]),
+state_enter(_S, _) ->
+    % ct:pal("state_enter ~w ~w", [self(), S]),
     [].
 
 flush() ->
