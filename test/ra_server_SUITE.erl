@@ -35,6 +35,7 @@ all() ->
      leader_does_not_abdicate_to_unknown_peer,
      higher_term_detected,
      pre_vote_election,
+     pre_vote_election_non_voter,
      pre_vote_election_reverts,
      candidate_receives_pre_vote,
      leader_receives_pre_vote,
@@ -2104,6 +2105,7 @@ candidate_election(_Config) ->
 pre_vote_election(_Config) ->
     Token = make_ref(),
     State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
+                             membership => voter,
                              pre_vote_token => Token},
     Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
     {pre_vote, #{votes := 2} = State1, []}
@@ -2128,6 +2130,15 @@ pre_vote_election(_Config) ->
     % quorum has been achieved - pre_vote becomes candidate
     {candidate,
      #{current_term := 6}, _} = ra_server:handle_pre_vote(Reply, State1).
+
+pre_vote_election_non_voter(_Config) ->
+    Token = make_ref(),
+    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
+                             membership => promotable,
+                             pre_vote_token => Token},
+    Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
+    % non-voter should ignore pre-vote
+    {pre_vote, #{votes := 1}, []} = ra_server:handle_pre_vote(Reply, State).
 
 pre_vote_election_reverts(_Config) ->
     N2 = ?N2,
