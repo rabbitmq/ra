@@ -52,7 +52,6 @@
          checkpoint/3,
          persist_last_applied/1,
          update_peer/3,
-         register_external_log_reader/2,
          update_disconnected_peers/3,
          handle_down/5,
          handle_node_status/6,
@@ -178,7 +177,8 @@
     {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
-    start_election_timeout.
+    start_election_timeout |
+    {bg_work, fun(() -> ok) | mfargs()}.
 
 -type effects() :: [effect()].
 
@@ -232,7 +232,8 @@
                               counter => counters:counters_ref(),
                               membership => ra_membership(),
                               system_config => ra_system:config(),
-                              has_changed => boolean()
+                              has_changed => boolean(),
+                              parent => term() %% the supervisor
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -927,9 +928,6 @@ handle_leader({transfer_leadership, ServerId},
                           timeout => #{effects => [], transition_to => leader}}},
              [{reply, ok}]}
     end;
-handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {leader, State#{log => Log}, Effs};
 handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
@@ -1038,9 +1036,6 @@ handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
-handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {candidate, State#{log => Log}, Effs};
 handle_candidate(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_candidate(#info_rpc{term = Term} = Msg,
@@ -1141,9 +1136,6 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {pre_vote, State#{log => Log}, Effects};
-handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {pre_vote, State#{log => Log}, Effs};
 handle_pre_vote(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_pre_vote(#info_rpc{term = Term} = Msg,
@@ -1492,9 +1484,6 @@ handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(try_become_leader, State) ->
     call_for_election(pre_vote, State);
-handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {follower, State#{log => Log}, Effs};
 handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               log_id = LogId}} = State0) ->
@@ -1543,8 +1532,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
            [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
-                                               SnapState0),
+    {ok, SnapState, Effs0} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
+                                                      SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
@@ -1598,11 +1587,12 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |
-                                                     Effs ++ SnapInstalledEffs]};
+                                                     Effs0 ++ Effs ++
+                                                     SnapInstalledEffs]};
         next ->
             Log = ra_log:set_snapshot_state(SnapState, Log0),
             State = update_term(Term, State0#{log => Log}),
-            {receive_snapshot, State, [{reply, Reply}]}
+            {receive_snapshot, State, [{reply, Reply} | Effs0]}
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
@@ -1632,9 +1622,6 @@ handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
     {follower, State#{log => Log}, []};
-handle_receive_snapshot({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {receive_snapshot, State#{log => Log}, Effs};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId},
@@ -1706,9 +1693,6 @@ handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {await_condition, State#{log => Log}, Effects};
-handle_await_condition({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {await_condition, State#{log => Log}, Effs};
 handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
     case Pred(Msg, State0) of
         {true, State1} ->
@@ -2204,21 +2188,26 @@ log_fold_cache(From, _To, _Cache, Acc) ->
                             term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
-                      State = #{log := Log0, cluster := Cluster}) ->
+                      #{cfg := #cfg{machine = Machine},
+                        log := Log0,
+                        cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
-                                                  MacVersion,
+                                                  MacMod,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec checkpoint(ra_index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
 checkpoint(Index, MacState,
-           State = #{log := Log0, cluster := Cluster}) ->
+           #{cfg := #cfg{machine = Machine},
+             log := Log0, cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
-                                       MacVersion, MacState, Log0),
+                                       MacMod, MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec promote_checkpoint(ra_index(), ra_server_state()) ->
@@ -2253,12 +2242,6 @@ update_peer(PeerId, Update, #{cluster := Peers} = State)
   when is_map(Update) ->
     Peer = maps:merge(maps:get(PeerId, Peers), Update),
     put_peer(PeerId, Peer, State).
-
--spec register_external_log_reader(pid(), ra_server_state()) ->
-    {ra_server_state(), effects()}.
-register_external_log_reader(Pid, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {State#{log => Log}, Effs}.
 
 -spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
     ra_server_state().
@@ -2308,20 +2291,20 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
               "~ts: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
-handle_down(RaftState, snapshot_writer, Pid, Info,
-            #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
-  when is_pid(Pid) ->
-    case Info of
-        noproc -> ok;
-        normal -> ok;
-        _ ->
-            ?WARN("~ts: Snapshot write process ~w exited with ~w",
-                  [LogId, Pid, Info])
-    end,
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {RaftState, State#{log => Log}, []};
+% handle_down(RaftState, snapshot_writer, Pid, Info,
+%             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
+%   when is_pid(Pid) ->
+%     case Info of
+%         noproc -> ok;
+%         normal -> ok;
+%         _ ->
+%             ?WARN("~ts: Snapshot write process ~w exited with ~w",
+%                   [LogId, Pid, Info])
+%     end,
+%     SnapState0 = ra_log:snapshot_state(Log0),
+%     SnapState = ra_snapshot:handle_error(Pid, Info, SnapState0),
+%     Log = ra_log:set_snapshot_state(SnapState, Log0),
+%     {RaftState, State#{log => Log}, []};
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};

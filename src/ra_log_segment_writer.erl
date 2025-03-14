@@ -66,14 +66,13 @@ start_link(#{name := Name} = Config) ->
 
 -spec accept_mem_tables(atom() | pid(),
                         #{ra_uid() => [{ets:tid(), ra:range()}]},
-                        string()) ->
-    ok.
+                        string()) -> ok.
 accept_mem_tables(_SegmentWriter, Tables, undefined)
   when map_size(Tables) == 0 ->
     ok;
-accept_mem_tables(SegmentWriter, Tables, WalFile)
-  when is_map(Tables) ->
-    gen_server:cast(SegmentWriter, {mem_tables, Tables, WalFile}).
+accept_mem_tables(SegmentWriter, UIdTidRanges, WalFile)
+  when is_map(UIdTidRanges) ->
+    gen_server:cast(SegmentWriter, {mem_tables, UIdTidRanges, WalFile}).
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
 truncate_segments(SegWriter, Who, SegRef) ->
@@ -135,9 +134,10 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
-handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
-                                                  system = System} = State) ->
-    ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
+handle_cast({mem_tables, UIdTidRanges, WalFile},
+            #state{data_dir = Dir,
+                   system = System} = State) ->
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(UIdTidRanges)),
     #{names := Names} = ra_system:fetch(System),
     Degree = erlang:system_info(schedulers),
     %% TODO: refactor to make better use of time where each uid has an
@@ -156,7 +156,7 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                                    ok = ra_log_ets:delete_mem_tables(Names, UId),
                                    Acc
                            end
-                   end, [], Ranges),
+                   end, [], UIdTidRanges),
 
     T1 = erlang:monotonic_time(),
     _ = [begin
@@ -263,7 +263,7 @@ get_overview(#state{data_dir = Dir,
 
 flush_mem_table_ranges({ServerUId, TidRanges0},
                        #state{system = System} = State) ->
-    SnapIdx = snap_idx(ServerUId),
+    SmallestIdx = smallest_live_idx(ServerUId),
     %% TidRanges arrive here sorted new -> old.
 
     %% truncate and limit all ranges to create a contiguous non-overlapping
@@ -272,14 +272,14 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
     %% processing
     TidRanges = lists:foldl(
                   fun ({T, Range0}, []) ->
-                          case ra_range:truncate(SnapIdx, Range0) of
+                          case ra_range:truncate(SmallestIdx - 1, Range0) of
                               undefined ->
                                   [];
                               Range ->
                                   [{T, Range}]
                           end;
                       ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
-                          Range1 = ra_range:truncate(SnapIdx, Range0),
+                          Range1 = ra_range:truncate(SmallestIdx - 1, Range0),
                           case ra_range:limit(Start, Range1) of
                               undefined ->
                                   Acc;
@@ -352,15 +352,10 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
     end.
 
 start_index(ServerUId, StartIdx0) ->
-    max(snap_idx(ServerUId) + 1, StartIdx0).
+    max(smallest_live_idx(ServerUId), StartIdx0).
 
-snap_idx(ServerUId) ->
-    case ets:lookup(ra_log_snapshot_state, ServerUId) of
-        [{_, SnapIdx}] ->
-            SnapIdx;
-        _ ->
-            -1
-    end.
+smallest_live_idx(ServerUId) ->
+    ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
 
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of

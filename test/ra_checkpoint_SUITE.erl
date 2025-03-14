@@ -13,6 +13,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("src/ra.hrl").
 
+-define(MACMOD, ?MODULE).
+
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -82,11 +84,13 @@ take_checkpoint(Config) ->
     State0 = init_state(Config),
 
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, snapshot_writer, Pid}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, checkpoint, State0),
+    MacState = ?FUNCTION_NAME,
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacState, checkpoint, State0),
+
     undefined = ra_snapshot:latest_checkpoint(State1),
-    {Pid, {55, 2}, checkpoint} = ra_snapshot:pending(State1),
+    {{55, 2}, checkpoint} = ra_snapshot:pending(State1),
+    Fun(),
     receive
         {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, checkpoint}} ->
             State = ra_snapshot:complete_snapshot(IdxTerm, checkpoint, State1),
@@ -102,20 +106,20 @@ take_checkpoint(Config) ->
 take_checkpoint_crash(Config) ->
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, snapshot_writer, Pid}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, checkpoint, State0),
+    MacState = ?FUNCTION_NAME,
+    {State1, [{bg_work, _Fun, ErrFun}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, checkpoint, State0),
     undefined = ra_snapshot:latest_checkpoint(State1),
-    {Pid, {55, 2}, checkpoint} = ra_snapshot:pending(State1),
+    {{55, 2}, checkpoint} = ra_snapshot:pending(State1),
+    ErrFun(it_failed),
+    {snapshot_error, {55,2}, checkpoint, Err} =
     receive
-        {ra_log_event, _} ->
-            %% Just pretend the snapshot event didn't happen
-            %% and the process instead crashed.
-            ok
+        {ra_log_event, Evt} ->
+            Evt
     after 10 -> ok
     end,
 
-    State = ra_snapshot:handle_down(Pid, it_crashed_dawg, State1),
+    State = ra_snapshot:handle_error({55,2}, Err, State1),
     %% If the checkpoint process crashed we just have to consider the
     %% checkpoint as faulty and clear it up.
     undefined = ra_snapshot:pending(State),
@@ -131,8 +135,10 @@ recover_from_checkpoint_only(Config) ->
     {error, no_current_snapshot} = ra_snapshot:recover(State0),
 
     Meta = meta(55, 2, [node()]),
-    {State1, [{monitor, process, snapshot_writer, _}]} =
-        ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, checkpoint, State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MODULE, ?FUNCTION_NAME,
+                                   checkpoint, State0),
+    Fun(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm, checkpoint}} ->
             _ = ra_snapshot:complete_snapshot(IdxTerm, checkpoint, State1),
@@ -157,8 +163,10 @@ recover_from_checkpoint_and_snapshot(Config) ->
 
     %% Snapshot.
     SnapMeta = meta(55, 2, [node()]),
-    {State1, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(SnapMeta, ?FUNCTION_NAME, snapshot, State0),
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(SnapMeta, ?MODULE, ?FUNCTION_NAME,
+                                    snapshot, State0),
+    Fun(),
     State2 = receive
                  {ra_log_event, {snapshot_written, IdxTerm1, snapshot}} ->
                        ra_snapshot:complete_snapshot(IdxTerm1, snapshot, State1)
@@ -168,8 +176,10 @@ recover_from_checkpoint_and_snapshot(Config) ->
 
     %% Checkpoint at a later index.
     CPMeta = meta(105, 3, [node()]),
-    {State3, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(CPMeta, ?FUNCTION_NAME, checkpoint, State2),
+    {State3, [{bg_work, Fun2, _}]} =
+         ra_snapshot:begin_snapshot(CPMeta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State2),
+    Fun2(),
     receive
         {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
              _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3),
@@ -195,8 +205,10 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
 
     %% Checkpoint at 25.
     CP1Meta = meta(25, 2, [node()]),
-    {State1, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(CP1Meta, ?FUNCTION_NAME, checkpoint, State0),
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(CP1Meta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State0),
+    Fun(),
     State2 = receive
                  {ra_log_event, {snapshot_written, IdxTerm1, checkpoint}} ->
                        ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
@@ -206,8 +218,10 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
 
     %% Checkpoint at 35.
     CP2Meta = meta(35, 3, [node()]),
-    {State3, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(CP2Meta, ?FUNCTION_NAME, checkpoint, State2),
+    {State3, [{bg_work, Fun2, _}]} =
+         ra_snapshot:begin_snapshot(CP2Meta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State2),
+    Fun2(),
     State4 = receive
                  {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
                        ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3)
@@ -217,8 +231,10 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
 
     %% Checkpoint at 55.
     CP3Meta = meta(55, 5, [node()]),
-    {State5, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(CP3Meta, ?FUNCTION_NAME, checkpoint, State4),
+    {State5, [{bg_work, Fun3, _}]} =
+         ra_snapshot:begin_snapshot(CP3Meta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State4),
+    Fun3(),
     State6 = receive
                  {ra_log_event, {snapshot_written, IdxTerm3, checkpoint}} ->
                        ra_snapshot:complete_snapshot(IdxTerm3, checkpoint, State5)
@@ -228,8 +244,10 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
 
     %% Snapshot at 45.
     SnapMeta = meta(45, 4, [node()]),
-    {State7, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(SnapMeta, ?FUNCTION_NAME, snapshot, State6),
+    {State7, [{bg_work, Fun4, _}]} =
+         ra_snapshot:begin_snapshot(SnapMeta, ?MODULE, ?FUNCTION_NAME,
+                                    snapshot, State6),
+    Fun4(),
     State8 = receive
                  {ra_log_event, {snapshot_written, IdxTerm4, snapshot}} ->
                       ra_snapshot:complete_snapshot(IdxTerm4, snapshot, State7)
@@ -262,7 +280,10 @@ init_recover_corrupt(Config) ->
 
     %% Take a checkpoint.
     Meta1 = meta(55, 2, [node()]),
-    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, checkpoint, State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta1, ?MODULE, ?FUNCTION_NAME,
+                                   checkpoint, State0),
+    Fun(),
     State2 = receive
                  {ra_log_event, {snapshot_written, {55, 2} = IdxTerm1, checkpoint}} ->
                      ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
@@ -272,7 +293,10 @@ init_recover_corrupt(Config) ->
 
     %% Take another checkpoint.
     Meta2 = meta(165, 2, [node()]),
-    {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME, checkpoint, State2),
+    {State3, [{bg_work, Fun2, _}]} =
+        ra_snapshot:begin_snapshot(Meta2, ?MODULE, ?FUNCTION_NAME,
+                                   checkpoint, State2),
+    Fun2(),
     receive
         {ra_log_event, {snapshot_written, {165, 2} = IdxTerm2, checkpoint}} ->
             _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3),
@@ -303,8 +327,10 @@ init_recover_multi_corrupt(Config) ->
 
     %% Checkpoint at 55.
     CP1Meta = meta(55, 2, [node()]),
-    {State1, _} =
-         ra_snapshot:begin_snapshot(CP1Meta, ?FUNCTION_NAME, checkpoint, State0),
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(CP1Meta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State0),
+    Fun(),
     State2 = receive
                  {ra_log_event, {snapshot_written, IdxTerm1, checkpoint}} ->
                      ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
@@ -314,8 +340,10 @@ init_recover_multi_corrupt(Config) ->
 
     %% Checkpoint at 165.
     CP2Meta = meta(165, 2, [node()]),
-    {State3, _} =
-         ra_snapshot:begin_snapshot(CP2Meta, ?FUNCTION_NAME, checkpoint, State2),
+    {State3, [{bg_work, Fun2, _}]} =
+         ra_snapshot:begin_snapshot(CP2Meta, ?MODULE, ?FUNCTION_NAME,
+                                    checkpoint, State2),
+    Fun2(),
     State4 = receive
                  {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
                       ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3)
@@ -365,3 +393,7 @@ list_checkpoint_dirs(Config) ->
 list_snap_dirs(Config) ->
     SnapDir = ?config(snap_dir, Config),
     filelib:wildcard(filename:join(SnapDir, "*")).
+
+%% ra_machine fakes
+version() -> 1.
+live_indexes(_) -> [].

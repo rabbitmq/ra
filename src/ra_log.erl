@@ -49,9 +49,6 @@
          delete_everything/1,
          release_resources/3,
 
-         % external reader
-         register_reader/2,
-         readers/1,
          tick/2
         ]).
 
@@ -108,7 +105,6 @@
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
          last_wal_write :: {pid(), Ms :: integer()},
          reader :: ra_log_reader:state(),
-         readers = [] :: [pid()],
          mem_table :: ra_mt:state(),
          tx = false :: boolean()
         }).
@@ -340,7 +336,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx, Term, Cmd},
+                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
@@ -682,9 +678,7 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
-                      mem_table = Mt0,
-                      readers = Readers
-                     } = State0) ->
+                      mem_table = Mt0} = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
                 ra_log_reader:segment_ref_count(Reader)),
@@ -698,21 +692,14 @@ handle_event({segments, TidRanges, NewSegs},
            end, Mt0, TidRanges),
     State = State0#?MODULE{reader = Reader,
                            mem_table = Mt},
-    case Readers of
-        [] ->
-            {State, []};
-        _ ->
-            %% HACK: but this feature is deprecated anyway
-            %% Dummy pid to swallow update notifications
-            Pid = spawn(fun () -> ok end),
-            {State, log_update_effects(Readers, Pid, State)}
-    end;
+    {State, []};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
                       first_index = FstIdx,
                       last_index = LstIdx,
                       mem_table = Mt0,
+                      % reader = Reader,
                       last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
@@ -721,8 +708,6 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
     case SnapKind of
         snapshot ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-            % delete any segments outside of first_index
-            {State, Effects0} = delete_segments(SnapIdx, State0),
             %% Delete old snapshot files. This is done as an effect
             %% so that if an old snapshot is still being replicated
             %% the cleanup can be delayed until it is safe.
@@ -735,21 +720,31 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, SnapKind},
             CPEffects = [{delete_snapshot,
                           ra_snapshot:directory(SnapState, checkpoint),
                           Checkpoint} || Checkpoint <- Checkpoints],
-            Effects1 = [DeleteCurrentSnap | CPEffects] ++ Effects0,
+            Effects0 = [DeleteCurrentSnap | CPEffects],
 
-            {LWIdxTerm, Effects} =
+            LWIdxTerm =
                 case LastWrittenIdx > SnapIdx of
                     true ->
-                        {LWIdxTerm0, Effects1};
+                        LWIdxTerm0;
                     false ->
-                        {Snap, Effects1}
+                        Snap
                 end,
+            % delete any segments outside of first_index
+            {State, Effects1} = delete_segments(SnapIdx, State0),
+
+            %% delete from mem table
             %% this will race with the segment writer but if the
             %% segwriter detects a missing index it will query the snaphost
             %% state and if that is higher it will resume flush
             {Spec, Mt1} = ra_mt:set_first(SnapIdx + 1, Mt0),
             ok = exec_mem_table_delete(Names, UId, Spec),
 
+            %% TODO schedule compaction,
+            %% NB the mt cannot be truncated here with set_first as we need
+            %% to keep any live indexes
+            % SegRefs = ra_log_reader:segment_refs(Reader),
+
+            Effects = Effects0 ++ Effects1,
             {State#?MODULE{first_index = SnapIdx + 1,
                            last_index = max(LstIdx, SnapIdx),
                            last_written_index_term = LWIdxTerm,
@@ -777,16 +772,20 @@ handle_event({snapshot_written, {Idx, Term} = Snap, SnapKind},
                 ra_snapshot:directory(SnapState, SnapKind),
                 Snap}],
     {State0, Effects};
+handle_event({snapshot_error, Snap, SnapKind, Error},
+             #?MODULE{cfg =#cfg{log_id = LogId},
+                      snapshot_state = SnapState0} = State0) ->
+    ?INFO("~ts: snapshot error for ~w ~s ", [LogId, Snap, SnapKind]),
+    SnapState = ra_snapshot:handle_error(Snap, Error, SnapState0),
+    {State0#?MODULE{snapshot_state = SnapState}, []};
 handle_event({resend_write, Idx},
-             #?MODULE{cfg =#cfg{log_id = LogId}} = State) ->
+             #?MODULE{cfg = #cfg{log_id = LogId}} = State) ->
     % resend missing entries from mem tables.
     ?INFO("~ts: ra_log: wal requested resend from ~b",
           [LogId, Idx]),
     {resend_from(Idx, State), []};
-handle_event({down, Pid, _Info},
-             #?MODULE{readers = Readers} =
-             State) ->
-    {State#?MODULE{readers = lists:delete(Pid, Readers)}, []}.
+handle_event({down, _Pid, _Info}, #?MODULE{} = State) ->
+    {State, []}.
 
 -spec next_index(state()) -> ra_index().
 next_index(#?MODULE{last_index = LastIdx}) ->
@@ -842,7 +841,7 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
     CPEffects = [{delete_snapshot,
                   ra_snapshot:directory(SnapState, checkpoint),
                   Checkpoint} || Checkpoint <- Checkpoints],
-    {Spec, Mt} = ra_mt:set_first(SnapIdx, Mt0),
+    {Spec, Mt} = ra_mt:set_first(SnapIdx + 1, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
     {State#?MODULE{snapshot_state = SnapState,
                    first_index = SnapIdx + 1,
@@ -866,25 +865,28 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 
--spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
-                            MacVersion :: ra_machine:version(),
+-spec update_release_cursor(Idx :: ra_index(),
+                            Cluster :: ra_cluster(),
+                            MacModule :: module(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
-    suggest_snapshot(snapshot, Idx, Cluster, MacVersion, MacState, State).
+update_release_cursor(Idx, Cluster, MacModule, MacState, State)
+  when is_atom(MacModule) ->
+    suggest_snapshot(snapshot, Idx, Cluster, MacModule, MacState, State).
 
 -spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
-                 MacVersion :: ra_machine:version(),
+                 MacModule :: module(),
                  MacState :: term(), State :: state()) ->
     {state(), effects()}.
-checkpoint(Idx, Cluster, MacVersion, MacState, State) ->
-    suggest_snapshot(checkpoint, Idx, Cluster, MacVersion, MacState, State).
+checkpoint(Idx, Cluster, MacModule, MacState, State)
+  when is_atom(MacModule) ->
+    suggest_snapshot(checkpoint, Idx, Cluster, MacModule, MacState, State).
 
-suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
+suggest_snapshot(SnapKind, Idx, Cluster, MacModule, MacState,
                  #?MODULE{snapshot_state = SnapshotState} = State) ->
     case ra_snapshot:pending(SnapshotState) of
         undefined ->
-            suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State);
+            suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State);
         _ ->
             %% Only one snapshot or checkpoint may be written at a time to
             %% prevent excessive I/O usage.
@@ -894,7 +896,7 @@ suggest_snapshot(SnapKind, Idx, Cluster, MacVersion, MacState,
 promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
                                  snapshot_state = SnapState0} = State) ->
     case ra_snapshot:pending(SnapState0) of
-        {_WriterPid, _IdxTerm, snapshot} ->
+        {_IdxTerm, snapshot} ->
             %% If we're currently writing a snapshot, skip promoting a
             %% checkpoint.
             {State, []};
@@ -930,13 +932,7 @@ tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
             State
     end.
 
-suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
-    ClusterServerIds = maps:map(fun (_, V) ->
-                                        maps:with([voter_status], V)
-                                end, Cluster),
-    Meta = #{index => Idx,
-             cluster => ClusterServerIds,
-             machine_version => MacVersion},
+suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State0) ->
     case should_snapshot(SnapKind, Idx, State0) of
         true ->
             % TODO: here we use the current cluster configuration in
@@ -954,7 +950,15 @@ suggest_snapshot0(SnapKind, Idx, Cluster, MacVersion, MacState, State0) ->
                 {undefined, _} ->
                     {State0, []};
                 {Term, State} ->
-                    write_snapshot(Meta#{term => Term}, MacState,
+                    ClusterServerIds =
+                        maps:map(fun (_, V) ->
+                                         maps:with([voter_status], V)
+                                 end, Cluster),
+                    MachineVersion = ra_machine:version(MacModule),
+                    Meta = #{index => Idx,
+                             cluster => ClusterServerIds,
+                             machine_version => MachineVersion},
+                    write_snapshot(Meta#{term => Term}, MacModule, MacState,
                                    SnapKind, State)
             end;
         false ->
@@ -1089,24 +1093,12 @@ read_config(Dir) ->
 delete_everything(#?MODULE{cfg = #cfg{uid = UId,
                                       names = Names,
                                       directory = Dir},
-                           snapshot_state = SnapState} = Log) ->
+                           snapshot_state = _SnapState} = Log) ->
     _ = close(Log),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),
-    catch ets:delete(ra_log_snapshot_state, UId),
-    case ra_snapshot:pending(SnapState) of
-        {Pid, _, _} ->
-            case is_process_alive(Pid) of
-                true ->
-                    exit(Pid, kill),
-                    ok;
-                false ->
-                    ok
-            end;
-        _ ->
-            ok
-    end,
+    catch ra_log_snapshot_state:delete(ra_log_snapshot_state, UId),
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch
@@ -1134,56 +1126,28 @@ release_resources(MaxOpenSegments,
                                               AccessPattern,
                                               ActiveSegs, Names, Counter)}.
 
--spec register_reader(pid(), state()) ->
-    {state(), effects()}.
-register_reader(Pid, #?MODULE{cfg = #cfg{uid = UId,
-                                         directory = Dir,
-                                         names = Names},
-                              reader = Reader,
-                              readers = Readers} = State) ->
-    SegRefs = ra_log_reader:segment_refs(Reader),
-    NewReader = ra_log_reader:init(UId, Dir, 1, SegRefs, Names),
-    {State#?MODULE{readers = [Pid | Readers]},
-     [{reply, {ok, NewReader}},
-      {monitor, process, log, Pid}]}.
-
-readers(#?MODULE{readers = Readers}) ->
-    Readers.
-
 
 %%% Local functions
-
-log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
-                                            reader = Reader}) ->
-    SegRefs = ra_log_reader:segment_refs(Reader),
-    [{send_msg, P, {ra_log_update, ReplyPid, Idx, SegRefs},
-      [ra_event, local]} || P <- Pids].
-
 
 %% deletes all segments where the last index is lower than
 %% the Idx argument
 delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
                                              segment_writer = SegWriter,
                                              uid = UId} = Cfg,
-                                  readers = Readers,
                                   reader = Reader0} = State0) ->
     case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
         {Reader, []} ->
             State = State0#?MODULE{reader = Reader},
-            {State, log_update_effects(Readers, undefined, State)};
+            {State, []};
         {Reader, [Pivot | _] = Obsolete} ->
-            Pid = spawn(
-                    fun () ->
-                            ok = log_update_wait_n(length(Readers)),
-                            ok = ra_log_segment_writer:truncate_segments(SegWriter,
-                                                                         UId, Pivot)
-                    end),
+            ok = ra_log_segment_writer:truncate_segments(SegWriter,
+                                                         UId, Pivot),
             NumActive = ra_log_reader:segment_ref_count(Reader),
             ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
                    [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
             put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
             State = State0#?MODULE{reader = Reader},
-            {State, log_update_effects(Readers, Pid, State)}
+            {State, []}
     end.
 
 %% unly used by resend to wal functionality and doesn't update the mem table
@@ -1212,11 +1176,11 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     {WalCommands, Num} =
         lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx, Term, Cmd},
+                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
                             {[WalC | WC], N+1}
                     end, {[], 0}, Entries),
 
-    [{_, _, _, LastIdx, LastTerm, _} | _] = WalCommands,
+    [{_, _, _, _PrevIdx, LastIdx, LastTerm, _} | _] = WalCommands,
     {_, Mt} = ra_mt:commit(Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
@@ -1314,7 +1278,7 @@ stage_entries0(Cfg, [Entry | Rem], Mt0) ->
 
 
 
-write_snapshot(Meta, MacRef, SnapKind,
+write_snapshot(Meta, MacModule, MacState, SnapKind,
                #?MODULE{cfg = Cfg,
                         snapshot_state = SnapState0} = State) ->
     Counter = case SnapKind of
@@ -1322,8 +1286,8 @@ write_snapshot(Meta, MacRef, SnapKind,
                   checkpoint -> ?C_RA_LOG_CHECKPOINTS_WRITTEN
               end,
     ok = incr_counter(Cfg, Counter, 1),
-    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacRef, SnapKind,
-                                                      SnapState0),
+    {SnapState, Effects} = ra_snapshot:begin_snapshot(Meta, MacModule, MacState,
+                                                      SnapKind, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
 recover_ranges(UId, MtRange, SegWriter) ->
@@ -1371,16 +1335,16 @@ await_written_idx(Idx, Term, Log0) ->
               throw(ra_log_append_timeout)
     end.
 
-log_update_wait_n(0) ->
-    ok;
-log_update_wait_n(N) ->
-    receive
-        ra_log_update_processed ->
-            log_update_wait_n(N - 1)
-    after 1500 ->
-              %% just go ahead anyway
-              ok
-    end.
+% log_update_wait_n(0) ->
+%     ok;
+% log_update_wait_n(N) ->
+%     receive
+%         ra_log_update_processed ->
+%             log_update_wait_n(N - 1)
+%     after 1500 ->
+%               %% just go ahead anyway
+%               ok
+%     end.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

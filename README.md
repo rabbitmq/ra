@@ -349,20 +349,6 @@ is available in a separate repository.
         <td>Boolean</td>
     </tr>
     <tr>
-        <td>wal_write_strategy</td>
-        <td>
-            <ul>
-                <li>
-                    <code>default</code>: used by default. <code>write(2)</code> system calls are delayed until a buffer is due to be flushed. Then it writes all the data in a single call then <code>fsync</code>s. Fastest option but incurs some additional memory use.
-                </li>
-                <li>
-                    <code>o_sync</code>: Like default but will try to open the file with O_SYNC and thus won't need the additional <code>fsync(2)</code> system call. If it fails to open the file with this flag this mode falls back to default.
-                </li>
-            </ul>
-        </td>
-        <td>Enumeration: <code>default</code> | <code>o_sync</code></td>
-    </tr>
-    <tr>
         <td>wal_sync_method</td>
         <td>
             <ul>
