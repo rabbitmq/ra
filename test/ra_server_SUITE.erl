@@ -2104,6 +2104,7 @@ candidate_election(_Config) ->
 pre_vote_election(_Config) ->
     Token = make_ref(),
     State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
+                             membership => voter,
                              pre_vote_token => Token},
     Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
     {pre_vote, #{votes := 2} = State1, []}

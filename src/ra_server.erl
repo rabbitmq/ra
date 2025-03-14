@@ -1113,7 +1113,8 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                   votes := Votes,
                   cfg := #cfg{log_id = LogId},
                   pre_vote_token := Token,
-                  cluster := Nodes} = State0) ->
+                  cluster := Nodes,
+                  membership := voter} = State0) ->
     ?DEBUG("~ts: pre_vote granted ~w for term ~b votes ~b",
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
@@ -1124,15 +1125,12 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
         _ ->
             {pre_vote, State#{votes => NewVotes}, []}
     end;
-handle_pre_vote(#pre_vote_result{vote_granted = false}, State) ->
+handle_pre_vote(#pre_vote_result{}, State) ->
     %% just handle negative results to avoid printing an unhandled message log
     {pre_vote, State, []};
 handle_pre_vote(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(pre_vote, PreVote, State);
 handle_pre_vote(#request_vote_result{}, State) ->
-    %% handle to avoid logging as unhandled
-    {pre_vote, State, []};
-handle_pre_vote(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {pre_vote, State, []};
 handle_pre_vote(election_timeout, State) ->
@@ -1360,7 +1358,7 @@ handle_follower({ra_log_event, Evt}, #{log := Log0,
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~ts: follower ignored pre_vote_rpc, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored pre_vote_rpc, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
@@ -1368,7 +1366,7 @@ handle_follower(#pre_vote_rpc{} = PreVote, State) ->
 handle_follower(#request_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~ts: follower ignored request_vote_rpc, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored request_vote_rpc, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
@@ -1485,11 +1483,17 @@ handle_follower(#append_entries_reply{}, State) ->
 handle_follower(election_timeout,
                 #{cfg := #cfg{log_id = LogId},
                   membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~ts: follower ignored election_timeout, non-voter: ~p0",
+    ?DEBUG("~ts: follower ignored election_timeout, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
+handle_follower(try_become_leader,
+                #{cfg := #cfg{log_id = LogId},
+                  membership := Membership} = State) when Membership =/= voter ->
+    ?INFO("~ts: follower ignored try_become_leader, non-voter: ~0p",
+           [LogId, Membership]),
+    {follower, State, []};
 handle_follower(try_become_leader, State) ->
     call_for_election(pre_vote, State);
 handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
