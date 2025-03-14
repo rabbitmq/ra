@@ -311,12 +311,13 @@ init(Config) ->
     {ok, recover, State, [{next_event, cast, go}]}.
 
 do_init(#{id := Id,
-          cluster_name := ClusterName} = Config0) ->
+          cluster_name := ClusterName,
+          system_config := #{name := System}} = Config0) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
     Config = #{counter := Counter,
-               system_config := #{names := Names} = SysConf} = maps:merge(config_defaults(Id),
+               system_config := #{names := Names} = SysConf} = maps:merge(config_defaults(System, Id),
                                                       Config0),
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
@@ -1054,7 +1055,8 @@ handle_event(_EventType, EventContent, StateName, State) ->
 
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
-                 server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
+                 server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey,
+                                                            system_config = #{name := System}}}} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
     #{names := #{server_sup := SrvSup,
@@ -1074,7 +1076,7 @@ terminate(Reason, StateName,
             catch ra_directory:unregister_name(Names, UId),
             _ = ra_server:terminate(ServerState, Reason),
             catch ra_log_meta:delete_sync(MetaName, UId),
-            catch ra_counters:delete(Id),
+            catch ra_counters:delete(System, Id),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% won't do this automatically, even for transient children
@@ -1785,10 +1787,10 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
-config_defaults(ServerId) ->
-    Counter = case ra_counters:fetch(ServerId) of
+config_defaults(System, ServerId) ->
+    Counter = case ra_counters:fetch(System, ServerId) of
                   undefined ->
-                      ra_counters:new(ServerId,
+                      ra_counters:new(System, ServerId,
                                       {persistent_term, ?FIELDSPEC_KEY});
                   C ->
                       C

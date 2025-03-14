@@ -598,7 +598,7 @@ nonvoter_catches_up(Config) ->
     ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := promotable},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
     ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
 
@@ -610,7 +610,7 @@ nonvoter_catches_up(Config) ->
     ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := voter},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
 
     stop_peers(Peers),
     ok.
@@ -634,7 +634,7 @@ nonvoter_catches_up_after_restart(Config) ->
     ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := promotable},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
     ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
     ok = ra:stop_server(?SYS, C),
@@ -648,7 +648,7 @@ nonvoter_catches_up_after_restart(Config) ->
     ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := voter},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
 
     stop_peers(Peers),
     ok.
@@ -672,7 +672,7 @@ nonvoter_catches_up_after_leader_restart(Config) ->
     ?assertMatch(#{Group := #{membership := promotable}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := promotable},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
     ?assertMatch({ok, #{membership := promotable}, _},
                  ra:member_overview(C)),
     ok = ra:stop_server(?SYS, Leader),
@@ -686,7 +686,7 @@ nonvoter_catches_up_after_leader_restart(Config) ->
     ?assertMatch(#{Group := #{membership := voter}},
                  rpc:call(NodeC, ra_directory, overview, [?SYS])),
     ?assertMatch(#{membership := voter},
-                 ra:key_metrics(C)),
+                 ra:key_metrics(?SYS, C)),
 
     stop_peers(Peers),
     ok.
@@ -709,7 +709,7 @@ key_metrics(Config) ->
     timer:sleep(100),
     TestId  = lists:last(Started),
     ok = ra:stop_server(?SYS, TestId),
-    StoppedMetrics = ra:key_metrics(TestId),
+    StoppedMetrics = ra:key_metrics(?SYS, TestId),
     ct:pal("StoppedMetrics  ~p", [StoppedMetrics]),
     ?assertMatch(#{state := noproc,
                    last_applied := LA,
@@ -723,12 +723,12 @@ key_metrics(Config) ->
     {ok, _, _} = ra:process_command(Leader, {data, Data}),
     await_condition(
       fun () ->
-              Metrics = ra:key_metrics(TestId),
+              Metrics = ra:key_metrics(?SYS, TestId),
               ct:pal("FollowerMetrics  ~p", [Metrics]),
               follower == maps:get(state, Metrics)
       end, 200),
     [begin
-         M = ra:key_metrics(S),
+         M = ra:key_metrics(?SYS, S),
          ct:pal("Metrics ~p", [M]),
          ?assertMatch(#{state := _,
                         last_applied := LA,
@@ -867,7 +867,7 @@ recover_from_checkpoint(Config) ->
               checkpoints_promoted := 0
              } when B > 0,
                     ct_rpc:call(N, ra_counters, counters,
-                                [ServerId, CounterKeys]))
+                                [?SYS, ServerId, CounterKeys]))
      end || {_, N} = ServerId <- ServerIds],
 
 
@@ -907,7 +907,7 @@ recover_from_checkpoint(Config) ->
               checkpoints_promoted := 1
              } when B > 0,
                     ct_rpc:call(N, ra_counters, counters,
-                                [ServerId, CounterKeys]))
+                                [?SYS, ServerId, CounterKeys]))
      end || {_, N} = ServerId <- ServerIds],
     %% Restart the servers: the servers should be able to recover from the
     %% snapshot which was promoted from a checkpoint.
@@ -1234,13 +1234,13 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
 
     %% kill the wal until the system crashes and the current member is terminated
     %% and another leader is elected
-    #{term := Term} = ra:key_metrics(Follower),
+    #{term := Term} = ra:key_metrics(?SYS, Follower),
     await_condition(fun () ->
                             WalPid = ct_rpc:call(LeaderNode, erlang, whereis,
                                                  [ra_log_wal]),
                             true = ct_rpc:call(LeaderNode, erlang, exit,
                                                [WalPid, kill]),
-                            #{term := T} = ra:key_metrics(Follower),
+                            #{term := T} = ra:key_metrics(?SYS, Follower),
                             T > Term andalso
                             (begin
                                  P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),%                      [ra_log_wal]),
