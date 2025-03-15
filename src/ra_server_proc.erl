@@ -128,7 +128,8 @@
               ra_event_reject_detail/0,
               ra_event/0,
               ra_event_body/0,
-              query_options/0]).
+              query_options/0,
+              server_loc/0]).
 
 %% the ra server proc keeps monitors on behalf of different components
 %% the state machine, log and server code. The tag is used to determine
@@ -211,27 +212,25 @@ log_fold(ServerId, Fun, InitialState, Timeout) ->
     gen_statem:call(ServerId, {log_fold, Fun, InitialState}, Timeout).
 
 %% used to query the raft state rather than the machine state
--spec state_query(server_loc(),
-                  all |
-                  overview |
-                  voters |
-                  members |
-                  members_info |
-                  initial_members |
-                  machine, timeout()) ->
-    ra_leader_call_ret(term()).
+-spec state_query
+    (server_loc(), all, timeout()) -> ra_leader_call_ret(ra_server:ra_server_state());
+    (server_loc(), overview, timeout()) -> ra_leader_call_ret(map());
+    (server_loc(), voters, timeout()) -> ra_leader_call_ret(map());
+    (server_loc(), members, timeout()) -> ra_leader_call_ret([ra_server_id()]);
+    (server_loc(), members_info, timeout()) -> ra_leader_call_ret(ra_cluster());
+    (server_loc(), initial_members, timeout()) -> ra_leader_call_ret([ra:server_id()]);
+    (server_loc(), machine, timeout()) -> ra_leader_call_ret(term()).
 state_query(ServerLoc, Spec, Timeout) ->
     leader_call(ServerLoc, {state_query, Spec}, Timeout).
 
--spec local_state_query(server_loc(),
-                        all |
-                        overview |
-                        voters |
-                        members |
-                        members_info |
-                        initial_members |
-                        machine, timeout()) ->
-    ra_local_call_ret(term()).
+-spec local_state_query
+    (server_loc(), all, timeout()) -> ra_local_call_ret(ra_server:ra_server_state());
+    (server_loc(), overview, timeout()) -> ra_local_call_ret(map());
+    (server_loc(), voters, timeout()) -> ra_local_call_ret(map());
+    (server_loc(), members, timeout()) -> ra_local_call_ret([ra_server_id()]);
+    (server_loc(), members_info, timeout()) -> ra_local_call_ret(ra_cluster());
+    (server_loc(), initial_members, timeout()) -> ra_local_call_ret([ra:server_id()]);
+    (server_loc(), machine, timeout()) -> ra_local_call_ret(term()).
 local_state_query(ServerLoc, Spec, Timeout) ->
     local_call(ServerLoc, {state_query, Spec}, Timeout).
 

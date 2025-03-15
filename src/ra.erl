@@ -233,7 +233,7 @@ restart_server(System, ServerId, AddConfig)
 %% DEPRECATED: use stop_server/2
 %% @end
 -spec stop_server(ra_server_id()) ->
-    ok | {error, nodedown | system_not_started}.
+    ok | {error, nodedown}.
 stop_server(ServerId) ->
     stop_server(default, ServerId).
 
@@ -243,7 +243,7 @@ stop_server(ServerId) ->
 %% @returns `{ok | error, nodedown}'
 %% @end
 -spec stop_server(atom(), ra_server_id()) ->
-    ok | {error, nodedown | system_not_started}.
+    ok | {error, nodedown}.
 stop_server(System, ServerId)
   when is_atom(System) ->
     try ra_server_sup_sup:stop_server(System, ServerId) of
@@ -675,7 +675,7 @@ trigger_election(ServerId, Timeout) ->
 %% @end
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()], ra_server_id()) ->
-    ok | timeout | {error, noproc | system_not_started}.
+    ok | timeout | {error, noproc | nodedown}.
 leave_and_terminate(System, ServerRef, ServerId) ->
     leave_and_terminate(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -688,7 +688,7 @@ leave_and_terminate(System, ServerRef, ServerId) ->
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()],
                           ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc | system_not_started}.
+    ok | timeout | {error, noproc | nodedown}.
 leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
@@ -715,7 +715,7 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id()) ->
-    ok | timeout | {error, noproc}.
+    ok | timeout | {error, term()} | {badrpc, term()}.
 leave_and_delete_server(System, ServerRef, ServerId) ->
     leave_and_delete_server(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -727,7 +727,7 @@ leave_and_delete_server(System, ServerRef, ServerId) ->
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc}.
+    ok | timeout | {error, term()} | {badrpc, term()}.
 leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
@@ -951,7 +951,9 @@ pipeline_command(ServerId, Command) ->
 %% @end
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}).
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+    | ra_server_proc:ra_leader_call_ret(Reply :: term())
+    | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 local_query(ServerId, QueryFun) ->
     local_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -973,8 +975,9 @@ local_query(ServerId, QueryFun) ->
 -spec local_query(ServerId :: ra_server_id(),
                   QueryFun :: query_fun(),
                   TimeoutOrOptions) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
-    {ok, {ra_idxterm(), Reply :: term()}, not_known}
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+    | ra_server_proc:ra_leader_call_ret(Reply :: term())
+    | {ok, {ra_idxterm(), Reply :: term()}, not_known}
       when TimeoutOrOptions :: Timeout | Options,
            Timeout :: timeout(),
            Options :: #{condition => query_condition(),
@@ -1001,6 +1004,7 @@ local_query(ServerId, QueryFun, Options) when is_map(Options) ->
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
+    ra_server_proc:ra_leader_call_ret(Reply :: term()) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 leader_query(ServerId, QueryFun) ->
     leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
@@ -1023,8 +1027,9 @@ leader_query(ServerId, QueryFun) ->
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
                    QueryFun :: query_fun(),
                    TimeoutOrOptions) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
-    {ok, {ra_idxterm(), Reply :: term()}, not_known}
+                       ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+                       | ra_server_proc:ra_leader_call_ret(Reply :: term())
+                       | {ok, {ra_idxterm(), Reply :: term()}, not_known}
       when TimeoutOrOptions :: Timeout | Options,
            Timeout :: timeout(),
            Options :: #{condition => query_condition(),
@@ -1049,7 +1054,9 @@ leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun()) ->
-    ra_server_proc:ra_leader_call_ret(Reply :: term()).
+                           ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+                           | ra_server_proc:ra_leader_call_ret(Reply :: term())
+                           | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 consistent_query(ServerId, QueryFun) ->
     consistent_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
 
@@ -1062,7 +1069,9 @@ consistent_query(ServerId, QueryFun) ->
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
                        QueryFun :: query_fun(),
                        Timeout :: timeout()) ->
-    ra_server_proc:ra_leader_call_ret(Reply :: term()).
+                           ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
+                           | ra_server_proc:ra_leader_call_ret(Reply :: term())
+                           | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
 consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, consistent, #{}, Timeout).
 
@@ -1078,7 +1087,7 @@ consistent_query(ServerId, QueryFun, Timeout) ->
 %%
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
--spec members(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
+-spec members(ra_server_proc:server_loc() | {local, ra_server_proc:server_loc()}) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members(ServerId) ->
     members(ServerId, ?DEFAULT_TIMEOUT).
@@ -1096,9 +1105,9 @@ members(ServerId) ->
 %% @param ServerId the Ra server(s) to send the query to
 %% @param Timeout the timeout to use
 %% @end
--spec members(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
-              timeout()) ->
-    ra_server_proc:ra_leader_call_ret([ra_server_id()]).
+-spec members
+    ({local, ra_server_proc:server_loc()}, timeout()) -> ra_server_proc:ra_local_call_ret([ra_server_id()]);
+    (ra_server_proc:server_loc(), timeout()) -> ra_server_proc:ra_leader_call_ret([ra_server_id()]).
 members({local, ServerId}, Timeout) ->
     ra_server_proc:local_state_query(ServerId, members, Timeout);
 members(ServerId, Timeout) ->
@@ -1116,8 +1125,9 @@ members(ServerId, Timeout) ->
 %%
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
--spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
-    ra_server_proc:ra_leader_call_ret(ra_cluster()).
+-spec members_info
+    ({local, ra_server_proc:server_loc()}) -> ra_server_proc:ra_local_call_ret(ra_cluster());
+    (ra_server_proc:server_loc()) -> ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info(ServerId) ->
     members_info(ServerId, ?DEFAULT_TIMEOUT).
 
@@ -1134,9 +1144,9 @@ members_info(ServerId) ->
 %% @param ServerId the Ra server(s) to send the query to
 %% @param Timeout the timeout to use
 %% @end
--spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
-              timeout()) ->
-    ra_server_proc:ra_leader_call_ret(ra_cluster()).
+-spec members_info
+    ({local, ra_server_proc:server_loc()}, timeout()) -> ra_server_proc:ra_local_call_ret(ra_cluster());
+    (ra_server_proc:server_loc(), timeout()) -> ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info({local, ServerId}, Timeout) ->
     ra_server_proc:local_state_query(ServerId, members_info, Timeout);
 members_info(ServerId, Timeout) ->

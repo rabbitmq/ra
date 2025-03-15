@@ -150,7 +150,11 @@
                   #info_rpc{} |
                   #info_reply{} |
                   {ra_server_id, #heartbeat_reply{}} |
-                  pipeline_rpcs.
+                  pipeline_rpcs |
+                  {register_external_log_reader, pid()} |
+                  force_member_change |
+                  {transfer_leadership, ra_server_id()} |
+                  {aux_command, {call, From :: from()} | cast, term()}.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -1022,7 +1026,7 @@ handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
-    %% unlike request_vote_rpc, a candidate cannot simply reject 
+    %% unlike request_vote_rpc, a candidate cannot simply reject
     %% a pre_vote_rpc that does not have a higher term
     %% (see https://github.com/rabbitmq/ra/issues/439 for the detail)
     process_pre_vote(candidate, PreVote, State);
@@ -2289,7 +2293,7 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
      end.
 
 -spec handle_down(ra_state(),
-                  machine | snapshot_sender | snapshot_writer | aux,
+                  machine | snapshot_sender | snapshot_writer | aux | log,
                   pid(), term(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_down(leader, machine, Pid, Info, State)
@@ -3484,7 +3488,7 @@ get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) -
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).
 
--spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
+-spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) ->
     effects().
 maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
     case Cluster of

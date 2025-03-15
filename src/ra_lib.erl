@@ -271,7 +271,7 @@ handle_make_dir({error, eexist}) ->
 handle_make_dir(Error) ->
     Error.
 
--spec validate_base64uri(string()) -> boolean().
+-spec validate_base64uri(unicode:chardata()) -> boolean().
 validate_base64uri(Str) ->
     catch
     begin

@@ -31,7 +31,7 @@
 -define(TIMEOUT, 30000).
 -define(SYNC_INTERVAL, 5000).
 
--record(?MODULE, {ref :: reference(),
+-record(?MODULE, {ref :: dets:tab_name(),
                   table_name :: atom()}).
 
 -opaque state() :: #?MODULE{}.
@@ -39,7 +39,7 @@
 -export_type([state/0]).
 
 -spec start_link(ra_system:config()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+    {ok, pid()} | {error, term()}.
 start_link(#{names := #{log_meta := Name}} = Cfg) ->
     gen_batch_server:start_link({local, Name}, ?MODULE, Cfg, []).
 
@@ -143,7 +143,7 @@ fetch(MetaName, Id, voted_for) ->
 fetch(MetaName, Id, last_applied) ->
     maybe_fetch(MetaName, Id, 4).
 
--spec fetch(atom(), ra_uid(), key(), term()) -> value().
+-spec fetch(atom(), ra_uid(), key(), value()) -> value().
 fetch(MetaName, Id, Key, Default) ->
     case fetch(MetaName, Id, Key) of
         undefined -> Default;

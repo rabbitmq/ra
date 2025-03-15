@@ -15,14 +15,15 @@
 -define(MAX_ROW_LEN, 64).
 
 -type row() :: [term()].
--type gt_fun() :: fun((Item, Item) -> boolean()).
+-type item() :: term().
+-type gt_fun() :: fun((item(), item()) -> boolean()).
 
 -record(?MODULE, {len = 0 :: non_neg_integer(),
                   append_row_len = 0 :: non_neg_integer(),
                   gt_fun :: gt_fun(),
                   rows = [] :: [row()]}).
 
--opaque state() :: #?MODULE{}.
+-opaque state() :: #?MODULE{} | out_of_order.
 
 %% a search continuation
 -opaque cont() :: [row()].

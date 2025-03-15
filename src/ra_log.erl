@@ -77,8 +77,9 @@
 -type effect() ::
     {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
     {monitor, process, log, pid()} |
-    ra_snapshot:effect() |
-    ra_server:effect().
+    {reply, term()} |
+    {reply, term(), term()} |
+    ra_snapshot:effect().
 %% logs can have effects too so that they can be coordinated with other state
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
@@ -114,7 +115,7 @@
         }).
 
 -record(read_plan, {dir :: file:filename_all(),
-                    read :: #{ra_index() := log_entry()},
+                    read :: #{ra_index() => log_entry()},
                     plan :: ra_log_reader:read_plan()}).
 
 -opaque read_plan() :: #read_plan{}.
@@ -356,7 +357,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                                             mem_table = Mt}}
     end;
 commit_tx(#?MODULE{tx = false} = State) ->
-    State.
+    {ok, State}.
 
 -spec append(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
@@ -510,7 +511,7 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                   unsorted ->
                       Lookup = lists:foldl(
                                  fun ({I, _, _} = E, Acc) ->
-                                         maps:put(I, E, Acc)
+                                         Acc#{I => E}
                                  end, #{}, Entries1),
                       maps_with_values(Indexes0, Lookup);
                   _ ->
