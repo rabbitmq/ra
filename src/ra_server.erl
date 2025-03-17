@@ -920,12 +920,12 @@ handle_leader({transfer_leadership, ServerId},
             ?DEBUG("~ts: transfer leadership to ~w requested",
                    [LogId, ServerId]),
             %% TODO find a timeout
-            gen_statem:cast(ServerId, try_become_leader),
             {await_condition,
              State#{condition =>
                         #{predicate_fun => fun transfer_leadership_condition/2,
-                          timeout => #{effects => [], transition_to => leader}}},
-             [{reply, ok}]}
+                          timeout => #{effects => [],
+                                       transition_to => leader}}},
+             [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]}
     end;
 handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {Log, Effs} = ra_log:register_reader(Pid, Log0),
