@@ -25,6 +25,13 @@
 
 -export_type([range/0]).
 
+-define(IS_RANGE(R), ((is_tuple(R) andalso
+                       tuple_size(R) == 2 andalso
+                       is_integer(element(1, R)) andalso
+                       is_integer(element(2, R))) orelse
+                      R == undefined)).
+
+
 -spec new(ra:index()) -> range().
 new(Start) when is_integer(Start) ->
     {Start, Start}.
@@ -71,14 +78,17 @@ limit(CeilExcl, Range)
 -spec truncate(ra:index(), range()) -> range().
 truncate(UpToIncl, {_Start, End})
   when is_integer(UpToIncl) andalso
+       is_integer(End) andalso
        UpToIncl >= End ->
     undefined;
 truncate(UpToIncl, {Start, End})
   when is_integer(UpToIncl) andalso
+       is_integer(Start) andalso
        UpToIncl >= Start ->
     {UpToIncl + 1, End};
 truncate(UpToIncl, Range)
-  when is_integer(UpToIncl) ->
+  when is_integer(UpToIncl) andalso
+       ?IS_RANGE(Range) ->
     Range.
 
 size(undefined) ->
