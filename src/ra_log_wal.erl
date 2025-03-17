@@ -58,7 +58,7 @@
 -record(batch_writer, {smallest_live_idx :: ra_index(),
                        tid :: ets:tid(),
                        uid :: term(),
-                       range :: ra:range(),
+                       seq :: ra_seq:state(),
                        term :: ra_term(),
                        old :: undefined | #batch_writer{}
                       }).
@@ -493,39 +493,39 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
     end.
 
 
-handle_msg({append, {UId, Pid} = Id, MtTid, PrevIdx0, Idx, Term, Entry},
+handle_msg({append, {UId, Pid} = Id, MtTid, ExpectedPrevIdx, Idx, Term, Entry},
            #state{conf = Conf,
                   writers = Writers} = State0) ->
     SmallestIdx = smallest_live_index(Conf, UId),
     %% detect if truncating flag should be set
     Trunc = Idx == SmallestIdx,
 
-    case maps:find(UId, Writers) of
+    case maps:get(UId, Writers, undefined) of
         _ when Idx < SmallestIdx ->
             %% the smallest live index for the last snapshot is higher than
             %% this index, just drop it
             LastIdx = SmallestIdx - 1,
             State0#state{writers = Writers#{UId => {in_seq, LastIdx}}};
-        {ok, {_, PrevIdx}}
-          when PrevIdx0 =< PrevIdx orelse
+        {_, PrevIdx}
+          when ExpectedPrevIdx =< PrevIdx orelse
                Trunc ->
             %% if the passed in previous index is less than the last written
             %% index (gap detection) _or_ it is a truncation
             %% then we can proceed and write the entry
             write_data(Id, MtTid, Idx, Term, Entry, Trunc, SmallestIdx, State0);
-        error ->
+        undefined ->
             %% no state for the UId is known so go ahead and write
             write_data(Id, MtTid, Idx, Term, Entry, false, SmallestIdx, State0);
-        {ok, {out_of_seq, _}} ->
+        {out_of_seq, _} ->
             % writer is out of seq simply ignore drop the write
             % TODO: capture metric for dropped writes?
             State0;
-        {ok, {in_seq, PrevIdx}} ->
+        {in_seq, PrevIdx} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
             ?DEBUG("WAL in ~ts: requesting resend from `~w`, "
-                   "last idx ~b idx received ~b",
-                   [Conf#conf.system, UId, PrevIdx, Idx]),
+                   "last idx ~b idx received (~b,~b)",
+                   [Conf#conf.system, UId, PrevIdx, ExpectedPrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
             State0#state{writers = Writers#{UId => {out_of_seq, PrevIdx}}}
     end;
@@ -540,32 +540,28 @@ incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
                   pending = Pend} = Batch,
            UId, Pid, MT_TID = MtTid,
-           Idx, TERM = Term, Data, SmallestIdx) ->
+           Idx, TERM = Term, Data, SmallestLiveIdx) ->
     Waiting = case Waiting0 of
                   #{Pid := #batch_writer{term = TERM,
                                          tid = MT_TID,
-                                         range = Range0
-                                        } = W} ->
+                                         seq = Seq0} = W} ->
                       %% The Tid and term is the same so add to current batch_writer
-                      Range = ra_range:extend(Idx, ra_range:truncate(SmallestIdx - 1,
-                                                                     Range0)),
+                      Range = ra_seq:append(Idx, Seq0),
                       %% TODO: range nees to become a ra_seq so that we can
                       %% capture sparse writes correctly
-                      Waiting0#{Pid => W#batch_writer{range = Range,
-                                                      smallest_live_idx = SmallestIdx,
-                                                      term = Term
-                                                     }};
+                      Waiting0#{Pid => W#batch_writer{seq = Range,
+                                                      smallest_live_idx = SmallestLiveIdx,
+                                                      term = Term}};
                   _ ->
                       %% The tid is different, open a new batch writer for the
                       %% new tid and term
                       PrevBatchWriter = maps:get(Pid, Waiting0, undefined),
-                      Writer = #batch_writer{smallest_live_idx = SmallestIdx,
+                      Writer = #batch_writer{smallest_live_idx = SmallestLiveIdx,
                                              tid = MtTid,
-                                             range = ra_range:new(Idx),
+                                             seq = [Idx],
                                              uid = UId,
                                              term = Term,
-                                             old = PrevBatchWriter
-                                            },
+                                             old = PrevBatchWriter},
                       Waiting0#{Pid => Writer}
               end,
 
@@ -701,7 +697,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
 complete_batch_writer(Pid, #batch_writer{smallest_live_idx = SmallestIdx,
                                          tid = MtTid,
                                          uid = UId,
-                                         range = Range,
+                                         seq = Range,
                                          term = Term,
                                          old = undefined}, Ranges) ->
     Pid ! {ra_log_event, {written, Term, Range}},
@@ -974,23 +970,24 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 smallest_live_index(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ra_log_snapshot_state:smallest(Tid, ServerUId).
 
-update_ranges(Ranges, UId, MtTid, SmallestIdx, {Start, _} = AddRange) ->
+update_ranges(Ranges, UId, MtTid, SmallestIdx, AddSeq) ->
     case Ranges of
-        #{UId := [{MtTid, Range0} | Rem]} ->
+        #{UId := [{MtTid, Seq0} | Rem]} ->
             %% SmallestIdx might have moved to we truncate the old range first
             %% before extending
-            Range1 = ra_range:truncate(SmallestIdx - 1, Range0),
+            Seq1 = ra_seq:floor(SmallestIdx, Seq0),
             %% limit the old range by the add end start as in some resend
             %% cases we may have got back before the prior range.
-            Range = ra_range:add(AddRange, ra_range:limit(Start, Range1)),
-            Ranges#{UId => [{MtTid, Range} | Rem]};
-        #{UId := [{OldMtTid, OldMtRange} | Rem]} ->
+            Seq = ra_seq:add(AddSeq, Seq1),
+            Ranges#{UId => [{MtTid, Seq} | Rem]};
+        #{UId := [{OldMtTid, OldMtSeq} | Rem]} ->
             %% new Tid, need to add a new range record for this
-            Ranges#{UId => [{MtTid, AddRange},
-                            ra_range:truncate(SmallestIdx - 1, {OldMtTid, OldMtRange})
+            Ranges#{UId => [{MtTid, AddSeq},
+                            {OldMtTid,
+                             ra_seq:floor(SmallestIdx, OldMtSeq)}
                             | Rem]};
         _ ->
-            Ranges#{UId => [{MtTid, AddRange}]}
+            Ranges#{UId => [{MtTid, AddSeq}]}
     end.
 
 recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
@@ -1007,7 +1004,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
     case ra_mt:insert(Entry, Mt0) of
         {ok, Mt1} ->
             Ranges = update_ranges(Ranges0, UId, ra_mt:tid(Mt1),
-                                   SmallestIdx, ra_range:new(Idx)),
+                                   SmallestIdx, [Idx]),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt1}}};
@@ -1039,7 +1036,7 @@ recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
                                 tables = Tables#{UId => Mt0}}};
         Tid ->
             Ranges = update_ranges(Ranges0, UId, Tid,
-                                   SmallestIdx, ra_range:new(Idx)),
+                                   SmallestIdx, [Idx]),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt0}}}
