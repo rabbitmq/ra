@@ -159,12 +159,14 @@ sparse_writes(Config) ->
     {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 11, 12, 1, "value"),
     ok = await_written(WriterId, 1, {12, 12}),
-    debugger:start(),
-    int:i(ra_log_wal),
-    int:break(ra_log_wal, 975),
+    % debugger:start(),
+    % int:i(ra_log_wal),
+    % int:break(ra_log_wal, 975),
     timer:sleep(1000),
+    %% write  a "sparse write" at index 15 but reference 12 as the last
+    %% one
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 15, 1, "value2"),
-    timer:sleep(200000),
+    % timer:sleep(200000),
     ok = await_written(WriterId, 1, {15, 15}),
     ra_log_wal:force_roll_over(Pid),
     receive
