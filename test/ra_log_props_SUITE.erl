@@ -833,7 +833,7 @@ run_proper_noshrink(Fun, Args, NumTests) ->
 basic_reset(Log) ->
     ra_log:write([{0, 0, empty}], Log),
     receive
-        {ra_log_event, {written, _, {0, 0}}} ->
+        {ra_log_event, {written, _, [0]}} ->
             ok
     end,
     ra_log:close(Log).
