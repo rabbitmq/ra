@@ -23,7 +23,9 @@ all_tests() ->
      append,
      floor,
      limit,
-     add
+     add,
+     subtract,
+     iter
     ].
 
 groups() ->
@@ -103,3 +105,25 @@ add(_Config) ->
     S4 = ra_seq:from_list([7, 8, 9, 11]),
     [11, {5, 9}, {1, 3}] = ra_seq:add(S4, S3),
     ok.
+
+subtract(_Config) ->
+    [11, {7, 9}, {1, 3}] = ra_seq:subtract([{1, 11}], [10, {4, 6}]),
+    ok.
+
+iter(_Config) ->
+    S = ra_seq:from_list([1, 2, 3, 5, 6, 8, 9, 10, 12]),
+    I0 = ra_seq:iterator(S),
+    {1, I1} = ra_seq:next(I0),
+    {2, I2} = ra_seq:next(I1),
+    {3, I3} = ra_seq:next(I2),
+    {5, I4} = ra_seq:next(I3),
+    {6, I5} = ra_seq:next(I4),
+    {8, I6} = ra_seq:next(I5),
+    {9, I7} = ra_seq:next(I6),
+    {10, I8} = ra_seq:next(I7),
+    {12, I9} = ra_seq:next(I8),
+    end_of_seq = ra_seq:next(I9),
+    ok.
+
+
+
