@@ -115,10 +115,12 @@ append_then_fetch_no_wait(Config) ->
     % results in the last written being updated
     receive
         {ra_log_event, {written, _, _} = Evt} ->
+            ct:pal("written ~p", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log3),
             {Idx, Term} = ra_log:last_written(Log)
-    after 0 ->
-              ok
+    after 1000 ->
+              flush(),
+              ct:pal("fail written event not received")
     end,
     ok.
 
@@ -277,3 +279,12 @@ append_in(Term, Data, Log0) ->
 ra_log_take(From, To, Log0) ->
     {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),
     {lists:reverse(Acc), Log}.
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.
