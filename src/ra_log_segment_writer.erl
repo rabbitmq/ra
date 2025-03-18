@@ -65,7 +65,7 @@ start_link(#{name := Name} = Config) ->
     gen_server:start_link({local, Name}, ?MODULE, [Config], []).
 
 -spec accept_mem_tables(atom() | pid(),
-                        #{ra_uid() => [{ets:tid(), ra:range()}]},
+                        #{ra_uid() => [{ets:tid(), ra_seq:state()}]},
                         string()) -> ok.
 accept_mem_tables(_SegmentWriter, Tables, undefined)
   when map_size(Tables) == 0 ->
@@ -262,7 +262,7 @@ get_overview(#state{data_dir = Dir,
     #{data_dir => Dir,
       segment_conf => Conf}.
 
-flush_mem_table_ranges({ServerUId, TidRanges0},
+flush_mem_table_ranges({ServerUId, TidSeqs0},
                        #state{system = System} = State) ->
     SmallestIdx = smallest_live_idx(ServerUId),
     %% TidRanges arrive here sorted new -> old.
@@ -271,31 +271,32 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
     %% list of tid ranges to flush to disk
     %% now TidRanges are sorted old -> new, i.e the correct order of
     %% processing
-    TidRanges = lists:foldl(
-                  fun ({T, Range0}, []) ->
-                          case ra_range:truncate(SmallestIdx - 1, Range0) of
-                              undefined ->
-                                  [];
-                              Range ->
-                                  [{T, Range}]
-                          end;
-                      ({T, Range0}, [{_T, {Start, _}} | _] = Acc) ->
-                          Range1 = ra_range:truncate(SmallestIdx - 1, Range0),
-                          case ra_range:limit(Start, Range1) of
-                              undefined ->
-                                  Acc;
-                              Range ->
-                                  [{T, Range} | Acc]
-                          end
-                  end, [], TidRanges0),
+    TidSeqs = lists:foldl(
+                fun ({T, Seq0}, []) ->
+                        case ra_seq:floor(SmallestIdx, Seq0) of
+                            undefined ->
+                                [];
+                            Seq ->
+                                [{T, Seq}]
+                        end;
+                    ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
+                        Start = ra_seq:first(PrevSeq),
+                        Seq1 = ra_seq:floor(SmallestIdx, Seq0),
+                        case ra_seq:limit(Start, Seq1) of
+                            undefined ->
+                                Acc;
+                            Seq ->
+                                [{T, Seq} | Acc]
+                        end
+                end, [], TidSeqs0),
 
     SegRefs0 = lists:append(
                  lists:reverse(
                    %% segrefs are returned in appended order so new -> old
                    %% so we need to reverse them so that the final appended list
                    %% of segrefs is in the old -> new order
-                   [flush_mem_table_range(ServerUId, TidRange, State)
-                    || TidRange <- TidRanges])),
+                   [flush_mem_table_range(ServerUId, TidSeq, State)
+                    || TidSeq <- TidSeqs])),
 
     %% compact cases where a segment was appended in a subsequent call to
     %% flush_mem_table_range
@@ -309,14 +310,14 @@ flush_mem_table_ranges({ServerUId, TidRanges0},
                           [Seg | Acc]
                   end, [], SegRefs0)),
 
-    ok = send_segments(System, ServerUId, TidRanges0, SegRefs),
+    ok = send_segments(System, ServerUId, TidSeqs0, SegRefs),
     ok.
 
-flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
+flush_mem_table_range(ServerUId, {Tid, Seq},
                       #state{data_dir = DataDir,
                              segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
-    StartIdx = start_index(ServerUId, StartIdx0),
+    % StartIdx = start_index(ServerUId, StartIdx0),
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
@@ -325,8 +326,7 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
             %% clean up the tables for this process
             [];
         Segment0 ->
-            case append_to_segment(ServerUId, Tid, StartIdx, EndIdx,
-                                   Segment0, State) of
+            case append_to_segment(ServerUId, Tid, Seq, Segment0, State) of
                 undefined ->
                     ?WARN("segment_writer: skipping segments for ~w as
                            directory ~ts disappeared whilst writing",
@@ -367,23 +367,29 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                    [ServerUId, "No Pid"]),
             %% delete from the memtable on the non-running server's behalf
             [begin
+                 %% TODO: HACK: this is a hack to get a full range out of a
+                 %% sequent, ideally the mt should take the ra_seq and
+                 %% delete from that
+                 Range = {ra_seq:first(Seq), ra_seq:last(Seq)},
                  _  = catch ra_mt:delete({range, Tid, Range})
-             end || {Tid, Range} <- TidRanges],
+             end || {Tid, Seq} <- TidRanges],
             ok;
         Pid ->
             Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},
             ok
     end.
 
-append_to_segment(UId, Tid, StartIdx0, EndIdx, Seg, State) ->
-    StartIdx = start_index(UId, StartIdx0),
-    % EndIdx + 1 because FP
-    append_to_segment(UId, Tid, StartIdx, EndIdx+1, Seg, [], State).
+append_to_segment(UId, Tid, Seq0, Seg, State) ->
+    FirstIdx = ra_seq:first(Seq0),
+    StartIdx = start_index(UId, FirstIdx),
+    %% TODO combine flor and iterator into one operation
+    Seq = ra_seq:floor(StartIdx, Seq0),
+    SeqIter = ra_seq:iterator(Seq),
+    append_to_segment(UId, Tid, ra_seq:next(SeqIter), Seg, [], State).
 
-append_to_segment(_, _, StartIdx, EndIdx, Seg, Closed, _State)
-  when StartIdx >= EndIdx ->
+append_to_segment(_, _, end_of_seq, Seg, Closed, _State) ->
     {Seg, Closed};
-append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
+append_to_segment(UId, Tid, {Idx, SeqIter} = Cur, Seg0, Closed, State) ->
     try ets:lookup(Tid, Idx) of
         [] ->
             StartIdx = start_index(UId, Idx),
@@ -391,7 +397,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                 true ->
                     %% a snapshot must have been completed after we last checked
                     %% the start idx, continue flush from new start index.
-                    append_to_segment(UId, Tid, StartIdx, EndIdx, Seg0,
+                    append_to_segment(UId, Tid, next_ra_seq(StartIdx, SeqIter), Seg0,
                                       Closed, State);
                 false ->
                     %% oh dear, an expected index was not found in the mem table.
@@ -420,7 +426,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                     %% the segment index but is probably good enough to get comparative
                     %% data rates for different Ra components
                     ok = counters:add(State#state.counter, ?C_BYTES_WRITTEN, DataSize),
-                    append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
+                    append_to_segment(UId, Tid, ra_seq:next(SeqIter), Seg, Closed, State);
                 {error, full} ->
                     % close and open a new segment
                     case open_successor_segment(Seg0, State#state.segment_conf) of
@@ -433,8 +439,14 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             %% re-evaluate snapshot state for the server in case
                             %% a snapshot has completed during segment flush
                             StartIdx = start_index(UId, Idx),
-                            append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
-                                              [Seg0 | Closed], State)
+                            Next = case StartIdx == Idx of
+                                       true ->
+                                           Cur;
+                                       false ->
+                                           next_ra_seq(StartIdx, SeqIter)
+                                   end,
+                            append_to_segment(UId, Tid, Next,
+                                              Seg, [Seg0 | Closed], State)
                     end;
                 {error, Posix} ->
                     FileName = ra_log_segment:filename(Seg0),
@@ -548,4 +560,15 @@ maybe_upgrade_segment_file_names(System, DataDir) ->
             ok = ra_lib:write_file(Marker, <<>>);
         true ->
             ok
+    end.
+
+next_ra_seq(Idx, Iter0) ->
+    case ra_seq:next(Iter0) of
+        end_of_seq ->
+            end_of_seq;
+        {I, _} = Next
+          when I >= Idx ->
+            Next;
+        {_, Iter} ->
+            next_ra_seq(Idx, Iter)
     end.
