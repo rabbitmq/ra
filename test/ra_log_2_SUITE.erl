@@ -128,7 +128,7 @@ handle_overwrite(Config) ->
     {ok, Log1} = ra_log:write([{1, 1, "value"},
                                {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, 1, {1, 2}}} -> ok
+        {ra_log_event, {written, 1, [2, 1]}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
@@ -138,11 +138,11 @@ handle_overwrite(Config) ->
     {ok, Log4} = ra_log:write([{2, 2, "value"}], Log3),
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
+    {Log, _} = ra_log:handle_event({written, 1, [2, 1]}, Log4),
     % ensure last written has not been incremented
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
-               element(1, ra_log:handle_event({written, 2, {1, 2}}, Log))),
+               element(1, ra_log:handle_event({written, 2, [2, 1]}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
@@ -157,7 +157,7 @@ handle_overwrite_append(Config) ->
     {ok, Log1} = ra_log:write([{1, 1, "value"},
                                {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, 1, {1, 2}}} -> ok
+        {ra_log_event, {written, 1, [2, 1]}} -> ok
     after 2000 ->
               flush(),
               exit(written_timeout)
@@ -172,11 +172,11 @@ handle_overwrite_append(Config) ->
     {3, 3} = ra_log:last_index_term(Log4),
     % simulate the first written event coming after index has already
     % been written in a new term
-    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
+    {Log, _} = ra_log:handle_event({written, 1, [2, 1]}, Log4),
     % ensure last written has not been incremented
     {1, 1} = ra_log:last_written(Log),
     {3, 3} = ra_log:last_written(
-               element(1, ra_log:handle_event({written, 3, {2, 3}}, Log))),
+               element(1, ra_log:handle_event({written, 3, [3, 2]}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
@@ -200,7 +200,7 @@ receive_segment(Config) ->
     {3, 1} = ra_log:last_written(Log2),
     % force wal roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    % Log3 = deliver_all_log_events(Log2, 1500),
+
     Log3 = deliver_log_events_cond(
              Log2, fun (L) ->
                            #{mem_table_range := MtRange} = ra_log:overview(L),
@@ -609,7 +609,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     %% no written notifications for anything lower than the snapshot should
     %% be received
     Log5 = receive
-               {ra_log_event, {written, _Term, {From, _To}} = E}
+               {ra_log_event, {written, _Term, [{From, _To}]} = E}
                  when From == 101 ->
                    {Log4b, Effs} = ra_log:handle_event(E, Log4),
                    Log4c = lists:foldl(
