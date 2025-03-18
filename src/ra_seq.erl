@@ -11,7 +11,11 @@
 %% [55, {20, 52}, 3]
 -type state() :: [ra:index() | ra:range()].
 
--export_type([state/0]).
+-record(i, {seq :: state()}).
+-opaque iter() :: #i{}.
+
+-export_type([state/0,
+             iter/0]).
 
 
 -export([
@@ -20,7 +24,13 @@
          floor/2,
          limit/2,
          add/2,
-         fold/3
+         fold/3,
+         expand/1,
+         subtract/2,
+         first/1,
+         last/1,
+         iterator/1,
+         next/1
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -94,6 +104,57 @@ fold(Fun, Acc0, Seq) ->
               Fun(Idx, Acc)
       end, Acc0, Seq).
 
+-spec expand(state()) -> [ra:index()].
+expand(Seq) ->
+    fold(fun (I, Acc) -> [I | Acc] end, [], Seq).
+
+subtract(SeqA, SeqB) ->
+    %% TODO: not efficient at all but good enough for now
+    %% optimise if we end up using this in critical path
+    A = expand(SeqA),
+    B = expand(SeqB),
+    from_list(A -- B).
+
+-spec first(state()) -> undefined | ra:index().
+first([]) ->
+    undefined;
+first(Seq) ->
+    case lists:last(Seq) of
+        {I, _} ->
+            I;
+        I ->
+            I
+    end.
+
+-spec last(state()) -> undefined | ra:index().
+last([]) ->
+    undefined;
+last(Seq) ->
+    case hd(Seq) of
+        {_, I} ->
+            I;
+        I ->
+            I
+    end.
+
+-spec iterator(state()) -> iter() | end_of_seq.
+iterator(Seq) when is_list(Seq) ->
+    #i{seq = lists:reverse(Seq)}.
+
+-spec next(iter()) -> {ra:index(), iter() | end_of_seq}.
+next(#i{seq = []}) ->
+    end_of_seq;
+next(#i{seq = [Next | Rem]})
+  when is_integer(Next) ->
+    {Next, #i{seq = Rem}};
+next(#i{seq = [{Next, End} | Rem]}) ->
+    case ra_range:new(Next + 1, End) of
+        undefined ->
+            {Next, #i{seq = Rem}};
+        NextRange ->
+            {Next, #i{seq = [NextRange | Rem]}}
+    end.
+
 %% internal functions
 
 floor0(FloorIdx, [Last | Rem], Acc)
@@ -114,13 +175,19 @@ floor0(FloorIdx, [{_, _} = T | Rem], Acc) ->
 floor0(_FloorIdx, _Seq, Acc) ->
     lists:reverse(Acc).
 
-% first_index(Seq) ->
-%     last_index(lists:reverse(Seq)).
 
-% last_index([{_, I} | _]) ->
-%     I;
-% last_index([I | _])
-%   when is_integer(I) ->
-%     I;
-% last_index([]) ->
-%     undefined.
+last_index([{_, I} | _]) ->
+    I;
+last_index([I | _])
+  when is_integer(I) ->
+    I;
+last_index([]) ->
+    undefined.
+
+first_index([{_, I} | _]) ->
+    I;
+first_index([I | _])
+  when is_integer(I) ->
+    I;
+first_index([]) ->
+    undefined.

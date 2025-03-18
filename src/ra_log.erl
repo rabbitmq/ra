@@ -62,7 +62,7 @@
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {ra_range:range(), File :: file:filename_all()}.
--type event_body() :: {written, ra_term(), ra:range()} |
+-type event_body() :: {written, ra_term(), ra_seq:state()} |
                       {segments, [{ets:tid(), ra:range()}], [segment_ref()]} |
                       {resend_write, ra_index()} |
                       {snapshot_written, ra_idxterm(), ra_snapshot:kind()} |
@@ -610,14 +610,14 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
 
 -spec handle_event(event_body(), state()) ->
     {state(), [effect()]}.
-handle_event({written, _Term, {FromIdx, _ToIdx}},
+handle_event({written, _Term, [{FromIdx, _ToIdx}]},
              #?MODULE{last_index = LastIdx} = State)
   when FromIdx > LastIdx ->
     %% we must have reverted back, either by explicit reset or by a snapshot
     %% installation taking place whilst the WAL was processing the write
     %% Just drop the event in this case as it is stale
     {State, []};
-handle_event({written, Term, {FromIdx, ToIdx}},
+handle_event({written, Term, [{FromIdx, ToIdx}]},
              #?MODULE{cfg = Cfg,
                       last_written_index_term = {LastWrittenIdx0,
                                                  _LastWrittenTerm0},
@@ -648,10 +648,10 @@ handle_event({written, Term, {FromIdx, ToIdx}},
                     {State, []};
                 NextWrittenRange ->
                     %% retry with a reduced range
-                    handle_event({written, Term, NextWrittenRange}, State0)
+                    handle_event({written, Term, [NextWrittenRange]}, State0)
             end
     end;
-handle_event({written, _Term, {FromIdx, _}} = Evt,
+handle_event({written, _Term, [{FromIdx, _}]} = Evt,
              #?MODULE{cfg = #cfg{log_id = LogId},
                       mem_table = Mt,
                       last_written_index_term = {LastWrittenIdx, _}} = State0)
@@ -675,6 +675,17 @@ handle_event({written, _Term, {FromIdx, _}} = Evt,
             handle_event(Evt,
                          State#?MODULE{last_written_index_term = {Expected, Term}})
     end;
+handle_event({written, Term, Written}, State) ->
+    %% simple handling of ra_seqs for now
+    case Written of
+        [I] when is_integer(I) ->
+            handle_event({written, Term, [{I, I}]}, State);
+        [I2, I] when is_integer(I) andalso
+                     I + 1 == I2 ->
+            handle_event({written, Term, [{I, I2}]}, State);
+        _ ->
+            exit({sparse_written_events_not_implemented, Written})
+    end;
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
@@ -685,7 +696,18 @@ handle_event({segments, TidRanges, NewSegs},
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
-           fun ({Tid, Range}, Acc0) ->
+           fun ({Tid, Seq}, Acc0) ->
+                   %% TODO: HACK: only handles single range ra_seqs
+                   Range = case Seq of
+                               [] ->
+                                   undefined;
+                               [{_, _} = R] ->
+                                   R;
+                               [I] -> ra_range:new(I, I);
+                               [I2, I] when I+1 == I2 ->
+                                   ra_range:new(I, I2)
+                           end,
+                   ct:pal("Range ~p Seq ~p", [Range, Seq]),
                    {Spec, Acc} = ra_mt:record_flushed(Tid, Range, Acc0),
                     ok = ra_log_ets:execute_delete(Names, UId, Spec),
                     Acc
@@ -1200,7 +1222,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
-        {ra_log_event, {written, 0, {0, 0}}} ->
+        {ra_log_event, {written, 0, [0]}} ->
             ok
     after 60000 ->
               exit({?FUNCTION_NAME, timeout})
@@ -1323,14 +1345,15 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
 
 %% TODO: implement synchronous writes using gen_batch_server:call/3
 await_written_idx(Idx, Term, Log0) ->
-    IDX = Idx,
     receive
-        {ra_log_event, {written, Term, {_, IDX}} = Evt} ->
+        {ra_log_event, {written, Term, _Seq} = Evt} ->
             {Log, _} = handle_event(Evt, Log0),
-            Log;
-        {ra_log_event, {written, _, _} = Evt} ->
-            {Log, _} = handle_event(Evt, Log0),
-            await_written_idx(Idx, Term, Log)
+            case last_written(Log) of
+                {Idx, Term} ->
+                    Log;
+                _ ->
+                    await_written_idx(Idx, Term, Log)
+            end
     after ?LOG_APPEND_TIMEOUT ->
               throw(ra_log_append_timeout)
     end.

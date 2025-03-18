@@ -42,7 +42,9 @@ new(Start, End)
        is_integer(End) andalso
        Start =< End ->
     {Start, End};
-new(_Start, _End) ->
+new(Start, End)
+  when is_integer(Start) andalso
+       is_integer(End) ->
     undefined.
 
 -spec add(AddRange :: range(), CurRange :: range()) -> range().
