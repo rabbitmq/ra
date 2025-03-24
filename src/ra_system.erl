@@ -43,6 +43,7 @@
                     wal_pre_allocate => boolean(),
                     segment_max_entries => non_neg_integer(),
                     segment_max_pending => non_neg_integer(),
+                    segment_max_size_bytes => non_neg_integer(),
                     segment_compute_checksums => boolean(),
                     snapshot_chunk_size => non_neg_integer(),
                     receive_snapshot_timeout => non_neg_integer(),
@@ -56,9 +57,7 @@
                     compress_mem_tables => boolean(),
                     low_priority_commands_flush_size => non_neg_integer(),
                     low_priority_commands_in_memory_size => non_neg_integer(),
-                    server_recovery_strategy => undefined |
-                                               registered |
-                                               {module(), atom(), list()},
+                    server_recovery_strategy => undefined | registered | {module(), atom(), list()},
                     machine_upgrade_strategy => ra_server:machine_upgrade_strategy()
                    }.
 
@@ -83,6 +82,8 @@ default_config() ->
                                             ?SEGMENT_MAX_ENTRIES),
     SegmentMaxPending = application:get_env(ra, segment_max_pending,
                                             ?SEGMENT_MAX_PENDING),
+    SegmentMaxSizeBytes = application:get_env(ra, segment_max_size_bytes,
+                                              ?SEGMENT_MAX_SIZE_B),
     SegmentComputeChecksums = application:get_env(ra, segment_compute_checksums,
                                                   true),
     WalMaxSizeBytes = application:get_env(ra, wal_max_size_bytes,
@@ -134,6 +135,7 @@ default_config() ->
       wal_min_bin_vheap_size => WalMinBinVheapSize,
       segment_max_entries => SegmentMaxEntries,
       segment_max_pending => SegmentMaxPending,
+      segment_max_size_bytes => SegmentMaxSizeBytes,
       segment_compute_checksums => SegmentComputeChecksums,
       default_max_pipeline_count => DefaultMaxPipelineCount,
       default_max_append_entries_rpc_batch_size => DefaultAERBatchSize,
