@@ -654,8 +654,8 @@ candidate(EventType, Msg, State0) ->
             {State, Actions0} = ?HANDLE_EFFECTS(Effects, EventType, State1),
             %% reset the tick timer to avoid it triggering early after a leader
             %% change
-            Actions = set_tick_timer(State, Actions0),
-            next_state(leader, State, Actions)
+            next_state(leader, State,
+                       [{next_event, cast, tick_timeout} | Actions0])
     end.
 
 pre_vote(enter, OldState, #state{leader_monitor = MRef} = State0) ->
