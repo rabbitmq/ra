@@ -49,6 +49,7 @@
 -record(cfg, {version :: non_neg_integer(),
               max_count = ?SEGMENT_MAX_ENTRIES :: non_neg_integer(),
               max_pending = ?SEGMENT_MAX_PENDING :: non_neg_integer(),
+              max_size = ?SEGMENT_MAX_SIZE_B :: non_neg_integer(),
               filename :: file:filename_all(),
               fd :: option(file:io_device()),
               index_size :: pos_integer(),
@@ -77,6 +78,7 @@
 
 -type ra_log_segment_options() :: #{max_count => non_neg_integer(),
                                     max_pending => non_neg_integer(),
+                                    max_size => non_neg_integer(),
                                     compute_checksums => boolean(),
                                     mode => append | read,
                                     access_pattern => sequential | random,
@@ -135,15 +137,18 @@ process_file(true, Mode, Filename, Fd, Options) ->
     case read_header(Fd) of
         {ok, Version, MaxCount} ->
             MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
+            MaxSize = maps:get(max_size, Options, ?SEGMENT_MAX_SIZE_B),
             IndexRecordSize = index_record_size(Version),
             IndexSize = MaxCount * IndexRecordSize,
             {NumIndexRecords, DataOffset, Range, Index} =
                 recover_index(Fd, Version, MaxCount),
             IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
             ComputeChecksums = maps:get(compute_checksums, Options, true),
+
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
                                    max_pending = MaxPending,
+                                   max_size = MaxSize,
                                    filename = Filename,
                                    mode = Mode,
                                    index_size = IndexSize,
@@ -169,6 +174,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
 process_file(false, Mode, Filename, Fd, Options) ->
     MaxCount = maps:get(max_count, Options, ?SEGMENT_MAX_ENTRIES),
     MaxPending = maps:get(max_pending, Options, ?SEGMENT_MAX_PENDING),
+    MaxSize = maps:get(max_size, Options, ?SEGMENT_MAX_SIZE_B),
     ComputeChecksums = maps:get(compute_checksums, Options, true),
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
@@ -176,6 +182,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
     {ok, #state{cfg = #cfg{version = ?VERSION,
                            max_count = MaxCount,
                            max_pending = MaxPending,
+                           max_size = MaxSize,
                            filename = Filename,
                            mode = Mode,
                            index_size = IndexSize,
@@ -474,7 +481,7 @@ is_same_filename_all(Fn, Fn) ->
 is_same_filename_all(Fn0, Fn1) ->
     B0 = filename:basename(Fn0),
     B1 = filename:basename(Fn1),
-    ra_lib:to_list(B0) == ra_lib:to_list(B1).
+    ra_lib:to_binary(B0) == ra_lib:to_binary(B1).
 
 update_range(undefined, Idx) ->
     {Idx, Idx};
@@ -679,9 +686,12 @@ validate_checksum(0, _) ->
 validate_checksum(Crc, Data) ->
     Crc == erlang:crc32(Data).
 
-is_full(#state{index_offset = IndexOffset,
-               data_start = DataStart}) ->
-    IndexOffset >= DataStart.
+is_full(#state{cfg = #cfg{max_size = MaxSize},
+               index_offset = IndexOffset,
+               data_start = DataStart,
+               data_offset = DataOffset}) ->
+    IndexOffset >= DataStart orelse
+    (DataOffset - DataStart) > MaxSize.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

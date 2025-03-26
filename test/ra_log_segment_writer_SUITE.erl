@@ -28,6 +28,7 @@ all_tests() ->
      accept_mem_tables_overwrite,
      accept_mem_tables_overwrite_same_wal,
      accept_mem_tables_multi_segment,
+     accept_mem_tables_multi_segment_max_size,
      accept_mem_tables_multi_segment_overwrite,
      accept_mem_tables_for_down_server,
      accept_mem_tables_with_deleted_server,
@@ -246,6 +247,33 @@ accept_mem_tables_multi_segment(Config) ->
     {ok, Pid} = ra_log_segment_writer:start_link(Conf),
     % more entries than fit a single segment
     Entries = [{I, 2, x} || I <- lists:seq(1, 10)],
+    Mt = make_mem_table(UId, Entries),
+    Tid = ra_mt:tid(Mt),
+    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    Ranges = #{UId => TidRanges},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w.wal")),
+    receive
+        {ra_log_event, {segments, TidRanges, [{{9, 10}, _Seg2}, {{1, 8}, _Seg1}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(Pid),
+    ok.
+
+accept_mem_tables_multi_segment_max_size(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    % configure max segment size
+    Conf = #{data_dir => Dir,
+             system => default,
+             name => ?SEGWR,
+             segment_conf => #{max_size => 1000}},
+    {ok, Pid} = ra_log_segment_writer:start_link(Conf),
+    % more entries than fit a single segment
+    Entries = [{I, 2, crypto:strong_rand_bytes(120)} || I <- lists:seq(1, 10)],
     Mt = make_mem_table(UId, Entries),
     Tid = ra_mt:tid(Mt),
     TidRanges = [{Tid, ra_mt:range(Mt)}],
