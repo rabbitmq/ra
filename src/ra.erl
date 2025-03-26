@@ -77,6 +77,7 @@
          transfer_leadership/2,
          %% auxiliary commands
          aux_command/2,
+         aux_command/3,
          cast_aux_command/2,
          register_external_log_reader/1,
          member_overview/1,
@@ -1171,6 +1172,15 @@ transfer_leadership(ServerId, TargetServerId) ->
 -spec aux_command(ra_server_id(), term()) -> term().
 aux_command(ServerRef, Cmd) ->
     gen_statem:call(ServerRef, {aux_command, Cmd}).
+
+%% @doc Executes (using a call) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
+-spec aux_command(ra_server_id(), term(), timeout()) -> term().
+aux_command(ServerRef, Cmd, Timeout) ->
+    gen_statem:call(ServerRef, {aux_command, Cmd}, Timeout).
 
 %% @doc Executes (using a cast) an auxiliary command that the state machine can handle.
 %%
