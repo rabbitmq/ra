@@ -51,6 +51,7 @@ all_tests() ->
      aux_command,
      aux_command_v2,
      aux_command_v1_and_v2,
+     aux_command_timeout,
      aux_monitor_effect,
      aux_and_machine_monitor_same_process,
      aux_and_machine_monitor_same_node,
@@ -807,6 +808,37 @@ aux_command_v1_and_v2(Config) ->
     {follower, undefined} = ra:aux_command(ServerId3, emit),
     ok = ra:cast_aux_command(ServerId3, orange),
     {follower, orange} = ra:aux_command(ServerId3, emit),
+    ra:delete_cluster(Cluster),
+    ok.
+
+aux_command_timeout(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    Cluster = [ServerId1,
+               ?config(server_id2, Config),
+               ?config(server_id3, Config)],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (_RaftState, {call, _From}, {sleep, Sleep}, AuxState, Opaque) ->
+                        timer:sleep(Sleep),
+                        {reply, ok, AuxState, Opaque};
+                    (_RaftState, cast, _Msg, AuxState, Opaque) ->
+                        {no_reply, AuxState, Opaque}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    ?assertEqual(ok, ra:aux_command(ServerId1, {sleep, 100}, 500)),
+    ?assertExit({timeout, _}, ra:aux_command(ServerId1, {sleep, 1000}, 500)),
     ra:delete_cluster(Cluster),
     ok.
 
