@@ -1495,13 +1495,15 @@ handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
     {follower, State#{log => Log}, Effs};
 handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
+                              uid = Uid,
                               log_id = LogId}} = State0) ->
-    Cluster = #{Id => new_peer()},
+    Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid, 
+                                                        membership => voter}})},
     ?WARN("~ts: Forcing cluster change. New cluster ~w",
           [LogId, Cluster]),
     {ok, _, _, State, Effects} =
         append_cluster_change(Cluster, undefined, no_reply, State0, []),
-    call_for_election(pre_vote, State, [{reply, ok} | Effects]);
+    call_for_election(pre_vote, State#{membership => voter}, [{reply, ok} | Effects]);
 handle_follower(#info_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State)
   when CurTerm < Term ->
