@@ -359,10 +359,10 @@ segment_sparse_read(#?STATE{segment_refs = SegRefs,
       fun ({Idxs, Fn}, {Open0, C, En0}) ->
               {Seg, Open} = get_segment(Cfg, Open0, Fn),
               {ok, ReadSparseCount, Entries} =
-                  ra_log_segment:read_sparse(Seg, Idxs,
-                                             fun (I, T, B, Acc) ->
-                                                     [{I, T, binary_to_term(B)} | Acc]
-                                             end, []),
+                  ra_log_segment:read_sparse_no_checks(
+                    Seg, Idxs, fun (I, T, B, Acc) ->
+                                       [{I, T, binary_to_term(B)} | Acc]
+                               end, []),
               {Open, C +  ReadSparseCount, lists:reverse(Entries, En0)}
       end, {OpenSegs, 0, Entries0}, Plan).
 
