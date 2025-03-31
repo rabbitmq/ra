@@ -632,6 +632,13 @@ candidate({call, From} = EventType, {local_query, QueryFun, Options}, State) ->
 candidate({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
+candidate(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_event, _Node, _Evt}, State) ->
@@ -681,6 +688,13 @@ pre_vote({call, From} = EventType, {local_query, QueryFun, Options}, State) ->
 pre_vote({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
+pre_vote(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
 pre_vote(info, {node_event, _Node, _Evt}, State) ->
@@ -890,6 +904,13 @@ receive_snapshot({call, From} = EventType, {local_query, QueryFun, Options},
 receive_snapshot({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
+receive_snapshot(EventType, {aux_command, Cmd}, State0) ->
+    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State#state{server_state = ServerState}, Actions};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
