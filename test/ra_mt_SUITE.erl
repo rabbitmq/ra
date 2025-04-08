@@ -468,6 +468,21 @@ perf(_Config) ->
 
     ok.
 
+sparse(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 1000)),
+    {[Spec], Mt2} = ra_mt:set_first(500, Mt1),
+    499 = ra_mt:delete(Spec),
+    ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
+    ?assertEqual(501, ets:info(Tid, size)),
+    {Spec2, Mt3} = ra_mt:record_flushed(Tid, {1, 999}, Mt2),
+    500 = ra_mt:delete(Spec2),
+    ?assertEqual(1, ra_mt:lookup_term(1000, Mt3)),
+    ok.
 
 %%% Util
 
