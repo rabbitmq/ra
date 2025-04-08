@@ -99,6 +99,7 @@
 -record(wal, {fd :: option(file:io_device()),
               filename :: option(file:filename()),
               file_size = 0 :: non_neg_integer(),
+              sync_offset = 0 :: non_neg_integer(),
               writer_name_cache = {0, #{}} :: writer_name_cache(),
               max_size :: non_neg_integer(),
               entry_count = 0 :: non_neg_integer(),
@@ -614,6 +615,7 @@ open_wal(File, Max, #conf{} = Conf0) ->
     Conf = maybe_pre_allocate(Conf0, Fd, Max),
     {Conf, #wal{fd = Fd,
                 max_size = Max,
+                sync_offset = ?HEADER_SIZE,
                 filename = File}}.
 
 prepare_file(File, Modes) ->
@@ -674,19 +676,24 @@ post_notify_flush(#state{wal = #wal{fd = Fd},
 post_notify_flush(_State) ->
     ok.
 
-flush_pending(#state{wal = #wal{fd = Fd},
+flush_pending(#state{wal = #wal{fd = Fd,
+                                file_size = FileSize,
+                                sync_offset = SyncOffset} = Wal,
                      batch = #batch{pending = Pend},
                      conf = #conf{write_strategy = WriteStrategy,
                                   sync_method = SyncMeth}} = State0) ->
 
     case WriteStrategy of
-        default ->
+        default
+          when (FileSize - SyncOffset) > (4096 * 8) ->
             ok = file:write(Fd, Pend),
-            sync(Fd, SyncMeth);
+            sync(Fd, SyncMeth),
+            State0#state{batch = undefined,
+                         wal = Wal#wal{sync_offset = FileSize}};
         _ ->
-            ok = file:write(Fd, Pend)
-    end,
-    State0#state{batch = undefined}.
+            ok = file:write(Fd, Pend),
+            State0#state{batch = undefined}
+    end.
 
 sync(_Fd, none) ->
     ok;
