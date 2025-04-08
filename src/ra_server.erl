@@ -3647,7 +3647,8 @@ ra_server_info(State, Keys) ->
     Info1.
 
 handle_info_reply(#{cluster := Cluster} = State,
-                  #info_reply{from = PeerId, keys = Keys, info = Info}) ->
+                  #info_reply{from = PeerId, keys = Keys, info = Info})
+  when is_map_key(PeerId, Cluster) ->
     PeerState0 = maps:get(PeerId, Cluster),
     PeerState1 = lists:foldl(fun(Key, PS) ->
                                      case Info of
@@ -3659,7 +3660,11 @@ handle_info_reply(#{cluster := Cluster} = State,
                              end, PeerState0, Keys),
     Cluster1 = Cluster#{PeerId => PeerState1},
     State1 = State#{cluster => Cluster1},
-    determine_if_machine_upgrade_allowed(State1).
+    determine_if_machine_upgrade_allowed(State1);
+handle_info_reply(State, #info_reply{} = _InfoReply) ->
+    %% The Ra node who sent the `#info_reply{}' was removed from the cluster
+    %% since this node asked for its info. We ignore its reply.
+    {State, []}.
 
 determine_if_machine_upgrade_allowed(
   #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
