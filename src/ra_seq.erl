@@ -176,18 +176,18 @@ floor0(_FloorIdx, _Seq, Acc) ->
     lists:reverse(Acc).
 
 
-last_index([{_, I} | _]) ->
-    I;
-last_index([I | _])
-  when is_integer(I) ->
-    I;
-last_index([]) ->
-    undefined.
+% last_index([{_, I} | _]) ->
+%     I;
+% last_index([I | _])
+%   when is_integer(I) ->
+%     I;
+% last_index([]) ->
+%     undefined.
 
-first_index([{_, I} | _]) ->
-    I;
-first_index([I | _])
-  when is_integer(I) ->
-    I;
-first_index([]) ->
-    undefined.
+% first_index([{_, I} | _]) ->
+%     I;
+% first_index([I | _])
+%   when is_integer(I) ->
+%     I;
+% first_index([]) ->
+%     undefined.
