@@ -365,9 +365,9 @@ snap_idx(ServerUId) ->
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of
         undefined ->
-            ?DEBUG("ra_log_segment_writer: error sending "
+            ?DEBUG("ra_log_segment_writer: unable to send "
                    "ra_log_event to: "
-                   "~ts. Error: ~s",
+                   "~ts. Reason: ~s",
                    [ServerUId, "No Pid"]),
             %% delete from the memtable on the non-running server's behalf
             [begin
