@@ -377,26 +377,26 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
                     filename:extension(File) == ".wal"],
     WalFiles = lists:sort(Files),
     AllWriters =
-    [begin
-         ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
-         Fd = open_at_first_record(filename:join(Dir, F)),
-         {Time, #recovery{ranges = Ranges,
-                          writers = Writers}} =
-             timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
+        [begin
+             ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
+             Fd = open_at_first_record(filename:join(Dir, F)),
+             {Time, #recovery{ranges = Ranges,
+                              writers = Writers}} =
+                 timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
-         ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, F),
+             ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, F),
 
-         close_existing(Fd),
-         ?DEBUG("wal: recovered ~ts time taken ~bms - Writer state recovered ~p",
-                [F, Time div 1000, Writers]),
-         Writers
-     end || F <- WalFiles],
+             close_existing(Fd),
+             ?DEBUG("wal: recovered ~ts time taken ~bms - recovered ~b writers",
+                    [F, Time div 1000, map_size(Writers)]),
+             Writers
+         end || F <- WalFiles],
 
     FinalWriters = lists:foldl(fun (New, Acc) ->
                                        maps:merge(Acc, New)
                                end, #{}, AllWriters),
 
-    ?DEBUG("wal: final writer state recovered ~p", [FinalWriters]),
+    ?DEBUG("wal: recovered ~b writers", [map_size(FinalWriters)]),
 
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
