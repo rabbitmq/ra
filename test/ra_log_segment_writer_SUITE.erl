@@ -347,6 +347,8 @@ accept_mem_tables_for_down_server(Config) ->
     %% but not running
     ok = dets:insert(maps:get(directory_rev, get_names(default)),
                      {down_uid, DownUId}),
+    true = ets:insert(maps:get(directory, get_names(default)),
+                      {DownUId, undefined, undefined, down_uid, undefined}),
     ok = ra_lib:make_dir(filename:join(Dir, DownUId)),
     application:start(sasl),
     {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
