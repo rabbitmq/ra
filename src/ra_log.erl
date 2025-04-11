@@ -895,6 +895,7 @@ promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
                                  snapshot_state = SnapState0} = State) ->
     case ra_snapshot:pending(SnapState0) of
         {_WriterPid, _IdxTerm, snapshot} ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_CHECKPOINTS_PROMOTIONS_DROPPED, 1),
             %% If we're currently writing a snapshot, skip promoting a
             %% checkpoint.
             {State, []};
