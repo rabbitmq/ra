@@ -137,6 +137,7 @@ segments_for(UId, #state{data_dir = DataDir}) ->
 
 handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                                                   system = System} = State) ->
+    T1 = erlang:monotonic_time(),
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
     #{names := Names} = ra_system:fetch(System),
     Degree = erlang:system_info(schedulers),
@@ -158,7 +159,6 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                            end
                    end, [], Ranges),
 
-    T1 = erlang:monotonic_time(),
     _ = [begin
              {_, Failures} = ra_lib:partition_parallel(
                                fun (TidRange) ->
