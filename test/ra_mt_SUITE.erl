@@ -33,7 +33,7 @@ all_tests() ->
      successor_below,
      stage_commit,
      range_overlap,
-     stage_commit_abort,
+     stage_commit_2,
      perf,
      sparse
     ].
@@ -387,7 +387,7 @@ range_overlap(_Config) ->
     % {{20, 30}, {31, 40}} = ra_mt:range_overlap({10, 40}, Mt1),
     ok.
 
-stage_commit_abort(_Config) ->
+stage_commit_2(_Config) ->
     Tid = ets:new(t1, [set, public]),
     Mt0 = ra_mt:init(Tid),
     Mt1 = lists:foldl(
@@ -397,8 +397,6 @@ stage_commit_abort(_Config) ->
     ?assertMatch(#{size := 0,
                    range := {20, 30}}, ra_mt:info(Mt1)),
 
-    ?assertMatch(#{size := 0,
-                   range := undefined}, ra_mt:info(ra_mt:abort(Mt1))),
     {[{20, _, _} | _] = Entries, Mt} = ra_mt:commit(Mt1),
     ?assertEqual(11, length(Entries)),
 
