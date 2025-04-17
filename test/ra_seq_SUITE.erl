@@ -25,7 +25,8 @@ all_tests() ->
      limit,
      add,
      subtract,
-     iter
+     iter,
+     remove_prefix
     ].
 
 groups() ->
@@ -125,5 +126,17 @@ iter(_Config) ->
     end_of_seq = ra_seq:next(I9),
     ok.
 
+remove_prefix(_Config) ->
+    S0 = ra_seq:from_list([2, 3, 5, 6, 8, 9, 10, 12]),
+    Pref1 = ra_seq:from_list([2, 3, 5]),
+    {ok, S1} = ra_seq:remove_prefix(Pref1, S0),
+    [12, 10, 9, 8, 6] = ra_seq:expand(S1),
 
-
+    %% prefix includes already removed items
+    Pref2 = ra_seq:from_list([1, 2, 3, 5]),
+    {ok, S2} = ra_seq:remove_prefix(Pref2, S0),
+    [12, 10, 9, 8, 6] = ra_seq:expand(S2),
+    %% not a prefix
+    Pref3 = ra_seq:from_list([5, 6, 8]),
+    {error, not_prefix} = ra_seq:remove_prefix(Pref3, S0),
+    ok.

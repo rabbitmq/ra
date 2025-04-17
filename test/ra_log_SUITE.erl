@@ -22,6 +22,7 @@ all_tests() ->
      fetch_not_found,
      append_then_fetch,
      write_then_fetch,
+     write_sparse_then_fetch,
      append_then_fetch_no_wait,
      write_then_overwrite,
      append_integrity_error,
@@ -96,6 +97,22 @@ write_then_fetch(Config) ->
     {{LastIdx, Term, "entry2"}, Log} = ra_log:fetch(Idx+1, Log2),
     {LastIdx, Term} = ra_log:last_written(Log),
     {Term, _} = ra_log:fetch_term(Idx, Log),
+    ok.
+
+write_sparse_then_fetch(Config) ->
+    Log0 = ?config(ra_log, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    LastIdx = Idx + 5,
+    Entry1 = {Idx, Term, "entry"},
+    %% sparse
+    Entry2 = {Idx+5, Term, "entry+5"},
+    Log1 = ra_log:write_sparse(Entry1, undefined, Log0),
+    {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
+    Log3 = ra_log:write_sparse(Entry2, Idx, Log2),
+    Log = await_written_idx(Idx, Term, Log3),
+    {LastIdx, Term} = ra_log:last_written(Log),
+    {{LastIdx, Term, "entry+5"}, Log2} = ra_log:fetch(Idx+5, Log1),
     ok.
 
 append_then_fetch_no_wait(Config) ->
@@ -287,4 +304,18 @@ flush() ->
             flush()
     after 0 ->
               ok
+    end.
+
+await_written_idx(Idx, Term, Log0) ->
+    receive
+        {ra_log_event, {written, Term, _Seq} = Evt} ->
+            {Log, _} = ra_log:handle_event(Evt, Log0),
+            case ra_log:last_written(Log) of
+                {Idx, Term} ->
+                    Log;
+                _ ->
+                    await_written_idx(Idx, Term, Log)
+            end
+    after 1000 ->
+              throw(ra_log_append_timeout)
     end.
