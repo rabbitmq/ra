@@ -16,6 +16,7 @@
          commit_tx/1,
          append/2,
          write/2,
+         write_sparse/3,
          append_sync/2,
          write_sync/2,
          fold/5,
@@ -437,6 +438,38 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
                                       [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
+write_sparse({Idx, Term, _} = Entry, PrevIdx0,
+             #?MODULE{cfg = #cfg{uid = UId,
+                                 wal = Wal} = Cfg,
+                      last_index = LastIdx,
+                      mem_table = Mt0} = State0)
+  when PrevIdx0 == undefined orelse
+       (PrevIdx0 == LastIdx) ->
+    {ok, Mt} = ra_mt:insert_sparse(Entry, PrevIdx0, Mt0),
+    % al_write_batch(State0#?MODULE{mem_table = Mt}, [Entry]).
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
+    Tid = ra_mt:tid(Mt),
+    PrevIdx = case PrevIdx0 of
+                  undefined ->
+                      Idx - 1;
+                  _ ->
+                      PrevIdx0
+              end,
+    case ra_log_wal:write(Wal, {UId, self()}, Tid, PrevIdx, Idx,
+                          Term, Entry) of
+        {ok, Pid} ->
+            ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
+            State0#?MODULE{last_index = Idx,
+                           last_term = Term,
+                           mem_table = Mt,
+                           last_wal_write = {Pid, now_ms()}
+                          };
+        {error, wal_down} ->
+            error(wal_down)
+    end.
+
 -spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
            fun((log_entry(), Acc) -> Acc), Acc, state()) ->
     {Acc, state()} when Acc :: term().
@@ -453,12 +486,14 @@ fold(From0, To0, Fun, Acc0,
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
 
     MtOverlap = ra_mt:range_overlap({From, To}, Mt),
-    case MtOverlap of
+    case MtOverlap oe
         {undefined, {RemStart, RemEnd}} ->
-            {Reader, Acc} = ra_log_reader:fold(RemStart, RemEnd, Fun, Acc0, Reader0),
+            {Reader, Acc} = ra_log_reader:fold(RemStart, RemEnd, Fun,
+                                               Acc0, Reader0),
             {Acc, State#?MODULE{reader = Reader}};
         {{MtStart, MtEnd}, {RemStart, RemEnd}} ->
-            {Reader, Acc1} = ra_log_reader:fold(RemStart, RemEnd, Fun, Acc0, Reader0),
+            {Reader, Acc1} = ra_log_reader:fold(RemStart, RemEnd, Fun,
+                                                Acc0, Reader0),
             Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc1, Mt),
             NumRead = MtEnd - MtStart + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
@@ -644,7 +679,7 @@ handle_event({written, Term, [{FromIdx, ToIdx}]},
                 undefined ->
                     ?DEBUG("~ts: written event did not find term ~b for index ~b "
                            "found ~w",
-                           [State#?MODULE.cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
+                           [Cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
                     {State, []};
                 NextWrittenRange ->
                     %% retry with a reduced range
@@ -697,20 +732,20 @@ handle_event({segments, TidRanges, NewSegs},
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
            fun ({Tid, Seq}, Acc0) ->
-                   %% TODO: HACK: only handles single range ra_seqs
+                   %% TODO: should mt take ra_seqs in case of sparse writes?
                    Range = case Seq of
                                [] ->
                                    undefined;
                                [{_, _} = R] ->
                                    R;
-                               [I] -> ra_range:new(I, I);
-                               [I2, I] when I+1 == I2 ->
-                                   ra_range:new(I, I2)
+                               _ ->
+                                   ra_range:new(ra_seq:first(Seq),
+                                                ra_seq:last(Seq))
                            end,
-                   ct:pal("Range ~p Seq ~p", [Range, Seq]),
+                   % ct:pal("Range ~p Seq ~p", [Range, Seq]),
                    {Spec, Acc} = ra_mt:record_flushed(Tid, Range, Acc0),
-                    ok = ra_log_ets:execute_delete(Names, UId, Spec),
-                    Acc
+                   ok = ra_log_ets:execute_delete(Names, UId, Spec),
+                   Acc
            end, Mt0, TidRanges),
     State = State0#?MODULE{reader = Reader,
                            mem_table = Mt},
