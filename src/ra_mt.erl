@@ -6,6 +6,7 @@
 %% @hidden
 -module(ra_mt).
 
+-include_lib("stdlib/include/assert.hrl").
 -include("ra.hrl").
 
 -export([
@@ -16,7 +17,7 @@
          insert_sparse/3,
          stage/2,
          commit/1,
-         abort/1,
+         % abort/1,
          lookup/2,
          lookup_term/2,
          tid_for/3,
@@ -41,21 +42,22 @@
          Idx >= element(1, Range) andalso
          Idx =< element(2, Range))).
 
--define(IS_BEFORE_RANGE(Idx, Range),
-        (is_tuple(Range) andalso
-         Idx < element(1, Range))).
+% -define(IS_BEFORE_RANGE(Idx, Range),
+%         (is_tuple(Range) andalso
+%          Idx < element(1, Range))).
 
--define(IS_AFTER_RANGE(Idx, Range),
-        (is_tuple(Range) andalso
-         Idx > element(2, Range))).
+% -define(IS_AFTER_RANGE(Idx, Range),
+%         (is_tuple(Range) andalso
+%          Idx > element(2, Range))).
 
--define(IS_NEXT_IDX(Idx, Range),
-        (Range == undefined orelse
-         Idx == element(2, Range) + 1)).
+-define(IS_NEXT_IDX(Idx, Seq),
+        (Seq == [] orelse
+         (is_integer(hd(Seq)) andalso hd(Seq) + 1 == Idx) orelse
+         (Idx == element(2, hd(Seq)) + 1))).
 
 -record(?MODULE,
         {tid :: ets:tid(),
-         range :: undefined | {ra:index(), ra:index()},
+         indexes :: ra_seq:state(),
          staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]},
          prev :: undefined | #?MODULE{}
         }).
@@ -73,19 +75,17 @@
 
 -spec init(ets:tid(), read | read_write) -> state().
 init(Tid, Mode) ->
-    Range = case Mode of
+    Seq = case Mode of
                 read ->
-                    undefined;
+                    [];
                 read_write ->
                     %% TODO: can this be optimised further?
-                    ets:foldl(fun ({I, _, _}, undefined) ->
-                                      {I, I};
-                                  ({I, _, _}, {S, E}) ->
-                                      {min(I, S), max(I, E)}
-                              end, undefined, Tid)
+                  ra_seq:from_list(ets:foldl(fun ({I, _, _}, Acc) ->
+                                                     [I |  Acc]
+                                             end, [], Tid))
             end,
     #?MODULE{tid = Tid,
-             range = Range}.
+             indexes = Seq}.
 
 -spec init(ets:tid()) -> state().
 init(Tid) ->
@@ -100,73 +100,74 @@ init_successor(Tid, Mode, #?MODULE{} = State) ->
     {ok, state()} | {error, overwriting | limit_reached}.
 insert({Idx, _, _} = Entry,
        #?MODULE{tid = Tid,
-                range = Range} = State)
-  when ?IS_NEXT_IDX(Idx, Range) ->
-    case ra_range:size(Range) > ?MAX_MEMTBL_ENTRIES of
+                indexes = Seq} = State)
+  when ?IS_NEXT_IDX(Idx, Seq) ->
+    %% TODO ra_seq:length can be slow for sparse ra_seqs
+    case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
         true ->
             {error, limit_reached};
         false ->
             true = ets:insert(Tid, Entry),
-            {ok, State#?MODULE{range = update_range_end(Idx, Range)}}
+            {ok, State#?MODULE{indexes = update_ra_seq(Idx, Seq)}}
     end;
 insert({Idx, _, _} = _Entry,
-       #?MODULE{range = Range} = _State0)
-  when ?IN_RANGE(Idx, Range) orelse
-       ?IS_BEFORE_RANGE(Idx, Range) ->
-    {error, overwriting}.
+       #?MODULE{indexes = Seq}) ->
+    case Idx =< ra_seq:last(Seq) of
+        true ->
+            {error, overwriting};
+        false ->
+            exit({unexpected_sparse_insert, Idx, Seq})
+    end.
 
 -spec insert_sparse(log_entry(), undefined | ra:index(), state()) ->
     {ok, state()} | {error, gap_detected | limit_reached}.
 insert_sparse({Idx, _, _} = Entry, LastIdx,
        #?MODULE{tid = Tid,
-                range = Range} = State)
-  when Range == undefined orelse
+                indexes = Seq} = State)
+  when Seq == undefined orelse
        LastIdx == undefined orelse
-       (element(2, Range) == LastIdx) ->
-    case ra_range:size(Range) > ?MAX_MEMTBL_ENTRIES of
+       ((is_integer(hd(Seq)) andalso hd(Seq) == LastIdx) orelse
+        (LastIdx == element(2, hd(Seq)))) ->
+    case ra_range:size(Seq) > ?MAX_MEMTBL_ENTRIES of
         true ->
             {error, limit_reached};
         false ->
             true = ets:insert(Tid, Entry),
-            NewRange = case Range of
-                           undefined ->
-                               ra_range:new(Idx);
-                           {S, _} ->
-                               {S,  Idx}
-                       end,
-            %% TODO: consider using ra_seq instead
-            {ok, State#?MODULE{range = NewRange}}
+            {ok, State#?MODULE{indexes = ra_seq:append(Idx, Seq)}}
     end;
 insert_sparse({_Idx, _, _} = _Entry, _LastIdx,
-              #?MODULE{range = _Range} = _State0) ->
+              #?MODULE{indexes = _Seq} = _State0) ->
     {error, gap_detected}.
 
 -spec stage(log_entry(), state()) ->
     {ok, state()} | {error, overwriting | limit_reached}.
 stage({Idx, _, _} = Entry,
       #?MODULE{staged = {FstIdx, Staged},
-               range = Range} = State)
+               indexes = Range} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
     {ok, State#?MODULE{staged = {FstIdx, [Entry | Staged]},
-                       range = update_range_end(Idx, Range)}};
+                       indexes = update_ra_seq(Idx, Range)}};
 stage({Idx, _, _} = Entry,
       #?MODULE{tid = _Tid,
                staged = undefined,
-               range = Range} = State)
-  when ?IS_NEXT_IDX(Idx, Range) ->
-    case ra_range:size(Range) > ?MAX_MEMTBL_ENTRIES of
+               indexes = Seq} = State)
+  when ?IS_NEXT_IDX(Idx, Seq) ->
+    case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
         true ->
             %% the limit cannot be reached during transaction
             {error, limit_reached};
         false ->
             {ok, State#?MODULE{staged = {Idx, [Entry]},
-                               range = update_range_end(Idx, Range)}}
+                               indexes = update_ra_seq(Idx, Seq)}}
     end;
 stage({Idx, _, _} = _Entry,
-      #?MODULE{range = Range} = _State0)
-  when ?IN_RANGE(Idx, Range) orelse
-       ?IS_BEFORE_RANGE(Idx, Range) ->
-    {error, overwriting}.
+       #?MODULE{indexes = Seq}) ->
+    case Idx =< ra_seq:last(Seq) of
+        true ->
+            {error, overwriting};
+        false ->
+            exit({unexpected_sparse_stage, Idx, Seq})
+    end.
 
 -spec commit(state()) -> {[log_entry()], state()}.
 commit(#?MODULE{staged = undefined} = State) ->
@@ -186,22 +187,22 @@ commit(#?MODULE{tid = Tid,
     {PrevStaged ++ Staged, State#?MODULE{staged = undefined,
                                          prev = Prev}}.
 
--spec abort(state()) -> state().
-abort(#?MODULE{staged = undefined} = State) ->
-    State;
-abort(#?MODULE{staged = {_, Staged},
-               range = Range,
-               prev = Prev0} = State) ->
-    Prev = case Prev0 of
-               undefined ->
-                   Prev0;
-               _ ->
-                   abort(Prev0)
-           end,
-    {Idx, _, _} = lists:last(Staged),
-    State#?MODULE{staged = undefined,
-                  range = ra_range:limit(Idx, Range),
-                  prev = Prev}.
+% -spec abort(state()) -> state().
+% abort(#?MODULE{staged = undefined} = State) ->
+%     State;
+% abort(#?MODULE{staged = {_, Staged},
+%                indexes = Range,
+%                prev = Prev0} = State) ->
+%     Prev = case Prev0 of
+%                undefined ->
+%                    Prev0;
+%                _ ->
+%                    abort(Prev0)
+%            end,
+%     {Idx, _, _} = lists:last(Staged),
+%     State#?MODULE{staged = undefined,
+%                   indexes = ra_range:limit(Idx, Range),
+%                   prev = Prev}.
 
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
@@ -215,10 +216,12 @@ lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
             undefined
     end;
 lookup(Idx, #?MODULE{tid = Tid,
-                     range = Range,
+                     indexes = Seq,
                      prev = Prev,
                      staged = undefined}) ->
-    case ?IN_RANGE(Idx, Range) of
+    %% ra_seq:in/2 could be expensive for sparse mem tables,
+    %% TODO: consider checking ets table first
+    case ra_seq:in(Idx, Seq) of
         true ->
             [Entry] = ets:lookup(Tid, Idx),
             Entry;
@@ -240,13 +243,21 @@ lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
             undefined
     end;
 lookup_term(Idx, #?MODULE{tid = Tid,
-                          range = Range})
-  when ?IN_RANGE(Idx, Range) ->
-    ets:lookup_element(Tid, Idx, 2);
-lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
-    lookup_term(Idx, Prev);
-lookup_term(_Idx, _State) ->
-    undefined.
+                          prev = Prev,
+                          indexes = _Seq}) ->
+    %% TODO: implement properly, checking Seq
+    case ets:lookup_element(Tid, Idx, 2, undefined) of
+        undefined when Prev =/= undefined ->
+            lookup_term(Idx, Prev);
+        Term ->
+            Term
+    end.
+  % when ?IN_RANGE(Idx, Seq) ->
+  %   ets:lookup_element(Tid, Idx, 2);
+% lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
+  %   lookup_term(Idx, Prev);
+% lookup_term(_Idx, _State) ->
+  %   undefined.
 
 -spec tid_for(ra:index(), ra_term(), state()) ->
     undefined | ets:tid().
@@ -269,6 +280,7 @@ fold(To, To, Fun, Acc, State) ->
 fold(From, To, Fun, Acc, State)
   when To > From ->
     E = lookup(From, State),
+    ?assert(E =/= undefined),
     fold(From + 1, To, Fun, Fun(E, Acc), State).
 
 -spec get_items([ra:index()], state()) ->
@@ -323,10 +335,10 @@ range_overlap(ReqRange, #?MODULE{} = State) ->
 
 -spec range(state()) ->
     undefined | {ra:index(), ra:index()}.
-range(#?MODULE{range = Range,
+range(#?MODULE{indexes = Range,
                prev = undefined}) ->
     Range;
-range(#?MODULE{range = {_, End} = Range,
+range(#?MODULE{indexes = {_, End} = Range,
                prev = Prev}) ->
     PrevRange = ra_range:limit(End, range(Prev)),
     ra_range:add(Range, PrevRange);
@@ -361,19 +373,19 @@ info(#?MODULE{tid = Tid,
       has_previous => Prev =/= undefined
      }.
 
--spec record_flushed(ets:tid(), ra:range(), state()) ->
+-spec record_flushed(ets:tid(), ra_seq:state(), state()) ->
     {delete_spec(), state()}.
-record_flushed(TID = Tid, {Start, End},
+record_flushed(TID = Tid, FlushedSeq,
                #?MODULE{tid = TID,
-                        range = Range} = State) ->
-    HasExtraEntries = ets:info(Tid, size) > ra_range:size(Range),
-    case ?IN_RANGE(End, Range) of
+                        indexes = Seq} = State) ->
+    HasExtraEntries = ets:info(Tid, size) > ra_seq:length(Seq),
+    case ?IN_RANGE(End, Seq) of
         true when HasExtraEntries ->
             {{'<', Tid, End + 1},
-             State#?MODULE{range = ra_range:truncate(End, Range)}};
+             State#?MODULE{indexes = ra_range:truncate(End, Seq)}};
         true ->
             {{range, Tid, {Start, End}},
-             State#?MODULE{range = ra_range:truncate(End, Range)}};
+             State#?MODULE{indexes = ra_range:truncate(End, Seq)}};
         false ->
             {undefined, State}
     end;
@@ -393,7 +405,7 @@ record_flushed(Tid, Range, #?MODULE{prev = Prev0} = State) ->
 -spec set_first(ra:index(), state()) ->
     {[delete_spec()], state()}.
 set_first(Idx, #?MODULE{tid = Tid,
-                        range = Range,
+                        indexes = Range,
                         prev = Prev0} = State)
   when (is_tuple(Range) andalso
         Idx > element(1, Range)) orelse
@@ -426,7 +438,7 @@ set_first(Idx, #?MODULE{tid = Tid,
                     PrevSpecs
             end,
     {Specs,
-     State#?MODULE{range = ra_range:truncate(Idx - 1, Range),
+     State#?MODULE{indexes = ra_range:truncate(Idx - 1, Range),
                    prev = Prev}};
 set_first(_Idx, State) ->
     {[], State}.
@@ -434,12 +446,19 @@ set_first(_Idx, State) ->
 
 %% internal
 
-update_range_end(Idx, {Start, End})
-  when Idx =< End orelse
-       Idx == End + 1 ->
-    {Start, Idx};
-update_range_end(Idx, undefined) ->
-    {Idx, Idx}.
+update_ra_seq(Idx, Seq) ->
+    case ra_seq:last(Seq) of
+        undefined ->
+            ra_seq:append(Idx, Seq);
+        LastIdx when LastIdx == Idx - 1 ->
+            ra_seq:append(Idx, Seq)
+    end.
+
+  % when Idx =< End orelse
+  %      Idx == End + 1 ->
+  %   {Start, Idx};
+% update_ra_seq(Idx, undefined) ->
+  %   {Idx, Idx}.
 
 delete(End, End, Tid) ->
     ets:delete(Tid, End);

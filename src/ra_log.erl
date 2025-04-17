@@ -486,7 +486,7 @@ fold(From0, To0, Fun, Acc0,
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
 
     MtOverlap = ra_mt:range_overlap({From, To}, Mt),
-    case MtOverlap oe
+    case MtOverlap of
         {undefined, {RemStart, RemEnd}} ->
             {Reader, Acc} = ra_log_reader:fold(RemStart, RemEnd, Fun,
                                                Acc0, Reader0),
