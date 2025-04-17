@@ -33,8 +33,9 @@ all_tests() ->
      successor_below,
      stage_commit,
      range_overlap,
-     stage_commit_abort,
-     perf
+     stage_commit_2,
+     perf,
+     sparse
     ].
 
 groups() ->
@@ -386,7 +387,7 @@ range_overlap(_Config) ->
     % {{20, 30}, {31, 40}} = ra_mt:range_overlap({10, 40}, Mt1),
     ok.
 
-stage_commit_abort(_Config) ->
+stage_commit_2(_Config) ->
     Tid = ets:new(t1, [set, public]),
     Mt0 = ra_mt:init(Tid),
     Mt1 = lists:foldl(
@@ -396,8 +397,6 @@ stage_commit_abort(_Config) ->
     ?assertMatch(#{size := 0,
                    range := {20, 30}}, ra_mt:info(Mt1)),
 
-    ?assertMatch(#{size := 0,
-                   range := undefined}, ra_mt:info(ra_mt:abort(Mt1))),
     {[{20, _, _} | _] = Entries, Mt} = ra_mt:commit(Mt1),
     ?assertEqual(11, length(Entries)),
 
@@ -468,6 +467,21 @@ perf(_Config) ->
 
     ok.
 
+sparse(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    {ok, Mt1} = ra_mt:insert_sparse({2, 1, <<"banana">>}, 0, Mt0),
+    {ok, Mt2} = ra_mt:insert_sparse({5, 1, <<"banana">>}, 2, Mt1),
+    ?assertEqual({2, 5}, ra_mt:range(Mt2)),
+    {Spec, _Mt3} = ra_mt:record_flushed(Tid, {2, 5}, Mt2),
+    ct:pal("Spec ~p", [Spec]),
+    % 499 = ra_mt:delete(Spec)2
+    % ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
+    % ?assertEqual(501, ets:info(Tid, size)),
+    % {Spec2, Mt3} = ra_mt:record_flushed(Tid, {1, 999}, Mt2),
+    % 500 = ra_mt:delete(Spec2),
+    % ?assertEqual(1, ra_mt:lookup_term(1000, Mt3)),
+    ok.
 
 %%% Util
 
