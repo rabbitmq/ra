@@ -14,4 +14,4 @@ jobs:
       with:
         event-type: ra_change
         repository: rabbitmq/ra-kv-store
-        token: ${{ secrets.CI_GITHUB_TOKEN }}
+        token: ${{ secrets.MK_RELEASE_AUTOMATION_TOKEN }}
