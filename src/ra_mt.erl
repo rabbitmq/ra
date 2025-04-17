@@ -13,6 +13,7 @@
          init/2,
          init_successor/3,
          insert/2,
+         insert_sparse/3,
          stage/2,
          commit/1,
          abort/1,
@@ -44,9 +45,9 @@
         (is_tuple(Range) andalso
          Idx < element(1, Range))).
 
-% -define(IS_AFTER_RANGE(Idx, Range),
-%         (is_tuple(Range) andalso
-%          Idx > element(2, Range))).
+-define(IS_AFTER_RANGE(Idx, Range),
+        (is_tuple(Range) andalso
+         Idx > element(2, Range))).
 
 -define(IS_NEXT_IDX(Idx, Range),
         (Range == undefined orelse
@@ -84,8 +85,7 @@ init(Tid, Mode) ->
                               end, undefined, Tid)
             end,
     #?MODULE{tid = Tid,
-             range = Range
-            }.
+             range = Range}.
 
 -spec init(ets:tid()) -> state().
 init(Tid) ->
@@ -114,6 +114,32 @@ insert({Idx, _, _} = _Entry,
   when ?IN_RANGE(Idx, Range) orelse
        ?IS_BEFORE_RANGE(Idx, Range) ->
     {error, overwriting}.
+
+-spec insert_sparse(log_entry(), undefined | ra:index(), state()) ->
+    {ok, state()} | {error, gap_detected | limit_reached}.
+insert_sparse({Idx, _, _} = Entry, LastIdx,
+       #?MODULE{tid = Tid,
+                range = Range} = State)
+  when Range == undefined orelse
+       LastIdx == undefined orelse
+       (element(2, Range) == LastIdx) ->
+    case ra_range:size(Range) > ?MAX_MEMTBL_ENTRIES of
+        true ->
+            {error, limit_reached};
+        false ->
+            true = ets:insert(Tid, Entry),
+            NewRange = case Range of
+                           undefined ->
+                               ra_range:new(Idx);
+                           {S, _} ->
+                               {S,  Idx}
+                       end,
+            %% TODO: consider using ra_seq instead
+            {ok, State#?MODULE{range = NewRange}}
+    end;
+insert_sparse({_Idx, _, _} = _Entry, _LastIdx,
+              #?MODULE{range = _Range} = _State0) ->
+    {error, gap_detected}.
 
 -spec stage(log_entry(), state()) ->
     {ok, state()} | {error, overwriting | limit_reached}.

@@ -27,6 +27,7 @@
          fold/3,
          expand/1,
          subtract/2,
+         remove_prefix/2,
          first/1,
          last/1,
          iterator/1,
@@ -64,6 +65,7 @@ floor(FloorIdxIncl, Seq) ->
     floor0(FloorIdxIncl, Seq, []).
 
 
+-spec limit(ra:index(), state()) -> state().
 limit(CeilIdx, [Last | Rem])
   when is_integer(Last) andalso
        Last > CeilIdx ->
@@ -92,9 +94,8 @@ add(Seq1, Seq2) ->
           end,
     fold(fun append/2, limit(Fst - 1, Seq2), Seq1).
 
-
--spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state())
--> Acc when Acc :: term().
+-spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) ->
+    Acc when Acc :: term().
 fold(Fun, Acc0, Seq) ->
     %% TODO: factor out the lists:seq/2
     lists:foldr(
@@ -108,6 +109,7 @@ fold(Fun, Acc0, Seq) ->
 expand(Seq) ->
     fold(fun (I, Acc) -> [I | Acc] end, [], Seq).
 
+-spec subtract(Min :: state(), Sub :: state()) -> Diff :: state().
 subtract(SeqA, SeqB) ->
     %% TODO: not efficient at all but good enough for now
     %% optimise if we end up using this in critical path
@@ -137,11 +139,18 @@ last(Seq) ->
             I
     end.
 
+-spec remove_prefix(state(), state()) ->
+    {ok, state()} | {error, not_prefix}.
+remove_prefix(Prefix, Seq) ->
+    P = iterator(Prefix),
+    S = iterator(Seq),
+    drop_prefix(next(P), next(S)).
+
 -spec iterator(state()) -> iter() | end_of_seq.
 iterator(Seq) when is_list(Seq) ->
     #i{seq = lists:reverse(Seq)}.
 
--spec next(iter()) -> {ra:index(), iter() | end_of_seq}.
+-spec next(iter()) -> {ra:index(), iter()} | end_of_seq.
 next(#i{seq = []}) ->
     end_of_seq;
 next(#i{seq = [Next | Rem]})
@@ -155,7 +164,20 @@ next(#i{seq = [{Next, End} | Rem]}) ->
             {Next, #i{seq = [NextRange | Rem]}}
     end.
 
-%% internal functions
+%% Internal functions
+
+drop_prefix({IDX, PI}, {IDX, SI}) ->
+    drop_prefix(next(PI), next(SI));
+drop_prefix(end_of_seq, {Idx, #i{seq = RevSeq}}) ->
+    {ok, lists:reverse([Idx | RevSeq])};
+drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
+  when PrefIdx < Idx ->
+    drop_prefix(next(PI), I);
+drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
+  when Idx < PrefIdx ->
+    {error, not_prefix}.
+
+
 
 floor0(FloorIdx, [Last | Rem], Acc)
   when is_integer(Last) andalso
