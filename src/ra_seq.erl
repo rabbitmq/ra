@@ -31,7 +31,9 @@
          first/1,
          last/1,
          iterator/1,
-         next/1
+         next/1,
+         length/1,
+         in/2
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -164,7 +166,32 @@ next(#i{seq = [{Next, End} | Rem]}) ->
             {Next, #i{seq = [NextRange | Rem]}}
     end.
 
+length(Seq) ->
+    lists:foldl(
+      fun (Idx, Acc) when is_integer(Idx) ->
+              Acc + 1;
+          (Range, Acc) when is_tuple(Range) ->
+              Acc + ra_range:size(Range)
+      end, 0, Seq).
+
+in(_Idx, []) ->
+    false;
+in(Idx, [Idx | _]) ->
+    true;
+in(Idx, [Next | Rem])
+ when is_integer(Next) ->
+    in(Idx, Rem);
+in(Idx, [Range | Rem]) ->
+    case ra_range:in(Idx, Range) of
+        true ->
+            true;
+        false ->
+            in(Idx, Rem)
+    end.
+
+
 %% Internal functions
+
 
 drop_prefix({IDX, PI}, {IDX, SI}) ->
     drop_prefix(next(PI), next(SI));
@@ -173,7 +200,7 @@ drop_prefix(end_of_seq, {Idx, #i{seq = RevSeq}}) ->
 drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
   when PrefIdx < Idx ->
     drop_prefix(next(PI), I);
-drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
+drop_prefix({PrefIdx, _PI}, {Idx, _SI})
   when Idx < PrefIdx ->
     {error, not_prefix}.
 
