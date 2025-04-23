@@ -33,7 +33,8 @@
          iterator/1,
          next/1,
          length/1,
-         in/2
+         in/2,
+         range/1
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -188,6 +189,13 @@ in(Idx, [Range | Rem]) ->
         false ->
             in(Idx, Rem)
     end.
+
+-spec range(state()) -> ra:range().
+range([]) ->
+    undefined;
+range(Seq) ->
+    ra_range:new(first(Seq), last(Seq)).
+
 
 
 %% Internal functions
