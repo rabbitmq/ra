@@ -62,7 +62,7 @@ from_list(L) ->
     lists:foldl(fun append/2, [], lists:sort(L)).
 
 -spec floor(ra:index(), state()) -> state().
-floor(FloorIdxIncl, Seq) ->
+floor(FloorIdxIncl, Seq) when is_list(Seq) ->
     %% TODO: assert appendable
     %% for now assume appendable
     floor0(FloorIdxIncl, Seq, []).
@@ -203,8 +203,12 @@ range(Seq) ->
 
 drop_prefix({IDX, PI}, {IDX, SI}) ->
     drop_prefix(next(PI), next(SI));
+drop_prefix(_, end_of_seq) ->
+    %% TODO: is this always right as it includes the case where there is
+    %% more prefex left to drop but nothing in the target?
+    {ok, []};
 drop_prefix(end_of_seq, {Idx, #i{seq = RevSeq}}) ->
-    {ok, lists:reverse([Idx | RevSeq])};
+    {ok, add(lists:reverse(RevSeq), [Idx])};
 drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
   when PrefIdx < Idx ->
     drop_prefix(next(PI), I);
@@ -231,20 +235,3 @@ floor0(FloorIdx, [{_, _} = T | Rem], Acc) ->
     end;
 floor0(_FloorIdx, _Seq, Acc) ->
     lists:reverse(Acc).
-
-
-% last_index([{_, I} | _]) ->
-%     I;
-% last_index([I | _])
-%   when is_integer(I) ->
-%     I;
-% last_index([]) ->
-%     undefined.
-
-% first_index([{_, I} | _]) ->
-%     I;
-% first_index([I | _])
-%   when is_integer(I) ->
-%     I;
-% first_index([]) ->
-%     undefined.

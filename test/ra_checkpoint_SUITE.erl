@@ -92,8 +92,9 @@ take_checkpoint(Config) ->
     {{55, 2}, checkpoint} = ra_snapshot:pending(State1),
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, checkpoint}} ->
-            State = ra_snapshot:complete_snapshot(IdxTerm, checkpoint, State1),
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, checkpoint}} ->
+            State = ra_snapshot:complete_snapshot(IdxTerm, checkpoint,
+                                                  Indexes, State1),
             undefined = ra_snapshot:pending(State),
             {55, 2} = ra_snapshot:latest_checkpoint(State),
             ok
@@ -140,8 +141,9 @@ recover_from_checkpoint_only(Config) ->
                                    checkpoint, State0),
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, checkpoint}} ->
-            _ = ra_snapshot:complete_snapshot(IdxTerm, checkpoint, State1),
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, checkpoint}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm, checkpoint,
+                                              Indexes, State1),
             ok
     after 1000 ->
               error(snapshot_event_timeout)
@@ -168,8 +170,9 @@ recover_from_checkpoint_and_snapshot(Config) ->
                                     snapshot, State0),
     Fun(),
     State2 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm1, snapshot}} ->
-                       ra_snapshot:complete_snapshot(IdxTerm1, snapshot, State1)
+                 {ra_log_event, {snapshot_written, IdxTerm1, Indexes, snapshot}} ->
+                       ra_snapshot:complete_snapshot(IdxTerm1, snapshot,
+                                                     Indexes, State1)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -181,8 +184,9 @@ recover_from_checkpoint_and_snapshot(Config) ->
                                     checkpoint, State2),
     Fun2(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
-             _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3),
+        {ra_log_event, {snapshot_written, IdxTerm2, Indexes2, checkpoint}} ->
+             _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint,
+                                               Indexes2, State3),
              ok
     after 1000 ->
               error(snapshot_event_timeout)
@@ -210,8 +214,9 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
                                     checkpoint, State0),
     Fun(),
     State2 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm1, checkpoint}} ->
-                       ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
+                 {ra_log_event, {snapshot_written, IdxTerm1, Indexes, checkpoint}} ->
+                       ra_snapshot:complete_snapshot(IdxTerm1, checkpoint,
+                                                     Indexes, State1)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -223,8 +228,9 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
                                     checkpoint, State2),
     Fun2(),
     State4 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
-                       ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3)
+                 {ra_log_event, {snapshot_written, IdxTerm2, Indexes2, checkpoint}} ->
+                       ra_snapshot:complete_snapshot(IdxTerm2, checkpoint,
+                                                     Indexes2, State3)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -236,8 +242,9 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
                                     checkpoint, State4),
     Fun3(),
     State6 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm3, checkpoint}} ->
-                       ra_snapshot:complete_snapshot(IdxTerm3, checkpoint, State5)
+                 {ra_log_event, {snapshot_written, IdxTerm3, Indexes3, checkpoint}} ->
+                       ra_snapshot:complete_snapshot(IdxTerm3, checkpoint,
+                                                     Indexes3, State5)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -249,8 +256,9 @@ newer_snapshot_deletes_older_checkpoints(Config) ->
                                     snapshot, State6),
     Fun4(),
     State8 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm4, snapshot}} ->
-                      ra_snapshot:complete_snapshot(IdxTerm4, snapshot, State7)
+                 {ra_log_event, {snapshot_written, IdxTerm4, Indexes4, snapshot}} ->
+                      ra_snapshot:complete_snapshot(IdxTerm4, snapshot,
+                                                    Indexes4, State7)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -285,8 +293,8 @@ init_recover_corrupt(Config) ->
                                    checkpoint, State0),
     Fun(),
     State2 = receive
-                 {ra_log_event, {snapshot_written, {55, 2} = IdxTerm1, checkpoint}} ->
-                     ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
+                 {ra_log_event, {snapshot_written, {55, 2} = IdxTerm1, Indexes, checkpoint}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, Indexes, State1)
              after 1000 ->
                      error(snapshot_event_timeout)
              end,
@@ -298,8 +306,8 @@ init_recover_corrupt(Config) ->
                                    checkpoint, State2),
     Fun2(),
     receive
-        {ra_log_event, {snapshot_written, {165, 2} = IdxTerm2, checkpoint}} ->
-            _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3),
+        {ra_log_event, {snapshot_written, {165, 2} = IdxTerm2, Indexes2, checkpoint}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, Indexes2, State3),
             ok
     after 1000 ->
             error(snapshot_event_timeout)
@@ -332,8 +340,8 @@ init_recover_multi_corrupt(Config) ->
                                     checkpoint, State0),
     Fun(),
     State2 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm1, checkpoint}} ->
-                     ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, State1)
+                 {ra_log_event, {snapshot_written, IdxTerm1, Indexes, checkpoint}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm1, checkpoint, Indexes, State1)
              after 1000 ->
                      error(snapshot_event_timeout)
              end,
@@ -345,8 +353,9 @@ init_recover_multi_corrupt(Config) ->
                                     checkpoint, State2),
     Fun2(),
     State4 = receive
-                 {ra_log_event, {snapshot_written, IdxTerm2, checkpoint}} ->
-                      ra_snapshot:complete_snapshot(IdxTerm2, checkpoint, State3)
+                 {ra_log_event, {snapshot_written, IdxTerm2, Indexes2, checkpoint}} ->
+                      ra_snapshot:complete_snapshot(IdxTerm2, checkpoint,
+                                                    Indexes2, State3)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
